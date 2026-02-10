@@ -1,0 +1,18 @@
+{
+  "ExpandedNodes": [
+    "",
+    "\\external",
+    "\\out\\build",
+    "\\src"
+  ],
+  "SelectedNode": "\\src",
+  "PreviewInSolutionExplorer": false,
+  "OutputFoldersPerTargetSystem": {
+    "Local Machine": [
+      "out\\build\\x64-Debug",
+      "out\\install\\x64-Debug",
+      "out\\build\\x64-Release",
+      "out\\install\\x64-Release"
+    ]
+  }
+}

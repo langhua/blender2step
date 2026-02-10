@@ -1,0 +1,39 @@
+{
+  "version": "0.2.1",
+  "tasks": [
+    {
+      "taskName": "build-addon",
+      "appliesTo": "*.cpp,*.h,*.py",
+      "type": "default",
+      "contextType": "build",
+      "command": "cmd.exe",
+      "args": [
+        "/c",
+        "cd /d ${workspaceRoot} && cmake --build build --config Debug --target install -j8"
+      ],
+      "problemMatcher": {
+        "owner": "cpp",
+        "pattern": {
+          "regexp": "^(.*):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*)$",
+          "file": 1,
+          "line": 2,
+          "column": 3,
+          "severity": 4,
+          "message": 5
+        }
+      },
+      "group": {
+        "isDefault": true
+      }
+    },
+    {
+      "taskName": "clean-build",
+      "command": "cmd.exe",
+      "args": [
+        "/c",
+        "cd /d ${workspaceRoot} && rmdir /s /q build && mkdir build && cd build && cmake .. -G \"Visual Studio 17 2022\" -A x64 && cmake --build . --config Release"
+      ],
+      "problemMatcher": []
+    }
+  ]
+}

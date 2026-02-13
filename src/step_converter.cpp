@@ -1,9 +1,9 @@
 #include "step_converter.h"
 #include <BRepPrimAPI_MakeBox.hxx>
-#include <Interface_Static.hxx> // ±ØĞë°üº¬
-
+#include <Interface_Static.hxx> // å¿…é¡»åŒ…å«
+ 
 TopoDS_Shape create_test_shape() {
-    // ´´½¨Ò»¸ö¼òµ¥µÄ²âÊÔÁ¢·½Ìå
+    // åˆ›å»ºä¸€ä¸ªç®€å•çš„æµ‹è¯•ç«‹æ–¹ä½“
     return BRepPrimAPI_MakeBox(10.0, 10.0, 10.0).Shape();
 }
 
@@ -11,16 +11,16 @@ bool export_shape_to_step(const TopoDS_Shape& shape, const char* filename) {
     try {
         STEPControl_Writer writer;
 
-        // ÉèÖÃSTEP°æ±¾
+        // è®¾ç½®STEPç‰ˆæœ¬
         Interface_Static::SetCVal("write.step.schema", "AP214");
 
-        // ÉèÖÃµ¥Î»ÏµÍ³£¨ºÁÃ×£©
+        // è®¾ç½®å•ä½ç³»ç»Ÿï¼ˆæ¯«ç±³ï¼‰
         Interface_Static::SetCVal("write.step.unit", "MM");
 
-        // ÉèÖÃ¼¸ºÎÈİ²î
+        // è®¾ç½®å‡ ä½•å®¹å·®
         Interface_Static::SetRVal("write.precision.val", 0.001);
 
-        // ×ª»»ĞÎ×´
+        // è½¬æ¢å½¢çŠ¶
         IFSelect_ReturnStatus status = writer.Transfer(shape, STEPControl_AsIs);
 
         if (status != IFSelect_RetDone) {
@@ -28,7 +28,7 @@ bool export_shape_to_step(const TopoDS_Shape& shape, const char* filename) {
             return false;
         }
 
-        // Ğ´ÈëÎÄ¼ş
+        // å†™å…¥æ–‡ä»¶
         status = writer.Write(filename);
 
         if (status != IFSelect_RetDone) {

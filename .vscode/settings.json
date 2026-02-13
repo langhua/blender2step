@@ -1,0 +1,17 @@
+{
+    // VSCode Blender 插件配置
+    "blender.executable": "C:\\Program Files\\Blender Foundation\\Blender\\blender.exe",
+    "blender.pythonPath": "C:\\Python311\\python.exe",
+    "blender.addonsDir": "step_exporter",
+    
+    // 调试配置
+    "blender.debugAdapter.enabled": true,
+    "blender.debugAdapter.host": "localhost",
+    "blender.debugAdapter.port": 5678,
+    
+    // Python配置
+    "python.defaultInterpreterPath": "C:\\Python311\\python.exe",
+    "python.analysis.extraPaths": [
+        "./step_exporter/lib"
+    ]
+}

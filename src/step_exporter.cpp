@@ -1,54 +1,53 @@
-// src/step_exporter.cpp
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
 #include "step_converter.h"
-
-// Python·½·¨£ºµ¼³öSTEP
+ 
+// Pythonæ–¹æ³•ï¼šå¯¼å‡ºSTEP
 static PyObject* py_export_step(PyObject* self, PyObject* args) {
     const char* filename;
 
     if (!PyArg_ParseTuple(args, "s", &filename)) {
-        PyErr_SetString(PyExc_TypeError, "²ÎÊı±ØĞëÊÇ×Ö·û´®");
+        PyErr_SetString(PyExc_TypeError, "Argument must be a string");
         return NULL;
     }
 
-    // ´´½¨²âÊÔĞÎ×´
+    // åˆ›å»ºæµ‹è¯•å½¢çŠ¶
     TopoDS_Shape shape = create_test_shape();
 
-    // µ¼³öSTEP
+    // å¯¼å‡ºSTEP
     bool success = export_shape_to_step(shape, filename);
 
     if (success) {
         Py_RETURN_TRUE;
     }
     else {
-        PyErr_SetString(PyExc_RuntimeError, "STEPµ¼³öÊ§°Ü");
+        PyErr_SetString(PyExc_RuntimeError, "STEP export failed");
         return NULL;
     }
 }
 
-// Python·½·¨£º»ñÈ¡°æ±¾
+// Pythonæ–¹æ³•ï¼šè·å–ç‰ˆæœ¬
 static PyObject* py_get_version(PyObject* self, PyObject* args) {
     return PyUnicode_FromString("1.0.0");
 }
 
-// Python·½·¨¶¨Òå
+// Pythonæ–¹æ³•å®šä¹‰
 static PyMethodDef StepExporterMethods[] = {
-    {"export_step", py_export_step, METH_VARARGS, "µ¼³ö¼¸ºÎµ½STEPÎÄ¼ş"},
-    {"get_version", py_get_version, METH_NOARGS, "»ñÈ¡²å¼ş°æ±¾"},
+    {"export_step", py_export_step, METH_VARARGS, "Export geometry to STEP file"},
+    {"get_version", py_get_version, METH_NOARGS, "Get plugin version"},
     {NULL, NULL, 0, NULL}
 };
 
-// Python 3.x Ä£¿é¶¨Òå
+// Python 3.x æ¨¡å—å®šä¹‰
 static struct PyModuleDef step_exporter_module = {
     PyModuleDef_HEAD_INIT,
-    "step_exporter",       // Ä£¿éÃû
-    "Blender STEPµ¼³ö²å¼ş", // Ä£¿éÎÄµµ
-    -1,                    // Ä£¿é×´Ì¬´óĞ¡
-    StepExporterMethods    // ·½·¨±í
+    "step_exporter",                    // æ¨¡å—å
+    "Blender STEP Exporter Plugin",     // æ¨¡å—æ–‡æ¡£ - ä½¿ç”¨çº¯è‹±æ–‡
+    -1,                                 // æ¨¡å—çŠ¶æ€å¤§å°
+    StepExporterMethods                 // æ–¹æ³•è¡¨
 };
 
-// Ä£¿é³õÊ¼»¯º¯Êı
-PyMODINIT_FUNC PyInit_step_exporter(void) {
+// æ¨¡å—åˆå§‹åŒ–å‡½æ•°
+PyMODINIT_FUNC PyInit__step_cpp(void) {  // æ”¹ä¸º_step_cpp
     return PyModule_Create(&step_exporter_module);
 }

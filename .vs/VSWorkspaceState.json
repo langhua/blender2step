@@ -1,12 +1,4 @@
 {
-  "ExpandedNodes": [
-    "",
-    "\\external",
-    "\\out\\build",
-    "\\src"
-  ],
-  "SelectedNode": "\\src",
-  "PreviewInSolutionExplorer": false,
   "OutputFoldersPerTargetSystem": {
     "Local Machine": [
       "out\\build\\x64-Debug",

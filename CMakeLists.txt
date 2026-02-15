@@ -41,7 +41,7 @@ add_library(step_exporter SHARED
 
 # 设置输出名称
 set_target_properties(step_exporter PROPERTIES
-    OUTPUT_NAME "_step_cpp"
+    OUTPUT_NAME "_step_exporter"
     PREFIX ""
     SUFFIX ".pyd"
 )

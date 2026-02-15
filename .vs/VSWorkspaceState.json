@@ -6,5 +6,11 @@
       "out\\build\\x64-Release",
       "out\\install\\x64-Release"
     ]
-  }
+  },
+  "ExpandedNodes": [
+    "",
+    "\\step_exporter"
+  ],
+  "SelectedNode": "\\step_exporter\\__init__.py",
+  "PreviewInSolutionExplorer": false
 }

@@ -1,337 +1,240 @@
 """
 STEP Exporter for Blender
-Export 3D models to STEP format using OpenCASCADE
+Version 4.0.0 with geometry fixing
 """
 
 bl_info = {
-    "name": "STEP Exporter",
-    "version": (1, 0, 0),
-    "blender": (2, 80, 0),
-    "location": "File > Export > STEP",
-    "description": "Export 3D models to STEP format",
+    "name": "STEP Exporter (Fixed)",
+    "author": "Your Name",
+    "version": (4, 0, 0),
+    "blender": (3, 0, 0),
+    "location": "File > Export > STEP (Fixed)",
+    "description": "Export to STEP format with geometry fixing",
     "category": "Import-Export",
 }
 
 import bpy
 import sys
 import os
-import traceback
-import importlib.util
+from bpy.types import Operator
 from bpy_extras.io_utils import ExportHelper
-from bpy.props import StringProperty, BoolProperty, FloatProperty
-from bpy.types import Operator, Panel
+from bpy.props import StringProperty, FloatProperty, BoolProperty
 
-# 全局变量存储C++扩展模块
-_cpp_module = None
-_cpp_module_loaded = False
-_cpp_module_error = None
+# 确保可以导入C++扩展
+plugin_dir = os.path.dirname(__file__)
+lib_dir = os.path.join(plugin_dir, "lib")
+if lib_dir not in sys.path:
+    sys.path.insert(0, lib_dir)
 
-# 插件注册状态
-_plugin_registered = False
-_plugin_menu_item_added = False
-
-def load_cpp_module_safe():
-    """安全加载C++扩展模块，处理符号链接和路径问题"""
-    global _cpp_module, _cpp_module_loaded, _cpp_module_error
+try:
+    # 尝试直接导入 _step_exporter
+    import _step_exporter
+    # 如果直接导入成功，创建一个别名以便使用
+    step_exporter = _step_exporter
+    CPP_MODULE_LOADED = True
+    print("✓ STEP Exporter C++ module loaded successfully (direct import)")
+except ImportError as e:
+    print(f"✗ Failed to load C++ module (direct import): {e}")
     
-    if _cpp_module_loaded:
-        return _cpp_module
-    
-    if _cpp_module_error is not None:
-        return None
-    
-    # 获取插件目录 - 使用绝对路径并解析符号链接
+    # 尝试从lib目录导入
     try:
-        # 首先获取当前文件的真实路径（解析符号链接）
-        current_file = os.path.abspath(__file__)
+        import sys
+        import os
+        plugin_dir = os.path.dirname(__file__)
+        lib_dir = os.path.join(plugin_dir, "lib")
         
-        # 尝试解析符号链接
-        if hasattr(os.path, 'readlink'):
-            try:
-                real_path = os.path.realpath(current_file)
-                if real_path != current_file:
-                    current_file = real_path
-            except:
-                pass
+        if lib_dir not in sys.path:
+            sys.path.insert(0, lib_dir)
         
-        plugin_dir = os.path.dirname(current_file)
-    except Exception as e:
-        _cpp_module_error = f"获取插件目录失败: {e}"
-        print(f"[STEP EXPORTER ERROR] {_cpp_module_error}")
-        return None
-    
-    lib_dir = os.path.join(plugin_dir, "lib")
-    
-    if not os.path.exists(lib_dir):
-        _cpp_module_error = f"lib目录未找到: {lib_dir}"
-        print(f"[STEP EXPORTER ERROR] {_cpp_module_error}")
-        return None
-    
-    # 设置DLL搜索路径
-    original_path = os.environ.get('PATH', '')
-    os.environ['PATH'] = lib_dir + ';' + original_path
-    
-    # 查找.pyd文件
-    pyd_files = [f for f in os.listdir(lib_dir) if f.lower().endswith('.pyd')]
-    if not pyd_files:
-        _cpp_module_error = f"在 {lib_dir} 中未找到.pyd文件"
-        print(f"[STEP EXPORTER ERROR] {_cpp_module_error}")
-        return None
-    
-    pyd_file = pyd_files[0]
-    pyd_path = os.path.join(lib_dir, pyd_file)
-    
-    print(f"[STEP EXPORTER] 找到C++扩展: {pyd_file}")
-    print(f"[STEP EXPORTER] 路径: {pyd_path}")
-    
-    # 尝试不同的模块名
-    possible_names = [
-        "step_exporter",      # 原始名称
-        "_step_exporter",     # 带下划线
-        "step_exporter_cpp",  # 带_cpp后缀
-    ]
-    
-    for module_name in possible_names:
-        print(f"[STEP EXPORTER] 尝试模块名: {module_name}")
-        
-        try:
-            # 保存原始sys.path
-            original_sys_path = sys.path.copy()
-            
-            # 添加lib目录到sys.path
-            if lib_dir not in sys.path:
-                sys.path.insert(0, lib_dir)
-            
-            # 从sys.modules中移除可能的冲突模块
-            if module_name in sys.modules:
-                del sys.modules[module_name]
-            
-            # 使用importlib加载
-            spec = importlib.util.spec_from_file_location(module_name, pyd_path)
-            if spec is None:
-                print(f"[STEP EXPORTER] 无法为 {module_name} 创建规范")
-                continue
-            
-            module = importlib.util.module_from_spec(spec)
-            sys.modules[module_name] = module
-            
-            # 执行模块
-            spec.loader.exec_module(module)
-            
-            print(f"[STEP EXPORTER] ✓ 使用模块名 {module_name} 加载成功")
-            
-            # 验证函数
-            if hasattr(module, 'export_step'):
-                print("[STEP EXPORTER] ✓ 找到 export_step 函数")
-            else:
-                print("[STEP EXPORTER] ✗ 未找到 export_step 函数")
-                continue
-                
-            if hasattr(module, 'get_version'):
-                print("[STEP EXPORTER] ✓ 找到 get_version 函数")
-            else:
-                print("[STEP EXPORTER] ✗ 未找到 get_version 函数")
-            
-            _cpp_module = module
-            _cpp_module_loaded = True
-            
-            return _cpp_module
-            
-        except ImportError as e:
-            print(f"[STEP EXPORTER] 模块名 {module_name} 导入失败: {e}")
-        except Exception as e:
-            print(f"[STEP EXPORTER] 模块名 {module_name} 加载错误: {e}")
-            traceback.print_exc()
-        finally:
-            # 恢复原始sys.path
-            sys.path = original_sys_path
-    
-    # 如果所有尝试都失败
-    _cpp_module_error = "所有模块名尝试都失败"
-    print(f"[STEP EXPORTER ERROR] {_cpp_module_error}")
-    return None
-
-def get_cpp_module():
-    """获取C++扩展模块"""
-    return load_cpp_module_safe()
+        import _step_exporter
+        step_exporter = _step_exporter
+        CPP_MODULE_LOADED = True
+        print("✓ STEP Exporter C++ module loaded successfully (from lib)")
+    except ImportError as e2:
+        CPP_MODULE_LOADED = False
+        print(f"✗ Failed to load C++ module (from lib): {e2}")
 
 class STEP_EXPORTER_OT_export(Operator, ExportHelper):
-    """导出到STEP格式"""
-    bl_idname = "export.step"
-    bl_label = "导出 STEP"
+    """Export to STEP format with geometry fixing"""
+    bl_idname = "export.step_fixed"
+    bl_label = "Export STEP (Fixed)"
+    bl_options = {'PRESET'}
     
     filename_ext = ".step"
-    
-    filter_glob: StringProperty(
-        default="*.step;*.stp",
-        options={'HIDDEN'},
-    ) # type: ignore
-    
-    use_selected: BoolProperty(
-        name="仅导出选中对象",
-        description="仅导出选中的对象",
-        default=False,
-    ) # type: ignore
+    filter_glob: StringProperty(default="*.step;*.stp", options={'HIDDEN'})
     
     scale: FloatProperty(
-        name="缩放比例",
-        description="导出缩放比例",
-        default=1.0,
-        min=0.001,
-        max=1000.0,
-    ) # type: ignore
+        name="Scale",
+        description="Scale factor for export",
+        default=0.001,  # 毫米到米转换
+        min=0.0001,
+        max=10000.0,
+    )
     
-    def draw(self, context):
-        """绘制操作符界面"""
-        layout = self.layout
-        
-        # 显示插件状态
-        box = layout.box()
-        box.label(text="STEP导出器状态", icon='INFO')
-        
-        cpp_module = get_cpp_module()
-        if cpp_module:
-            box.label(text="✓ C++扩展已加载", icon='CHECKMARK')
-            
-            # 显示版本信息
-            if hasattr(cpp_module, 'get_version'):
-                try:
-                    version = cpp_module.get_version()
-                    box.label(text=f"版本: {version}")
-                except:
-                    box.label(text="版本: 未知")
-        else:
-            box.label(text="✗ C++扩展不可用", icon='ERROR')
-            if _cpp_module_error:
-                box.label(text=f"错误: {_cpp_module_error[:50]}...", icon='CANCEL')
-        
-        # 导出设置
-        box = layout.box()
-        box.label(text="导出设置", icon='SETTINGS')
-        box.prop(self, "use_selected")
-        box.prop(self, "scale")
+    fix_geometry: BoolProperty(
+        name="Fix Geometry",
+        description="Enable geometry fixing (recommended)",
+        default=True,
+    )
     
     def execute(self, context):
-        """执行导出操作"""
-        # 获取C++扩展模块
-        cpp_module = get_cpp_module()
-        
-        if cpp_module is None:
-            self.report({'ERROR'}, "无法加载STEP导出器C++扩展")
-            if _cpp_module_error:
-                self.report({'ERROR'}, f"错误: {_cpp_module_error}")
+        if not CPP_MODULE_LOADED:
+            self.report({'ERROR'}, "C++ extension not loaded")
             return {'CANCELLED'}
         
-        if not hasattr(cpp_module, 'export_step'):
-            self.report({'ERROR'}, "C++扩展缺少export_step函数")
+        # 收集场景中的网格对象
+        objects_data = []
+        for obj in context.selected_objects:
+            if obj.type == 'MESH':
+                mesh_data = get_mesh_data(obj, self.scale)
+                if mesh_data:
+                    objects_data.append(mesh_data)
+        
+        if not objects_data:
+            self.report({'ERROR'}, "No mesh objects selected")
             return {'CANCELLED'}
         
-        # 导出文件
         try:
-            result = cpp_module.export_step(self.filepath)
-            if result:
-                self.report({'INFO'}, f"成功导出到 {self.filepath}")
+            # 调用C++导出函数
+            success = step_exporter.export_scene(
+                self.filepath,
+                objects_data,
+                self.scale,
+                1 if self.fix_geometry else 0
+            )
+            
+            if success:
+                self.report({'INFO'}, f"Exported {len(objects_data)} objects to {self.filepath}")
                 return {'FINISHED'}
             else:
-                self.report({'ERROR'}, "导出失败 - 请查看控制台获取详情")
+                self.report({'ERROR'}, "Export failed - see console for details")
                 return {'CANCELLED'}
+                
         except Exception as e:
-            self.report({'ERROR'}, f"导出错误: {str(e)[:100]}")
-            print(f"[STEP EXPORTER ERROR] 导出异常: {e}")
-            traceback.print_exc()
+            self.report({'ERROR'}, f"Export error: {str(e)[:100]}")
             return {'CANCELLED'}
+    
+    def draw(self, context):
+        layout = self.layout
+        layout.label(text="STEP Export Settings", icon='SETTINGS')
+        layout.prop(self, "scale")
+        layout.prop(self, "fix_geometry")
+        
+        if not CPP_MODULE_LOADED:
+            layout.label(text="⚠ C++ extension not loaded", icon='ERROR')
+
+def get_mesh_data(obj, scale):
+    """获取网格数据"""
+    mesh = obj.data
+    
+    print(f"\n[Python] Getting mesh data for: {obj.name}")
+    print(f"[Python]  Vertex count: {len(mesh.vertices)}")
+    
+    # 确保有三角面数据
+    if not mesh.loop_triangles:
+        mesh.calc_loop_triangles()
+    
+    print(f"[Python]  Triangle count: {len(mesh.loop_triangles)}")
+    
+    # 获取顶点（应用变换矩阵）
+    vertices = []
+    for i, vert in enumerate(mesh.vertices):
+        world_co = obj.matrix_world @ vert.co
+        vertices.append([world_co.x, world_co.y, world_co.z])
+        
+        # 打印前几个顶点的坐标
+        if i < 3:
+            print(f"[Python]  Vertex {i}: ({world_co.x:.3f}, {world_co.y:.3f}, {world_co.z:.3f})")
+    
+    # 获取三角面
+    faces = []
+    for i, tri in enumerate(mesh.loop_triangles):
+        face_indices = list(tri.vertices)
+        faces.append(face_indices)
+        
+        # 打印前几个面的索引
+        if i < 3:
+            print(f"[Python]  Face {i}: vertices {face_indices}")
+    
+    return {
+        'name': obj.name,
+        'vertices': vertices,
+        'faces': faces
+    }
+
+class STEP_EXPORTER_OT_test_simple(Operator):
+    """Test with a simple cube"""
+    bl_idname = "export.test_simple_cube"
+    bl_label = "Test Simple Cube Export"
+    
+    def execute(self, context):
+        if not CPP_MODULE_LOADED or step_exporter is None:
+            self.report({'ERROR'}, "C++ extension not loaded")
+            return {'CANCELLED'}
+        
+        import tempfile
+        import os
+        
+        # 创建简单的立方体数据
+        cube_vertices = [
+            [0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0],  # 底面
+            [0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1]   # 顶面
+        ]
+        
+        cube_faces = [
+            [0, 1, 2, 3],  # 底面
+            [4, 5, 6, 7],  # 顶面
+            [0, 4, 7, 3],  # 前面
+            [1, 5, 6, 2],  # 后面
+            [0, 1, 5, 4],  # 左面
+            [3, 2, 6, 7]   # 右面
+        ]
+        
+        cube_data = [{
+            'name': 'TestCube',
+            'vertices': cube_vertices,
+            'faces': cube_faces
+        }]
+        
+        # 使用临时文件
+        temp_file = os.path.join(tempfile.gettempdir(), "test_cube.step")
+        
+        try:
+            success = step_exporter.export_scene(
+                temp_file,
+                cube_data,
+                1.0,  # scale
+                1     # fix_geometry
+            )
+            
+            if success:
+                self.report({'INFO'}, f"Test cube exported to: {temp_file}")
+                print(f"✓ Test cube exported to: {temp_file}")
+                print(f"  File exists: {os.path.exists(temp_file)}")
+                if os.path.exists(temp_file):
+                    print(f"  File size: {os.path.getsize(temp_file)} bytes")
+            else:
+                self.report({'ERROR'}, "Test cube export failed")
+                
+        except Exception as e:
+            self.report({'ERROR'}, f"Test error: {str(e)[:100]}")
+            import traceback
+            traceback.print_exc()
+            
+        return {'FINISHED'}
 
 def menu_func_export(self, context):
-    """在导出菜单中添加STEP导出项"""
-    # 检查是否已经添加了菜单项
-    if not _plugin_menu_item_added:
-        return
-    
-    # 添加菜单项
     self.layout.operator(STEP_EXPORTER_OT_export.bl_idname, text="STEP (.step)")
 
 def register():
-    """注册插件 - 防止重复注册"""
-    global _plugin_registered, _plugin_menu_item_added
-    
-    if _plugin_registered:
-        print("[STEP EXPORTER] 插件已经注册，跳过重复注册")
-        return
-    
-    try:
-        # 首先尝试取消注册，以防之前有残留
-        try:
-            bpy.utils.unregister_class(STEP_EXPORTER_OT_export)
-            print("[STEP EXPORTER] 清理了之前的注册")
-        except:
-            pass
-        
-        # 注册操作符
-        bpy.utils.register_class(STEP_EXPORTER_OT_export)
-        _plugin_registered = True
-        
-        # 从导出菜单中移除可能存在的重复项
-        try:
-            bpy.types.TOPBAR_MT_file_export.remove(menu_func_export)
-        except:
-            pass
-        
-        # 添加菜单项
-        bpy.types.TOPBAR_MT_file_export.append(menu_func_export)
-        _plugin_menu_item_added = True
-        
-        # 预加载C++扩展
-        cpp_module = get_cpp_module()
-        if cpp_module:
-            print("[STEP EXPORTER] 插件注册成功")
-        else:
-            print("[STEP EXPORTER WARNING] 插件已注册，但C++扩展未加载")
-            
-    except Exception as e:
-        print(f"[STEP EXPORTER ERROR] 注册插件时出错: {e}")
-        traceback.print_exc()
-        _plugin_registered = False
-        _plugin_menu_item_added = False
+    bpy.utils.register_class(STEP_EXPORTER_OT_export)
+    bpy.utils.register_class(STEP_EXPORTER_OT_test_simple)
+    bpy.types.TOPBAR_MT_file_export.append(menu_func_export)
 
 def unregister():
-    """注销插件"""
-    global _plugin_registered, _plugin_menu_item_added
-    
-    try:
-        # 从菜单中移除菜单项
-        if _plugin_menu_item_added:
-            try:
-                bpy.types.TOPBAR_MT_file_export.remove(menu_func_export)
-            except:
-                pass
-            _plugin_menu_item_added = False
-        
-        # 注销操作符
-        if _plugin_registered:
-            bpy.utils.unregister_class(STEP_EXPORTER_OT_export)
-            _plugin_registered = False
-        
-        # 清理C++扩展引用
-        global _cpp_module, _cpp_module_loaded, _cpp_module_error
-        _cpp_module = None
-        _cpp_module_loaded = False
-        _cpp_module_error = None
-        
-        print("[STEP EXPORTER] 插件已注销")
-        
-    except Exception as e:
-        print(f"[STEP EXPORTER ERROR] 注销插件时出错: {e}")
-        traceback.print_exc()
-
-# 检查是否重复加载
-if __name__ in locals() or __name__ in sys.modules:
-    print(f"[STEP EXPORTER WARNING] 检测到可能的重复加载: {__name__}")
-    
-    # 尝试清理旧的注册
-    try:
-        unregister()
-    except:
-        pass
+    bpy.utils.unregister_class(STEP_EXPORTER_OT_export)
+    bpy.utils.unregister_class(STEP_EXPORTER_OT_test_simple)
+    bpy.types.TOPBAR_MT_file_export.remove(menu_func_export)
 
 if __name__ == "__main__":
     register()

@@ -46,12 +46,16 @@ set_target_properties(step_exporter PROPERTIES
     SUFFIX ".pyd"
 )
 
+find_package(Python3 COMPONENTS Development REQUIRED)
+target_include_directories(step_exporter PRIVATE ${Python3_INCLUDE_DIRS})
+
 # ====== 5. 链接库 ======
 # 方法1：使用 vcpkg 提供的库列表（推荐）
 target_link_libraries(step_exporter
     PRIVATE
         ${OpenCASCADE_LIBRARIES}  # 使用 vcpkg 找到的所有库
         ${PYTHON_LIBRARY}
+        ${Python3_LIBRARIES}
     PUBLIC
         # Windows 系统库
         kernel32.lib

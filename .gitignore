@@ -18,3 +18,4 @@ build/
 *.sqlite
 *.step
 __pycache__/
+vcpkg_installed/

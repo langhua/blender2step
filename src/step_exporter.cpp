@@ -59,6 +59,8 @@
 #include <TopoDS_Iterator.hxx>
 #include <GProp_GProps.hxx>
 #include <BRepGProp.hxx>
+#include <Bnd_Box.hxx>
+#include <BRepBndLib.hxx>
 
 // 用于高级BREP表示和PCURVE
 #include <Geom_Surface.hxx>
@@ -197,7 +199,7 @@ TopoDS_Shape static fix_shape_enhanced(const TopoDS_Shape& shape, double toleran
             solidFixer->Perform();
             fixedShape = solidFixer->Solid();
         }
-        // 如果是壳，尝试闭合它并转为实体
+        // 如果是壳，尝试闭合它并转为实体，但检查体积
         else if (fixedShape.ShapeType() == TopAbs_SHELL) {
             std::cout << "[STEP Exporter] Processing shell, attempting to create solid..." << std::endl;
             Handle(ShapeFix_Shell) shellFixer = new ShapeFix_Shell;
@@ -208,8 +210,18 @@ TopoDS_Shape static fix_shape_enhanced(const TopoDS_Shape& shape, double toleran
             // 检查壳是否闭合
             BRepBuilderAPI_MakeSolid solidMaker(fixedShell);
             if (solidMaker.IsDone()) {
-                fixedShape = solidMaker.Solid();
-                std::cout << "[STEP Exporter] Shell successfully converted to solid." << std::endl;
+                TopoDS_Solid solid = solidMaker.Solid();
+                // 检查实体体积
+                GProp_GProps props;
+                BRepGProp::VolumeProperties(solid, props);
+                double volume = fabs(props.Mass());
+                if (volume > 1.0e-12) {
+                    fixedShape = solid;
+                    std::cout << "[STEP Exporter] Shell successfully converted to solid (Volume: " << volume << ")." << std::endl;
+                } else {
+                    // 体积太小，保持为壳
+                    std::cout << "[STEP Exporter] Shell converted to solid but has negligible volume, keeping as shell." << std::endl;
+                }
             } else {
                 std::cout << "[STEP Exporter] Shell could not be converted to solid, keeping as shell." << std::endl;
             }
@@ -244,10 +256,10 @@ TopoDS_Shape create_solid_from_mesh(const std::vector<std::vector<double>>& vert
               << " from mesh: " << vertices.size() << " vertices, " << faces.size() << " faces" << std::endl;
 
     try {
-        // 使用Sewing工具将离散的面片缝合为完整的壳
-        BRepBuilderAPI_Sewing sewer(tolerance);
-        sewer.SetMaxTolerance(tolerance * 10);
-        sewer.SetMinTolerance(tolerance / 10);
+        // 首先创建一个复合形状来收集所有面
+        BRep_Builder builder;
+        TopoDS_Compound compound;
+        builder.MakeCompound(compound);
 
         int valid_face_count = 0;
 
@@ -309,7 +321,7 @@ TopoDS_Shape create_solid_from_mesh(const std::vector<std::vector<double>>& vert
                         faceFixer->FixOrientation();
                         faceFixer->Perform();
                         if (faceFixer->Status(ShapeExtend_OK) || faceFixer->Status(ShapeExtend_DONE)) {
-                            sewer.Add(faceFixer->Face());
+                            builder.Add(compound, faceFixer->Face());
                             valid_face_count++;
                             if (face_idx < 3) {
                                 std::cout << "[DEBUG] Face " << face_idx << " created with plane surface." << std::endl;
@@ -325,6 +337,14 @@ TopoDS_Shape create_solid_from_mesh(const std::vector<std::vector<double>>& vert
             return TopoDS_Shape();
         }
 
+        std::cout << "[STEP Exporter] Created " << valid_face_count << " valid faces." << std::endl;
+
+        // 使用Sewing工具将离散的面片缝合为完整的壳
+        BRepBuilderAPI_Sewing sewer(tolerance);
+        sewer.SetMaxTolerance(tolerance * 10);
+        sewer.SetMinTolerance(tolerance / 10);
+        sewer.Add(compound);
+
         // 执行缝合
         sewer.Perform();
         TopoDS_Shape sewedShape = sewer.SewedShape();
@@ -334,7 +354,23 @@ TopoDS_Shape create_solid_from_mesh(const std::vector<std::vector<double>>& vert
             return TopoDS_Shape();
         }
 
-        std::cout << "[STEP Exporter] Sewing created a shape with " << valid_face_count << " faces." << std::endl;
+        std::cout << "[STEP Exporter] Sewing completed." << std::endl;
+        
+        // 打印缝合后形状的类型
+        std::cout << "[STEP Exporter] Sewed shape type: ";
+        switch (sewedShape.ShapeType()) {
+            case TopAbs_COMPOUND: std::cout << "COMPOUND"; break;
+            case TopAbs_COMPSOLID: std::cout << "COMPSOLID"; break;
+            case TopAbs_SOLID: std::cout << "SOLID"; break;
+            case TopAbs_SHELL: std::cout << "SHELL"; break;
+            case TopAbs_FACE: std::cout << "FACE"; break;
+            case TopAbs_WIRE: std::cout << "WIRE"; break;
+            case TopAbs_EDGE: std::cout << "EDGE"; break;
+            case TopAbs_VERTEX: std::cout << "VERTEX"; break;
+            case TopAbs_SHAPE: std::cout << "SHAPE"; break;
+            default: std::cout << "UNKNOWN";
+        }
+        std::cout << std::endl;
 
         // 尝试将缝合后的壳转换为实体
         TopoDS_Shape finalShape = sewedShape;
@@ -347,16 +383,38 @@ TopoDS_Shape create_solid_from_mesh(const std::vector<std::vector<double>>& vert
                 GProp_GProps props;
                 BRepGProp::VolumeProperties(solid, props);
                 double volume = props.Mass();
-                if (volume > tolerance) {
-                    finalShape = solid;
-                    std::cout << "[STEP Exporter] Successfully created solid (Volume: " << volume << ")." << std::endl;
+                if (volume > tolerance || fabs(volume) < tolerance) {
+                    // 检查体积是否足够大
+                    if (fabs(volume) > 1.0e-12) {
+                        finalShape = solid;
+                        std::cout << "[STEP Exporter] Successfully created solid (Volume: " << volume << ")." << std::endl;
+                    } else {
+                        // 体积太小，保持为壳
+                        std::cout << "[STEP Exporter] Created solid has negligible volume (" << volume << "), keeping as shell." << std::endl;
+                    }
                 } else {
-                    std::cout << "[STEP Exporter] Created solid has non-positive volume (" << volume << "), keeping as shell." << std::endl;
+                    std::cout << "[STEP Exporter] Created solid has negative volume (" << volume << "), keeping as shell." << std::endl;
                 }
             } else {
                 std::cout << "[STEP Exporter] Could not make solid from shell, exporting as closed shell." << std::endl;
             }
         }
+
+        // 修复前打印最终形状类型
+        std::cout << "[STEP Exporter] Final shape type before fixing: ";
+        switch (finalShape.ShapeType()) {
+            case TopAbs_COMPOUND: std::cout << "COMPOUND"; break;
+            case TopAbs_COMPSOLID: std::cout << "COMPSOLID"; break;
+            case TopAbs_SOLID: std::cout << "SOLID"; break;
+            case TopAbs_SHELL: std::cout << "SHELL"; break;
+            case TopAbs_FACE: std::cout << "FACE"; break;
+            case TopAbs_WIRE: std::cout << "WIRE"; break;
+            case TopAbs_EDGE: std::cout << "EDGE"; break;
+            case TopAbs_VERTEX: std::cout << "VERTEX"; break;
+            case TopAbs_SHAPE: std::cout << "SHAPE"; break;
+            default: std::cout << "UNKNOWN";
+        }
+        std::cout << std::endl;
 
         return fix_shape_enhanced(finalShape, tolerance);
 
@@ -445,18 +503,37 @@ static PyObject* export_scene(PyObject* self, PyObject* args) {
                 std::cout << "[STEP Exporter]   Vertices: " << num_vertices << std::endl;
                 for (Py_ssize_t v = 0; v < num_vertices; v++) {
                     PyObject* vertex_item = PyList_GetItem(vertices_obj, v);
+                    bool valid_vertex = false;
+                    std::vector<double> vertex(3);
+                    
                     if (PyTuple_Check(vertex_item) && PyTuple_Size(vertex_item) >= 3) {
-                        std::vector<double> vertex(3);
-                        vertex[0] = PyFloat_AsDouble(PyTuple_GetItem(vertex_item, 0)) * scale;
-                        vertex[1] = PyFloat_AsDouble(PyTuple_GetItem(vertex_item, 1)) * scale;
-                        vertex[2] = PyFloat_AsDouble(PyTuple_GetItem(vertex_item, 2)) * scale;
-                        vertices.push_back(vertex);
+                        for (int i = 0; i < 3; i++) {
+                            PyObject* coord = PyTuple_GetItem(vertex_item, i);
+                            if (PyFloat_Check(coord)) {
+                                vertex[i] = PyFloat_AsDouble(coord) * scale;
+                            } else if (PyLong_Check(coord)) {
+                                vertex[i] = static_cast<double>(PyLong_AsLong(coord)) * scale;
+                            } else {
+                                break;
+                            }
+                            if (i == 2) valid_vertex = true;
+                        }
                     }
                     else if (PyList_Check(vertex_item) && PyList_Size(vertex_item) >= 3) {
-                        std::vector<double> vertex(3);
-                        vertex[0] = PyFloat_AsDouble(PyList_GetItem(vertex_item, 0)) * scale;
-                        vertex[1] = PyFloat_AsDouble(PyList_GetItem(vertex_item, 1)) * scale;
-                        vertex[2] = PyFloat_AsDouble(PyList_GetItem(vertex_item, 2)) * scale;
+                        for (int i = 0; i < 3; i++) {
+                            PyObject* coord = PyList_GetItem(vertex_item, i);
+                            if (PyFloat_Check(coord)) {
+                                vertex[i] = PyFloat_AsDouble(coord) * scale;
+                            } else if (PyLong_Check(coord)) {
+                                vertex[i] = static_cast<double>(PyLong_AsLong(coord)) * scale;
+                            } else {
+                                break;
+                            }
+                            if (i == 2) valid_vertex = true;
+                        }
+                    }
+                    
+                    if (valid_vertex) {
                         vertices.push_back(vertex);
                     }
                 }
@@ -477,7 +554,15 @@ static PyObject* export_scene(PyObject* self, PyObject* args) {
                         Py_ssize_t num_indices = PyList_Size(face_item);
                         std::vector<int> face_indices;
                         for (Py_ssize_t idx = 0; idx < num_indices; idx++) {
-                            int vertex_idx = PyLong_AsLong(PyList_GetItem(face_item, idx));
+                            PyObject* idx_obj = PyList_GetItem(face_item, idx);
+                            int vertex_idx;
+                            if (PyLong_Check(idx_obj)) {
+                                vertex_idx = static_cast<int>(PyLong_AsLong(idx_obj));
+                            } else if (PyFloat_Check(idx_obj)) {
+                                vertex_idx = static_cast<int>(PyFloat_AsDouble(idx_obj));
+                            } else {
+                                continue;
+                            }
                             face_indices.push_back(vertex_idx);
                         }
                         faces.push_back(face_indices);
@@ -486,7 +571,15 @@ static PyObject* export_scene(PyObject* self, PyObject* args) {
                         Py_ssize_t num_indices = PyTuple_Size(face_item);
                         std::vector<int> face_indices;
                         for (Py_ssize_t idx = 0; idx < num_indices; idx++) {
-                            int vertex_idx = PyLong_AsLong(PyTuple_GetItem(face_item, idx));
+                            PyObject* idx_obj = PyTuple_GetItem(face_item, idx);
+                            int vertex_idx;
+                            if (PyLong_Check(idx_obj)) {
+                                vertex_idx = static_cast<int>(PyLong_AsLong(idx_obj));
+                            } else if (PyFloat_Check(idx_obj)) {
+                                vertex_idx = static_cast<int>(PyFloat_AsDouble(idx_obj));
+                            } else {
+                                continue;
+                            }
                             face_indices.push_back(vertex_idx);
                         }
                         faces.push_back(face_indices);
@@ -526,7 +619,7 @@ static PyObject* export_scene(PyObject* self, PyObject* args) {
 
         std::cout << "\n[STEP Exporter] Created " << shapes.size() << " valid shapes" << std::endl;
 
-        // 组合所有形状
+        // 将所有形状合并成一个Compound
         TopoDS_Shape finalShape;
         if (shapes.size() == 1) {
             finalShape = shapes[0];
@@ -557,9 +650,9 @@ static PyObject* export_scene(PyObject* self, PyObject* args) {
         }
 
         std::cout << "[STEP Exporter] Writing STEP file..." << std::endl;
-        status = writer.Write(filename);
+        IFSelect_ReturnStatus write_status = writer.Write(filename);
 
-        if (status == IFSelect_RetDone) {
+        if (write_status == IFSelect_RetDone) {
             std::cout << "[STEP Exporter] ✓ Successfully exported STEP file" << std::endl;
             std::cout << "[STEP Exporter] =========================================\n" << std::endl;
             Py_RETURN_TRUE;
@@ -631,12 +724,15 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
         Interface_Static::SetRVal("write.precision.val", 0.001); // 1微米精度
         Interface_Static::SetCVal("write.step.unit", "MM");
         
+        // 额外的STEP配置以确保几何数据正确写入
+        Interface_Static::SetIVal("write.step.assembly", 0); // 禁用装配模式，避免创建空的产品定义
+        Interface_Static::SetIVal("write.step.shape.repr", 1); // 高级形状表示
+        Interface_Static::SetCVal("write.step.nonmanifold", "0"); // 优先处理流形
+        Interface_Static::SetCVal("write.step.product.context", "design");
+        Interface_Static::SetCVal("write.step.product.definition", "part");
+        
         // 新增：启用高级BREP相关设置
         if (advanced_brep) {
-            // 这些设置有助于生成包含PCURVE的完整BREP表示
-            Interface_Static::SetIVal("write.step.assembly", 1);
-            Interface_Static::SetIVal("write.step.shape.repr", 1); // 高级形状表示
-            Interface_Static::SetCVal("write.step.nonmanifold", "0"); // 优先处理流形
             std::cout << "[STEP Exporter] Advanced BREP settings enabled." << std::endl;
         }
 
@@ -667,18 +763,37 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
                 std::cout << "[STEP Exporter]   Vertices: " << num_vertices << std::endl;
                 for (Py_ssize_t v = 0; v < num_vertices; v++) {
                     PyObject* vertex_item = PyList_GetItem(vertices_obj, v);
+                    bool valid_vertex = false;
+                    std::vector<double> vertex(3);
+                    
                     if (PyTuple_Check(vertex_item) && PyTuple_Size(vertex_item) >= 3) {
-                        std::vector<double> vertex(3);
-                        vertex[0] = PyFloat_AsDouble(PyTuple_GetItem(vertex_item, 0)) * scale;
-                        vertex[1] = PyFloat_AsDouble(PyTuple_GetItem(vertex_item, 1)) * scale;
-                        vertex[2] = PyFloat_AsDouble(PyTuple_GetItem(vertex_item, 2)) * scale;
-                        vertices.push_back(vertex);
+                        for (int i = 0; i < 3; i++) {
+                            PyObject* coord = PyTuple_GetItem(vertex_item, i);
+                            if (PyFloat_Check(coord)) {
+                                vertex[i] = PyFloat_AsDouble(coord) * scale;
+                            } else if (PyLong_Check(coord)) {
+                                vertex[i] = static_cast<double>(PyLong_AsLong(coord)) * scale;
+                            } else {
+                                break;
+                            }
+                            if (i == 2) valid_vertex = true;
+                        }
                     }
                     else if (PyList_Check(vertex_item) && PyList_Size(vertex_item) >= 3) {
-                        std::vector<double> vertex(3);
-                        vertex[0] = PyFloat_AsDouble(PyList_GetItem(vertex_item, 0)) * scale;
-                        vertex[1] = PyFloat_AsDouble(PyList_GetItem(vertex_item, 1)) * scale;
-                        vertex[2] = PyFloat_AsDouble(PyList_GetItem(vertex_item, 2)) * scale;
+                        for (int i = 0; i < 3; i++) {
+                            PyObject* coord = PyList_GetItem(vertex_item, i);
+                            if (PyFloat_Check(coord)) {
+                                vertex[i] = PyFloat_AsDouble(coord) * scale;
+                            } else if (PyLong_Check(coord)) {
+                                vertex[i] = static_cast<double>(PyLong_AsLong(coord)) * scale;
+                            } else {
+                                break;
+                            }
+                            if (i == 2) valid_vertex = true;
+                        }
+                    }
+                    
+                    if (valid_vertex) {
                         vertices.push_back(vertex);
                     }
                 }
@@ -699,7 +814,15 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
                         Py_ssize_t num_indices = PyList_Size(face_item);
                         std::vector<int> face_indices;
                         for (Py_ssize_t idx = 0; idx < num_indices; idx++) {
-                            int vertex_idx = PyLong_AsLong(PyList_GetItem(face_item, idx));
+                            PyObject* idx_obj = PyList_GetItem(face_item, idx);
+                            int vertex_idx;
+                            if (PyLong_Check(idx_obj)) {
+                                vertex_idx = static_cast<int>(PyLong_AsLong(idx_obj));
+                            } else if (PyFloat_Check(idx_obj)) {
+                                vertex_idx = static_cast<int>(PyFloat_AsDouble(idx_obj));
+                            } else {
+                                continue;
+                            }
                             face_indices.push_back(vertex_idx);
                         }
                         faces.push_back(face_indices);
@@ -708,7 +831,15 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
                         Py_ssize_t num_indices = PyTuple_Size(face_item);
                         std::vector<int> face_indices;
                         for (Py_ssize_t idx = 0; idx < num_indices; idx++) {
-                            int vertex_idx = PyLong_AsLong(PyTuple_GetItem(face_item, idx));
+                            PyObject* idx_obj = PyTuple_GetItem(face_item, idx);
+                            int vertex_idx;
+                            if (PyLong_Check(idx_obj)) {
+                                vertex_idx = static_cast<int>(PyLong_AsLong(idx_obj));
+                            } else if (PyFloat_Check(idx_obj)) {
+                                vertex_idx = static_cast<int>(PyFloat_AsDouble(idx_obj));
+                            } else {
+                                continue;
+                            }
                             face_indices.push_back(vertex_idx);
                         }
                         faces.push_back(face_indices);
@@ -760,48 +891,128 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
 
         std::cout << "\n[STEP Exporter] Created " << shapes.size() << " valid shapes" << std::endl;
 
-        // 组合所有形状
-        TopoDS_Shape finalShape;
-        if (shapes.size() == 1) {
-            finalShape = shapes[0];
-        } else {
-            BRep_Builder builder;
-            TopoDS_Compound compound;
-            builder.MakeCompound(compound);
-            for (const auto& shape : shapes) {
-                if (!shape.IsNull()) {
-                    builder.Add(compound, shape);
+        // 逐个传输每个形状，确保正确的STEP结构
+        std::cout << "[STEP Exporter] Transferring " << shapes.size() << " shapes to STEP..." << std::endl;
+        int transferred_count = 0;
+        for (size_t i = 0; i < shapes.size(); i++) {
+            TopoDS_Shape shape = shapes[i];
+            
+            // 几何修复
+            if (fix_geometry) {
+                shape = fix_shape_enhanced(shape);
+            }
+            
+            // 验证形状
+            int face_count = 0;
+            for (TopExp_Explorer exp(shape, TopAbs_FACE); exp.More(); exp.Next()) face_count++;
+            if (face_count == 0) {
+                std::cerr << "[STEP Exporter] ✗ Shape " << i + 1 << " has no faces, skipping." << std::endl;
+                continue;
+            }
+            
+            // 检查形状是否为空
+            if (shape.IsNull()) {
+                std::cerr << "[STEP Exporter] ✗ Shape " << i + 1 << " is null, skipping." << std::endl;
+                continue;
+            }
+            
+            // 计算形状体积，确保它有实际几何内容
+            GProp_GProps props;
+            BRepGProp::VolumeProperties(shape, props);
+            double volume = fabs(props.Mass());
+            
+            // 考虑缩放因子的影响，调整体积阈值
+            // 对于缩放后的模型（如0.001缩放因子），体积会很小
+            // 使用相对阈值，基于形状的边界框大小
+            Bnd_Box bbox;
+            BRepBndLib::Add(shape, bbox);
+            double xmin, ymin, zmin, xmax, ymax, zmax;
+            bbox.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+            double size = std::max({xmax - xmin, ymax - ymin, zmax - zmin});
+            
+            // 如果边界框大小大于0.1毫米，则认为形状有效
+            if (size < 1.0e-4) { // 小于0.1毫米
+                std::cerr << "[STEP Exporter] ✗ Shape " << i + 1 << " has negligible size (" << size << "), skipping." << std::endl;
+                continue;
+            }
+            
+            // 检查体积，但允许特定形状类型的体积为0
+            // 对于壳、面和复合形状，体积为0是正常的
+            if (volume < 1.0e-24) { // 非常小的体积阈值
+                // 检查形状类型
+                TopAbs_ShapeEnum shapeType = shape.ShapeType();
+                if (shapeType == TopAbs_SOLID) {
+                    // 实体应该有体积，如果没有则跳过
+                    std::cerr << "[STEP Exporter] ✗ Shape " << i + 1 << " has negligible volume (" << volume << "), skipping." << std::endl;
+                    continue;
+                } else {
+                    // 对于非实体形状（壳、面、复合），体积为0是正常的
+                    // 检查这些形状是否有实际的几何内容
+                    int face_count = 0;
+                    for (TopExp_Explorer exp(shape, TopAbs_FACE); exp.More(); exp.Next()) face_count++;
+                    if (face_count == 0) {
+                        std::cerr << "[STEP Exporter] ✗ Shape " << i + 1 << " has no faces and negligible volume, skipping." << std::endl;
+                        continue;
+                    }
+                    std::cout << "[STEP Exporter] ✓ Shape " << i + 1 << " has negligible volume but has " << face_count << " faces, proceeding." << std::endl;
                 }
             }
-            finalShape = compound;
+            
+            // 再次尝试修复形状
+            TopoDS_Shape finalShape = fix_shape_enhanced(shape);
+            if (finalShape.IsNull()) {
+                std::cerr << "[STEP Exporter] ✗ Shape " << i + 1 << " became null after final fixing, skipping." << std::endl;
+                continue;
+            }
+            
+            BRepCheck_Analyzer analyzer(finalShape);
+            if (!analyzer.IsValid()) {
+                std::cout << "[STEP Exporter] Warning: Shape " << i + 1 << " has validation issues, attempting transfer anyway." << std::endl;
+            }
+            
+            // 根据形状类型选择传输模式
+            STEPControl_StepModelType transfer_mode = STEPControl_AsIs;
+            switch (finalShape.ShapeType()) {
+                case TopAbs_SOLID:
+                    transfer_mode = STEPControl_ManifoldSolidBrep;
+                    std::cout << "[STEP Exporter]   Shape " << i + 1 << " is SOLID, using ManifoldSolidBrep." << std::endl;
+                    break;
+                case TopAbs_SHELL:
+                    transfer_mode = STEPControl_ShellBasedSurfaceModel;
+                    std::cout << "[STEP Exporter]   Shape " << i + 1 << " is SHELL, using ShellBasedSurfaceModel." << std::endl;
+                    break;
+                case TopAbs_COMPOUND:
+                    // 对于复合形状，尝试使用AsIs，或者如果包含实体则使用ManifoldSolidBrep
+                    transfer_mode = STEPControl_AsIs;
+                    std::cout << "[STEP Exporter]   Shape " << i + 1 << " is COMPOUND, using AsIs." << std::endl;
+                    break;
+                default:
+                    transfer_mode = STEPControl_AsIs;
+                    std::cout << "[STEP Exporter]   Shape " << i + 1 << " type " << finalShape.ShapeType() << ", using AsIs." << std::endl;
+                    break;
+            }
+            
+            IFSelect_ReturnStatus status = writer.Transfer(finalShape, transfer_mode);
+            if (status != IFSelect_RetDone) {
+                std::cerr << "[STEP Exporter] ✗ Failed to transfer shape " << i + 1 << std::endl;
+                // 继续处理其他形状
+            } else {
+                transferred_count++;
+                std::cout << "[STEP Exporter]   ✓ Shape " << i + 1 << " transferred successfully." << std::endl;
+            }
         }
-
-        // 最终几何修复
-        if (fix_geometry) {
-            finalShape = fix_shape_enhanced(finalShape);
-        }
-
-        // 验证最终形状
-        BRepCheck_Analyzer analyzer(finalShape);
-        if (!analyzer.IsValid()) {
-            std::cout << "[STEP Exporter] Warning: Final shape has validation issues" << std::endl;
-        } else {
-            std::cout << "[STEP Exporter] Final shape validation passed." << std::endl;
-        }
-
-        // 写入STEP文件
-        std::cout << "[STEP Exporter] Transferring shape to STEP..." << std::endl;
-        IFSelect_ReturnStatus status = writer.Transfer(finalShape, STEPControl_AsIs);
-
-        if (status != IFSelect_RetDone) {
-            std::cerr << "[STEP Exporter] ✗ Failed to transfer shape" << std::endl;
+        
+        if (transferred_count == 0) {
+            std::cerr << "[STEP Exporter] ✗ No shapes were successfully transferred." << std::endl;
             Py_RETURN_FALSE;
         }
+        
+        std::cout << "[STEP Exporter] Successfully transferred " << transferred_count << " out of " << shapes.size() << " shapes." << std::endl;
 
         std::cout << "[STEP Exporter] Writing STEP file..." << std::endl;
-        status = writer.Write(filename);
+        IFSelect_ReturnStatus write_status = writer.Write(filename);
 
-        if (status == IFSelect_RetDone) {
+        if (write_status == IFSelect_RetDone) {
             std::cout << "[STEP Exporter] ✓ Successfully exported ENHANCED STEP file" << std::endl;
             std::cout << "[STEP Exporter] =========================================\n" << std::endl;
             Py_RETURN_TRUE;

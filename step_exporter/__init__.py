@@ -93,13 +93,14 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
     )
     
     # 基本参数
-    scale: FloatProperty(
-        name="Scale",
-        description="Scale factor for export (Blender units to mm)",
-        default=0.001,  # 米到毫米转换
-        min=0.000001,
-        max=10000.0,
-        precision=6,
+    unit: EnumProperty(
+        name="Export Unit",
+        description="Unit for exported STEP file",
+        items=[
+            ('mm', "毫米 (mm)", "Export in millimeters (1 Blender unit = 1 mm)"),
+            ('m', "米 (m)", "Export in meters (1 Blender unit = 1 m)"),
+        ],
+        default='mm',
     )
     
     fix_geometry: BoolProperty(
@@ -118,7 +119,7 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
     advanced_brep: BoolProperty(
         name="Advanced BREP",
         description="Use advanced BREP representation (includes PCURVE, parametric surfaces). Recommended for best compatibility",
-        default=True,
+        default=False,
     )
     
     step_schema: EnumProperty(
@@ -134,8 +135,8 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
     
     sew_tolerance: FloatProperty(
         name="Sewing Tolerance",
-        description="Tolerance for sewing faces together (in mm). Smaller values = more precise but slower",
-        default=0.01,
+        description="Tolerance for sewing faces together (in meters, will be converted to mm internally). Smaller values = more precise but slower",
+        default=0.001,
         min=0.0001,
         max=1.0,
         precision=4,
@@ -151,6 +152,12 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
     apply_modifiers: BoolProperty(
         name="Apply Modifiers",
         description="Apply all modifiers before export",
+        default=True,
+    )
+    
+    enable_logging: BoolProperty(
+        name="Enable Logging",
+        description="Enable detailed logging to console",
         default=True,
     )
     
@@ -175,31 +182,21 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
         # 基本设置
         box = layout.box()
         box.label(text="Basic Settings", icon='SETTINGS')
-        box.prop(self, "scale")
+        box.prop(self, "unit")
         box.prop(self, "fix_geometry")
         box.prop(self, "use_selected")
         box.prop(self, "apply_modifiers")
+        box.prop(self, "enable_logging")
         
         # 高级 BREP 设置
         box = layout.box()
         box.label(text="Advanced BREP & Solid Creation", icon='MOD_SOLIDIFY')
         box.prop(self, "create_solid")
         box.prop(self, "advanced_brep")
+        box.prop(self, "step_schema")
+        box.prop(self, "sew_tolerance")
         
-        # 只有当 advanced_brep 启用时才显示这些选项
-        if self.advanced_brep:
-            box.prop(self, "step_schema")
-            box.prop(self, "sew_tolerance")
-        
-        # 导出按钮
-        layout.separator()
-        row = layout.row()
-        row.scale_y = 2.0
-        if CPP_MODULE_LOADED:
-            row.operator("export_scene.step_enhanced", text="Export STEP (Enhanced)", icon='EXPORT')
-        else:
-            row.enabled = False
-            row.operator("export_scene.step_enhanced", text="C++ Module Not Loaded", icon='CANCEL')
+
     
     def execute(self, context):
         if not CPP_MODULE_LOADED:
@@ -219,11 +216,17 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
             self.report({'ERROR'}, "No mesh objects found to export.")
             return {'CANCELLED'}
         
+        # 根据选择的单位确定缩放值
+        if self.unit == 'mm':
+            scale = 1.0  # 1 Blender单位 = 1毫米
+        else:  # 'm'
+            scale = 1000.0  # 1 Blender单位 = 1米 = 1000毫米
+            
         print(f"\n[STEP Exporter] Starting enhanced export of {len(export_objects)} objects...")
-        print(f"[STEP Exporter] Parameters: Scale={self.scale}, FixGeometry={self.fix_geometry}, CreateSolid={self.create_solid}, AdvancedBREP={self.advanced_brep}")
+        print(f"[STEP Exporter] Parameters: Unit={self.unit}, Scale={scale}, FixGeometry={self.fix_geometry}, CreateSolid={self.create_solid}, AdvancedBREP={self.advanced_brep}")
         
         for obj in export_objects:
-            mesh_data = self.get_mesh_data_enhanced(obj, context, self.scale, self.apply_modifiers)
+            mesh_data = self.get_mesh_data_enhanced(obj, context, scale, self.apply_modifiers)
             if mesh_data:
                 objects_data.append(mesh_data)
         
@@ -233,13 +236,21 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
         
         try:
             # 调用 C++ 增强版导出函数
+            # 转换单位字符串：Blender 中使用 'mm'/'m'，STEP 中使用 'MM'/'M'
+            step_unit = 'MM' if self.unit == 'mm' else 'M'
+            # 缝合容差：Blender中单位为米，C++函数也期望米为单位
+            sew_tolerance_m = self.sew_tolerance
             success = step_exporter.export_scene_enhanced(
                 self.filepath,
                 objects_data,
-                self.scale,
+                scale,
                 1 if self.fix_geometry else 0,
                 1 if self.create_solid else 0,
-                1 if self.advanced_brep else 0
+                1 if self.advanced_brep else 0,
+                self.step_schema,
+                step_unit,
+                1 if self.enable_logging else 0,
+                sew_tolerance_m
             )
             
             if success:
@@ -302,106 +313,10 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
             'faces': faces
         }
 
-# ====================== 旧版导出操作类（保持兼容性） ======================
-
-class STEP_EXPORTER_OT_export_legacy(Operator, ExportHelper):
-    """Export to STEP format (Legacy version)"""
-    bl_idname = "export_scene.step_legacy"
-    bl_label = "Export STEP (Legacy)"
-    bl_description = "Export to STEP format using legacy method"
-    bl_options = {'PRESET'}
-    
-    filename_ext = ".step"
-    filter_glob: StringProperty(
-        default="*.step;*.stp",
-        options={'HIDDEN'},
-    )
-    
-    scale: FloatProperty(
-        name="Scale",
-        description="Scale factor for export",
-        default=0.001,
-        min=0.000001,
-        max=10000.0,
-        precision=6,
-    )
-    
-    fix_geometry: BoolProperty(
-        name="Fix Geometry",
-        description="Enable geometry fixing",
-        default=True,
-    )
-    
-    def execute(self, context):
-        if not CPP_MODULE_LOADED:
-            self.report({'ERROR'}, "C++ extension module not loaded.")
-            return {'CANCELLED'}
-        
-        # 收集所有网格对象
-        objects_data = []
-        for obj in context.scene.objects:
-            if obj.type == 'MESH':
-                mesh_data = self.get_mesh_data(obj, self.scale)
-                if mesh_data:
-                    objects_data.append(mesh_data)
-        
-        if not objects_data:
-            self.report({'ERROR'}, "No mesh objects found.")
-            return {'CANCELLED'}
-        
-        try:
-            success = step_exporter.export_scene(
-                self.filepath,
-                objects_data,
-                self.scale,
-                1 if self.fix_geometry else 0
-            )
-            
-            if success:
-                self.report({'INFO'}, f"Exported {len(objects_data)} object(s)")
-                return {'FINISHED'}
-            else:
-                self.report({'ERROR'}, "Export failed.")
-                return {'CANCELLED'}
-                
-        except Exception as e:
-            self.report({'ERROR'}, f"Error: {str(e)[:100]}")
-            return {'CANCELLED'}
-    
-    def get_mesh_data(self, obj, scale):
-        """获取网格数据（简化版）"""
-        if obj.type != 'MESH':
-            return None
-        
-        mesh = obj.data
-        if not mesh.loop_triangles:
-            mesh.calc_loop_triangles()
-        
-        vertices = []
-        for vert in mesh.vertices:
-            world_co = obj.matrix_world @ vert.co
-            vertices.append([world_co.x * scale, world_co.y * scale, world_co.z * scale])
-        
-        faces = []
-        for tri in mesh.loop_triangles:
-            faces.append(list(tri.vertices))
-        
-        if len(vertices) == 0 or len(faces) == 0:
-            return None
-        
-        return {
-            'name': obj.name,
-            'vertices': vertices,
-            'faces': faces
-        }
-
 # ====================== 菜单函数 ======================
 
 def menu_func_export_enhanced(self, context):
     self.layout.operator(STEP_EXPORTER_OT_export_enhanced.bl_idname, text="STEP Enhanced (.step)")
-
-def menu_func_export_legacy(self, context):
-    self.layout.operator(STEP_EXPORTER_OT_export_legacy.bl_idname, text="STEP Legacy (.step)")
 
 # ====================== 面板类 ======================
 
@@ -435,7 +350,6 @@ class STEP_EXPORTER_PT_main_panel(Panel):
         if CPP_MODULE_LOADED:
             col = layout.column(align=True)
             col.operator("export_scene.step_enhanced", text="Quick Export (Enhanced)", icon='EXPORT')
-            col.operator("export_scene.step_legacy", text="Quick Export (Legacy)", icon='EXPORT')
         else:
             box = layout.box()
             box.label(text="C++ module required", icon='ERROR')
@@ -445,7 +359,6 @@ class STEP_EXPORTER_PT_main_panel(Panel):
 
 classes = [
     STEP_EXPORTER_OT_export_enhanced,
-    STEP_EXPORTER_OT_export_legacy,
     STEP_EXPORTER_PT_main_panel,
 ]
 
@@ -456,14 +369,12 @@ def register():
     
     # 添加到导出菜单
     bpy.types.TOPBAR_MT_file_export.append(menu_func_export_enhanced)
-    bpy.types.TOPBAR_MT_file_export.append(menu_func_export_legacy)
     
     print("[STEP Exporter] Enhanced plugin registered successfully")
 
 def unregister():
     # 从导出菜单移除
     bpy.types.TOPBAR_MT_file_export.remove(menu_func_export_enhanced)
-    bpy.types.TOPBAR_MT_file_export.remove(menu_func_export_legacy)
     
     # 注销所有类
     for cls in reversed(classes):

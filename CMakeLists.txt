@@ -10,6 +10,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # ====== 2. 查找 OpenCASCADE ======
 # 使用 vcpkg 提供的 CONFIG 模式
+set(OpenCASCADE_DIR "f:/git/blender2step/vcpkg_installed/x64-windows/share/opencascade" CACHE PATH "Path to OpenCASCADE config")
 find_package(OpenCASCADE CONFIG REQUIRED)
 
 # 打印找到的库

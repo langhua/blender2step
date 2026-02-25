@@ -20,3 +20,5 @@ build/
 __pycache__/
 vcpkg_installed/
 *.log
+blender.crash.*
+build_*.txt

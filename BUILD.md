@@ -1,4 +1,6 @@
+
 cd blender2step\build
+Remove-Item ..\CMakeCache.txt -ErrorAction SilentlyContinue
 Remove-Item CMakeCache.txt -ErrorAction SilentlyContinue
 cmake .. -DCMAKE_TOOLCHAIN_FILE="F:/git/vcpkg/scripts/buildsystems/vcpkg.cmake"
 

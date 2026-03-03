@@ -12,7 +12,7 @@ bool export_shape_to_step(const TopoDS_Shape& shape, const char* filename) {
         STEPControl_Writer writer;
 
         // 设置STEP版本
-        Interface_Static::SetCVal("write.step.schema", "AP214");
+        Interface_Static::SetCVal("write.step.schema", "AP214DIS");
 
         // 设置单位系统（毫米）
         Interface_Static::SetCVal("write.step.unit", "MM");

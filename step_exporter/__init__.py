@@ -1,12 +1,12 @@
 """
 STEP Exporter for Blender (Enhanced)
-Version 4.1.0 with advanced BREP and solid creation support
+Version 4.1.1 with advanced BREP and solid creation support
 """
 
 bl_info = {
     "name": "STEP Exporter (Enhanced)",
     "author": "Blender STEP Exporter",
-    "version": (4, 1, 0),
+    "version": (4, 1, 1),
     "blender": (3, 0, 0),
     "location": "File > Export > STEP (Enhanced)",
     "description": "Export to STEP format with advanced BREP, solid creation and geometry fixing",
@@ -119,27 +119,29 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
     advanced_brep: BoolProperty(
         name="Advanced BREP",
         description="Use advanced BREP representation (includes PCURVE, parametric surfaces). Recommended for best compatibility",
-        default=False,
+        default=True,
     )
     
     step_schema: EnumProperty(
         name="STEP Schema",
         description="STEP application protocol",
         items=[
-            ('AP214', "AP214", "ISO 10303-214: Core data for automotive mechanical design processes (supports colors and layers)"),
+            ('AP214DIS', "AP214DIS", "ISO 10303-214 DIS version: Draft International Standard (default)"),
+            ('AP214CD', "AP214CD", "ISO 10303-214 Conformance Class D: Core data for automotive mechanical design processes"),
+            ('AP214IS', "AP214IS", "ISO 10303-214 IS version: International Standard"),
             ('AP203', "AP203", "ISO 10303-203: Configuration controlled 3D designs of mechanical parts and assemblies (widely supported)"),
-            ('AP242', "AP242", "ISO 10303-242: Managed model-based 3D engineering (most modern)"),
+            ('AP242DIS', "AP242DIS", "ISO 10303-242 DIS version: Managed model-based 3D engineering"),
         ],
-        default='AP214',
+        default='AP214DIS',
     )
     
     sew_tolerance: FloatProperty(
         name="Sewing Tolerance",
         description="Tolerance for sewing faces together (in meters, will be converted to mm internally). Smaller values = more precise but slower",
         default=0.001,
-        min=0.0001,
+        min=0.000001,  # 1 micron minimum
         max=1.0,
-        precision=4,
+        precision=6,
         subtype='DISTANCE',
     )
     
@@ -225,7 +227,8 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
         print(f"\n[STEP Exporter] Starting enhanced export of {len(export_objects)} objects...")
         print(f"[STEP Exporter] Parameters: Unit={self.unit}, Scale={scale}, FixGeometry={self.fix_geometry}, CreateSolid={self.create_solid}, AdvancedBREP={self.advanced_brep}")
         
-        for obj in export_objects:
+        for idx, obj in enumerate(export_objects):
+            print(f"[Python DEBUG] Processing object {idx}: '{obj.name}'")
             mesh_data = self.get_mesh_data_enhanced(obj, context, scale, self.apply_modifiers)
             if mesh_data:
                 objects_data.append(mesh_data)
@@ -240,6 +243,18 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
             step_unit = 'MM' if self.unit == 'mm' else 'M'
             # 缝合容差：Blender中单位为米，C++函数也期望米为单位
             sew_tolerance_m = self.sew_tolerance
+            print(f"[Python DEBUG] sew_tolerance_m = {sew_tolerance_m}")
+            print(f"[Python DEBUG] scale = {scale}, enable_logging = {self.enable_logging}")
+            # 调试：打印传递给C++的顶点数据
+            if objects_data and len(objects_data) > 0:
+                first_obj = objects_data[0]
+                if 'vertices' in first_obj:
+                    verts = first_obj['vertices']
+                    print(f"[Python DEBUG] First 5 vertices being passed to C++:")
+                    for i in range(min(5, len(verts))):
+                        print(f"  Vertex {i}: {verts[i]}")
+            import sys
+            sys.stdout.flush()
             success = step_exporter.export_scene_enhanced(
                 self.filepath,
                 objects_data,
@@ -272,7 +287,17 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
         if obj.type != 'MESH':
             return None
         
+        import sys
+        print(f"[Python DEBUG] get_mesh_data_enhanced called for object '{obj.name}'")
+        sys.stdout.flush()
         mesh = obj.data
+        
+        # 检查原始顶点坐标
+        print(f"[Python DEBUG] Original mesh vertex count: {len(mesh.vertices)}")
+        if len(mesh.vertices) > 0:
+            for i in range(min(5, len(mesh.vertices))):
+                v = mesh.vertices[i]
+                print(f"[Python DEBUG] Original vertex {i}: ({v.co.x}, {v.co.y}, {v.co.z})")
         
         # 获取最终几何（应用修改器）
         depsgraph = context.evaluated_depsgraph_get() if apply_modifiers else None
@@ -289,9 +314,37 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
         
         # 获取顶点（应用世界变换）
         vertices = []
-        for vert in eval_mesh.vertices:
+        zero_vertex_count = 0
+        for idx, vert in enumerate(eval_mesh.vertices):
             world_co = eval_obj.matrix_world @ vert.co
-            vertices.append([world_co.x * scale, world_co.y * scale, world_co.z * scale])
+            vertex_scaled = [round(float(world_co.x) * scale, 12), round(float(world_co.y) * scale, 12), round(float(world_co.z) * scale, 12)]
+            vertices.append(vertex_scaled)
+            
+            # 检查顶点是否为零
+            if abs(world_co.x) < 1e-12 and abs(world_co.y) < 1e-12 and abs(world_co.z) < 1e-12:
+                zero_vertex_count += 1
+            
+            # 详细调试前5个顶点
+            if idx < 5:
+                print(f"[Python DEBUG] Vertex {idx}:")
+                print(f"  Local co: ({vert.co.x}, {vert.co.y}, {vert.co.z})")
+                print(f"  World co: ({world_co.x}, {world_co.y}, {world_co.z})")
+                print(f"  Scaled: ({vertex_scaled[0]}, {vertex_scaled[1]}, {vertex_scaled[2]})")
+                print(f"  Matrix: {eval_obj.matrix_world}")
+        
+        # 调试：打印统计信息
+        print(f"[Python DEBUG] Object '{obj.name}' vertex analysis:")
+        print(f"  Total vertices: {len(vertices)}")
+        print(f"  Zero world-co vertices: {zero_vertex_count}")
+        print(f"  Scale factor: {scale}")
+        print(f"  Matrix world: {eval_obj.matrix_world}")
+        import sys
+        sys.stdout.flush()
+        
+        # 如果所有顶点都为零，打印严重警告
+        if zero_vertex_count == len(vertices) and len(vertices) > 0:
+            print(f"[Python WARNING] ALL vertices have zero world coordinates! Check object transform and mesh data.")
+            sys.stdout.flush()
         
         # 获取三角面
         faces = []

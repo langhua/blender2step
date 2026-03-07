@@ -1,9 +1,9 @@
 #include "step_converter.h"
 #include <BRepPrimAPI_MakeBox.hxx>
-#include <Interface_Static.hxx> // 必须包含
+#include <Interface_Static.hxx> // [Comment]
  
 TopoDS_Shape create_test_shape() {
-    // 创建一个简单的测试立方体
+    // [Comment]
     return BRepPrimAPI_MakeBox(10.0, 10.0, 10.0).Shape();
 }
 
@@ -11,16 +11,16 @@ bool export_shape_to_step(const TopoDS_Shape& shape, const char* filename) {
     try {
         STEPControl_Writer writer;
 
-        // 设置STEP版本
+        // [Comment]
         Interface_Static::SetCVal("write.step.schema", "AP214DIS");
 
-        // 设置单位系统（毫米）
+        // [Comment]
         Interface_Static::SetCVal("write.step.unit", "MM");
 
-        // 设置几何容差
+        // [Comment]
         Interface_Static::SetRVal("write.precision.val", 0.001);
 
-        // 转换形状
+        // [Comment]
         IFSelect_ReturnStatus status = writer.Transfer(shape, STEPControl_AsIs);
 
         if (status != IFSelect_RetDone) {
@@ -28,7 +28,7 @@ bool export_shape_to_step(const TopoDS_Shape& shape, const char* filename) {
             return false;
         }
 
-        // 写入文件
+        // [Comment]
         status = writer.Write(filename);
 
         if (status != IFSelect_RetDone) {

@@ -56,7 +56,7 @@
 #include <gp_Dir.hxx>
 #include <gp_Pln.hxx>
 
-// 鍑犱綍淇涓庢鏌ュ伐鍏?
+// 几何修复与检查工具
 #include <ShapeFix_Shape.hxx>
 #include <ShapeFix_ShapeTolerance.hxx>
 #include <ShapeFix_Solid.hxx>
@@ -77,19 +77,19 @@
 #include <Bnd_Box.hxx>
 #include <BRepBndLib.hxx>
 
-// 鐢ㄤ簬楂樼骇BREP琛ㄧず鍜孭CURVE
+// 用于高级BREP表示和PCURVE
 #include <Geom_Surface.hxx>
 #include <Geom_Plane.hxx>
 #include <BRep_Tool.hxx>
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepBuilderAPI_NurbsConvert.hxx>
 
-// 鐗堟湰淇℃伅
+// 版本信息
 static const char* MODULE_VERSION = "4.1.1";
 
-// ====================== 鍘熷鍔熻兘鍑芥暟 (蹇呴』淇濈暀) ======================
+// ====================== 原始功能函数 (必须保留) ======================
 
-// 绠€鍗曠殑褰㈢姸淇鍑芥暟锛堝師濮嬬増鏈級
+// 简单的形状修复函数（原始版本）
 TopoDS_Shape static fix_shape(const TopoDS_Shape& shape, double tolerance = 1.0e-6) {
     try {
         Handle(ShapeFix_Shape) fixer = new ShapeFix_Shape;
@@ -116,7 +116,7 @@ TopoDS_Shape static fix_shape(const TopoDS_Shape& shape, double tolerance = 1.0e
     }
 }
 
-// 浠庣綉鏍煎垱寤哄舰鐘讹紙鍘熷鐗堟湰锛?
+// 从网格创建形状（原始版本）
 TopoDS_Shape static create_shape_from_mesh(const std::vector<std::vector<double>>& vertices,
                                            const std::vector<std::vector<int>>& faces) {
     if (vertices.empty() || faces.empty()) {
@@ -193,12 +193,12 @@ TopoDS_Shape static create_shape_from_mesh(const std::vector<std::vector<double>
     }
 }
 
-// 淇鍑犱綍褰㈢姸锛堝寮虹増锛屾敮鎸佸疄浣擄級
+// 修复几何形状（增强版，支持实体）
 TopoDS_Shape static fix_shape_enhanced(const TopoDS_Shape& shape, double tolerance = 1.0e-6) {
     try {
         std::cout << "[STEP Exporter] Starting enhanced shape fixing with tolerance " << tolerance << std::endl;
         
-        // 璁板綍杈撳叆褰㈢姸绫诲瀷
+        // 记录输入形状类型
         TopAbs_ShapeEnum inputShapeType = shape.ShapeType();
         bool input_is_solid = (inputShapeType == TopAbs_SOLID);
         bool preserveSolidity = input_is_solid;
@@ -206,12 +206,12 @@ TopoDS_Shape static fix_shape_enhanced(const TopoDS_Shape& shape, double toleran
             std::cout << "[STEP Exporter] Input shape is SOLID, will preserve solidity." << std::endl;
         }
         
-        // 杈呭姪鍑芥暟锛氬鏋滃彲鑳斤紝灏哠HELL鎭㈠涓篠OLID
+        // 辅助函数：如果可能，将SHELL恢复为SOLID
         auto tryRestoreSolidity = [](const TopoDS_Shape& shape) -> TopoDS_Shape {
             if (shape.ShapeType() == TopAbs_SHELL) {
                 TopoDS_Shell shell = TopoDS::Shell(shape);
                 
-                // 璁＄畻澹崇殑鍖呭洿鐩掑ぇ灏忎互璋冩暣瀹瑰樊
+                // 计算壳的包围盒大小以调整容差
                 Bnd_Box bbox;
                 BRepBndLib::Add(shell, bbox);
                 double bboxSize = 0.0;
@@ -225,7 +225,7 @@ TopoDS_Shape static fix_shape_enhanced(const TopoDS_Shape& shape, double toleran
                 if (shellTolerance > 0.01) shellTolerance = 0.01;
                 std::cout << "[STEP Exporter]   Shell bbox size: " << bboxSize << ", using tolerance: " << shellTolerance << std::endl;
                 
-                // 鏂规硶0锛氶鍏堜慨澶嶅３锛堥棴鍚堥棿闅欙紝淇鍑犱綍锛変娇鐢ㄨ嚜閫傚簲瀹瑰樊
+                // 方法0：首先修复壳（闭合间隙，修复几何）使用自适应容差
                 std::cout << "[STEP Exporter]   Attempting to fix shell before solid conversion..." << std::endl;
                 Handle(ShapeFix_Shell) shellFixer = new ShapeFix_Shell;
                 shellFixer->Init(shell);
@@ -241,11 +241,11 @@ TopoDS_Shape static fix_shape_enhanced(const TopoDS_Shape& shape, double toleran
                     std::cout << "[STEP Exporter]   Shell fixing did not improve, using original shell." << std::endl;
                 }
                 
-                // 鏂规硶1锛氱洿鎺ヨ浆鎹负瀹炰綋
+                // 方法1：直接转换为实体
                 BRepBuilderAPI_MakeSolid solidMaker(shell);
                 if (solidMaker.IsDone()) {
                     TopoDS_Solid solid = solidMaker.Solid();
-                    // 楠岃瘉浣撶Н
+                    // 验证体积
                     GProp_GProps props;
                     BRepGProp::VolumeProperties(solid, props);
                     double volume = fabs(props.Mass());
@@ -254,7 +254,7 @@ TopoDS_Shape static fix_shape_enhanced(const TopoDS_Shape& shape, double toleran
                         return solid;
                     }
                 }
-                // 鏂规硶2锛氬鏋滅洿鎺ヨ浆鎹㈠け璐ワ紝灏濊瘯鍔犲帤锛堥€傜敤浜庨潪闂悎澹虫垨寰皬闂撮殭锛?
+                // 方法2：如果直接转换失败，尝试加厚（适用于非闭合壳或微小间隙）
                 std::cout << "[STEP Exporter]   Direct solid conversion failed, trying thickening..." << std::endl;
                 double thicknesses[] = {0.001, -0.001, 0.01, -0.01, 0.1, -0.1};
                 for (double thickness : thicknesses) {
@@ -277,11 +277,11 @@ TopoDS_Shape static fix_shape_enhanced(const TopoDS_Shape& shape, double toleran
                             }
                         }
                     } catch (Standard_Failure& e) {
-                        // 蹇界暐寮傚父锛屽皾璇曚笅涓€涓帤搴?
+                        // 忽略异常，尝试下一个厚度
                     }
                 }
                 
-                // 鏂规硶3锛氫娇鐢˙RepOffsetAPI_MakeOffsetShape杩涜寰皬鍋忕Щ锛堥€傜敤浜庨潪闂悎澹筹級
+                // 方法3：使用BRepOffsetAPI_MakeOffsetShape进行微小偏移（适用于非闭合壳）
                 std::cout << "[STEP Exporter]   Trying offset shape..." << std::endl;
                 double offsets[] = {0.001, -0.001, 0.01, -0.01};
                 for (double offset : offsets) {
@@ -304,11 +304,11 @@ TopoDS_Shape static fix_shape_enhanced(const TopoDS_Shape& shape, double toleran
                             }
                         }
                     } catch (Standard_Failure& e) {
-                        // 蹇界暐寮傚父锛屽皾璇曚笅涓€涓亸绉?
+                        // 忽略异常，尝试下一个偏移
                     }
                 }
                 
-                // 鏂规硶4锛氫娇鐢ㄦ洿灏忕殑瀹瑰樊杩涜缂濆悎锛岀劧鍚庡皾璇曡浆鎹负瀹炰綋
+                // 方法4：使用更小的容差进行缝合，然后尝试转换为实体
                 std::cout << "[STEP Exporter]   Trying sewing with reduced tolerance..." << std::endl;
                 BRepBuilderAPI_Sewing sewer(shellTolerance * 0.1);
                 sewer.Add(shell);
@@ -333,7 +333,7 @@ TopoDS_Shape static fix_shape_enhanced(const TopoDS_Shape& shape, double toleran
             return shape;
         };
         
-        // 璁＄畻褰㈢姸鐨勫寘鍥寸洅浠ヨ皟鏁村宸?
+        // 计算形状的包围盒以调整容差
         Bnd_Box bbox;
         BRepBndLib::Add(shape, bbox);
         double bboxSize = 0.0;
@@ -348,29 +348,29 @@ TopoDS_Shape static fix_shape_enhanced(const TopoDS_Shape& shape, double toleran
         std::cout << "[STEP Exporter] DEBUG: bboxSize = " << bboxSize << std::endl;
         std::cout << "[STEP Exporter] DEBUG: tolerance parameter = " << tolerance << std::endl;
         
-        // 鏍规嵁鍖呭洿鐩掑ぇ灏忚皟鏁村宸?
+        // 根据包围盒大小调整容差
         double adjustedTolerance = tolerance;
-        // 濡傛灉鍖呭洿鐩掑ぇ灏忓皬浜?寰背锛?e-6绫筹級锛岃涓洪浂灏哄妯″瀷锛屼娇鐢ㄩ粯璁ゅ宸?
+        // 如果包围盒大小小于1微米（1e-6米），视为零尺寸模型，使用默认容差
         if (bboxSize > 1.0e-6) {
-            // 浣跨敤鍖呭洿鐩掑瑙掔嚎闀垮害鐨?.1%浣滀负瀹瑰樊锛屼絾淇濇寔鍦ㄥ悎鐞嗚寖鍥村唴
+            // 使用包围盒对角线长度的0.1%作为容差，但保持在合理范围内
             adjustedTolerance = bboxSize * 0.001; // 0.1% of bbox size
             if (adjustedTolerance < tolerance) adjustedTolerance = tolerance;
             if (adjustedTolerance > tolerance * 100.0) adjustedTolerance = tolerance * 100.0;
             std::cout << "[STEP Exporter] Adjusted tolerance to " << adjustedTolerance << " based on bbox size " << bboxSize << std::endl;
         } else {
-            // 濡傛灉鍖呭洿鐩掑ぇ灏忔瀬灏忥紙<=1寰背锛夛紝瑙嗕负闆跺昂瀵告ā鍨嬶紝寮哄埗浣跨敤鏈€灏忓宸?
-            // 閬垮厤瀹瑰樊涓?瀵艰嚧淇澶辫触
+            // 如果包围盒大小极小（<=1微米），视为零尺寸模型，强制使用最小容差
+            // 避免容差为0导致修复失败
             adjustedTolerance = std::max(tolerance, 1.0e-6);
-            std::cout << "[STEP Exporter] WARNING: bounding box size is " << bboxSize << " (<=1寰背), forcing minimum tolerance " << adjustedTolerance << std::endl;
+            std::cout << "[STEP Exporter] WARNING: bounding box size is " << bboxSize << " (<=1微米), forcing minimum tolerance " << adjustedTolerance << std::endl;
         }
 
-        // 纭繚瀹瑰樊涓嶅皬浜庢渶灏忓€硷紙1寰背锛夛紝閬垮厤淇澶辫触
+        // 确保容差不小于最小值（1微米），避免修复失败
         if (adjustedTolerance < 1.0e-6) {
             std::cout << "[STEP Exporter] INFO: Adjusted tolerance " << adjustedTolerance << " is too small, increasing to 1e-06." << std::endl;
             adjustedTolerance = 1.0e-6;
         }
 
-        // 璁＄畻鍘熷褰㈢姸鐨勯潰鏁颁互璋冩暣瀹瑰樊涔樻暟
+        // 计算原始形状的面数以调整容差乘数
         int originalFaceCount = 0;
         for (TopExp_Explorer exp(shape, TopAbs_FACE); exp.More(); exp.Next()) originalFaceCount++;
         
@@ -379,42 +379,42 @@ TopoDS_Shape static fix_shape_enhanced(const TopoDS_Shape& shape, double toleran
             return shape;
         }
         
-        // 瀵逛簬楂橀潰鏁版ā鍨嬶紙>=10000锛夛紝璺宠繃澧炲己淇浠ラ伩鍏嶅穿婧?
+        // 对于高面数模型（>=10000），跳过增强修复以避免崩溃
         if (originalFaceCount >= 10000) {
             std::cout << "[STEP Exporter] High-poly model (" << originalFaceCount << " faces), skipping enhanced fixing to avoid crash." << std::endl;
             return shape;
         }
         
-        // 鏍规嵁闈㈡暟鍔ㄦ€佽皟鏁村宸箻鏁板拰淇绛栫暐
-        double toleranceMultiplier = 10.0; // 榛樿涔樻暟
-        bool allowNonManifold = false; // 榛樿寮哄埗娴佸舰鍑犱綍
+        // 根据面数动态调整容差乘数和修复策略
+        double toleranceMultiplier = 10.0; // 默认乘数
+        bool allowNonManifold = false; // 默认强制流形几何
         
         std::cout << "[STEP Exporter] DEBUG: originalFaceCount = " << originalFaceCount << std::endl;
         if (originalFaceCount < 500) {
-            toleranceMultiplier = 50.0; // 绠€鍗曠綉鏍硷紝浣跨敤杈冨ぇ瀹瑰樊淇闈炴祦褰㈣竟
+            toleranceMultiplier = 50.0; // 简单网格，使用较大容差修复非流形边
             allowNonManifold = false;
             std::cout << "[STEP Exporter] DEBUG: Using low-poly settings (face count < 500)" << std::endl;
         } else if (originalFaceCount < 2000) {
-            toleranceMultiplier = 15.0; // 涓瓑澶嶆潅搴︾綉鏍硷紙濡傜尨澶达級锛屽己鍒舵祦褰㈠嚑浣?
+            toleranceMultiplier = 15.0; // 中等复杂度网格（如猴头），强制流形几何
             allowNonManifold = false;
             std::cout << "[STEP Exporter] DEBUG: Using medium-poly settings (500 <= face count < 2000)" << std::endl;
         } else if (originalFaceCount < 5000) {
-            toleranceMultiplier = 10.0; // 楂橀潰鏁扮綉鏍?
+            toleranceMultiplier = 10.0; // 高面数网格
             allowNonManifold = false;
             std::cout << "[STEP Exporter] DEBUG: Using high-poly settings (2000 <= face count < 5000)" << std::endl;
         } else if (originalFaceCount < 10000) {
-            toleranceMultiplier = 10.0; // 澶嶆潅缃戞牸
+            toleranceMultiplier = 10.0; // 复杂网格
             allowNonManifold = true;
             std::cout << "[STEP Exporter] DEBUG: Using very high-poly settings (5000 <= face count < 10000)" << std::endl;
         } else {
-            toleranceMultiplier = 5.0; // 鏋侀珮缁嗚妭缃戞牸锛屼娇鐢ㄦ瀬灏忓宸繚鎸佸畬鏁存€?
-            allowNonManifold = true; // 鍏佽闈炴祦褰㈠嚑浣曪紝閬垮厤杩囧害淇
+            toleranceMultiplier = 5.0; // 极高细节网格，使用极小容差保持完整性
+            allowNonManifold = true; // 允许非流形几何，避免过度修复
             std::cout << "[STEP Exporter] DEBUG: Using extreme-poly settings (face count >= 10000)" << std::endl;
         }
         std::cout << "[STEP Exporter] Face count: " << originalFaceCount << ", using tolerance multiplier: " << toleranceMultiplier 
                   << ", non-manifold allowed: " << (allowNonManifold ? "yes" : "no") << std::endl;
 
-        // 瀵逛簬楂橀潰鏁版ā鍨嬶紙濡傜尨澶达級锛岀畝鍖栦慨澶嶆祦绋嬩互閬垮厤杩囧害淇
+        // 对于高面数模型（如猴头），简化修复流程以避免过度修复
         bool simplifyForHighPoly = (originalFaceCount >= 5000);
         std::cout << "[STEP Exporter] DEBUG: simplifyForHighPoly = " << (simplifyForHighPoly ? "true" : "false") << std::endl;
         if (simplifyForHighPoly) {
@@ -423,7 +423,7 @@ TopoDS_Shape static fix_shape_enhanced(const TopoDS_Shape& shape, double toleran
 
         TopoDS_Shape fixedShape = shape;
         
-        // 绗竴姝ワ細閫氱敤褰㈢姸淇
+        // 第一步：通用形状修复
         {
             std::cout << "[STEP Exporter] Step 1: Generic shape fixing..." << std::endl;
             Handle(ShapeFix_Shape) fixer = new ShapeFix_Shape;
@@ -439,20 +439,20 @@ TopoDS_Shape static fix_shape_enhanced(const TopoDS_Shape& shape, double toleran
             }
         }
         
-        // 绗竴姝ュ悗妫€鏌ュ疄浣撴€?
+        // 第一步后检查实体性
         if (preserveSolidity && fixedShape.ShapeType() == TopAbs_SHELL) {
             std::cout << "[STEP Exporter]   Shape became SHELL after step 1, attempting to restore SOLID..." << std::endl;
             fixedShape = tryRestoreSolidity(fixedShape);
         }
 
-        // 绗簩姝ワ細闈㈢骇淇 - 淇姣忎釜闈紙浠呭浣庨潰鏁版ā鍨嬶級
+        // 第二步：面级修复 - 修复每个面（仅对低面数模型）
         if (!simplifyForHighPoly) {
             std::cout << "[STEP Exporter] Step 2: Face-level fixing skipped (FixAddPCurve compatibility)." << std::endl;
         } else {
             std::cout << "[STEP Exporter] Step 2: Skipped for high-poly model." << std::endl;
         }
 
-        // 绗笁姝ワ細鐗瑰畾褰㈢姸绫诲瀷淇
+        // 第三步：特定形状类型修复
         if (fixedShape.ShapeType() == TopAbs_SOLID) {
             std::cout << "[STEP Exporter] Step 3: Solid-specific fixing..." << std::endl;
             Handle(ShapeFix_Solid) solidFixer = new ShapeFix_Solid;
@@ -468,11 +468,11 @@ TopoDS_Shape static fix_shape_enhanced(const TopoDS_Shape& shape, double toleran
             shellFixer->Perform();
             TopoDS_Shell fixedShell = shellFixer->Shell();
             
-            // 灏濊瘯灏嗗３鎭㈠涓哄疄浣擄紙浣跨敤澧炲己鐨勬仮澶嶉€昏緫锛?
+            // 尝试将壳恢复为实体（使用增强的恢复逻辑）
             TopoDS_Shape restoredShape = tryRestoreSolidity(fixedShell);
             if (restoredShape.ShapeType() == TopAbs_SOLID) {
                 fixedShape = restoredShape;
-                // 璁＄畻浣撶Н鐢ㄤ簬鏃ュ織杈撳嚭
+                // 计算体积用于日志输出
                 GProp_GProps props;
                 BRepGProp::VolumeProperties(restoredShape, props);
                 double volume = fabs(props.Mass());
@@ -482,11 +482,11 @@ TopoDS_Shape static fix_shape_enhanced(const TopoDS_Shape& shape, double toleran
             }
         }
 
-        // 绗洓姝ワ細缂濆悎娑堥櫎闈炴祦褰㈣繛鎺?
+        // 第四步：缝合消除非流形连接
         {
             std::cout << "[STEP Exporter] Step 4: Sewing to remove non-manifold edges..." << std::endl;
-            BRepBuilderAPI_Sewing sewer(adjustedTolerance * toleranceMultiplier); // 鍩轰簬闈㈡暟璋冩暣缂濆悎瀹瑰樊
-            sewer.SetNonManifoldMode(allowNonManifold ? Standard_True : Standard_False); // 鏍规嵁缃戞牸澶嶆潅搴﹀喅瀹?
+            BRepBuilderAPI_Sewing sewer(adjustedTolerance * toleranceMultiplier); // 基于面数调整缝合容差
+            sewer.SetNonManifoldMode(allowNonManifold ? Standard_True : Standard_False); // 根据网格复杂度决定
             sewer.Add(fixedShape);
             sewer.Perform();
             
@@ -496,20 +496,20 @@ TopoDS_Shape static fix_shape_enhanced(const TopoDS_Shape& shape, double toleran
             }
         }
         
-        // 绗洓姝ュ悗妫€鏌ュ疄浣撴€?
+        // 第四步后检查实体性
         if (fixedShape.ShapeType() == TopAbs_SHELL) {
             std::cout << "[STEP Exporter]   Shape became SHELL after step 4, attempting to restore SOLID..." << std::endl;
             fixedShape = tryRestoreSolidity(fixedShape);
         }
 
-        // 绗簲姝ワ細绾挎淇 - 涓撻棬淇闈炴祦褰㈣竟鍜岀嚎妗嗛棶棰橈紙浠呭浣庨潰鏁版ā鍨嬶級
+        // 第五步：线框修复 - 专门修复非流形边和线框问题（仅对低面数模型）
         if (!simplifyForHighPoly) {
             std::cout << "[STEP Exporter] Step 5: Wireframe fixing for non-manifold edges..." << std::endl;
             Handle(ShapeFix_Wireframe) wireframeFixer = new ShapeFix_Wireframe;
             wireframeFixer->Load(fixedShape);
             wireframeFixer->SetPrecision(adjustedTolerance);
             wireframeFixer->SetMaxTolerance(adjustedTolerance * toleranceMultiplier);
-            // 鎵ц绾挎淇
+            // 执行线框修复
             wireframeFixer->FixWireGaps();
             
             if (!wireframeFixer->Shape().IsNull()) {
@@ -520,7 +520,7 @@ TopoDS_Shape static fix_shape_enhanced(const TopoDS_Shape& shape, double toleran
             std::cout << "[STEP Exporter] Step 5: Skipped for high-poly model." << std::endl;
         }
 
-        // 绗叚姝ワ細闈炴祦褰㈣竟淇锛堝寮虹増锛夛紙浠呭浣庨潰鏁版ā鍨嬶級
+        // 第六步：非流形边修复（增强版）（仅对低面数模型）
         if (!simplifyForHighPoly) {
             std::cout << "[STEP Exporter] Step 6: Enhanced non-manifold edge fixing..." << std::endl;
             Handle(ShapeFix_Shape) nonManifoldFixer = new ShapeFix_Shape;
@@ -528,7 +528,7 @@ TopoDS_Shape static fix_shape_enhanced(const TopoDS_Shape& shape, double toleran
             nonManifoldFixer->SetPrecision(adjustedTolerance);
             nonManifoldFixer->SetMaxTolerance(adjustedTolerance * toleranceMultiplier);
             nonManifoldFixer->SetMinTolerance(adjustedTolerance / 100.0);
-            // 灏濊瘯淇闈炴祦褰㈣竟
+            // 尝试修复非流形边
             nonManifoldFixer->Perform();
             
             if (!nonManifoldFixer->Shape().IsNull()) {
@@ -539,14 +539,14 @@ TopoDS_Shape static fix_shape_enhanced(const TopoDS_Shape& shape, double toleran
             std::cout << "[STEP Exporter] Step 6: Skipped for high-poly model." << std::endl;
         }
 
-        // 绗竷姝ワ細缁熶竴鐩稿悓鍩熷悎骞剁浉閭婚潰锛堜粎瀵逛綆闈㈡暟妯″瀷锛?
+        // 第七步：统一相同域合并相邻面（仅对低面数模型）
         if (!simplifyForHighPoly && !preserveSolidity && fixedShape.ShapeType() != TopAbs_SOLID) {
             std::cout << "[STEP Exporter] Step 7: Unifying same domain..." << std::endl;
             try {
                 Handle(ShapeUpgrade_UnifySameDomain) unify = new ShapeUpgrade_UnifySameDomain;
-                unify->Initialize(fixedShape, Standard_True, Standard_True, Standard_True); // 缁熶竴闈€€佽竟鍜岄《鐐?
+                unify->Initialize(fixedShape, Standard_True, Standard_True, Standard_True); // 统一面、边和顶点
                 unify->SetLinearTolerance(adjustedTolerance);
-                unify->SetAngularTolerance(0.0001); // 閫傚害闄嶄綆瑙掑害瀹瑰樊鍒?.0001寮у害锛堢害0.0057搴︼級
+                unify->SetAngularTolerance(0.0001); // 适度降低角度容差到0.0001弧度（约0.0057度）
                 unify->Build();
                 
                 if (!unify->Shape().IsNull()) {
@@ -566,7 +566,7 @@ TopoDS_Shape static fix_shape_enhanced(const TopoDS_Shape& shape, double toleran
             std::cout << "[STEP Exporter] Step 7: Skipped because shape is SOLID." << std::endl;
         }
 
-        // 绗叓姝ワ細杩唬淇锛堟渶澶?娆★級锛堜粎瀵逛綆闈㈡暟妯″瀷锛?
+        // 第八步：迭代修复（最多5次）（仅对低面数模型）
         if (!simplifyForHighPoly) {
             std::cout << "[STEP Exporter] Step 8: Iterative fixing..." << std::endl;
             int maxIterations = 3;
@@ -585,7 +585,7 @@ TopoDS_Shape static fix_shape_enhanced(const TopoDS_Shape& shape, double toleran
                 std::cout << "[STEP Exporter]   Performing additional iteration " << iter + 1 << "..." << std::endl;
                 
                 try {
-                    // 閲嶅缂濆悎
+                    // 重复缝合
                     BRepBuilderAPI_Sewing sewer2(adjustedTolerance * toleranceMultiplier);
                     sewer2.SetNonManifoldMode(allowNonManifold ? Standard_True : Standard_False);
                     sewer2.Add(fixedShape);
@@ -600,7 +600,7 @@ TopoDS_Shape static fix_shape_enhanced(const TopoDS_Shape& shape, double toleran
                 }
                 
                 try {
-                    // 閲嶅缁熶竴鐩稿悓鍩?
+                    // 重复统一相同域
                     Handle(ShapeUpgrade_UnifySameDomain) unify2 = new ShapeUpgrade_UnifySameDomain;
                     unify2->Initialize(fixedShape, Standard_True, Standard_True, Standard_True);
                     unify2->SetLinearTolerance(adjustedTolerance);
@@ -619,23 +619,23 @@ TopoDS_Shape static fix_shape_enhanced(const TopoDS_Shape& shape, double toleran
             std::cout << "[STEP Exporter] Step 8: Skipped for high-poly model." << std::endl;
         }
 
-        // 鏈€缁堥獙璇?
+        // 最终验证
         BRepCheck_Analyzer finalAnalyzer(fixedShape);
         if (finalAnalyzer.IsValid()) {
-            std::cout << "[STEP Exporter] 鉁?Shape is fully valid after enhanced fixing." << std::endl;
+            std::cout << "[STEP Exporter] ✓ Shape is fully valid after enhanced fixing." << std::endl;
         } else {
-            std::cout << "[STEP Exporter] 鈿?Warning: Shape still has issues after enhanced fixing." << std::endl;
+            std::cout << "[STEP Exporter] ⚠ Warning: Shape still has issues after enhanced fixing." << std::endl;
         }
 
         return fixedShape;
 
     } catch (const Standard_Failure& e) {
-        std::cerr << "[STEP Exporter] 鉁?Error in enhanced shape fixing: " << e.GetMessageString() << std::endl;
+        std::cerr << "[STEP Exporter] ✗ Error in enhanced shape fixing: " << e.GetMessageString() << std::endl;
         return shape;
     }
 }
 
-// 鍒涘缓瀹炰綋褰㈢姸锛堥珮绾REP琛ㄧず锛?
+// 创建实体形状（高级BREP表示）
 TopoDS_Shape create_solid_from_mesh(const std::vector<std::vector<double>>& vertices,
                                      const std::vector<std::vector<int>>& faces,
                                      double tolerance = 1.0e-6,
@@ -649,7 +649,7 @@ TopoDS_Shape create_solid_from_mesh(const std::vector<std::vector<double>>& vert
               << " from mesh: " << vertices.size() << " vertices, " << faces.size() << " faces" << std::endl;
 
     try {
-        // 璁＄畻缃戞牸鐨勫寘鍥寸洅浠ヨ皟鏁村宸?
+        // 计算网格的包围盒以调整容差
         double meshBBoxSize = 0.0;
         if (!vertices.empty()) {
             double xmin = vertices[0][0], ymin = vertices[0][1], zmin = vertices[0][2];
@@ -671,28 +671,28 @@ TopoDS_Shape create_solid_from_mesh(const std::vector<std::vector<double>>& vert
             std::cout << "[STEP Exporter] DEBUG: Bounding box ranges: x[" << xmin << "," << xmax << "] y[" << ymin << "," << ymax << "] z[" << zmin << "," << zmax << "]" << std::endl;
         }
         
-        // 鏍规嵁鍖呭洿鐩掑ぇ灏忚皟鏁村宸?
+        // 根据包围盒大小调整容差
         double adjustedTolerance = tolerance;
         std::cout << "[STEP Exporter] DEBUG: tolerance parameter = " << tolerance << std::endl;
         std::cout << "[STEP Exporter] DEBUG: meshBBoxSize = " << meshBBoxSize << std::endl;
         
-        // 濡傛灉鍖呭洿鐩掑ぇ灏忓皬浜?寰背锛?e-6绫筹級锛岃涓洪浂灏哄妯″瀷锛屼娇鐢ㄩ粯璁ゅ宸?
+        // 如果包围盒大小小于1微米（1e-6米），视为零尺寸模型，使用默认容差
         if (meshBBoxSize > 1.0e-6) {
-            // 寤鸿瀹瑰樊锛氱綉鏍煎寘鍥寸洅瀵硅绾块暱搴︾殑0.1%
+            // 建议容差：网格包围盒对角线长度的0.1%
             double suggestedTolerance = meshBBoxSize * 0.001;
-            // 鏈€澶у悎鐞嗗宸細缃戞牸鍖呭洿鐩掑瑙掔嚎闀垮害鐨?0%
+            // 最大合理容差：网格包围盒对角线长度的10%
             double maxReasonableTolerance = meshBBoxSize * 0.1;
-            // 纭繚鏈€澶у悎鐞嗗宸笉灏忎簬1寰背锛堥伩鍏嶆瀬灏忔ā鍨嬪宸繃灏忥級
+            // 确保最大合理容差不小于1微米（避免极小模型容差过小）
             if (maxReasonableTolerance < 1.0e-6) {
                 maxReasonableTolerance = 1.0e-6;
             }
             std::cout << "[STEP Exporter] DEBUG: tolerance=" << tolerance << " meshBBoxSize=" << meshBBoxSize << " maxReasonableTolerance=" << maxReasonableTolerance << std::endl;
-            // 濡傛灉鐢ㄦ埛鎸囧畾鐨勫宸繃澶э紙瓒呰繃鏈€澶у悎鐞嗗宸級锛屽垯浣跨敤鏈€澶у悎鐞嗗宸?
+            // 如果用户指定的容差过大（超过最大合理容差），则使用最大合理容差
             if (tolerance > maxReasonableTolerance) {
                 adjustedTolerance = maxReasonableTolerance;
                 std::cout << "[STEP Exporter] Reducing tolerance from " << tolerance << " to " << adjustedTolerance << " (exceeds mesh size)" << std::endl;
             } else {
-                // 鍚﹀垯锛屼娇鐢ㄧ敤鎴锋寚瀹氱殑瀹瑰樊锛屼絾纭繚涓嶅皬浜庡缓璁宸?
+                // 否则，使用用户指定的容差，但确保不小于建议容差
                 adjustedTolerance = tolerance;
                 if (adjustedTolerance < suggestedTolerance) {
                     adjustedTolerance = suggestedTolerance;
@@ -700,55 +700,55 @@ TopoDS_Shape create_solid_from_mesh(const std::vector<std::vector<double>>& vert
             }
             std::cout << "[STEP Exporter] Adjusted sewing tolerance to " << adjustedTolerance << std::endl;
         } else {
-            // 濡傛灉鍖呭洿鐩掑ぇ灏忔瀬灏忥紙<=1寰背锛夛紝瑙嗕负闆跺昂瀵告ā鍨嬶紝寮哄埗浣跨敤鏈€灏忓宸?
-            // 閬垮厤瀹瑰樊涓?瀵艰嚧缂濆悎澶辫触
+            // 如果包围盒大小极小（<=1微米），视为零尺寸模型，强制使用最小容差
+            // 避免容差为0导致缝合失败
             adjustedTolerance = std::max(tolerance, 1.0e-6);
-            std::cout << "[STEP Exporter] WARNING: mesh bounding box size is " << meshBBoxSize << " (<=1寰背), forcing minimum tolerance " << adjustedTolerance << std::endl;
+            std::cout << "[STEP Exporter] WARNING: mesh bounding box size is " << meshBBoxSize << " (<=1微米), forcing minimum tolerance " << adjustedTolerance << std::endl;
         }
 
-        // 纭繚瀹瑰樊涓嶅皬浜庢渶灏忓€硷紙1寰背锛夛紝閬垮厤缂濆悎澶辫触
+        // 确保容差不小于最小值（1微米），避免缝合失败
         if (adjustedTolerance < 1.0e-6) {
             std::cout << "[STEP Exporter] INFO: Adjusted tolerance " << adjustedTolerance << " is too small, increasing to 1e-06." << std::endl;
             adjustedTolerance = 1.0e-6;
         }
 
-        // 鏍规嵁闈㈡暟鍔ㄦ€佽皟鏁村宸箻鏁板拰淇绛栫暐
-        double toleranceMultiplier = 10.0; // 榛樿涔樻暟
-        bool allowNonManifold = false; // 榛樿寮哄埗娴佸舰鍑犱綍
+        // 根据面数动态调整容差乘数和修复策略
+        double toleranceMultiplier = 10.0; // 默认乘数
+        bool allowNonManifold = false; // 默认强制流形几何
         
         std::cout << "[STEP Exporter] DEBUG: faces.size() = " << faces.size() << std::endl;
         if (faces.size() < 500) {
-            toleranceMultiplier = 50.0; // 绠€鍗曠綉鏍硷紝浣跨敤杈冨ぇ瀹瑰樊淇闈炴祦褰㈣竟
+            toleranceMultiplier = 50.0; // 简单网格，使用较大容差修复非流形边
             allowNonManifold = false;
             std::cout << "[STEP Exporter] DEBUG: Branch 1 (faces < 500)" << std::endl;
         } else if (faces.size() < 2000) {
-            toleranceMultiplier = 15.0; // 涓瓑澶嶆潅搴︾綉鏍硷紙濡傜尨澶达級锛屽己鍒舵祦褰㈠嚑浣?
+            toleranceMultiplier = 15.0; // 中等复杂度网格（如猴头），强制流形几何
             allowNonManifold = false;
             std::cout << "[STEP Exporter] DEBUG: Branch 2 (500 <= faces < 2000)" << std::endl;
         } else if (faces.size() < 5000) {
-            toleranceMultiplier = 10.0; // 楂橀潰鏁扮綉鏍?
+            toleranceMultiplier = 10.0; // 高面数网格
             allowNonManifold = false;
             std::cout << "[STEP Exporter] DEBUG: Branch 3 (2000 <= faces < 5000)" << std::endl;
         } else if (faces.size() < 10000) {
-            toleranceMultiplier = 10.0; // 澶嶆潅缃戞牸
+            toleranceMultiplier = 10.0; // 复杂网格
             allowNonManifold = true;
             std::cout << "[STEP Exporter] DEBUG: Branch 4 (5000 <= faces < 10000)" << std::endl;
         } else {
-            toleranceMultiplier = 5.0; // 鏋侀珮缁嗚妭缃戞牸锛屼娇鐢ㄦ瀬灏忓宸繚鎸佸畬鏁存€?
-            allowNonManifold = true; // 鍏佽闈炴祦褰㈠嚑浣曪紝閬垮厤杩囧害淇
+            toleranceMultiplier = 5.0; // 极高细节网格，使用极小容差保持完整性
+            allowNonManifold = true; // 允许非流形几何，避免过度修复
             std::cout << "[STEP Exporter] DEBUG: Branch 5 (faces >= 10000)" << std::endl;
         }
         std::cout << "[STEP Exporter] Mesh face count: " << faces.size() << ", using tolerance multiplier: " << toleranceMultiplier 
                   << ", non-manifold allowed: " << (allowNonManifold ? "yes" : "no") << std::endl;
 
-        // 棣栧厛鍒涘缓涓€涓鍚堝舰鐘舵潵鏀堕泦鎵€鏈夐潰
+        // 首先创建一个复合形状来收集所有面
         BRep_Builder builder;
         TopoDS_Compound compound;
         builder.MakeCompound(compound);
 
         int valid_face_count = 0;
         
-        // 杩涘害鎶ュ憡璁剧疆
+        // 进度报告设置
         size_t report_interval = faces.size() / 100;
         if (report_interval == 0) report_interval = 1;
         size_t next_report = report_interval;
@@ -759,7 +759,7 @@ TopoDS_Shape create_solid_from_mesh(const std::vector<std::vector<double>>& vert
 
             if (face.size() < 3) continue;
 
-            // 涓烘瘡涓潰鍒涘缓涓€涓杈瑰舰绾挎(Wire)
+            // 为每个面创建一个多边形线框(Wire)
             BRepBuilderAPI_MakePolygon polygon;
             bool all_vertices_valid = true;
             
@@ -784,12 +784,12 @@ TopoDS_Shape create_solid_from_mesh(const std::vector<std::vector<double>>& vert
             
             TopoDS_Wire wire = polygon.Wire();
 
-            // 灏濊瘯鍒涘缓瑙ｆ瀽鏇查潰锛堝浜庡钩闈€€佸渾鏌遍潰銆佸渾閿ラ潰绛夛級
-            // 濡傛灉澶辫触锛屽垯鍥為€€鍒板杈瑰舰闈㈢墖
+            // 尝试创建解析曲面（对于平面、圆柱面、圆锥面等）
+            // 如果失败，则回退到多边形面片
             TopoDS_Face faceShape;
             bool faceCreated = false;
             
-            // 棣栧厛灏濊瘯鍒涘缓瑙ｆ瀽鏇查潰锛堜粎瀵逛綆闈㈡暟妯″瀷锛岄伩鍏嶆€ц兘闂锛?
+            // 首先尝试创建解析曲面（仅对低面数模型，避免性能问题）
             if (faces.size() < 5000) {
                 try {
                     BRepBuilderAPI_MakeFace analyticFaceMaker(wire, Standard_True);
@@ -801,14 +801,14 @@ TopoDS_Shape create_solid_from_mesh(const std::vector<std::vector<double>>& vert
                         }
                     }
                 } catch (const Standard_Failure& e) {
-                    // 瑙ｆ瀽鏇查潰鍒涘缓澶辫触锛屽洖閫€鍒板杈瑰舰闈㈢墖
+                    // 解析曲面创建失败，回退到多边形面片
                     if (face_idx < 3) {
                         std::cout << "[DEBUG] Analytic surface creation failed for face " << face_idx << ": " << e.GetMessageString() << ", using polygonal face." << std::endl;
                     }
                 }
             }
             
-            // 濡傛灉瑙ｆ瀽鏇查潰鍒涘缓澶辫触鎴栭潰鏁板お澶氾紝浣跨敤澶氳竟褰㈤潰鐗?
+            // 如果解析曲面创建失败或面数太多，使用多边形面片
             if (!faceCreated) {
                 BRepBuilderAPI_MakeFace polyFaceMaker(wire, Standard_False);
                 if (polyFaceMaker.IsDone()) {
@@ -825,7 +825,7 @@ TopoDS_Shape create_solid_from_mesh(const std::vector<std::vector<double>>& vert
                 valid_face_count++;
             }
             
-            // 杩涘害鎶ュ憡
+            // 进度报告
             if (face_idx >= next_report) {
                 double progress = (face_idx * 100.0) / faces.size();
                 std::chrono::steady_clock::time_point current_time = std::chrono::steady_clock::now();
@@ -850,14 +850,14 @@ TopoDS_Shape create_solid_from_mesh(const std::vector<std::vector<double>>& vert
 
         std::cout << "[STEP Exporter] Created " << valid_face_count << " valid faces." << std::endl;
 
-        // 浣跨敤Sewing宸ュ叿灏嗙鏁ｇ殑闈㈢墖缂濆悎涓哄畬鏁寸殑澹?
-        BRepBuilderAPI_Sewing sewer(adjustedTolerance * toleranceMultiplier); // 鍩轰簬鍖呭洿鐩掑ぇ灏忚皟鏁村宸?
-        sewer.SetNonManifoldMode(allowNonManifold ? Standard_True : Standard_False); // 鏍规嵁缃戞牸澶嶆潅搴﹀喅瀹?
+        // 使用Sewing工具将离散的面片缝合为完整的壳
+        BRepBuilderAPI_Sewing sewer(adjustedTolerance * toleranceMultiplier); // 基于包围盒大小调整容差
+        sewer.SetNonManifoldMode(allowNonManifold ? Standard_True : Standard_False); // 根据网格复杂度决定
         sewer.SetMaxTolerance(adjustedTolerance * toleranceMultiplier);
         sewer.SetMinTolerance(adjustedTolerance);
         sewer.Add(compound);
 
-        // 鎵ц缂濆悎
+        // 执行缝合
         sewer.Perform();
         TopoDS_Shape sewedShape = sewer.SewedShape();
         
@@ -868,7 +868,7 @@ TopoDS_Shape create_solid_from_mesh(const std::vector<std::vector<double>>& vert
 
         std::cout << "[STEP Exporter] Sewing completed." << std::endl;
         
-        // 鎵撳嵃缂濆悎鍚庡舰鐘剁殑绫诲瀷
+        // 打印缝合后形状的类型
         std::cout << "[STEP Exporter] Sewed shape type: ";
         switch (sewedShape.ShapeType()) {
             case TopAbs_COMPOUND: std::cout << "COMPOUND"; break;
@@ -884,26 +884,26 @@ TopoDS_Shape create_solid_from_mesh(const std::vector<std::vector<double>>& vert
         }
         std::cout << std::endl;
 
-        // 灏濊瘯灏嗙紳鍚堝悗鐨勫舰鐘惰浆鎹负瀹炰綋
+        // 尝试将缝合后的形状转换为实体
         TopoDS_Shape finalShape = sewedShape;
         if (make_solid) {
-            // 濡傛灉缂濆悎鍚庣殑褰㈢姸鏄疭HELL锛岀洿鎺ュ皾璇曡浆鎹负瀹炰綋
+            // 如果缝合后的形状是SHELL，直接尝试转换为实体
             if (sewedShape.ShapeType() == TopAbs_SHELL) {
                 TopoDS_Shell shell = TopoDS::Shell(sewedShape);
                 BRepBuilderAPI_MakeSolid solidMaker(shell);
                 if (solidMaker.IsDone()) {
                     TopoDS_Solid solid = solidMaker.Solid();
-                    // 妫€鏌ュ疄浣撲綋绉槸鍚︿负姝?
+                    // 检查实体体积是否为正
                     GProp_GProps props;
                     BRepGProp::VolumeProperties(solid, props);
                     double volume = props.Mass();
                     if (volume > tolerance || fabs(volume) < tolerance) {
-                        // 妫€鏌ヤ綋绉槸鍚﹁冻澶熷ぇ
+                        // 检查体积是否足够大
                         if (fabs(volume) > 1.0e-12) {
                             finalShape = solid;
                             std::cout << "[STEP Exporter] Successfully created solid (Volume: " << volume << ")." << std::endl;
                         } else {
-                            // 浣撶Н澶皬锛屼繚鎸佷负澹?
+                            // 体积太小，保持为壳
                             std::cout << "[STEP Exporter] Created solid has negligible volume (" << volume << "), keeping as shell." << std::endl;
                         }
                     } else {
@@ -913,11 +913,11 @@ TopoDS_Shape create_solid_from_mesh(const std::vector<std::vector<double>>& vert
                     std::cout << "[STEP Exporter] Could not make solid from shell, exporting as closed shell." << std::endl;
                 }
             }
-            // 濡傛灉缂濆悎鍚庣殑褰㈢姸鏄疌OMPOUND锛屽皾璇曟彁鍙朣HELL鎴朏ACE骞剁紳鍚堟垚SHELL锛岀劧鍚庤浆鎹负瀹炰綋
+            // 如果缝合后的形状是COMPOUND，尝试提取SHELL或FACE并缝合成SHELL，然后转换为实体
             else if (sewedShape.ShapeType() == TopAbs_COMPOUND) {
                 std::cout << "[STEP Exporter] Sewed shape is COMPOUND, attempting to extract SHELLs/FACEs and create solid..." << std::endl;
                 
-                // 鏀堕泦鎵€鏈塖HELL鍜孎ACE
+                // 收集所有SHELL和FACE
                 TopTools_ListOfShape shells;
                 TopTools_ListOfShape faces;
                 for (TopExp_Explorer exp(sewedShape, TopAbs_SHELL); exp.More(); exp.Next()) {
@@ -929,7 +929,7 @@ TopoDS_Shape create_solid_from_mesh(const std::vector<std::vector<double>>& vert
                 
                 TopoDS_Shape combinedShape;
                 if (shells.Extent() > 0) {
-                    // 濡傛灉鏈塖HELL锛屽皾璇曠紳鍚堝畠浠?
+                    // 如果有SHELL，尝试缝合它们
                     if (shells.Extent() == 1) {
                         combinedShape = shells.First();
                     } else {
@@ -941,7 +941,7 @@ TopoDS_Shape create_solid_from_mesh(const std::vector<std::vector<double>>& vert
                         combinedShape = sewer2.SewedShape();
                     }
                 } else if (faces.Extent() > 0) {
-                    // 鍙湁FACE锛屽皾璇曠紳鍚堜负SHELL
+                    // 只有FACE，尝试缝合为SHELL
                     BRepBuilderAPI_Sewing sewer2(adjustedTolerance * toleranceMultiplier);
                     for (TopTools_ListIteratorOfListOfShape iter(faces); iter.More(); iter.Next()) {
                         sewer2.Add(iter.Value());
@@ -951,7 +951,7 @@ TopoDS_Shape create_solid_from_mesh(const std::vector<std::vector<double>>& vert
                 }
                 
                 if (!combinedShape.IsNull() && combinedShape.ShapeType() == TopAbs_SHELL) {
-                    // 灏濊瘯灏哠HELL杞崲涓哄疄浣?
+                    // 尝试将SHELL转换为实体
                     TopoDS_Shell shell = TopoDS::Shell(combinedShape);
                     BRepBuilderAPI_MakeSolid solidMaker(shell);
                     if (solidMaker.IsDone()) {
@@ -976,7 +976,7 @@ TopoDS_Shape create_solid_from_mesh(const std::vector<std::vector<double>>& vert
             }
         }
 
-        // 淇鍓嶆墦鍗版渶缁堝舰鐘剁被鍨?
+        // 修复前打印最终形状类型
         std::cout << "[STEP Exporter] Final shape type before fixing: ";
         switch (finalShape.ShapeType()) {
             case TopAbs_COMPOUND: std::cout << "COMPOUND"; break;
@@ -992,7 +992,7 @@ TopoDS_Shape create_solid_from_mesh(const std::vector<std::vector<double>>& vert
         }
         std::cout << std::endl;
 
-        // 瀵逛簬楂橀潰鏁版ā鍨嬶紝璺宠繃澧炲己淇浠ラ伩鍏嶈繃搴︿慨澶?
+        // 对于高面数模型，跳过增强修复以避免过度修复
         if (faces.size() >= 10000) {
             std::cout << "[STEP Exporter] High-poly model (" << faces.size() << " faces), skipping enhanced fixing." << std::endl;
             return finalShape;
@@ -1009,20 +1009,20 @@ TopoDS_Shape create_solid_from_mesh(const std::vector<std::vector<double>>& vert
     }
 }
 
-// ====================== Python鎺ュ彛鍑芥暟 (蹇呴』淇濈暀) ======================
+// ====================== Python接口函数 (必须保留) ======================
 
-// 鑾峰彇鐗堟湰淇℃伅锛堝師濮嬪嚱鏁帮級
+// 获取版本信息（原始函数）
 static PyObject* get_version(PyObject* self, PyObject* args) {
     return PyUnicode_FromString(MODULE_VERSION);
 }
 
-// 绠€鍗曞鍑哄嚱鏁帮紙鍘熷鍑芥暟锛?
+// 简单导出函数（原始函数）
 static PyObject* export_step(PyObject* self, PyObject* args) {
     std::cout << "[STEP Exporter] Simple export_step called" << std::endl;
     Py_RETURN_TRUE;
 }
 
-// 鍘熷鍦烘櫙瀵煎嚭鍑芥暟锛堝師濮嬪嚱鏁帮級
+// 原始场景导出函数（原始函数）
 static PyObject* export_scene(PyObject* self, PyObject* args) {
     const char* filename;
     PyObject* scene_data_list;
@@ -1055,33 +1055,33 @@ static PyObject* export_scene(PyObject* self, PyObject* args) {
     try {
         STEPControl_Controller::Init();
         
-        // 浼樺寲璁剧疆浠ュ噺灏戞枃浠跺ぇ灏?
-        Interface_Static::SetCVal("write.step.schema", "AP203"); // 浣跨敤鏈€绠€鍗曠殑AP203 schema
+        // 优化设置以减少文件大小
+        Interface_Static::SetCVal("write.step.schema", "AP203"); // 使用最简单的AP203 schema
         Interface_Static::SetCVal("write.step.product.name", filename);
         Interface_Static::SetCVal("write.step.company", "");
         Interface_Static::SetCVal("write.step.author", "");
         Interface_Static::SetCVal("write.step.unit", "MM");
-        Interface_Static::SetRVal("write.precision.val", 0.01); // 0.01mm绮惧害锛屽噺灏忔枃浠?
-        Interface_Static::SetIVal("write.step.precision.mode", 0); // 鍥哄畾绮惧害妯″紡
+        Interface_Static::SetRVal("write.precision.val", 0.01); // 0.01mm精度，减小文件
+        Interface_Static::SetIVal("write.step.precision.mode", 0); // 固定精度模式
         Interface_Static::SetIVal("write.step.assembly", 0);
-        Interface_Static::SetIVal("write.step.shape.repr", 1); // 娴佸舰鏇查潰琛ㄧず锛岀鐢ㄩ珮绾REP
-        Interface_Static::SetCVal("write.step.nonmanifold", "0"); // 绂佹闈炴祦褰㈠嚑浣?
+        Interface_Static::SetIVal("write.step.shape.repr", 1); // 流形曲面表示，禁用高级BREP
+        Interface_Static::SetCVal("write.step.nonmanifold", "0"); // 禁止非流形几何
         Interface_Static::SetCVal("write.step.product.context", "mechanical");
         Interface_Static::SetCVal("write.step.product.definition", "part");
-        Interface_Static::SetIVal("write.step.pcurve", 0); // 瀹屽叏绂佺敤PCURVE
+        Interface_Static::SetIVal("write.step.pcurve", 0); // 完全禁用PCURVE
         Interface_Static::SetIVal("write.step.surface.pcurve", 0);
-        Interface_Static::SetIVal("write.step.curve.pcurve", 0); // 棰濆绂佺敤鏇茬嚎PCURVE
+        Interface_Static::SetIVal("write.step.curve.pcurve", 0); // 额外禁用曲线PCURVE
         Interface_Static::SetIVal("write.step.curve.precision.mode", 0);
         Interface_Static::SetIVal("write.step.surface.precision.mode", 0);
         Interface_Static::SetIVal("write.step.vertex.precision.mode", 0);
         Interface_Static::SetIVal("write.step.subshape.names", 0);
         Interface_Static::SetIVal("write.step.write.conformance.class", 0);
-        Interface_Static::SetIVal("write.step.no.auxiliary.values", 1); // 涓嶅鍑鸿緟鍔╁€?
-        Interface_Static::SetIVal("write.step.comments", 0); // 涓嶅鍑烘敞閲?
-        Interface_Static::SetCVal("write.step.resource.name", ""); // 绌鸿祫婧愬悕
-        Interface_Static::SetCVal("write.step.resource.usage", ""); // 绌鸿祫婧愮敤閫?
-        Interface_Static::SetIVal("write.step.codify", 0); // 绂佺敤缂栫爜
-        Interface_Static::SetIVal("write.step.compress", 0); // 绂佺敤鍘嬬缉锛堝彲鑳藉鍔犳枃浠朵絾鎻愰珮鍏煎鎬э級
+        Interface_Static::SetIVal("write.step.no.auxiliary.values", 1); // 不导出辅助值
+        Interface_Static::SetIVal("write.step.comments", 0); // 不导出注释
+        Interface_Static::SetCVal("write.step.resource.name", ""); // 空资源名
+        Interface_Static::SetCVal("write.step.resource.usage", ""); // 空资源用途
+        Interface_Static::SetIVal("write.step.codify", 0); // 禁用编码
+        Interface_Static::SetIVal("write.step.compress", 0); // 禁用压缩（可能增加文件但提高兼容性）
         
         STEPControl_Writer writer;
 
@@ -1104,7 +1104,7 @@ static PyObject* export_scene(PyObject* self, PyObject* args) {
             std::cout << "\n[STEP Exporter] Processing object " << i + 1 << "/" << num_objects
                       << ": " << obj_name << std::endl;
 
-            // 鑾峰彇椤剁偣鏁版嵁
+            // 获取顶点数据
             std::vector<std::vector<double>> vertices;
             PyObject* vertices_obj = PyDict_GetItemString(obj_dict, "vertices");
             if (vertices_obj && PyList_Check(vertices_obj)) {
@@ -1137,7 +1137,7 @@ static PyObject* export_scene(PyObject* self, PyObject* args) {
                                 // Clear any exception
                                 PyErr_Clear();
                                 // Fallback to PyFloat_AsDouble
-                                if (PyFloat_Check(coord)) {
+                            if (PyFloat_Check(coord)) {
                                     coord_value = PyFloat_AsDouble(coord);
                                     success = true;
 
@@ -1146,7 +1146,7 @@ static PyObject* export_scene(PyObject* self, PyObject* args) {
                                                             std::cout << "[STEP Exporter] DEBUG: PyNumber_Float succeeded, coord_value = " << coord_value << std::endl;
 
                                                         }
-                                } else if (PyLong_Check(coord)) {
+                            } else if (PyLong_Check(coord)) {
                                     coord_value = static_cast<double>(PyLong_AsLong(coord));
                                     success = true;
 
@@ -1182,10 +1182,10 @@ static PyObject* export_scene(PyObject* self, PyObject* args) {
                                                 if (v < 5) {
                                                     std::cout << "[STEP Exporter] DEBUG: Using repr parsed value (differs from coord_value): " << repr_str << " -> " << parsed_value << std::endl;
                                                 }
-                                            } else {
+                            } else {
                                                 if (v < 5) {
                                                     std::cout << "[STEP Exporter] DEBUG: parsed value matches coord_value within tolerance, keeping coord_value" << std::endl;
-                                                }
+                            }
                                             }
                                         } catch (const std::exception& e) {
                                             if (v < 5) {
@@ -1213,7 +1213,7 @@ static PyObject* export_scene(PyObject* self, PyObject* args) {
                                 }
                                 if (repr) { Py_DECREF(repr); }
                                 vertex[k] = coord_value;
-                                if (k == 2) valid_vertex = true;
+                            if (k == 2) valid_vertex = true;
                             } else {
                                 break;
                             }
@@ -1241,7 +1241,7 @@ static PyObject* export_scene(PyObject* self, PyObject* args) {
                                 // Clear any exception
                                 PyErr_Clear();
                                 // Fallback to PyFloat_AsDouble
-                                if (PyFloat_Check(coord)) {
+                            if (PyFloat_Check(coord)) {
                                     coord_value = PyFloat_AsDouble(coord);
                                     success = true;
 
@@ -1250,7 +1250,7 @@ static PyObject* export_scene(PyObject* self, PyObject* args) {
                                                             std::cout << "[STEP Exporter] DEBUG: PyNumber_Float succeeded, coord_value = " << coord_value << std::endl;
 
                                                         }
-                                } else if (PyLong_Check(coord)) {
+                            } else if (PyLong_Check(coord)) {
                                     coord_value = static_cast<double>(PyLong_AsLong(coord));
                                     success = true;
 
@@ -1286,10 +1286,10 @@ static PyObject* export_scene(PyObject* self, PyObject* args) {
                                                 if (v < 5) {
                                                     std::cout << "[STEP Exporter] DEBUG: Using repr parsed value (differs from coord_value): " << repr_str << " -> " << parsed_value << std::endl;
                                                 }
-                                            } else {
+                            } else {
                                                 if (v < 5) {
                                                     std::cout << "[STEP Exporter] DEBUG: parsed value matches coord_value within tolerance, keeping coord_value" << std::endl;
-                                                }
+                            }
                                             }
                                         } catch (const std::exception& e) {
                                             if (v < 5) {
@@ -1317,7 +1317,7 @@ static PyObject* export_scene(PyObject* self, PyObject* args) {
                                 }
                                 if (repr) { Py_DECREF(repr); }
                                 vertex[i] = coord_value;
-                                if (i == 2) valid_vertex = true;
+                            if (i == 2) valid_vertex = true;
                             } else {
                                 break;
                             }
@@ -1333,7 +1333,7 @@ static PyObject* export_scene(PyObject* self, PyObject* args) {
                 continue;
             }
 
-            // 鑾峰彇闈㈡暟鎹?
+            // 获取面数据
             std::vector<std::vector<int>> faces;
             PyObject* faces_obj = PyDict_GetItemString(obj_dict, "faces");
             if (faces_obj && PyList_Check(faces_obj)) {
@@ -1391,26 +1391,26 @@ static PyObject* export_scene(PyObject* self, PyObject* args) {
                     
                     if (!shape.IsNull()) {
                         shapes.push_back(shape);
-                        std::cout << "[STEP Exporter]   鉁?Shape created successfully" << std::endl;
+                        std::cout << "[STEP Exporter]   ✓ Shape created successfully" << std::endl;
                     } else {
-                        std::cerr << "[STEP Exporter]   鉁?Shape is null after fixing" << std::endl;
+                        std::cerr << "[STEP Exporter]   ✗ Shape is null after fixing" << std::endl;
                     }
                 } else {
-                    std::cerr << "[STEP Exporter]   鉁?Failed to create shape from mesh" << std::endl;
+                    std::cerr << "[STEP Exporter]   ✗ Failed to create shape from mesh" << std::endl;
                 }
             } else {
-                std::cerr << "[STEP Exporter]   鉁?No valid mesh data" << std::endl;
+                std::cerr << "[STEP Exporter]   ✗ No valid mesh data" << std::endl;
             }
         }
 
         if (shapes.empty()) {
-            std::cerr << "[STEP Exporter] 鉁?No valid shapes to export" << std::endl;
+            std::cerr << "[STEP Exporter] ✗ No valid shapes to export" << std::endl;
             Py_RETURN_FALSE;
         }
 
         std::cout << "\n[STEP Exporter] Created " << shapes.size() << " valid shapes" << std::endl;
 
-        // 灏嗘墍鏈夊舰鐘跺悎骞舵垚涓€涓狢ompound
+        // 将所有形状合并成一个Compound
         TopoDS_Shape finalShape;
         if (shapes.size() == 1) {
             finalShape = shapes[0];
@@ -1426,17 +1426,17 @@ static PyObject* export_scene(PyObject* self, PyObject* args) {
             finalShape = compound;
         }
 
-        // 鏈€缁堝嚑浣曚慨澶?
+        // 最终几何修复
         if (fix_geometry) {
             finalShape = fix_shape(finalShape);
         }
 
-        // 鍐欏叆STEP鏂囦欢
+        // 写入STEP文件
         std::cout << "[STEP Exporter] Transferring shape to STEP..." << std::endl;
         IFSelect_ReturnStatus status = writer.Transfer(finalShape, STEPControl_AsIs);
 
         if (status != IFSelect_RetDone) {
-            std::cerr << "[STEP Exporter] 鉁?Failed to transfer shape" << std::endl;
+            std::cerr << "[STEP Exporter] ✗ Failed to transfer shape" << std::endl;
             Py_RETURN_FALSE;
         }
 
@@ -1444,11 +1444,11 @@ static PyObject* export_scene(PyObject* self, PyObject* args) {
         IFSelect_ReturnStatus write_status = writer.Write(filename);
 
         if (write_status == IFSelect_RetDone) {
-            std::cout << "[STEP Exporter] 鉁?Successfully exported STEP file" << std::endl;
+            std::cout << "[STEP Exporter] ✓ Successfully exported STEP file" << std::endl;
             std::cout << "[STEP Exporter] =========================================\n" << std::endl;
             Py_RETURN_TRUE;
         } else {
-            std::cerr << "[STEP Exporter] 鉁?Failed to write STEP file" << std::endl;
+            std::cerr << "[STEP Exporter] ✗ Failed to write STEP file" << std::endl;
             std::cerr << "[STEP Exporter] =========================================\n" << std::endl;
             Py_RETURN_FALSE;
         }
@@ -1468,20 +1468,20 @@ static PyObject* export_scene(PyObject* self, PyObject* args) {
     }
 }
 
-// 澧炲己鐗堝満鏅鍑哄嚱鏁帮紙鏂板鍔熻兘锛?
+// 增强版场景导出函数（新增功能）
 static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
     const char* filename;
     PyObject* scene_data_list;
     double scale = 1.0;
     int fix_geometry = 1;
-    int create_solid = 1; // 鏂板锛氭槸鍚﹀垱寤哄疄浣?
-    int advanced_brep = 1; // 鏂板锛氭槸鍚︿娇鐢ㄩ珮绾REP琛ㄧず
+    int create_solid = 1; // 新增：是否创建实体
+    int advanced_brep = 1; // 新增：是否使用高级BREP表示
     const char* step_schema = "AP214DIS";
     const char* unit = "MM";
     int enable_logging = 1;
-    double sew_tolerance = 0.001; // 缂濆悎瀹瑰樊锛屽崟浣嶏細绫?
+    double sew_tolerance = 0.001; // 缝合容差，单位：米
 
-    // 瑙ｆ瀽鍙傛暟锛歠ilename, scene_data_list, scale, [fix_geometry], [create_solid], [advanced_brep], [step_schema], [unit], [enable_logging], [sew_tolerance]
+    // 解析参数：filename, scene_data_list, scale, [fix_geometry], [create_solid], [advanced_brep], [step_schema], [unit], [enable_logging], [sew_tolerance]
     if (!PyArg_ParseTuple(args, "sOd|iiissid", &filename, &scene_data_list, &scale, &fix_geometry, &create_solid, &advanced_brep, &step_schema, &unit, &enable_logging, &sew_tolerance)) {
         PyErr_SetString(PyExc_TypeError, "export_scene_enhanced() expected: filename, scene_data_list, scale, [fix_geometry], [create_solid], [advanced_brep], [step_schema], [unit], [enable_logging], [sew_tolerance]");
         return NULL;
@@ -1489,7 +1489,7 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
 
     std::cout << "[STEP Exporter] DEBUG: After PyArg_ParseTuple, sew_tolerance = " << sew_tolerance << std::endl;
     
-    // 濡傛灉缂濆悎瀹瑰樊涓洪浂锛岃缃负榛樿鍊?
+    // 如果缝合容差为零，设置为默认值
     if (sew_tolerance == 0.0) {
         std::cout << "[STEP Exporter] WARNING: Sewing tolerance is zero! Setting to default 0.001 m." << std::endl;
         sew_tolerance = 0.001;
@@ -1500,7 +1500,7 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
         return NULL;
     }
 
-    // 闄愬埗缂濆悎瀹瑰樊鍦ㄥ悎鐞嗚寖鍥村唴锛堟渶灏?寰背锛屾渶澶?.1绫筹級
+    // 限制缝合容差在合理范围内（最小1微米，最大0.1米）
     if (sew_tolerance < 1.0e-6 - 1e-12) {
         std::cout << "[STEP Exporter] Warning: Sewing tolerance " << sew_tolerance << " m is too small, increasing to 1e-06 m." << std::endl;
         sew_tolerance = 1.0e-6;
@@ -1509,7 +1509,7 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
         std::cout << "[STEP Exporter] Warning: Sewing tolerance " << sew_tolerance << " m is too large, reducing to 0.001 m." << std::endl;
         sew_tolerance = 0.001;
     }
-    // 鏈€缁堝宸鏌?
+    // 最终容差检查
     std::cout << "[STEP Exporter] DEBUG: Final sewing tolerance = " << sew_tolerance << " m" << std::endl;
 
     if (enable_logging) {
@@ -1549,103 +1549,103 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
         // 鐩存帴浣跨敤鐢ㄦ埛閫夋嫨鐨剆chema锛圲I涓凡绉婚櫎AP214鍜孉P242閫氱敤閫夐」锛?
         const char* actual_schema = step_schema;
         
-        Interface_Static::SetCVal("write.step.schema", actual_schema); // 浣跨敤瀹為檯鐨凷TEP schema
+        Interface_Static::SetCVal("write.step.schema", actual_schema); // 使用实际的STEP schema
         std::cout << "[STEP Exporter] Using STEP schema: " << actual_schema << std::endl;
         
-        // 璁剧疆閫氱敤鍙傛暟
+        // 设置通用参数
         Interface_Static::SetCVal("write.step.product.name", filename);
         Interface_Static::SetCVal("write.step.company", "");
         Interface_Static::SetCVal("write.step.author", "");
         Interface_Static::SetCVal("write.step.unit", unit);
         
-        // 鐜板湪鍒濆鍖朣TEP鎺у埗鍣?
+        // 现在初始化STEP控制器
         STEPControl_Controller::Init();
         
-        // 鍒濆鍖栧悗鍐嶆妫€鏌ヨ缃?
+        // 初始化后再次检查设置
         std::cout << "[STEP Exporter] DEBUG after Init(): write.step.schema = " << Interface_Static::CVal("write.step.schema") << std::endl;
-        // 妫€鏌penCASCADE鐗堟湰瀵笰P242DIS鐨勬敮鎸?
+        // 检查OpenCASCADE版本对AP242DIS的支持
         std::cout << "[STEP Exporter] OpenCASCADE version: " << OCC_VERSION_MAJOR << "." << OCC_VERSION_MINOR << "." << OCC_VERSION_MAINTENANCE << std::endl;
         if (strcmp(step_schema, "AP242DIS") == 0) {
             if (OCC_VERSION_MAJOR == 7 && OCC_VERSION_MINOR == 7) {
                 std::cout << "[STEP Exporter] WARNING: OpenCASCADE 7.7 may have limited AP242 support. Consider upgrading to 7.8+ for full AP242 compliance." << std::endl;
             }
         }
-        Interface_Static::SetRVal("write.precision.val", 0.01); // 0.01mm绮惧害锛屾洿绮剧粏鐨勫嚑浣曡〃绀?
-        Interface_Static::SetIVal("write.step.precision.mode", 0); // 鍥哄畾绮惧害妯″紡
+        Interface_Static::SetRVal("write.precision.val", 0.01); // 0.01mm精度，更精细的几何表示
+        Interface_Static::SetIVal("write.step.precision.mode", 0); // 固定精度模式
         Interface_Static::SetIVal("write.step.assembly", 0);
-        Interface_Static::SetIVal("write.step.shape.repr", 0); // 绠€鍖栧舰鐘惰〃绀?
-        Interface_Static::SetCVal("write.step.nonmanifold", "0"); // 绂佹闈炴祦褰㈠嚑浣?
+        Interface_Static::SetIVal("write.step.shape.repr", 0); // 简化形状表示
+        Interface_Static::SetCVal("write.step.nonmanifold", "0"); // 禁止非流形几何
         Interface_Static::SetCVal("write.step.product.context", "mechanical");
         Interface_Static::SetCVal("write.step.product.definition", "part");
-        Interface_Static::SetIVal("write.step.pcurve", 0); // 瀹屽叏绂佺敤PCURVE
+        Interface_Static::SetIVal("write.step.pcurve", 0); // 完全禁用PCURVE
         Interface_Static::SetIVal("write.step.surface.pcurve", 0);
-        Interface_Static::SetIVal("write.step.curve.pcurve", 0); // 棰濆绂佺敤鏇茬嚎PCURVE
+        Interface_Static::SetIVal("write.step.curve.pcurve", 0); // 额外禁用曲线PCURVE
         Interface_Static::SetIVal("write.step.curve.precision.mode", 0);
         Interface_Static::SetIVal("write.step.surface.precision.mode", 0);
         Interface_Static::SetIVal("write.step.vertex.precision.mode", 0);
         Interface_Static::SetIVal("write.step.subshape.names", 0);
         Interface_Static::SetIVal("write.step.write.conformance.class", 0);
-        Interface_Static::SetIVal("write.step.no.auxiliary.values", 1); // 涓嶅鍑鸿緟鍔╁€?
-        Interface_Static::SetIVal("write.step.comments", 0); // 涓嶅鍑烘敞閲?
-        Interface_Static::SetCVal("write.step.resource.name", ""); // 绌鸿祫婧愬悕
-        Interface_Static::SetCVal("write.step.resource.usage", ""); // 绌鸿祫婧愮敤閫?
-        Interface_Static::SetIVal("write.step.codify", 0); // 绂佺敤缂栫爜
-        Interface_Static::SetIVal("write.step.compress", 0); // 绂佺敤鍘嬬缉锛堝彲鑳藉鍔犳枃浠朵絾鎻愰珮鍏煎鎬э級
+        Interface_Static::SetIVal("write.step.no.auxiliary.values", 1); // 不导出辅助值
+        Interface_Static::SetIVal("write.step.comments", 0); // 不导出注释
+        Interface_Static::SetCVal("write.step.resource.name", ""); // 空资源名
+        Interface_Static::SetCVal("write.step.resource.usage", ""); // 空资源用途
+        Interface_Static::SetIVal("write.step.codify", 0); // 禁用编码
+        Interface_Static::SetIVal("write.step.compress", 0); // 禁用压缩（可能增加文件但提高兼容性）
         
         std::cout << "[STEP Exporter] Checking advanced_brep condition: " << (!advanced_brep ? "true" : "false") << std::endl;
-        // 褰撶鐢ㄩ珮绾REP鏃讹紝搴旂敤棰濆浼樺寲璁剧疆
+        // 当禁用高级BREP时，应用额外优化设置
         if (!advanced_brep) {
             std::cout << "[STEP Exporter] Advanced BREP disabled - applying maximum optimization settings." << std::endl;
-            // 寮哄埗浣跨敤鏇寸畝鍗曠殑褰㈢姸琛ㄧず锛堝彲鑳戒负娴佸舰鏇查潰琛ㄧず锛?
-            Interface_Static::SetIVal("write.step.shape.repr", 0); // 绠€鍖栧舰鐘惰〃绀?
-            // 纭繚PCURVE瀹屽叏绂佺敤 - 娣诲姞鎵€鏈夊彲鑳界殑PCURVE鍙傛暟
+            // 强制使用更简单的形状表示（可能为流形曲面表示）
+            Interface_Static::SetIVal("write.step.shape.repr", 0); // 简化形状表示
+            // 确保PCURVE完全禁用 - 添加所有可能的PCURVE参数
             Interface_Static::SetIVal("write.step.pcurve", 0);
             Interface_Static::SetIVal("write.step.surface.pcurve", 0);
             Interface_Static::SetIVal("write.step.curve.pcurve", 0);
-            Interface_Static::SetIVal("write.step.brep.pcurve", 0); // 棰濆灏濊瘯
-            Interface_Static::SetIVal("write.step.surfacecurve.pcurve", 0); // 棰濆灏濊瘯
-            Interface_Static::SetIVal("write.step.curve.pcurve.mode", 0); // 棰濆灏濊瘯
-            // 绂佺敤楂樼骇BREP鐗瑰畾鍔熻兘
-            Interface_Static::SetIVal("write.step.brep.mode", 0); // 绠€鍗旴REP妯″紡
-            Interface_Static::SetIVal("write.step.surface.curve.mode", 0); // 绂佺敤鏇查潰鏇茬嚎
-            Interface_Static::SetIVal("write.step.curve.mode", 0); // 绂佺敤鏇茬嚎
-            Interface_Static::SetIVal("write.step.geom.curve.mode", 0); // 绂佺敤鍑犱綍鏇茬嚎
-            Interface_Static::SetIVal("write.step.geom.surface.mode", 0); // 绂佺敤鍑犱綍鏇查潰
-            // 棰濆绂佺敤鍙傛暟
+            Interface_Static::SetIVal("write.step.brep.pcurve", 0); // 额外尝试
+            Interface_Static::SetIVal("write.step.surfacecurve.pcurve", 0); // 额外尝试
+            Interface_Static::SetIVal("write.step.curve.pcurve.mode", 0); // 额外尝试
+            // 禁用高级BREP特定功能
+            Interface_Static::SetIVal("write.step.brep.mode", 0); // 简单BREP模式
+            Interface_Static::SetIVal("write.step.surface.curve.mode", 0); // 禁用曲面曲线
+            Interface_Static::SetIVal("write.step.curve.mode", 0); // 禁用曲线
+            Interface_Static::SetIVal("write.step.geom.curve.mode", 0); // 禁用几何曲线
+            Interface_Static::SetIVal("write.step.geom.surface.mode", 0); // 禁用几何曲面
+            // 额外禁用参数
             Interface_Static::SetIVal("write.surfacecurve.mode", 0);
             Interface_Static::SetIVal("write.step.geom.mode", 0);
             Interface_Static::SetIVal("write.step.brep.surface.mode", 0);
             Interface_Static::SetIVal("write.step.curve.continuity", 0);
             Interface_Static::SetIVal("write.step.surface.continuity", 0);
-            // 淇敼锛氫笉鍐嶅己鍒朵娇鐢╢aceted琛ㄧず锛屽厑璁歌В鏋愭洸闈互淇濈暀鍊掕绛夌壒寰?
-            // 浣嗕粛鐒剁鐢≒CURVE鍜屽叾浠栭珮绾REP鍔熻兘浠ユ彁楂樺吋瀹规€?
-            Interface_Static::SetIVal("write.step.representation", 1); // 鍏佽楂樼骇琛ㄧず
-            Interface_Static::SetCVal("write.step.brep.representation", "advanced_brep"); // 浣跨敤楂樼骇BREP琛ㄧず
-            // 涓嶇鐢ㄨВ鏋愭洸闈紝浠ヤ繚鐣欏€掕绛夌壒寰?
-            Interface_Static::SetIVal("write.step.surface.mode", 1); // 鍏佽鏇查潰妯″紡
-            Interface_Static::SetIVal("write.step.brep.curve.mode", 1); // 鍏佽BREP鏇茬嚎妯″紡
-            Interface_Static::SetIVal("write.step.geom.brep.mode", 1); // 鍏佽鍑犱綍BREP妯″紡
-            Interface_Static::SetCVal("write.step.curve.representation", "parametric"); // 鍙傛暟鍖栨洸绾胯〃绀?
-            Interface_Static::SetCVal("write.step.surface.representation", "parametric"); // 鍙傛暟鍖栨洸闈㈣〃绀猴紝淇濈暀鍊掕
+            // 修改：不再强制使用faceted表示，允许解析曲面以保留倒角等特征
+            // 但仍然禁用PCURVE和其他高级BREP功能以提高兼容性
+            Interface_Static::SetIVal("write.step.representation", 1); // 允许高级表示
+            Interface_Static::SetCVal("write.step.brep.representation", "advanced_brep"); // 使用高级BREP表示
+            // 不禁用解析曲面，以保留倒角等特征
+            Interface_Static::SetIVal("write.step.surface.mode", 1); // 允许曲面模式
+            Interface_Static::SetIVal("write.step.brep.curve.mode", 1); // 允许BREP曲线模式
+            Interface_Static::SetIVal("write.step.geom.brep.mode", 1); // 允许几何BREP模式
+            Interface_Static::SetCVal("write.step.curve.representation", "parametric"); // 参数化曲线表示
+            Interface_Static::SetCVal("write.step.surface.representation", "parametric"); // 参数化曲面表示，保留倒角
             
-            // 绔嬪嵆鍒锋柊杈撳嚭骞堕獙璇佽缃?
+            // 立即刷新输出并验证设置
             std::cout << "[STEP Exporter] DEBUG SETTINGS APPLIED - forcing flush" << std::endl;
             std::cout.flush();
         } else {
             std::cout << "[STEP Exporter] Advanced BREP settings enabled." << std::endl;
-            // 搴旂敤淇濈暀鍊掕绛夎В鏋愭洸闈㈢壒寰佺殑璁剧疆
-            Interface_Static::SetIVal("write.step.representation", 1); // 鍏佽楂樼骇琛ㄧず
-            Interface_Static::SetCVal("write.step.brep.representation", "advanced_brep"); // 浣跨敤楂樼骇BREP琛ㄧず
-            // 纭繚瑙ｆ瀽鏇查潰琚惎鐢紝浠ヤ繚鐣欏€掕绛夌壒寰?
-            Interface_Static::SetIVal("write.step.surface.mode", 1); // 鍏佽鏇查潰妯″紡
-            Interface_Static::SetIVal("write.step.brep.curve.mode", 1); // 鍏佽BREP鏇茬嚎妯″紡
-            Interface_Static::SetIVal("write.step.geom.brep.mode", 1); // 鍏佽鍑犱綍BREP妯″紡
-            Interface_Static::SetCVal("write.step.curve.representation", "parametric"); // 鍙傛暟鍖栨洸绾胯〃绀?
-            Interface_Static::SetCVal("write.step.surface.representation", "parametric"); // 鍙傛暟鍖栨洸闈㈣〃绀猴紝淇濈暀鍊掕
+            // 应用保留倒角等解析曲面特征的设置
+            Interface_Static::SetIVal("write.step.representation", 1); // 允许高级表示
+            Interface_Static::SetCVal("write.step.brep.representation", "advanced_brep"); // 使用高级BREP表示
+            // 确保解析曲面被启用，以保留倒角等特征
+            Interface_Static::SetIVal("write.step.surface.mode", 1); // 允许曲面模式
+            Interface_Static::SetIVal("write.step.brep.curve.mode", 1); // 允许BREP曲线模式
+            Interface_Static::SetIVal("write.step.geom.brep.mode", 1); // 允许几何BREP模式
+            Interface_Static::SetCVal("write.step.curve.representation", "parametric"); // 参数化曲线表示
+            Interface_Static::SetCVal("write.step.surface.representation", "parametric"); // 参数化曲面表示，保留倒角
             std::cout << "[STEP Exporter] Applied advanced BREP settings to preserve chamfers and analytic surfaces." << std::endl;
         }
         
-        // 璋冭瘯锛氶獙璇佸叧閿缃殑鍊?
+        // 调试：验证关键设置的值
         std::cout << "[STEP Exporter] DEBUG: write.step.shape.repr = " << Interface_Static::IVal("write.step.shape.repr") << std::endl;
         std::cout << "[STEP Exporter] DEBUG: write.step.pcurve = " << Interface_Static::IVal("write.step.pcurve") << std::endl;
         std::cout << "[STEP Exporter] DEBUG: write.step.surface.pcurve = " << Interface_Static::IVal("write.step.surface.pcurve") << std::endl;
@@ -1661,7 +1661,7 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
         std::cout << "[STEP Exporter] DEBUG: write.step.curve.continuity = " << Interface_Static::IVal("write.step.curve.continuity") << std::endl;
         std::cout << "[STEP Exporter] DEBUG: write.step.surface.continuity = " << Interface_Static::IVal("write.step.surface.continuity") << std::endl;
         std::cout << "[STEP Exporter] DEBUG: write.step.brep.representation = " << Interface_Static::CVal("write.step.brep.representation") << std::endl;
-        // 鏂版坊鍔犲弬鏁扮殑璋冭瘯杈撳嚭
+        // 新添加参数的调试输出
         std::cout << "[STEP Exporter] DEBUG: write.step.surface.mode = " << Interface_Static::IVal("write.step.surface.mode") << std::endl;
         std::cout << "[STEP Exporter] DEBUG: write.step.brep.curve.mode = " << Interface_Static::IVal("write.step.brep.curve.mode") << std::endl;
         std::cout << "[STEP Exporter] DEBUG: write.step.geom.brep.mode = " << Interface_Static::IVal("write.step.geom.brep.mode") << std::endl;
@@ -1671,7 +1671,7 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
         
         STEPControl_Writer writer;
         
-        // 鍦╳riter鍒涘缓鍚庨獙璇佽缃?
+        // 在writer创建后验证设置
         std::cout << "[STEP Exporter] DEBUG AFTER WRITER: write.step.shape.repr = " << Interface_Static::IVal("write.step.shape.repr") << std::endl;
         std::cout << "[STEP Exporter] DEBUG AFTER WRITER: write.step.pcurve = " << Interface_Static::IVal("write.step.pcurve") << std::endl;
         std::cout << "[STEP Exporter] DEBUG AFTER WRITER: write.step.surface.pcurve = " << Interface_Static::IVal("write.step.surface.pcurve") << std::endl;
@@ -1687,12 +1687,12 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
         
         std::vector<TopoDS_Shape> shapes;
 
-        // 瀵硅薄澶勭悊杩涘害璁℃椂鍣?
+        // 对象处理进度计时器
         std::chrono::steady_clock::time_point objects_start_time = std::chrono::steady_clock::now();
         size_t total_faces_processed = 0;
         size_t total_faces_in_scene = 0;
         
-        // 棣栧厛璁＄畻鍦烘櫙鎬婚潰鏁帮紙鐢ㄤ簬杩涘害浼扮畻锛?
+        // 首先计算场景总面数（用于进度估算）
         for (Py_ssize_t i = 0; i < num_objects; i++) {
             PyObject* obj_dict = PyList_GetItem(scene_data_list, i);
             if (PyDict_Check(obj_dict)) {
@@ -1711,7 +1711,7 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
             }
         }
         
-        // 璋冭瘯锛氭墦鍗板綋鍓嶅宸?
+        // 调试：打印当前容差
         if (enable_logging) {
             std::cout << "[STEP Exporter] DEBUG: Before object loop, sew_tolerance = " << sew_tolerance << std::endl;
             std::cout.flush();
@@ -1733,7 +1733,7 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
                 obj_name = PyUnicode_AsUTF8(name_obj);
             }
 
-            // 璁＄畻瀵硅薄杩涘害
+            // 计算对象进度
             double object_progress = (i * 100.0) / num_objects;
             std::chrono::steady_clock::time_point current_time = std::chrono::steady_clock::now();
             auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(current_time - objects_start_time).count();
@@ -1744,7 +1744,7 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
                       << ": " << obj_name 
                       << " [Elapsed: " << std::setprecision(1) << elapsed_sec << "s]" << std::endl;
 
-            // 鑾峰彇椤剁偣鏁版嵁
+            // 获取顶点数据
             std::vector<std::vector<double>> vertices;
             PyObject* vertices_obj = PyDict_GetItemString(obj_dict, "vertices");
             if (vertices_obj && PyList_Check(vertices_obj)) {
@@ -1755,7 +1755,7 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
                     bool valid_vertex = false;
                     std::vector<double> vertex(3);
                     
-                    // 璋冭瘯锛氬墠5涓《鐐圭殑璇︾粏淇℃伅
+                    // 调试：前5个顶点的详细信息
                     std::cout << "[STEP Exporter] DEBUG: In vertex loop v=" << v << std::endl;
                     std::cout.flush();
                     if (v < 5) {
@@ -1770,7 +1770,7 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
                                 std::cout << "[STEP Exporter] DEBUG:   coord[" << j << "] type: " << coord->ob_type->tp_name 
                                           << ", PyFloat_Check=" << PyFloat_Check(coord) 
                                           << ", PyLong_Check=" << PyLong_Check(coord) << std::endl;
-                                // 棰濆璋冭瘯锛氭墦鍗癙ython瀵硅薄鐨勫瓧绗︿覆琛ㄧず
+                                // 额外调试：打印Python对象的字符串表示
                                 PyObject* repr = PyObject_Repr(coord);
                                 if (repr && PyUnicode_Check(repr)) {
                                     const char* repr_str = PyUnicode_AsUTF8(repr);
@@ -1784,9 +1784,9 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
                                 if (PyFloat_Check(coord)) {
                                     double val1 = PyFloat_AsDouble(coord);
                                     double val2 = PyFloat_AS_DOUBLE(coord);
-                                    // 鐩存帴璁块棶ob_fval浣滀负璋冭瘯
+                                    // 直接访问ob_fval作为调试
                                     PyFloatObject* float_obj = (PyFloatObject*)coord;
-                                    // 妫€鏌ョ被鍨嬫寚閽?
+                                    // 检查类型指针
                                     std::cout << "[STEP Exporter] DEBUG:   coord[" << j << "] type pointer: " << coord->ob_type 
                                               << ", PyFloat_Type pointer: " << &PyFloat_Type << std::endl;
                                     std::cout << "[STEP Exporter] DEBUG:   coord[" << j << "] value PyFloat_AsDouble=" << val1 
@@ -1848,7 +1848,7 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
                                 // Clear any exception
                                 PyErr_Clear();
                                 // Fallback to PyFloat_AsDouble
-                                if (PyFloat_Check(coord)) {
+                            if (PyFloat_Check(coord)) {
                                     coord_value = PyFloat_AsDouble(coord);
                                     success = true;
 
@@ -1857,7 +1857,7 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
                                                             std::cout << "[STEP Exporter] DEBUG: PyNumber_Float succeeded, coord_value = " << coord_value << std::endl;
 
                                                         }
-                                } else if (PyLong_Check(coord)) {
+                            } else if (PyLong_Check(coord)) {
                                     coord_value = static_cast<double>(PyLong_AsLong(coord));
                                     success = true;
 
@@ -1893,10 +1893,10 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
                                                 if (v < 5) {
                                                     std::cout << "[STEP Exporter] DEBUG: Using repr parsed value (differs from coord_value): " << repr_str << " -> " << parsed_value << std::endl;
                                                 }
-                                            } else {
+                            } else {
                                                 if (v < 5) {
                                                     std::cout << "[STEP Exporter] DEBUG: parsed value matches coord_value within tolerance, keeping coord_value" << std::endl;
-                                                }
+                            }
                                             }
                                         } catch (const std::exception& e) {
                                             if (v < 5) {
@@ -1924,7 +1924,7 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
                                 }
                                 if (repr) { Py_DECREF(repr); }
                                 vertex[k] = coord_value;
-                                if (k == 2) valid_vertex = true;
+                            if (k == 2) valid_vertex = true;
                             } else {
                                 break;
                             }
@@ -1952,7 +1952,7 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
                                 // Clear any exception
                                 PyErr_Clear();
                                 // Fallback to PyFloat_AsDouble
-                                if (PyFloat_Check(coord)) {
+                            if (PyFloat_Check(coord)) {
                                     coord_value = PyFloat_AsDouble(coord);
                                     success = true;
 
@@ -1961,7 +1961,7 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
                                                             std::cout << "[STEP Exporter] DEBUG: PyNumber_Float succeeded, coord_value = " << coord_value << std::endl;
 
                                                         }
-                                } else if (PyLong_Check(coord)) {
+                            } else if (PyLong_Check(coord)) {
                                     coord_value = static_cast<double>(PyLong_AsLong(coord));
                                     success = true;
 
@@ -2005,10 +2005,10 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
                                                 if (v < 5) {
                                                     std::cout << "[STEP Exporter] DEBUG: Using repr parsed value (differs from coord_value): " << repr_str << " -> " << parsed_value << std::endl;
                                                 }
-                                            } else {
+                            } else {
                                                 if (v < 5) {
                                                     std::cout << "[STEP Exporter] DEBUG: parsed value matches coord_value within tolerance, keeping coord_value" << std::endl;
-                                                }
+                            }
                                             }
                                         } catch (const std::exception& e) {
                                             if (v < 5) {
@@ -2036,7 +2036,7 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
                                 }
                                 if (repr) { Py_DECREF(repr); }
                                 vertex[i] = coord_value;
-                                if (i == 2) valid_vertex = true;
+                            if (i == 2) valid_vertex = true;
                             } else {
                                 break;
                             }
@@ -2048,7 +2048,7 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
                     }
                 }
                 
-                // 璋冭瘯锛氭墦鍗板墠鍑犱釜椤剁偣鍧愭爣
+                // 调试：打印前几个顶点坐标
                 if (!vertices.empty()) {
                     std::cout << "[STEP Exporter] DEBUG: First 5 vertices (scale already applied in Python):" << std::endl;
                     for (size_t i = 0; i < std::min(vertices.size(), (size_t)5); i++) {
@@ -2063,19 +2063,19 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
                 continue;
             }
 
-            // 鑾峰彇闈㈡暟鎹?
+            // 获取面数据
             std::vector<std::vector<int>> faces;
             PyObject* faces_obj = PyDict_GetItemString(obj_dict, "faces");
             if (faces_obj && PyList_Check(faces_obj)) {
                 Py_ssize_t num_faces = PyList_Size(faces_obj);
                 std::cout << "[STEP Exporter]   Faces: " << num_faces << std::endl;
                 
-                // 璀﹀憡锛氶潰鏁拌繃澶?
+                // 警告：面数过多
                 if (num_faces > 500000) {
                     std::cout << "[STEP Exporter]   WARNING: Object has " << num_faces << " faces, processing may be slow." << std::endl;
                 }
                 
-                // 杩涘害鎶ュ憡璁剧疆
+                // 进度报告设置
                 size_t report_interval = num_faces / 100;
                 if (report_interval == 0) report_interval = 1;
                 size_t next_report = report_interval;
@@ -2118,10 +2118,10 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
                         faces.push_back(face_indices);
                     }
                     
-                    // 鏇存柊鎬诲鐞嗛潰鏁?
+                    // 更新总处理面数
                     total_faces_processed++;
                     
-                    // 杩涘害鎶ュ憡
+                    // 进度报告
                     if (f >= next_report) {
                         double object_face_progress = (f * 100.0) / num_faces;
                         double total_progress = (total_faces_in_scene > 0) ? (total_faces_processed * 100.0) / total_faces_in_scene : 0.0;
@@ -2146,8 +2146,8 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
             }
 
             if (!vertices.empty() && !faces.empty()) {
-                // 浣跨敤鏂扮殑瀹炰綋鍒涘缓鍑芥暟
-                // 纭繚缂濆悎瀹瑰樊涓嶅皬浜庢渶灏忓€?
+                // 使用新的实体创建函数
+                // 确保缝合容差不小于最小值
                 double actual_tolerance = sew_tolerance;
                 std::cout << "[STEP Exporter] DEBUG: Before tolerance check, sew_tolerance=" << sew_tolerance << ", actual_tolerance=" << actual_tolerance << std::endl;
                 if (actual_tolerance < 1.0e-6) {
@@ -2165,7 +2165,7 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
 
                     if (!shape.IsNull()) {
                         shapes.push_back(shape);
-                        std::cout << "[STEP Exporter]   鉁?Shape created successfully (Type: ";
+                        std::cout << "[STEP Exporter]   ✓ Shape created successfully (Type: ";
                         switch (shape.ShapeType()) {
                             case TopAbs_SOLID: std::cout << "SOLID"; break;
                             case TopAbs_SHELL: std::cout << "SHELL"; break;
@@ -2176,97 +2176,97 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
                         std::cout << ")" << std::endl;
                     }
                     else {
-                        std::cerr << "[STEP Exporter]   鉁?Shape is null after fixing" << std::endl;
+                        std::cerr << "[STEP Exporter]   ✗ Shape is null after fixing" << std::endl;
                     }
                 }
                 else {
-                    std::cerr << "[STEP Exporter]   鉁?Failed to create shape from mesh" << std::endl;
+                    std::cerr << "[STEP Exporter]   ✗ Failed to create shape from mesh" << std::endl;
                 }
             }
             else {
-                std::cerr << "[STEP Exporter]   鉁?No valid mesh data" << std::endl;
+                std::cerr << "[STEP Exporter]   ✗ No valid mesh data" << std::endl;
             }
         }
 
         if (shapes.empty()) {
-            std::cerr << "[STEP Exporter] 鉁?No valid shapes to export" << std::endl;
+            std::cerr << "[STEP Exporter] ✗ No valid shapes to export" << std::endl;
             Py_RETURN_FALSE;
         }
 
         std::cout << "\n[STEP Exporter] Created " << shapes.size() << " valid shapes" << std::endl;
 
-        // 閫愪釜浼犺緭姣忎釜褰㈢姸锛岀‘淇濇纭殑STEP缁撴瀯
+        // 逐个传输每个形状，确保正确的STEP结构
         std::cout << "[STEP Exporter] Transferring " << shapes.size() << " shapes to STEP..." << std::endl;
         int transferred_count = 0;
         for (size_t i = 0; i < shapes.size(); i++) {
             TopoDS_Shape shape = shapes[i];
             
-            // 鍑犱綍淇
+            // 几何修复
             if (fix_geometry) {
                 shape = fix_shape_enhanced(shape, sew_tolerance);
             }
             
-            // 楠岃瘉褰㈢姸
+            // 验证形状
             int face_count = 0;
             for (TopExp_Explorer exp(shape, TopAbs_FACE); exp.More(); exp.Next()) face_count++;
             if (face_count == 0) {
-                std::cerr << "[STEP Exporter] 鉁?Shape " << i + 1 << " has no faces, skipping." << std::endl;
+                std::cerr << "[STEP Exporter] ✗ Shape " << i + 1 << " has no faces, skipping." << std::endl;
                 continue;
             }
             
-            // 妫€鏌ュ舰鐘舵槸鍚︿负绌?
+            // 检查形状是否为空
             if (shape.IsNull()) {
-                std::cerr << "[STEP Exporter] 鉁?Shape " << i + 1 << " is null, skipping." << std::endl;
+                std::cerr << "[STEP Exporter] ✗ Shape " << i + 1 << " is null, skipping." << std::endl;
                 continue;
             }
             
-            // 璁＄畻褰㈢姸浣撶Н锛岀‘淇濆畠鏈夊疄闄呭嚑浣曞唴瀹?
+            // 计算形状体积，确保它有实际几何内容
             GProp_GProps props;
             BRepGProp::VolumeProperties(shape, props);
             double volume = fabs(props.Mass());
             
-            // 鑰冭檻缂╂斁鍥犲瓙鐨勫奖鍝嶏紝璋冩暣浣撶Н闃堝€?
-            // 瀵逛簬缂╂斁鍚庣殑妯″瀷锛堝0.001缂╂斁鍥犲瓙锛夛紝浣撶Н浼氬緢灏?
-            // 浣跨敤鐩稿闃堝€硷紝鍩轰簬褰㈢姸鐨勮竟鐣屾澶у皬
+            // 考虑缩放因子的影响，调整体积阈值
+            // 对于缩放后的模型（如0.001缩放因子），体积会很小
+            // 使用相对阈值，基于形状的边界框大小
             Bnd_Box bbox;
             BRepBndLib::Add(shape, bbox);
             double xmin, ymin, zmin, xmax, ymax, zmax;
             bbox.Get(xmin, ymin, zmin, xmax, ymax, zmax);
             double size = std::max({xmax - xmin, ymax - ymin, zmax - zmin});
             
-            // 濡傛灉杈圭晫妗嗗ぇ灏忓ぇ浜?.01姣背锛屽垯璁や负褰㈢姸鏈夋晥
-            if (size < 1.0e-5) { // 灏忎簬0.01姣背
-                std::cerr << "[STEP Exporter] 鉁?Shape " << i + 1 << " has negligible size (" << size << "), skipping. BBox: [" 
+            // 如果边界框大小大于0.01毫米，则认为形状有效
+            if (size < 1.0e-5) { // 小于0.01毫米
+                std::cerr << "[STEP Exporter] ✗ Shape " << i + 1 << " has negligible size (" << size << "), skipping. BBox: [" 
                           << xmin << "," << ymin << "," << zmin << "] -> [" << xmax << "," << ymax << "," << zmax << "]" << std::endl;
                 continue;
             }
             
-            // 妫€鏌ヤ綋绉紝浣嗗厑璁哥壒瀹氬舰鐘剁被鍨嬬殑浣撶Н涓?
-            // 瀵逛簬澹炽€侀潰鍜屽鍚堝舰鐘讹紝浣撶Н涓?鏄甯哥殑
-            if (volume < 1.0e-12) { // 闈炲父灏忕殑浣撶Н闃堝€?
-                // 妫€鏌ュ舰鐘剁被鍨?
+            // 检查体积，但允许特定形状类型的体积为0
+            // 对于壳、面和复合形状，体积为0是正常的
+            if (volume < 1.0e-12) { // 非常小的体积阈值
+                // 检查形状类型
                 TopAbs_ShapeEnum shapeType = shape.ShapeType();
                 if (shapeType == TopAbs_SOLID) {
-                    // 瀹炰綋搴旇鏈変綋绉紝濡傛灉娌℃湁鍒欒烦杩?
-                    std::cerr << "[STEP Exporter] 鉁?Shape " << i + 1 << " has negligible volume (" << volume << "), skipping. ShapeType: SOLID" << std::endl;
+                    // 实体应该有体积，如果没有则跳过
+                    std::cerr << "[STEP Exporter] ✗ Shape " << i + 1 << " has negligible volume (" << volume << "), skipping. ShapeType: SOLID" << std::endl;
                     continue;
                 } else {
-                    // 瀵逛簬闈炲疄浣撳舰鐘讹紙澹炽€侀潰銆佸鍚堬級锛屼綋绉负0鏄甯哥殑
-                    // 妫€鏌ヨ繖浜涘舰鐘舵槸鍚︽湁瀹為檯鐨勫嚑浣曞唴瀹?
+                    // 对于非实体形状（壳、面、复合），体积为0是正常的
+                    // 检查这些形状是否有实际的几何内容
                     int face_count = 0;
                     for (TopExp_Explorer exp(shape, TopAbs_FACE); exp.More(); exp.Next()) face_count++;
                     if (face_count == 0) {
-                        std::cerr << "[STEP Exporter] 鉁?Shape " << i + 1 << " has no faces and negligible volume, skipping. ShapeType: " << shapeType << std::endl;
+                        std::cerr << "[STEP Exporter] ✗ Shape " << i + 1 << " has no faces and negligible volume, skipping. ShapeType: " << shapeType << std::endl;
                         continue;
                     }
-                    std::cout << "[STEP Exporter] 鉁?Shape " << i + 1 << " has negligible volume but has " << face_count << " faces, proceeding. ShapeType: " << shapeType << std::endl;
+                    std::cout << "[STEP Exporter] ✓ Shape " << i + 1 << " has negligible volume but has " << face_count << " faces, proceeding. ShapeType: " << shapeType << std::endl;
                 }
             }
             
-            // 鍐嶆灏濊瘯淇褰㈢姸
+            // 再次尝试修复形状
             TopoDS_Shape finalShape = fix_shape_enhanced(shape, sew_tolerance);
             if (finalShape.IsNull()) {
-                std::cerr << "[STEP Exporter] 鉁?Shape " << i + 1 << " became null after final fixing, skipping." << std::endl;
+                std::cerr << "[STEP Exporter] ✗ Shape " << i + 1 << " became null after final fixing, skipping." << std::endl;
                 continue;
             }
             
@@ -2275,22 +2275,22 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
                 std::cout << "[STEP Exporter] Warning: Shape " << i + 1 << " has validation issues, attempting transfer anyway." << std::endl;
             }
             
-            // 鏍规嵁褰㈢姸绫诲瀷閫夋嫨浼犺緭妯″紡
+            // 根据形状类型选择传输模式
             STEPControl_StepModelType transfer_mode = STEPControl_AsIs;
             std::cout << "[STEP Exporter] DEBUG: Shape " << i + 1 << " type value = " << finalShape.ShapeType() << " (4=FACE)" << std::endl;
             switch (finalShape.ShapeType()) {
                 case TopAbs_SOLID:
-                    // 瀵逛簬瀹炰綋褰㈢姸锛屾€绘槸浣跨敤ManifoldSolidBrep浠ョ‘淇濇渶澶у吋瀹规€?
+                    // 对于实体形状，总是使用ManifoldSolidBrep以确保最大兼容性
                     transfer_mode = STEPControl_ManifoldSolidBrep;
-                    std::cout << "[STEP Exporter]   Shape " << i + 1 << " is SOLID, using ManifoldSolidBrep (Bambu鍏煎)." << std::endl;
+                    std::cout << "[STEP Exporter]   Shape " << i + 1 << " is SOLID, using ManifoldSolidBrep (Bambu兼容)." << std::endl;
                     break;
                 case TopAbs_SHELL:
-                    // 灏濊瘯灏嗗３杞崲涓哄疄浣撲互鎻愰珮Bambu鍏煎鎬?
+                    // 尝试将壳转换为实体以提高Bambu兼容性
                     {
                         bool converted_to_solid = false;
                         TopoDS_Shape shape_to_use = finalShape;
                         
-                        // 鏂规硶1锛氱洿鎺ヨ浆鎹负瀹炰綋
+                        // 方法1：直接转换为实体
                         BRepBuilderAPI_MakeSolid solidMaker;
                         solidMaker.Add(TopoDS::Shell(shape_to_use));
                         if (solidMaker.IsDone()) {
@@ -2303,7 +2303,7 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
                             }
                         }
                         
-                        // 鏂规硶2锛氬鏋滄柟娉?澶辫触锛屽皾璇曚慨澶嶅嚑浣曞悗閲嶈瘯
+                        // 方法2：如果方法1失败，尝试修复几何后重试
                         if (!converted_to_solid) {
                             std::cout << "[STEP Exporter]   Shape " << i + 1 << " is SHELL, method 1 failed, trying geometry repair..." << std::endl;
                             Handle(ShapeFix_Shape) fixer = new ShapeFix_Shape;
@@ -2328,9 +2328,9 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
                             }
                         }
                         
-                        // 鏂规硶3锛氳褰曚綋绉俊鎭敤浜庤皟璇?
+                        // 方法3：记录体积信息用于调试
                         if (!converted_to_solid) {
-                            // 璁＄畻澹崇殑浣撶Н鐢ㄤ簬璋冭瘯
+                            // 计算壳的体积用于调试
                             GProp_GProps areaProps;
                             BRepGProp::SurfaceProperties(shape_to_use, areaProps);
                             double area = areaProps.Mass();
@@ -2340,7 +2340,7 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
                             std::cout << "[STEP Exporter]   Shape " << i + 1 << " is SHELL, area=" << area << ", volume=" << volume << std::endl;
                             std::cout << "[STEP Exporter]   DEBUG: area > 1e-12 = " << (area > 1e-12) << ", volume < 1e-12 = " << (volume < 1e-12) << std::endl;
                             
-                            // 鏂规硶4锛氬鏋滀綋绉负闆朵絾闈㈢Н涓嶄负闆讹紝灏濊瘯鎸ゅ嚭涓鸿杽瀹炰綋
+                            // 方法4：如果体积为零但面积不为零，尝试挤出为薄实体
                             if (volume < 1e-12 && area > 1e-12) {
                                 std::cout << "[STEP Exporter]   Shape " << i + 1 << " has zero volume, attempting extrusion..." << std::endl;
                                 std::cout << "[STEP Exporter]   DEBUG: shape_to_use type = " << shape_to_use.ShapeType() << " (4=SHELL)" << std::endl;
@@ -2348,9 +2348,9 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
                                 bool extrusion_success = false;
                                 TopoDS_Shape extrudedShape;
                                 
-                                // 鏂规硶4a锛氬皾璇曚娇鐢˙RepOffsetAPI_MakeThickSolid娣诲姞鍘氬害
+                                // 方法4a：尝试使用BRepOffsetAPI_MakeThickSolid添加厚度
                                 try {
-                                    // 棣栧厛灏濊瘯淇澹冲嚑浣曪紙濡傛灉鏄疭HELL锛?
+                                    // 首先尝试修复壳几何（如果是SHELL）
                                     if (shape_to_use.ShapeType() == TopAbs_SHELL) {
                                         try {
                                             Handle(ShapeFix_Shell) shellFixer = new ShapeFix_Shell;
@@ -2369,11 +2369,11 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
                                     }
                                     
                                     std::cout << "[STEP Exporter]   Trying BRepOffsetAPI_MakeThickSolid with multiple thicknesses..." << std::endl;
-                                    // 灏濊瘯澶氫釜鍘氬害鍊硷紙姝ｅ悜鍜岃礋鍚戯級
-                                    double thicknesses[] = {0.001, -0.001, 0.005, -0.005, 0.01, -0.01, 0.05, -0.05, 0.1, -0.1, 0.2, -0.2, 0.5, -0.5, 1.0, -1.0};
+                                    // 尝试多个厚度值（正向和负向）
+                                    double thicknesses[] = {0.2, -0.2, 0.5, -0.5, 1.0, -1.0};
                                     bool thick_success = false;
                                     
-                                    for (int thick_idx = 0; thick_idx < 16 && !thick_success; thick_idx++) {
+                                    for (int thick_idx = 0; thick_idx < 6 && !thick_success; thick_idx++) {
                                         try {
                                             BRepOffsetAPI_MakeThickSolid thickSolidMaker;
                                             thickSolidMaker.MakeThickSolidBySimple(shape_to_use, thicknesses[thick_idx]);
@@ -2406,16 +2406,16 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
                                     std::cout << "[STEP Exporter]   ThickSolid general exception: " << e.GetMessageString() << std::endl;
                                 }
                                 
-                                // 鏂规硶4b锛氬鏋滄柟娉?a澶辫触锛屽皾璇曟部澶氫釜鏂瑰悜鎸ゅ嚭
+                                // 方法4b：如果方法4a失败，尝试沿多个方向挤出
                                 if (!extrusion_success) {
                                     std::cout << "[STEP Exporter]   Trying extrusion along different directions..." << std::endl;
                                     gp_Vec directions[] = {
-                                        gp_Vec(0.0, 0.0, 0.2),   // Z鏂瑰悜
-                                        gp_Vec(0.2, 0.0, 0.0),   // X鏂瑰悜
-                                        gp_Vec(0.0, 0.2, 0.0),   // Y鏂瑰悜
-                                        gp_Vec(0.0, 0.0, -0.2),  // 璐焃鏂瑰悜
-                                        gp_Vec(-0.2, 0.0, 0.0),  // 璐焁鏂瑰悜
-                                        gp_Vec(0.0, -0.2, 0.0)   // 璐焂鏂瑰悜
+                                        gp_Vec(0.0, 0.0, 0.2),   // Z方向
+                                        gp_Vec(0.2, 0.0, 0.0),   // X方向
+                                        gp_Vec(0.0, 0.2, 0.0),   // Y方向
+                                        gp_Vec(0.0, 0.0, -0.2),  // 负Z方向
+                                        gp_Vec(-0.2, 0.0, 0.0),  // 负X方向
+                                        gp_Vec(0.0, -0.2, 0.0)   // 负Y方向
                                     };
                                     
                                     for (int dir_idx = 0; dir_idx < 6 && !extrusion_success; dir_idx++) {
@@ -2434,7 +2434,7 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
                                                     break;
                                                 }
                                             } else if (extrudedShape.ShapeType() == TopAbs_COMPOUND) {
-                                                // 妫€鏌ュ鍚堝舰鐘朵腑鏄惁鍖呭惈瀹炰綋
+                                                // 检查复合形状中是否包含实体
                                                 TopExp_Explorer solidExp(extrudedShape, TopAbs_SOLID);
                                                 if (solidExp.More()) {
                                                     TopoDS_Solid solid = TopoDS::Solid(solidExp.Current());
@@ -2458,21 +2458,21 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
                             }
                         }
                         
-                        // 鏍规嵁杞崲缁撴灉閫夋嫨浼犺緭妯″紡
+                        // 根据转换结果选择传输模式
                         if (converted_to_solid) {
                             finalShape = shape_to_use;
                             transfer_mode = STEPControl_ManifoldSolidBrep;
-                            std::cout << "[STEP Exporter]   Shape " << i + 1 << " is SHELL, using ManifoldSolidBrep (Bambu鍏煎)." << std::endl;
+                            std::cout << "[STEP Exporter]   Shape " << i + 1 << " is SHELL, using ManifoldSolidBrep (Bambu兼容)." << std::endl;
                         } else {
-                            // 鎵€鏈夎浆鎹㈡柟娉曢兘澶辫触锛屽己鍒朵娇鐢∕anifoldSolidBrep浠ユ彁楂楤ambu鍏煎鎬?
-                            finalShape = shape_to_use; // 淇濇寔鍘熷SHELL褰㈢姸
+                            // 所有转换方法都失败，强制使用ManifoldSolidBrep以提高Bambu兼容性
+                            finalShape = shape_to_use; // 保持原始SHELL形状
                             transfer_mode = STEPControl_ManifoldSolidBrep;
                             std::cout << "[STEP Exporter]   Shape " << i + 1 << " is SHELL, conversion to SOLID failed, forcing ManifoldSolidBrep for maximum Bambu compatibility." << std::endl;
                         }
                     }
                     break;
                 case TopAbs_COMPOUND:
-                    // 瀵逛簬澶嶅悎褰㈢姸锛屽皾璇曟娴嬫槸鍚﹀寘鍚疄浣撴垨澹?
+                    // 对于复合形状，尝试检测是否包含实体或壳
                     {
                         bool has_solid = false;
                         TopExp_Explorer solidExp(finalShape, TopAbs_SOLID);
@@ -2482,13 +2482,13 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
                         
                         if (has_solid) {
                             transfer_mode = STEPControl_ManifoldSolidBrep;
-                            std::cout << "[STEP Exporter]   Shape " << i + 1 << " is COMPOUND containing SOLID, using ManifoldSolidBrep (Bambu鍏煎)." << std::endl;
+                            std::cout << "[STEP Exporter]   Shape " << i + 1 << " is COMPOUND containing SOLID, using ManifoldSolidBrep (Bambu兼容)." << std::endl;
                         } else {
-                            // 妫€鏌ユ槸鍚﹀寘鍚３
+                            // 检查是否包含壳
                             bool has_shell = false;
                             TopExp_Explorer shellExp(finalShape, TopAbs_SHELL);
                             
-                            // 鏀堕泦鎵€鏈夊３
+                            // 收集所有壳
                             std::vector<TopoDS_Shell> shells;
                             for (; shellExp.More(); shellExp.Next()) {
                                 shells.push_back(TopoDS::Shell(shellExp.Current()));
@@ -2498,16 +2498,16 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
                             if (has_shell) {
                                 std::cout << "[STEP Exporter]   Shape " << i + 1 << " is COMPOUND containing " << shells.size() << " SHELL(s), attempting to combine and convert..." << std::endl;
                                 
-                                // 棣栧厛灏濊瘯缂濆悎鎵€鏈夊３
+                                // 首先尝试缝合所有壳
                                 TopoDS_Shape combinedShape;
                                 bool sewing_success = false;
                                 
                                 if (shells.size() == 1) {
-                                    // 鍗曚竴澹筹紝鐩存帴灏濊瘯杞崲
+                                    // 单一壳，直接尝试转换
                                     combinedShape = shells[0];
                                     sewing_success = true;
                                 } else {
-                                    // 澶氫釜澹筹紝灏濊瘯缂濆悎
+                                    // 多个壳，尝试缝合
                                     std::cout << "[STEP Exporter]   Multiple shells detected, attempting sewing..." << std::endl;
                                     BRepBuilderAPI_Sewing sewer(0.01);
                                     for (const auto& shell : shells) {
@@ -2526,7 +2526,7 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
                                 
                                 bool conversion_success = false;
                                 
-                                // 濡傛灉缂濆悎鎴愬姛锛屽皾璇曞皢缂濆悎鍚庣殑澹宠浆鎹负瀹炰綋
+                                // 如果缝合成功，尝试将缝合后的壳转换为实体
                                 if (sewing_success && combinedShape.ShapeType() == TopAbs_SHELL) {
                                     BRepBuilderAPI_MakeSolid solidMaker;
                                     solidMaker.Add(TopoDS::Shell(combinedShape));
@@ -2541,7 +2541,7 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
                                     }
                                     
                                     if (!conversion_success) {
-                                        // 灏濊瘯淇鍑犱綍鍚庨噸璇?
+                                        // 尝试修复几何后重试
                                         std::cout << "[STEP Exporter]   Direct conversion failed, attempting geometry repair..." << std::endl;
                                         Handle(ShapeFix_Shape) fixer = new ShapeFix_Shape;
                                         fixer->Init(combinedShape);
@@ -2566,7 +2566,7 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
                                     }
                                 }
                                 
-                                // 濡傛灉缂濆悎澶辫触鎴栬浆鎹㈠け璐ワ紝灏濊瘯灏嗘瘡涓３鍗曠嫭杞崲涓哄疄浣?
+                                // 如果缝合失败或转换失败，尝试将每个壳单独转换为实体
                                 if (!conversion_success) {
                                     std::cout << "[STEP Exporter]   Trying to convert each SHELL individually..." << std::endl;
                                     BRep_Builder compoundBuilder;
@@ -2579,7 +2579,7 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
                                         bool shell_converted = false;
                                         TopoDS_Solid shellAsSolid;
                                         
-                                        // 灏濊瘯鐩存帴杞崲涓哄疄浣?
+                                        // 尝试直接转换为实体
                                         BRepBuilderAPI_MakeSolid solidMaker;
                                         solidMaker.Add(shell);
                                         if (solidMaker.IsDone()) {
@@ -2591,9 +2591,9 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
                                             }
                                         }
                                         
-                                        // 濡傛灉鐩存帴杞崲澶辫触锛屽皾璇曞绉嶈浆鎹㈡柟娉?
+                                        // 如果直接转换失败，尝试多种转换方法
                                         if (!shell_converted) {
-                                            // 棣栧厛灏濊瘯淇澹冲嚑浣?
+                                            // 首先尝试修复壳几何
                                             try {
                                                 Handle(ShapeFix_Shell) shellFixer = new ShapeFix_Shell;
                                                 shellFixer->Init(shell);
@@ -2609,15 +2609,15 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
                                                 std::cout << "[STEP Exporter]   Shell repair exception: " << e.GetMessageString() << std::endl;
                                             }
                                             
-                                            // 鏂规硶1锛氬皾璇曞姞鍘氾紙ThickSolid锛?- 瀵瑰皝闂３鏈夋晥
+                                            // 方法1：尝试加厚（ThickSolid） - 对封闭壳有效
                                             if (!shell_converted) {
                                                 try {
                                                     std::cout << "[STEP Exporter]   Trying BRepOffsetAPI_MakeThickSolid for shell " << shell_idx << "..." << std::endl;
                                                     BRepOffsetAPI_MakeThickSolid thickSolidMaker;
-                                                    // 灏濊瘯姝ｅ悜鍜岃礋鍚戝帤搴?
-                                                    double thicknesses[] = {0.001, -0.001, 0.005, -0.005, 0.01, -0.01, 0.05, -0.05, 0.1, -0.1, 0.2, -0.2, 0.5, -0.5, 1.0, -1.0};
+                                                    // 尝试正向和负向厚度
+                                                    double thicknesses[] = {0.2, -0.2, 0.5, -0.5};
                                                     bool thick_success = false;
-                                                    for (int thick_idx = 0; thick_idx < 16 && !thick_success; thick_idx++) {
+                                                    for (int thick_idx = 0; thick_idx < 4 && !thick_success; thick_idx++) {
                                                         try {
                                                             thickSolidMaker.MakeThickSolidBySimple(shell, thicknesses[thick_idx]);
                                                             if (thickSolidMaker.IsDone()) {
@@ -2646,7 +2646,7 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
                                                 }
                                             }
                                             
-                                            // 鏂规硶2锛氬鏋滃姞鍘氬け璐ワ紝妫€鏌ユ槸鍚﹂浂浣撶Н骞跺皾璇曟尋鍑?
+                                            // 方法2：如果加厚失败，检查是否零体积并尝试挤出
                                             if (!shell_converted) {
                                                 GProp_GProps areaProps;
                                                 BRepGProp::SurfaceProperties(shell, areaProps);
@@ -2656,7 +2656,7 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
                                                 double volume = fabs(volumeProps.Mass());
                                                 
                                                 if (volume < 1e-12 && area > 1e-12) {
-                                                    // 灏濊瘯娌垮涓柟鍚戞尋鍑?
+                                                    // 尝试沿多个方向挤出
                                                     gp_Vec directions[] = {
                                                         gp_Vec(0.0, 0.0, 0.2),
                                                         gp_Vec(0.2, 0.0, 0.0),
@@ -2698,7 +2698,7 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
                                         conversion_success = true;
                                         std::cout << "[STEP Exporter]   Successfully converted " << solid_count << " out of " << shells.size() << " SHELL(s) to SOLID(s)." << std::endl;
                                     } else {
-                                        // 鎵€鏈夎浆鎹㈤兘澶辫触锛屼娇鐢ㄧ涓€涓３
+                                        // 所有转换都失败，使用第一个壳
                                         std::cout << "[STEP Exporter]   All conversion methods failed, using first SHELL." << std::endl;
                                         combinedShape = shells[0];
                                     }
@@ -2706,15 +2706,15 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
                                 
                                 if (conversion_success) {
                                     transfer_mode = STEPControl_ManifoldSolidBrep;
-                                    std::cout << "[STEP Exporter]   Shape " << i + 1 << " is COMPOUND containing SHELL, successfully converted to SOLID(s), using ManifoldSolidBrep (Bambu鍏煎)." << std::endl;
+                                    std::cout << "[STEP Exporter]   Shape " << i + 1 << " is COMPOUND containing SHELL, successfully converted to SOLID(s), using ManifoldSolidBrep (Bambu兼容)." << std::endl;
                                 } else {
-                                    // 鎵€鏈夎浆鎹㈡柟娉曢兘澶辫触锛屽己鍒朵娇鐢∕anifoldSolidBrep浠ユ彁楂楤ambu鍏煎鎬?
-                                    finalShape = combinedShape; // 浣跨敤绗竴涓３鎴栫紳鍚堝悗鐨勫３
+                                    // 所有转换方法都失败，强制使用ManifoldSolidBrep以提高Bambu兼容性
+                                    finalShape = combinedShape; // 使用第一个壳或缝合后的壳
                                     transfer_mode = STEPControl_ManifoldSolidBrep;
                                     std::cout << "[STEP Exporter]   Shape " << i + 1 << " is COMPOUND containing SHELL, all conversion methods failed, forcing ManifoldSolidBrep for Bambu compatibility." << std::endl;
                                 }
                             } else {
-                                // 鏃㈡病鏈夊疄浣撲篃娌℃湁澹?
+                                // 既没有实体也没有壳
                                 transfer_mode = STEPControl_ManifoldSolidBrep;
                                 std::cout << "[STEP Exporter]   Shape " << i + 1 << " is COMPOUND (no SOLID or SHELL), forcing ManifoldSolidBrep for Bambu compatibility." << std::endl;
                             }
@@ -2722,7 +2722,7 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
                     }
                     break;
                 case TopAbs_FACE:
-                    // 瀵逛簬闈㈢被鍨嬶紝灏濊瘯杞崲涓哄疄浣撲互鎻愰珮Bambu鍏煎鎬?
+                    // 对于面类型，尝试转换为实体以提高Bambu兼容性
                     {
                         std::cout << "[STEP Exporter] DEBUG: ENTERING FACE CASE for shape " << i + 1 << std::endl;
                         std::cout << "[STEP Exporter]   Shape " << i + 1 << " is FACE, attempting to convert to SOLID..." << std::endl;
@@ -2730,19 +2730,19 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
                         bool converted_to_solid = false;
                         TopoDS_Shape shape_to_use = finalShape;
                         
-                        // 璁＄畻闈㈢殑闈㈢Н鐢ㄤ簬璋冭瘯
+                        // 计算面的面积用于调试
                         GProp_GProps areaProps;
                         BRepGProp::SurfaceProperties(shape_to_use, areaProps);
                         double area = areaProps.Mass();
                         std::cout << "[STEP Exporter]   FACE area=" << area << std::endl;
                         
-                        // 鏂规硶1锛氬皾璇曞姞鍘氾紙ThickSolid锛夊垱寤鸿杽瀹炰綋
+                        // 方法1：尝试加厚（ThickSolid）创建薄实体
                         if (area > 1e-12) {
                             std::cout << "[STEP Exporter]   Face has area > 1e-12, attempting thickening..." << std::endl;
                             bool thick_success = false;
-                            double thicknesses[] = {0.001, -0.001, 0.005, -0.005, 0.01, -0.01, 0.05, -0.05, 0.1, -0.1, 0.2, -0.2, 0.5, -0.5, 1.0, -1.0};
+                            double thicknesses[] = {0.2, -0.2, 0.5, -0.5, 1.0, -1.0};
                             
-                            for (int thick_idx = 0; thick_idx < 16 && !thick_success; thick_idx++) {
+                            for (int thick_idx = 0; thick_idx < 6 && !thick_success; thick_idx++) {
                                 try {
                                     BRepOffsetAPI_MakeThickSolid thickSolidMaker;
                                     thickSolidMaker.MakeThickSolidBySimple(shape_to_use, thicknesses[thick_idx]);
@@ -2767,16 +2767,16 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
                                 }
                             }
                             
-                            // 鏂规硶2锛氬鏋滃姞鍘氬け璐ワ紝灏濊瘯娌垮涓柟鍚戞尋鍑?
+                            // 方法2：如果加厚失败，尝试沿多个方向挤出
                             if (!thick_success) {
                                 std::cout << "[STEP Exporter]   Trying extrusion along different directions..." << std::endl;
                                 gp_Vec directions[] = {
-                                    gp_Vec(0.0, 0.0, 0.2),   // Z鏂瑰悜
-                                    gp_Vec(0.2, 0.0, 0.0),   // X鏂瑰悜
-                                    gp_Vec(0.0, 0.2, 0.0),   // Y鏂瑰悜
-                                    gp_Vec(0.0, 0.0, -0.2),  // 璐焃鏂瑰悜
-                                    gp_Vec(-0.2, 0.0, 0.0),  // 璐焁鏂瑰悜
-                                    gp_Vec(0.0, -0.2, 0.0)   // 璐焂鏂瑰悜
+                                    gp_Vec(0.0, 0.0, 0.2),   // Z方向
+                                    gp_Vec(0.2, 0.0, 0.0),   // X方向
+                                    gp_Vec(0.0, 0.2, 0.0),   // Y方向
+                                    gp_Vec(0.0, 0.0, -0.2),  // 负Z方向
+                                    gp_Vec(-0.2, 0.0, 0.0),  // 负X方向
+                                    gp_Vec(0.0, -0.2, 0.0)   // 负Y方向
                                 };
                                 
                                 for (int dir_idx = 0; dir_idx < 6 && !thick_success; dir_idx++) {
@@ -2795,7 +2795,7 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
                                                 break;
                                             }
                                         } else if (extrudedShape.ShapeType() == TopAbs_COMPOUND) {
-                                            // 妫€鏌ュ鍚堝舰鐘朵腑鏄惁鍖呭惈瀹炰綋
+                                            // 检查复合形状中是否包含实体
                                             TopExp_Explorer solidExp(extrudedShape, TopAbs_SOLID);
                                             if (solidExp.More()) {
                                                 TopoDS_Solid solid = TopoDS::Solid(solidExp.Current());
@@ -2814,13 +2814,13 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
                             }
                         }
                         
-                        // 鏍规嵁杞崲缁撴灉閫夋嫨浼犺緭妯″紡
+                        // 根据转换结果选择传输模式
                         if (converted_to_solid) {
                             finalShape = shape_to_use;
                             transfer_mode = STEPControl_ManifoldSolidBrep;
-                            std::cout << "[STEP Exporter]   Face converted to SOLID, using ManifoldSolidBrep (Bambu鍏煎)." << std::endl;
+                            std::cout << "[STEP Exporter]   Face converted to SOLID, using ManifoldSolidBrep (Bambu兼容)." << std::endl;
                         } else {
-                            // 鎵€鏈夎浆鎹㈡柟娉曢兘澶辫触锛屼娇鐢⊿hellBasedSurfaceModel浣滀负鍚庡鏂规
+                            // 所有转换方法都失败，使用ShellBasedSurfaceModel作为后备方案
                             transfer_mode = STEPControl_ShellBasedSurfaceModel;
                             std::cout << "[STEP Exporter]   Face conversion to SOLID failed, using ShellBasedSurfaceModel for compatibility." << std::endl;
                         }
@@ -2833,14 +2833,14 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
                     break;
             }
             
-            // 濡傛灉绂佺敤楂樼骇BREP锛屽褰㈢姸杩涜缃戞牸鍖栦互寮哄埗浣跨敤澶氶潰浣撹〃绀?
+            // 如果禁用高级BREP，对形状进行网格化以强制使用多面体表示
             if (!advanced_brep) {
-                // 鍑犱綍缁熶竴锛堝彲閫夋楠わ紝濡傛灉澶辫触鍒欒烦杩囷級
+                // 几何统一（可选步骤，如果失败则跳过）
                 try {
                     std::cout << "[STEP Exporter]   Applying geometry unification for shape " << i + 1 << "..." << std::endl;
                     Handle(ShapeUpgrade_UnifySameDomain) unify = new ShapeUpgrade_UnifySameDomain(finalShape);
-                    unify->SetLinearTolerance(0.01);  // 鏇翠弗鏍肩殑瀹瑰樊
-                    unify->SetAngularTolerance(0.5 * M_PI / 180.0); // 0.5搴?
+                    unify->SetLinearTolerance(0.01);  // 更严格的容差
+                    unify->SetAngularTolerance(0.5 * M_PI / 180.0); // 0.5度
                     unify->Build();
                     if (!unify->Shape().IsNull()) {
                         finalShape = unify->Shape();
@@ -2854,15 +2854,15 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
                     std::cout << "[STEP Exporter]   Geometry unification failed (std): " << e.what() << ", skipping." << std::endl;
                 }
                 
-                // 缃戞牸鍖栵紙蹇呴渶姝ラ锛屼絾澶辫触鏃剁户缁級
+                // 网格化（必需步骤，但失败时继续）
                 std::cout << "[STEP Exporter]   Meshing shape " << i + 1 << " to force faceted representation..." << std::endl;
                 try {
                     BRepMesh_IncrementalMesh mesh(finalShape, 0.1, false, 0.5 * M_PI / 180.0);
                     mesh.Perform();
                     if (mesh.IsDone()) {
-                        std::cout << "[STEP Exporter]   鉁?Meshing completed successfully." << std::endl;
+                        std::cout << "[STEP Exporter]   ✓ Meshing completed successfully." << std::endl;
                     } else {
-                        std::cout << "[STEP Exporter]   鈿?Meshing may have issues, continuing anyway." << std::endl;
+                        std::cout << "[STEP Exporter]   ⚠ Meshing may have issues, continuing anyway." << std::endl;
                     }
                 } catch (const Standard_Failure& e) {
                     std::cout << "[STEP Exporter]   Meshing failed: " << e.GetMessageString() << ", continuing anyway." << std::endl;
@@ -2873,16 +2873,16 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
             
             IFSelect_ReturnStatus status = writer.Transfer(finalShape, transfer_mode);
             if (status != IFSelect_RetDone) {
-                std::cerr << "[STEP Exporter] 鉁?Failed to transfer shape " << i + 1 << std::endl;
-                // 缁х画澶勭悊鍏朵粬褰㈢姸
+                std::cerr << "[STEP Exporter] ✗ Failed to transfer shape " << i + 1 << std::endl;
+                // 继续处理其他形状
             } else {
                 transferred_count++;
-                std::cout << "[STEP Exporter]   鉁?Shape " << i + 1 << " transferred successfully." << std::endl;
+                std::cout << "[STEP Exporter]   ✓ Shape " << i + 1 << " transferred successfully." << std::endl;
             }
         }
         
         if (transferred_count == 0) {
-            std::cerr << "[STEP Exporter] 鉁?No shapes were successfully transferred." << std::endl;
+            std::cerr << "[STEP Exporter] ✗ No shapes were successfully transferred." << std::endl;
             Py_RETURN_FALSE;
         }
         
@@ -2892,7 +2892,7 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
         IFSelect_ReturnStatus write_status = writer.Write(filename);
 
         if (write_status == IFSelect_RetDone) {
-            std::cout << "[STEP Exporter] 鉁?Successfully exported ENHANCED STEP file" << std::endl;
+            std::cout << "[STEP Exporter] Successfully exported ENHANCED STEP file" << std::endl;
             // 计算导出用时
             auto export_end_time = std::chrono::steady_clock::now();
             auto export_duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(export_end_time - export_start_time).count();
@@ -2903,7 +2903,7 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
             std::cout << "[STEP Exporter] =========================================\n" << std::endl;
             Py_RETURN_TRUE;
         } else {
-            std::cerr << "[STEP Exporter] 鉁?Failed to write STEP file" << std::endl;
+            std::cerr << "[STEP Exporter] Failed to write STEP file" << std::endl;
             // 计算导出用时
             auto export_end_time = std::chrono::steady_clock::now();
             auto export_duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(export_end_time - export_start_time).count();
@@ -2930,9 +2930,9 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
     }
 }
 
-// ====================== 妯″潡瀹氫箟 (蹇呴』淇濈暀) ======================
+// ====================== 模块定义 (必须保留) ======================
 
-// 妯″潡鏂规硶瀹氫箟琛?
+// 模块方法定义表
 static PyMethodDef step_exporter_methods[] = {
     {"export_step", export_step, METH_VARARGS, "Export simple shape to STEP"},
     {"export_scene", export_scene, METH_VARARGS, "Export scene objects to STEP (Legacy)"},
@@ -2941,16 +2941,16 @@ static PyMethodDef step_exporter_methods[] = {
     {NULL, NULL, 0, NULL}
 };
 
-// 妯″潡瀹氫箟缁撴瀯浣?
+// 模块定义结构体
 static struct PyModuleDef step_exporter_module = {
     PyModuleDef_HEAD_INIT,
-    "_step_exporter",          // 妯″潡鍚?
-    "STEP Exporter for Blender with advanced BREP support",  // 妯″潡鏂囨。
-    -1,                       // 妯″潡鐘舵€佸ぇ灏?
-    step_exporter_methods     // 妯″潡鏂规硶琛?
+    "_step_exporter",          // 模块名
+    "STEP Exporter for Blender with advanced BREP support",  // 模块文档
+    -1,                       // 模块状态大小
+    step_exporter_methods     // 模块方法表
 };
 
-// 妯″潡鍒濆鍖栧嚱鏁?
+// 模块初始化函数
 PyMODINIT_FUNC PyInit__step_exporter(void) {
     std::cout << "[STEP Exporter] Initializing ENHANCED module version " << MODULE_VERSION << std::endl;
     std::cout << "[STEP Exporter] Using OpenCASCADE version: "

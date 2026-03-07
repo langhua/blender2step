@@ -7,7 +7,7 @@ bl_info = {
     "name": "STEP Exporter (Enhanced)",
     "author": "Blender STEP Exporter",
     "version": (4, 1, 1),
-    "blender": (3, 0, 0),
+    "blender": (4, 2, 1),
     "location": "File > Export > STEP (Enhanced)",
     "description": "Export to STEP format with advanced BREP, solid creation and geometry fixing",
     "category": "Import-Export",

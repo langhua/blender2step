@@ -1,6 +1,9 @@
 #include "step_converter.h"
 #include <BRepPrimAPI_MakeBox.hxx>
 #include <Interface_Static.hxx> // [Comment]
+#include <BRepBuilderAPI_MakeVertex.hxx>
+#include <gp_Pnt.hxx>
+
  
 TopoDS_Shape create_test_shape() {
     // [Comment]
@@ -19,6 +22,22 @@ bool export_shape_to_step(const TopoDS_Shape& shape, const char* filename) {
 
         // [Comment]
         Interface_Static::SetRVal("write.precision.val", 0.001);
+
+        // 添加虚拟顶点以强制单位上下文提前写入
+        // 解决Bambu Studio等软件在单位定义位于文件末尾时无法识别的问题
+        try {
+            gp_Pnt dummyPoint(0, 0, 0);
+            BRepBuilderAPI_MakeVertex dummyVertex(dummyPoint);
+            TopoDS_Shape dummyShape = dummyVertex.Shape();
+            IFSelect_ReturnStatus dummy_status = writer.Transfer(dummyShape, STEPControl_AsIs);
+            if (dummy_status != IFSelect_RetDone) {
+                std::cerr << "WARNING: Dummy vertex transfer failed, but continuing..." << std::endl;
+            }
+        } catch (const Standard_Failure& e) {
+            std::cerr << "WARNING: Dummy vertex creation failed: " << e.GetMessageString() << ", continuing..." << std::endl;
+        } catch (const std::exception& e) {
+            std::cerr << "WARNING: Dummy vertex creation failed (std): " << e.what() << ", continuing..." << std::endl;
+        }
 
         // [Comment]
         IFSelect_ReturnStatus status = writer.Transfer(shape, STEPControl_AsIs);

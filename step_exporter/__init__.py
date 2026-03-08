@@ -205,42 +205,55 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
             self.report({'ERROR'}, "C++ extension module '_step_exporter' not loaded. Check console for details.")
             return {'CANCELLED'}
         
-        # 收集要导出的对象
-        objects_data = []
-        
-        # 确定要导出的对象列表
-        if self.use_selected and context.selected_objects:
-            export_objects = [obj for obj in context.selected_objects if obj.type == 'MESH']
-        else:
-            export_objects = [obj for obj in context.scene.objects if obj.type == 'MESH']
-        
-        if not export_objects:
-            self.report({'ERROR'}, "No mesh objects found to export.")
-            return {'CANCELLED'}
-        
-        # 根据选择的单位确定缩放值
-        if self.unit == 'mm':
-            scale = 1.0  # 1 Blender单位 = 1毫米
-        else:  # 'm'
-            scale = 1000.0  # 1 Blender单位 = 1米 = 1000毫米
-            
-        print(f"\n[STEP Exporter] Starting enhanced export of {len(export_objects)} objects...")
-        print(f"[STEP Exporter] Parameters: Unit={self.unit}, Scale={scale}, FixGeometry={self.fix_geometry}, CreateSolid={self.create_solid}, AdvancedBREP={self.advanced_brep}")
-        
-        for idx, obj in enumerate(export_objects):
-            print(f"[Python DEBUG] Processing object {idx}: '{obj.name}'")
-            mesh_data = self.get_mesh_data_enhanced(obj, context, scale, self.apply_modifiers)
-            if mesh_data:
-                objects_data.append(mesh_data)
-        
-        if not objects_data:
-            self.report({'ERROR'}, "No valid mesh data to export.")
-            return {'CANCELLED'}
+        # 启动进度条
+        wm = context.window_manager
+        wm.progress_begin(0, 100)
         
         try:
+            # 收集要导出的对象
+            objects_data = []
+            
+            # 确定要导出的对象列表
+            if self.use_selected and context.selected_objects:
+                export_objects = [obj for obj in context.selected_objects if obj.type == 'MESH']
+            else:
+                export_objects = [obj for obj in context.scene.objects if obj.type == 'MESH']
+            
+            if not export_objects:
+                self.report({'ERROR'}, "No mesh objects found to export.")
+                wm.progress_end()
+                return {'CANCELLED'}
+            
+            # 根据选择的单位确定缩放值
+            # Blender内部使用米作为单位，因此需要转换
+            if self.unit == 'mm':
+                scale = 1000.0  # 1 Blender单位（米）= 1000毫米
+            else:  # 'm'
+                scale = 1.0  # 1 Blender单位 = 1米
+                
+            print(f"\n[STEP Exporter] Starting enhanced export of {len(export_objects)} objects...")
+            print(f"[STEP Exporter] Parameters: Unit={self.unit}, Scale={scale}, FixGeometry={self.fix_geometry}, CreateSolid={self.create_solid}, AdvancedBREP={self.advanced_brep}")
+            
+            # Python数据准备阶段：占总进度的20%
+            python_progress_weight = 20
+            for idx, obj in enumerate(export_objects):
+                print(f"[Python DEBUG] Processing object {idx}: '{obj.name}'")
+                mesh_data = self.get_mesh_data_enhanced(obj, context, scale, self.apply_modifiers)
+                if mesh_data:
+                    objects_data.append(mesh_data)
+                
+                # 更新进度：Python阶段
+                object_progress = (idx + 1) / len(export_objects) * python_progress_weight
+                wm.progress_update(object_progress)
+            
+            if not objects_data:
+                self.report({'ERROR'}, "No valid mesh data to export.")
+                wm.progress_end()
+                return {'CANCELLED'}
+            
             # 调用 C++ 增强版导出函数
-            # 转换单位字符串：Blender 中使用 'mm'/'m'，STEP 中使用 'MM'/'M'
-            step_unit = 'MM' if self.unit == 'mm' else 'M'
+            # 转换单位字符串：Blender 中使用 'mm'/'m'，STEP 中使用 'MILLIMETER'/'METER'
+            step_unit = 'MILLIMETER' if self.unit == 'mm' else 'METER'
             # 缝合容差：Blender中单位为米，C++函数也期望米为单位
             sew_tolerance_m = self.sew_tolerance
             print(f"[Python DEBUG] sew_tolerance_m = {sew_tolerance_m}")
@@ -255,6 +268,10 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
                         print(f"  Vertex {i}: {verts[i]}")
             import sys
             sys.stdout.flush()
+            
+            # C++处理阶段：设置基础进度为20%
+            wm.progress_update(python_progress_weight)
+            
             success = step_exporter.export_scene_enhanced(
                 self.filepath,
                 objects_data,
@@ -265,8 +282,12 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
                 self.step_schema,
                 step_unit,
                 1 if self.enable_logging else 0,
-                sew_tolerance_m
+                sew_tolerance_m,
+                lambda progress: wm.progress_update(progress)
             )
+            
+            # C++处理完成，进度到100%
+            wm.progress_update(100)
             
             if success:
                 self.report({'INFO'}, f"Successfully exported {len(objects_data)} object(s) to {self.filepath}")
@@ -281,6 +302,12 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
             import traceback
             traceback.print_exc()
             return {'CANCELLED'}
+        finally:
+            # 确保进度条结束
+            try:
+                wm.progress_end()
+            except:
+                pass
     
     def get_mesh_data_enhanced(self, obj, context, scale, apply_modifiers=True):
         """获取网格数据（增强版，包含更多检查和信息）"""

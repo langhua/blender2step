@@ -1085,6 +1085,25 @@ static PyObject* export_scene(PyObject* self, PyObject* args) {
         
         STEPControl_Writer writer;
 
+        // 添加虚拟顶点以强制单位上下文提前写入
+        // 解决Bambu Studio等软件在单位定义位于文件末尾时无法识别的问题
+        std::cout << "[STEP Exporter] Adding dummy vertex to force unit context early..." << std::endl;
+        try {
+            gp_Pnt dummyPoint(0, 0, 0);
+            BRepBuilderAPI_MakeVertex dummyVertex(dummyPoint);
+            TopoDS_Shape dummyShape = dummyVertex.Shape();
+            IFSelect_ReturnStatus dummy_status = writer.Transfer(dummyShape, STEPControl_AsIs);
+            if (dummy_status != IFSelect_RetDone) {
+                std::cout << "[STEP Exporter] WARNING: Dummy vertex transfer failed, but continuing..." << std::endl;
+            } else {
+                std::cout << "[STEP Exporter] Dummy vertex transferred successfully (unit context forced early)" << std::endl;
+            }
+        } catch (const Standard_Failure& e) {
+            std::cout << "[STEP Exporter] WARNING: Dummy vertex creation failed: " << e.GetMessageString() << ", continuing..." << std::endl;
+        } catch (const std::exception& e) {
+            std::cout << "[STEP Exporter] WARNING: Dummy vertex creation failed (std): " << e.what() << ", continuing..." << std::endl;
+        }
+
         std::vector<TopoDS_Shape> shapes;
 
         for (Py_ssize_t i = 0; i < num_objects; i++) {
@@ -1476,16 +1495,55 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
     int fix_geometry = 1;
     int create_solid = 1; // 新增：是否创建实体
     int advanced_brep = 1; // 新增：是否使用高级BREP表示
-    const char* step_schema = "AP214DIS";
-    const char* unit = "MM";
+    const char* step_schema = "AP214IS";
+    const char* unit = "MILLIMETER";
     int enable_logging = 1;
     double sew_tolerance = 0.001; // 缝合容差，单位：米
+    PyObject* progress_callback = NULL; // 新增：进度回调函数
 
-    // 解析参数：filename, scene_data_list, scale, [fix_geometry], [create_solid], [advanced_brep], [step_schema], [unit], [enable_logging], [sew_tolerance]
-    if (!PyArg_ParseTuple(args, "sOd|iiissid", &filename, &scene_data_list, &scale, &fix_geometry, &create_solid, &advanced_brep, &step_schema, &unit, &enable_logging, &sew_tolerance)) {
-        PyErr_SetString(PyExc_TypeError, "export_scene_enhanced() expected: filename, scene_data_list, scale, [fix_geometry], [create_solid], [advanced_brep], [step_schema], [unit], [enable_logging], [sew_tolerance]");
-        return NULL;
+    // 解析参数：filename, scene_data_list, scale, [fix_geometry], [create_solid], [advanced_brep], [step_schema], [unit], [enable_logging], [sew_tolerance], [progress_callback]
+    // 尝试解析11个参数（包含进度回调）
+    if (!PyArg_ParseTuple(args, "sOd|iiissidO", &filename, &scene_data_list, &scale, &fix_geometry, &create_solid, &advanced_brep, &step_schema, &unit, &enable_logging, &sew_tolerance, &progress_callback)) {
+        // 如果失败，尝试解析10个参数（无进度回调）
+        PyErr_Clear();
+        if (!PyArg_ParseTuple(args, "sOd|iiissid", &filename, &scene_data_list, &scale, &fix_geometry, &create_solid, &advanced_brep, &step_schema, &unit, &enable_logging, &sew_tolerance)) {
+            PyErr_SetString(PyExc_TypeError, "export_scene_enhanced() expected: filename, scene_data_list, scale, [fix_geometry], [create_solid], [advanced_brep], [step_schema], [unit], [enable_logging], [sew_tolerance], [progress_callback]");
+            return NULL;
+        }
     }
+    
+    // 如果提供了进度回调，检查是否为可调用对象
+    if (progress_callback != NULL && progress_callback != Py_None) {
+        if (!PyCallable_Check(progress_callback)) {
+            PyErr_SetString(PyExc_TypeError, "progress_callback must be callable");
+            return NULL;
+        }
+        // 增加引用计数，确保回调对象在函数执行期间有效
+        Py_INCREF(progress_callback);
+    } else {
+        progress_callback = NULL;
+    }
+
+    // 进度回调辅助函数
+    auto call_progress = [&](double progress) {
+        if (progress_callback != NULL) {
+            // 确保进度在0-100范围内
+            if (progress < 0.0) progress = 0.0;
+            if (progress > 100.0) progress = 100.0;
+            
+            PyObject* arg = PyFloat_FromDouble(progress);
+            if (arg) {
+                PyObject* result = PyObject_CallFunction(progress_callback, "(O)", arg);
+                Py_DECREF(arg);
+                if (result) {
+                    Py_DECREF(result);
+                } else {
+                    // 回调失败，但不要中断导出
+                    PyErr_Clear();
+                }
+            }
+        }
+    };
 
     std::cout << "[STEP Exporter] DEBUG: After PyArg_ParseTuple, sew_tolerance = " << sew_tolerance << std::endl;
     
@@ -1533,6 +1591,7 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
 
     if (num_objects == 0) {
         std::cerr << "[STEP Exporter] No objects to export" << std::endl;
+        if (progress_callback) Py_DECREF(progress_callback);
         Py_RETURN_FALSE;
     }
 
@@ -1556,13 +1615,22 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
         Interface_Static::SetCVal("write.step.product.name", filename);
         Interface_Static::SetCVal("write.step.company", "");
         Interface_Static::SetCVal("write.step.author", "");
-        Interface_Static::SetCVal("write.step.unit", unit);
+        // 映射单位字符串为OpenCASCADE内部格式
+        const char* unit_mapped = unit;
+        if (strcmp(unit, "MILLIMETER") == 0) {
+            unit_mapped = "MM";
+        } else if (strcmp(unit, "METER") == 0) {
+            unit_mapped = "M";
+        }
+        Interface_Static::SetCVal("write.step.unit", unit_mapped);
+        std::cout << "[STEP Exporter] Setting unit to: " << unit << " (mapped to: " << unit_mapped << ")" << std::endl;
         
         // 现在初始化STEP控制器
         STEPControl_Controller::Init();
         
         // 初始化后再次检查设置
         std::cout << "[STEP Exporter] DEBUG after Init(): write.step.schema = " << Interface_Static::CVal("write.step.schema") << std::endl;
+        std::cout << "[STEP Exporter] DEBUG after Init(): write.step.unit = " << Interface_Static::CVal("write.step.unit") << std::endl;
         // 检查OpenCASCADE版本对AP242DIS的支持
         std::cout << "[STEP Exporter] OpenCASCADE version: " << OCC_VERSION_MAJOR << "." << OCC_VERSION_MINOR << "." << OCC_VERSION_MAINTENANCE << std::endl;
         if (strcmp(step_schema, "AP242DIS") == 0) {
@@ -1570,7 +1638,17 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
                 std::cout << "[STEP Exporter] WARNING: OpenCASCADE 7.7 may have limited AP242 support. Consider upgrading to 7.8+ for full AP242 compliance." << std::endl;
             }
         }
-        Interface_Static::SetRVal("write.precision.val", 0.01); // 0.01mm精度，更精细的几何表示
+        // 设置长度和角度单位以确保STEP文件包含正确的单位信息
+        Interface_Static::SetCVal("write.step.length.unit", unit_mapped);
+        Interface_Static::SetCVal("write.step.angular.unit", "RADIAN");
+        // 初始化后重新设置单位，确保生效
+        Interface_Static::SetCVal("write.step.unit", unit_mapped);
+        // 根据单位设置精度值
+        double precision_val = 0.01; // 默认0.01毫米
+        if (strcmp(unit, "METER") == 0) {
+            precision_val = 0.00001; // 0.01毫米，但以米为单位
+        }
+        Interface_Static::SetRVal("write.precision.val", precision_val); // 0.01mm精度，更精细的几何表示
         Interface_Static::SetIVal("write.step.precision.mode", 0); // 固定精度模式
         Interface_Static::SetIVal("write.step.assembly", 0);
         Interface_Static::SetIVal("write.step.shape.repr", 0); // 简化形状表示
@@ -1685,6 +1763,31 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
         std::cout << "[STEP Exporter] DEBUG AFTER WRITER: write.step.brep.representation = " << Interface_Static::CVal("write.step.brep.representation") << std::endl;
         std::cout.flush();
         
+        // 添加虚拟顶点以强制单位上下文提前写入
+        // 解决Bambu Studio等软件在单位定义位于文件末尾时无法识别的问题
+        if (enable_logging) {
+            std::cout << "[STEP Exporter] Adding dummy vertex to force unit context early..." << std::endl;
+        }
+        try {
+            gp_Pnt dummyPoint(0, 0, 0);
+            BRepBuilderAPI_MakeVertex dummyVertex(dummyPoint);
+            TopoDS_Shape dummyShape = dummyVertex.Shape();
+            IFSelect_ReturnStatus dummy_status = writer.Transfer(dummyShape, STEPControl_AsIs);
+            if (dummy_status != IFSelect_RetDone && enable_logging) {
+                std::cout << "[STEP Exporter] WARNING: Dummy vertex transfer failed, but continuing..." << std::endl;
+            } else if (enable_logging) {
+                std::cout << "[STEP Exporter] Dummy vertex transferred successfully (unit context forced early)" << std::endl;
+            }
+        } catch (const Standard_Failure& e) {
+            if (enable_logging) {
+                std::cout << "[STEP Exporter] WARNING: Dummy vertex creation failed: " << e.GetMessageString() << ", continuing..." << std::endl;
+            }
+        } catch (const std::exception& e) {
+            if (enable_logging) {
+                std::cout << "[STEP Exporter] WARNING: Dummy vertex creation failed (std): " << e.what() << ", continuing..." << std::endl;
+            }
+        }
+        
         std::vector<TopoDS_Shape> shapes;
 
         // 对象处理进度计时器
@@ -1738,6 +1841,10 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
             std::chrono::steady_clock::time_point current_time = std::chrono::steady_clock::now();
             auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(current_time - objects_start_time).count();
             double elapsed_sec = elapsed_ms / 1000.0;
+            
+            // 更新进度条：C++处理阶段占总进度的80%（从20%到100%）
+            double mapped_progress = 20.0 + object_progress * 0.8;
+            call_progress(mapped_progress);
             
             std::cout << "\n[STEP Exporter] Processing object " << i + 1 << "/" << num_objects
                       << " (" << std::fixed << std::setprecision(1) << object_progress << "%)"
@@ -2190,6 +2297,7 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
 
         if (shapes.empty()) {
             std::cerr << "[STEP Exporter] ✗ No valid shapes to export" << std::endl;
+            if (progress_callback) Py_DECREF(progress_callback);
             Py_RETURN_FALSE;
         }
 
@@ -2883,6 +2991,7 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
         
         if (transferred_count == 0) {
             std::cerr << "[STEP Exporter] ✗ No shapes were successfully transferred." << std::endl;
+            if (progress_callback) Py_DECREF(progress_callback);
             Py_RETURN_FALSE;
         }
         
@@ -2901,6 +3010,7 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
             std::cout << "[STEP Exporter] Export finished at: " << std::put_time(std::localtime(&end_time_t), "%Y-%m-%d %H:%M:%S") << std::endl;
             std::cout << "[STEP Exporter] Total export time: " << std::fixed << std::setprecision(3) << export_duration_sec << " seconds" << std::endl;
             std::cout << "[STEP Exporter] =========================================\n" << std::endl;
+            if (progress_callback) Py_DECREF(progress_callback);
             Py_RETURN_TRUE;
         } else {
             std::cerr << "[STEP Exporter] Failed to write STEP file" << std::endl;
@@ -2912,20 +3022,24 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
             std::cerr << "[STEP Exporter] Export finished at: " << std::put_time(std::localtime(&end_time_t), "%Y-%m-%d %H:%M:%S") << std::endl;
             std::cerr << "[STEP Exporter] Total export time: " << std::fixed << std::setprecision(3) << export_duration_sec << " seconds" << std::endl;
             std::cerr << "[STEP Exporter] =========================================\n" << std::endl;
+            if (progress_callback) Py_DECREF(progress_callback);
             Py_RETURN_FALSE;
         }
 
     } catch (const Standard_Failure& e) {
         std::cerr << "[STEP Exporter] OpenCASCADE error: " << e.GetMessageString() << std::endl;
         std::cerr << "[STEP Exporter] =========================================\n" << std::endl;
+        if (progress_callback) Py_DECREF(progress_callback);
         Py_RETURN_FALSE;
     } catch (const std::exception& e) {
         std::cerr << "[STEP Exporter] Standard error: " << e.what() << std::endl;
         std::cerr << "[STEP Exporter] =========================================\n" << std::endl;
+        if (progress_callback) Py_DECREF(progress_callback);
         Py_RETURN_FALSE;
     } catch (...) {
         std::cerr << "[STEP Exporter] Unknown error" << std::endl;
         std::cerr << "[STEP Exporter] =========================================\n" << std::endl;
+        if (progress_callback) Py_DECREF(progress_callback);
         Py_RETURN_FALSE;
     }
 }

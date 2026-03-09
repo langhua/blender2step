@@ -6,19 +6,26 @@ Version 4.1.1 with advanced BREP and solid creation support
 bl_info = {
     "name": "STEP Exporter (Enhanced)",
     "author": "Blender STEP Exporter",
-    "version": (4, 1, 1),
+    "version": (4, 1, 2),
     "blender": (4, 2, 1),
     "location": "File > Export > STEP (Enhanced)",
     "description": "Export to STEP format with advanced BREP, solid creation and geometry fixing",
     "category": "Import-Export",
 }
 
-import bpy
 import sys
 import os
+sys.path.append(os.path.abspath(os.path.dirname(__file__)))
+
+import bpy
 from bpy.types import Operator, Panel
 from bpy_extras.io_utils import ExportHelper
 from bpy.props import StringProperty, FloatProperty, BoolProperty, EnumProperty
+
+# 进度报告系统
+from .progress_report import (STEPProgressReport, step_progress_data, 
+                             start_progress, update_progress, end_progress,
+                             register as register_progress, unregister as unregister_progress)
 
 # ====================== C++ 模块加载检查 ======================
 
@@ -90,7 +97,7 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
     filter_glob: StringProperty(
         default="*.step;*.stp",
         options={'HIDDEN'},
-    )
+    ) # type: ignore
     
     # 基本参数
     unit: EnumProperty(
@@ -101,26 +108,26 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
             ('m', "米 (m)", "Export in meters (1 Blender unit = 1 m)"),
         ],
         default='mm',
-    )
+    ) # type: ignore
     
     fix_geometry: BoolProperty(
         name="Fix Geometry",
         description="Enable geometry fixing (repair gaps, small edges, etc.)",
         default=True,
-    )
+    ) # type: ignore
     
     # 高级 BREP 参数
     create_solid: BoolProperty(
         name="Create Solid",
         description="Attempt to create solid bodies instead of surfaces. Yields better compatibility with CAD software",
         default=True,
-    )
+    ) # type: ignore
     
     advanced_brep: BoolProperty(
         name="Advanced BREP",
         description="Use advanced BREP representation (includes PCURVE, parametric surfaces). Recommended for best compatibility",
         default=True,
-    )
+    ) # type: ignore
     
     step_schema: EnumProperty(
         name="STEP Schema",
@@ -133,7 +140,7 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
             ('AP242DIS', "AP242DIS", "ISO 10303-242 DIS version: Managed model-based 3D engineering"),
         ],
         default='AP214DIS',
-    )
+    ) # type: ignore
     
     sew_tolerance: FloatProperty(
         name="Sewing Tolerance",
@@ -143,25 +150,25 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
         max=1.0,
         precision=6,
         subtype='DISTANCE',
-    )
+    ) # type: ignore
     
     use_selected: BoolProperty(
         name="Selected Only",
         description="Export only selected objects",
         default=False,
-    )
+    ) # type: ignore
     
     apply_modifiers: BoolProperty(
         name="Apply Modifiers",
         description="Apply all modifiers before export",
         default=True,
-    )
+    ) # type: ignore
     
     enable_logging: BoolProperty(
         name="Enable Logging",
         description="Enable detailed logging to console",
         default=True,
-    )
+    ) # type: ignore
     
     def draw(self, context):
         layout = self.layout
@@ -169,7 +176,7 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
         # 状态信息
         box = layout.box()
         box.label(text="Module Status", icon='INFO')
-        if CPP_MODULE_LOADED:
+        if CPP_MODULE_LOADED and step_exporter:
             try:
                 version = step_exporter.get_version()
                 box.label(text=f"✓ Module v{version} loaded", icon='CHECKMARK')
@@ -201,13 +208,13 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
 
     
     def execute(self, context):
-        if not CPP_MODULE_LOADED:
+        if not CPP_MODULE_LOADED or not step_exporter:
             self.report({'ERROR'}, "C++ extension module '_step_exporter' not loaded. Check console for details.")
             return {'CANCELLED'}
         
-        # 启动进度条
-        wm = context.window_manager
-        wm.progress_begin(0, 100)
+        # 启动进度条（使用自定义进度报告系统）
+        start_progress(context)
+        wm = context.window_manager  # 保留wm变量，可能其他地方会用到
         
         try:
             # 收集要导出的对象
@@ -221,7 +228,7 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
             
             if not export_objects:
                 self.report({'ERROR'}, "No mesh objects found to export.")
-                wm.progress_end()
+                end_progress(context)
                 return {'CANCELLED'}
             
             # 根据选择的单位确定缩放值
@@ -244,11 +251,11 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
                 
                 # 更新进度：Python阶段
                 object_progress = (idx + 1) / len(export_objects) * python_progress_weight
-                wm.progress_update(object_progress)
+                update_progress(object_progress, f"正在处理对象 {idx+1}/{len(export_objects)}")
             
             if not objects_data:
                 self.report({'ERROR'}, "No valid mesh data to export.")
-                wm.progress_end()
+                end_progress(context)
                 return {'CANCELLED'}
             
             # 调用 C++ 增强版导出函数
@@ -270,7 +277,7 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
             sys.stdout.flush()
             
             # C++处理阶段：设置基础进度为20%
-            wm.progress_update(python_progress_weight)
+            update_progress(python_progress_weight, "正在导出 STEP 文件...")
             
             success = step_exporter.export_scene_enhanced(
                 self.filepath,
@@ -283,11 +290,16 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
                 step_unit,
                 1 if self.enable_logging else 0,
                 sew_tolerance_m,
-                lambda progress: wm.progress_update(progress)
+                lambda progress: (
+                    print(f"[Python Progress] C++ callback: {progress:.1f}%"),
+                    update_progress(progress, f"导出进度: {progress:.1f}%"),
+                    # 保留UI更新调用以确保刷新
+                    hasattr(bpy.ops.wm, 'redraw_timer') and bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP', iterations=1)
+                )[1]
             )
             
             # C++处理完成，进度到100%
-            wm.progress_update(100)
+            update_progress(100, "导出完成")
             
             if success:
                 self.report({'INFO'}, f"Successfully exported {len(objects_data)} object(s) to {self.filepath}")
@@ -305,7 +317,7 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
         finally:
             # 确保进度条结束
             try:
-                wm.progress_end()
+                end_progress(context)
             except:
                 pass
     
@@ -414,7 +426,7 @@ class STEP_EXPORTER_PT_main_panel(Panel):
         box = layout.box()
         box.label(text="Module Status", icon='INFO')
         
-        if CPP_MODULE_LOADED:
+        if CPP_MODULE_LOADED and step_exporter:
             try:
                 version = step_exporter.get_version()
                 box.label(text=f"✓ Module v{version} loaded", icon='CHECKMARK')
@@ -447,6 +459,9 @@ def register():
     for cls in classes:
         bpy.utils.register_class(cls)
     
+    # 注册进度报告系统
+    register_progress()
+    
     # 添加到导出菜单
     bpy.types.TOPBAR_MT_file_export.append(menu_func_export_enhanced)
     
@@ -455,6 +470,9 @@ def register():
 def unregister():
     # 从导出菜单移除
     bpy.types.TOPBAR_MT_file_export.remove(menu_func_export_enhanced)
+    
+    # 注销进度报告系统
+    unregister_progress()
     
     # 注销所有类
     for cls in reversed(classes):

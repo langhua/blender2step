@@ -1525,11 +1525,18 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
     }
 
     // 进度回调辅助函数
+    std::cout << "[STEP Exporter] DEBUG: enable_logging = " << enable_logging << ", progress_callback = " << (progress_callback != NULL ? "non-NULL" : "NULL") << std::endl;
     auto call_progress = [&](double progress) {
+        std::cout << "[STEP Exporter] DEBUG: call_progress invoked with progress = " << progress << std::endl;
         if (progress_callback != NULL) {
             // 确保进度在0-100范围内
             if (progress < 0.0) progress = 0.0;
             if (progress > 100.0) progress = 100.0;
+            
+            // 调试输出
+            if (enable_logging) {
+                std::cout << "[STEP Exporter] Progress callback: " << std::fixed << std::setprecision(1) << progress << "%" << std::endl;
+            }
             
             PyObject* arg = PyFloat_FromDouble(progress);
             if (arg) {
@@ -1539,6 +1546,9 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
                     Py_DECREF(result);
                 } else {
                     // 回调失败，但不要中断导出
+                    if (enable_logging) {
+                        std::cout << "[STEP Exporter] WARNING: Progress callback failed (Python error cleared)" << std::endl;
+                    }
                     PyErr_Clear();
                 }
             }
@@ -2244,8 +2254,19 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
                                   << "Elapsed: " << (elapsed_ms / 1000.0) << "s, "
                                   << "Remaining: " << std::setprecision(0) << remaining_sec << "s" << std::endl;
                         
+                        // 更新Blender进度条
+                        double mapped_progress = 20.0 + total_progress * 0.8;
+                        call_progress(mapped_progress);
+                        
                         next_report += report_interval;
                     }
+                }
+                
+                // 面循环结束后更新进度，确保进度条前进
+                if (num_faces > 0) {
+                    double total_progress = (total_faces_in_scene > 0) ? (total_faces_processed * 100.0) / total_faces_in_scene : 0.0;
+                    double mapped_progress = 20.0 + total_progress * 0.8;
+                    call_progress(mapped_progress);
                 }
             } else {
                 std::cerr << "[STEP Exporter]   No faces found or faces is not a list" << std::endl;

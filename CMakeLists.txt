@@ -11,6 +11,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # ====== 2. 查找 OpenCASCADE ======
 # 使用 vcpkg 提供的 CONFIG 模式
 set(OpenCASCADE_DIR "f:/git/blender2step/vcpkg_installed/x64-windows/share/opencascade" CACHE PATH "Path to OpenCASCADE config")
+# 优先使用静态库
+set(OpenCASCADE_USE_STATIC_LIBS ON)
 find_package(OpenCASCADE CONFIG REQUIRED)
 
 # 打印找到的库
@@ -36,7 +38,30 @@ include_directories(
 
 # ====== 4. 创建库 ======
 add_library(step_exporter SHARED
-    src/step_exporter.cpp
+    # Basic shape functions (split from step_exporter_basic.cpp)
+    src/step_exporter_fix_shape.cpp
+    src/step_exporter_create_shape_from_mesh.cpp
+    src/step_exporter_create_solid_from_mesh.cpp
+    # Curve shape functions
+    src/step_exporter_curve.cpp
+    src/step_exporter_curve_dict.cpp
+    src/step_exporter_curve_poly.cpp
+    src/step_exporter_curve_bezier.cpp
+    src/step_exporter_curve_nurbs.cpp
+    src/step_exporter_curve_common.cpp
+    # Shape fixing functions
+    src/step_exporter_shape_fix.cpp
+    # Export functions
+    src/step_exporter_export_scene.cpp
+    src/step_exporter_export_enhanced_parse.cpp
+    src/step_exporter_export_enhanced_progress.cpp
+    src/step_exporter_export_enhanced_writer.cpp
+    src/step_exporter_export_enhanced_objects.cpp
+    src/step_exporter_export_enhanced_transfer.cpp
+    src/step_exporter_export_enhanced.cpp
+    # Module initialization
+    src/step_exporter_module.cpp
+    # STEP converter
     src/step_converter.cpp
 )
 

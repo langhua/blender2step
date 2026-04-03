@@ -6,6 +6,7 @@
 #include <Python.h>
 #include <iostream>
 #include <vector>
+#include <map>
 #include <string>
 #include <cmath>
 #include <cstring>
@@ -14,6 +15,7 @@
 #include <iomanip>
 
 // OpenCASCADE includes
+#include <exception>
 #include <STEPControl_Writer.hxx>
 #include <STEPControl_StepModelType.hxx>
 #include <STEPControl_Controller.hxx>
@@ -21,6 +23,7 @@
 #include <IFSelect_ReturnStatus.hxx>
 #include <Standard_Failure.hxx>
 #include <Standard_Version.hxx>
+#include <Precision.hxx>
 #include <BRepMesh_IncrementalMesh.hxx>
 
 #include <TopoDS_Shape.hxx>
@@ -80,6 +83,11 @@
 // 用于高级BREP表示和PCURVE
 #include <Geom_Surface.hxx>
 #include <Geom_Plane.hxx>
+#include <Geom_Curve.hxx>
+#include <Geom_BezierCurve.hxx>
+#include <Geom_BSplineCurve.hxx>
+#include <Geom_Circle.hxx>
+#include <GC_MakeCircle.hxx>
 #include <BRep_Tool.hxx>
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepBuilderAPI_NurbsConvert.hxx>
@@ -117,7 +125,7 @@ TopoDS_Shape static fix_shape(const TopoDS_Shape& shape, double tolerance = 1.0e
 }
 
 // 从网格创建形状（原始版本）
-TopoDS_Shape static create_shape_from_mesh(const std::vector<std::vector<double>>& vertices,
+static TopoDS_Shape create_shape_from_mesh(const std::vector<std::vector<double>>& vertices,
                                            const std::vector<std::vector<int>>& faces) {
     if (vertices.empty() || faces.empty()) {
         std::cerr << "[DEBUG] vertices or faces is empty" << std::endl;
@@ -191,6 +199,884 @@ TopoDS_Shape static create_shape_from_mesh(const std::vector<std::vector<double>
         std::cerr << "[STEP Exporter] Standard error creating shape: " << e.what() << std::endl;
         return TopoDS_Shape();
     }
+}
+
+// 从曲线数据创建形状
+static TopoDS_Shape create_shape_from_curve_data(const std::vector<std::map<std::string, PyObject*>>& splines_data, double scale = 1.0) {
+    if (splines_data.empty()) {
+        std::cerr << "[DEBUG] No splines data" << std::endl;
+        return TopoDS_Shape();
+    }
+    
+    std::cout << "[STEP Exporter] Creating shape from curve data: " << splines_data.size() << " splines" << std::endl;
+    
+    try {
+        BRep_Builder builder;
+        TopoDS_Compound compound;
+        builder.MakeCompound(compound);
+        
+        int valid_edge_count = 0;
+        
+        for (size_t spline_idx = 0; spline_idx < splines_data.size(); spline_idx++) {
+            const auto& spline_info = splines_data[spline_idx];
+            
+            // 获取样条类型
+            std::string spline_type = "POLY";
+            auto type_it = spline_info.find("type");
+            if (type_it != spline_info.end() && PyUnicode_Check(type_it->second)) {
+                spline_type = PyUnicode_AsUTF8(type_it->second);
+            }
+            
+            std::cout << "[STEP Exporter] Processing spline " << spline_idx << ": type=" << spline_type << std::endl;
+            
+            // 获取控制点
+            std::vector<gp_Pnt> control_points;
+            auto points_it = spline_info.find("control_points");
+            if (points_it != spline_info.end() && PyList_Check(points_it->second)) {
+                PyObject* points_list = points_it->second;
+                Py_ssize_t num_points = PyList_Size(points_list);
+                for (Py_ssize_t p = 0; p < num_points; p++) {
+                    PyObject* point_item = PyList_GetItem(points_list, p);
+                    if (PyList_Check(point_item) && PyList_Size(point_item) >= 3) {
+                        double x = PyFloat_AsDouble(PyList_GetItem(point_item, 0));
+                        double y = PyFloat_AsDouble(PyList_GetItem(point_item, 1));
+                        double z = PyFloat_AsDouble(PyList_GetItem(point_item, 2));
+                        // 缩放已在Python中应用，直接使用坐标
+                        control_points.push_back(gp_Pnt(x, y, z));
+                        std::cout << "[STEP Exporter] Control point " << p << ": (" << std::setprecision(15) << x << ", " << y << ", " << z << ")" << std::endl;
+                    }
+                }
+            }
+            
+            if (control_points.empty()) {
+                std::cerr << "[STEP Exporter]   No valid control points" << std::endl;
+                continue;
+            }
+            
+            Handle(Geom_Curve) curve;
+            bool close_curve = false;
+            
+            if (spline_type == "POLY") {
+                // 创建折线
+                BRepBuilderAPI_MakePolygon polygon;
+                for (const auto& pnt : control_points) {
+                    polygon.Add(pnt);
+                }
+                // 检查是否闭合
+                bool close_poly = false;
+                auto cyclic_it = spline_info.find("use_cyclic_u");
+                if (cyclic_it != spline_info.end()) {
+                    std::cout << "[STEP Exporter]   Found use_cyclic_u key, type: " << Py_TYPE(cyclic_it->second)->tp_name << std::endl;
+                    if (PyBool_Check(cyclic_it->second)) {
+                        close_poly = PyObject_IsTrue(cyclic_it->second) ? true : false;
+                        std::cout << "[STEP Exporter]   use_cyclic_u (bool): " << close_poly << std::endl;
+                    } else if (PyLong_Check(cyclic_it->second)) {
+                        long cyclic_val = PyLong_AsLong(cyclic_it->second);
+                        close_poly = (cyclic_val != 0);
+                        std::cout << "[STEP Exporter]   use_cyclic_u (int): " << cyclic_val << ", converted to: " << close_poly << std::endl;
+                    } else {
+                        std::cout << "[STEP Exporter]   use_cyclic_u value is not bool or int, using default: " << close_poly << std::endl;
+                    }
+                } else {
+                    std::cout << "[STEP Exporter]   use_cyclic_u not found, using default: " << close_poly << std::endl;
+                }
+                std::cout << "[STEP Exporter]   close_poly: " << close_poly << ", control points: " << control_points.size() << std::endl;
+                if (close_poly) {
+                    polygon.Close();
+                }
+                if (polygon.IsDone()) {
+                    TopoDS_Wire wire = polygon.Wire();
+                    // 计算边数量
+                    int edge_count = 0;
+                    TopoDS_Iterator it(wire);
+                    for (; it.More(); it.Next()) {
+                        if (it.Value().ShapeType() == TopAbs_EDGE) {
+                            edge_count++;
+                        }
+                    }
+                    std::cout << "[STEP Exporter]   Polygon wire edge count: " << edge_count << std::endl;
+                    // 将线转换为边
+                    TopoDS_Iterator it2(wire);
+                    for (; it2.More(); it2.Next()) {
+                        if (it2.Value().ShapeType() == TopAbs_EDGE) {
+                            builder.Add(compound, it2.Value());
+                            valid_edge_count++;
+                        }
+                    }
+                }
+            } else if (spline_type == "BEZIER") {
+                // 创建贝塞尔曲线（可能是有理的）
+                TColgp_Array1OfPnt poles(1, static_cast<Standard_Integer>(control_points.size()));
+                for (size_t i = 0; i < control_points.size(); i++) {
+                    poles.SetValue(static_cast<Standard_Integer>(i + 1), control_points[i]);
+                }
+                
+                // 获取权重
+                TColStd_Array1OfReal weights(1, static_cast<Standard_Integer>(control_points.size()));
+                auto weights_it = spline_info.find("weights");
+                bool has_weights = false;
+                if (weights_it != spline_info.end() && PyList_Check(weights_it->second)) {
+                    PyObject* weights_list = weights_it->second;
+                    Py_ssize_t num_weights = PyList_Size(weights_list);
+                    std::cout << "[STEP Exporter]   Bezier weights count: " << num_weights << std::endl;
+                    for (Py_ssize_t w = 0; w < std::min(num_weights, (Py_ssize_t)control_points.size()); w++) {
+                        double weight_val = PyFloat_AsDouble(PyList_GetItem(weights_list, w));
+                        weights.SetValue(static_cast<Standard_Integer>(w + 1), weight_val);
+                        std::cout << "[STEP Exporter]     Weight " << w << ": " << std::fixed << std::setprecision(15) << weight_val << std::endl;
+                    }
+                    has_weights = true;
+                } else {
+                    // 默认权重为1
+                    std::cout << "[STEP Exporter]   No weights found for Bezier, using default weights = 1.0" << std::endl;
+                    for (int w = 1; w <= static_cast<int>(control_points.size()); w++) {
+                        weights.SetValue(w, 1.0);
+                    }
+                }
+                
+                // 获取阶数
+                int order = 3;
+                auto order_it = spline_info.find("order");
+                if (order_it != spline_info.end()) {
+                    std::cout << "[STEP Exporter]   Found order key for Bezier, type: " << Py_TYPE(order_it->second)->tp_name << std::endl;
+                    if (PyLong_Check(order_it->second)) {
+                        order = PyLong_AsLong(order_it->second);
+                        std::cout << "[STEP Exporter]   Bezier order from Python: " << order << std::endl;
+                    } else {
+                        std::cout << "[STEP Exporter]   Bezier order value is not integer, using default: " << order << std::endl;
+                    }
+                } else {
+                    std::cout << "[STEP Exporter]   Bezier order not found, using default: " << order << std::endl;
+                }
+                
+                // 读取闭合标志
+                close_curve = false;
+                auto cyclic_it = spline_info.find("use_cyclic_u");
+                if (cyclic_it != spline_info.end()) {
+                    std::cout << "[STEP Exporter]   Found use_cyclic_u key for Bezier, type: " << Py_TYPE(cyclic_it->second)->tp_name << std::endl;
+                    if (PyBool_Check(cyclic_it->second)) {
+                        close_curve = PyObject_IsTrue(cyclic_it->second) ? true : false;
+                        std::cout << "[STEP Exporter]   use_cyclic_u (bool): " << close_curve << std::endl;
+                    } else if (PyLong_Check(cyclic_it->second)) {
+                        long cyclic_val = PyLong_AsLong(cyclic_it->second);
+                        close_curve = (cyclic_val != 0);
+                        std::cout << "[STEP Exporter]   use_cyclic_u (int): " << cyclic_val << ", converted to: " << close_curve << std::endl;
+                    } else {
+                        std::cout << "[STEP Exporter]   use_cyclic_u value is not bool or int, using default: " << close_curve << std::endl;
+                    }
+                } else {
+                    std::cout << "[STEP Exporter]   use_cyclic_u not found for Bezier, using default: " << close_curve << std::endl;
+                }
+                
+                // 检查是否是有理贝塞尔曲线（权重不全为1）
+                bool is_rational = false;
+                if (has_weights) {
+                    for (int w = 1; w <= static_cast<int>(control_points.size()); w++) {
+                        if (weights.Value(w) != 1.0) {
+                            is_rational = true;
+                            break;
+                        }
+                    }
+                }
+                
+                if (is_rational) {
+                    // 创建有理B样条曲线（有理贝塞尔曲线）
+                    int degree = order - 1;
+                    if (degree < 1) degree = 1;
+                    
+                    // 处理闭合曲线
+                    Standard_Integer adjusted_num_poles = static_cast<Standard_Integer>(control_points.size());
+                    TColgp_Array1OfPnt adjusted_poles(1, adjusted_num_poles);
+                    TColStd_Array1OfReal adjusted_weights(1, adjusted_num_poles);
+                    
+                    // 复制原始控制点和权重
+                    for (size_t i = 0; i < control_points.size(); i++) {
+                        adjusted_poles.SetValue(static_cast<Standard_Integer>(i + 1), control_points[i]);
+                        adjusted_weights.SetValue(static_cast<Standard_Integer>(i + 1), weights.Value(static_cast<Standard_Integer>(i + 1)));
+                    }
+                    
+                    if (close_curve) {
+                        std::cout << "[STEP Exporter]   Creating CLOSED rational Bezier curve" << std::endl;
+                        // 对于闭合曲线，需要添加前degree个控制点到末尾
+                        Standard_Integer original_num = static_cast<Standard_Integer>(control_points.size());
+                        Standard_Integer new_num = original_num + degree;
+                        TColgp_Array1OfPnt closed_poles(1, new_num);
+                        TColStd_Array1OfReal closed_weights(1, new_num);
+                        
+                        // 复制原始控制点
+                        for (int i = 1; i <= original_num; i++) {
+                            closed_poles.SetValue(i, adjusted_poles.Value(i));
+                            closed_weights.SetValue(i, adjusted_weights.Value(i));
+                        }
+                        // 添加前degree个控制点到末尾
+                        for (int i = 1; i <= degree; i++) {
+                            closed_poles.SetValue(original_num + i, adjusted_poles.Value(i));
+                            closed_weights.SetValue(original_num + i, adjusted_weights.Value(i));
+                        }
+                        
+                        // 创建均匀节点向量用于闭合曲线
+                        Standard_Integer num_knots = new_num - degree + 1;
+                        TColStd_Array1OfReal closed_knots(1, num_knots);
+                        TColStd_Array1OfInteger closed_multiplicities(1, num_knots);
+                        
+                        // 节点值从0到1均匀分布
+                        for (int i = 1; i <= num_knots; i++) {
+                            closed_knots.SetValue(i, (i - 1.0) / (num_knots - 1.0));
+                            closed_multiplicities.SetValue(i, 1);
+                        }
+                        // 两端节点重复degree+1次以满足周期性B样条曲线要求
+                        closed_multiplicities.SetValue(1, degree + 1);
+                        closed_multiplicities.SetValue(num_knots, degree + 1);
+                        
+                        // 计算总节点数（包括重复）
+                        Standard_Integer total_knots_with_multiplicity = 0;
+                        for (int i = 1; i <= closed_multiplicities.Length(); i++) {
+                            total_knots_with_multiplicity += closed_multiplicities.Value(i);
+                        }
+                        
+                        std::cout << "[STEP Exporter]   Closed rational Bezier: degree=" << degree 
+                                  << ", order=" << order 
+                                  << ", control_points=" << new_num
+                                  << ", distinct_knots=" << num_knots
+                                  << ", total_knots_with_multiplicity=" << total_knots_with_multiplicity << std::endl;
+                        
+                        curve = new Geom_BSplineCurve(closed_poles, closed_weights, closed_knots, closed_multiplicities, degree, Standard_False, Standard_True); // 设置周期性为true
+                        std::cout << "[STEP Exporter]   Created CLOSED rational Bezier curve as periodic rational BSpline" << std::endl;
+                    } else {
+                        // 非闭合有理贝塞尔曲线
+                        // 贝塞尔曲线的节点向量：两端重复order次，没有内部节点
+                        // 节点向量 = [0, 1]，多重性 = [order, order]
+                        Standard_Integer num_distinct_knots = 2;
+                        TColStd_Array1OfReal knots(1, num_distinct_knots);
+                        TColStd_Array1OfInteger multiplicities(1, num_distinct_knots);
+                        
+                        knots.SetValue(1, 0.0);
+                        knots.SetValue(2, 1.0);
+                        multiplicities.SetValue(1, order);
+                        multiplicities.SetValue(2, order);
+                        
+                        // 验证节点数量：控制点数量 + 次数 + 1 = 节点总数（包括重复）
+                        Standard_Integer total_knots = 0;
+                        for (int i = 1; i <= multiplicities.Length(); i++) {
+                            total_knots += multiplicities.Value(i);
+                        }
+                        std::cout << "[STEP Exporter]   Rational Bezier: degree=" << degree 
+                                  << ", order=" << order 
+                                  << ", control_points=" << control_points.size()
+                                  << ", total_knots=" << total_knots << std::endl;
+                        
+                        curve = new Geom_BSplineCurve(adjusted_poles, adjusted_weights, knots, multiplicities, degree);
+                        std::cout << "[STEP Exporter]   Created rational Bezier curve as rational BSpline" << std::endl;
+                    }
+                } else {
+                    // 创建普通贝塞尔曲线作为B样条曲线（确保一致性）
+                    int degree = order - 1;
+                    if (degree < 1) degree = 1;
+                    
+                    if (close_curve) {
+                        std::cout << "[STEP Exporter]   Creating CLOSED non-rational Bezier curve" << std::endl;
+                        // 对于闭合曲线，需要添加前degree个控制点到末尾
+                        Standard_Integer original_num = static_cast<Standard_Integer>(control_points.size());
+                        Standard_Integer new_num = original_num + degree;
+                        TColgp_Array1OfPnt closed_poles(1, new_num);
+                        TColStd_Array1OfReal closed_weights(1, new_num);
+                        
+                        // 复制原始控制点
+                        for (int i = 1; i <= original_num; i++) {
+                            closed_poles.SetValue(i, poles.Value(i));
+                        }
+                        // 添加前degree个控制点到末尾
+                        for (int i = 1; i <= degree; i++) {
+                            closed_poles.SetValue(original_num + i, poles.Value(i));
+                        }
+                        // 权重全为1.0
+                        for (int i = 1; i <= new_num; i++) {
+                            closed_weights.SetValue(i, 1.0);
+                        }
+                        
+                        // 创建均匀节点向量用于闭合曲线
+                        Standard_Integer num_knots = new_num - degree + 1;
+                        TColStd_Array1OfReal closed_knots(1, num_knots);
+                        TColStd_Array1OfInteger closed_multiplicities(1, num_knots);
+                        
+                        // 节点值从0到1均匀分布
+                        for (int i = 1; i <= num_knots; i++) {
+                            closed_knots.SetValue(i, (i - 1.0) / (num_knots - 1.0));
+                            closed_multiplicities.SetValue(i, 1);
+                        }
+                        // 两端节点重复degree+1次以满足周期性B样条曲线要求
+                        closed_multiplicities.SetValue(1, degree + 1);
+                        closed_multiplicities.SetValue(num_knots, degree + 1);
+                        
+                        // 计算总节点数（包括重复）
+                        Standard_Integer total_knots_with_multiplicity = 0;
+                        for (int i = 1; i <= closed_multiplicities.Length(); i++) {
+                            total_knots_with_multiplicity += closed_multiplicities.Value(i);
+                        }
+                        
+                        std::cout << "[STEP Exporter]   Closed non-rational Bezier: degree=" << degree 
+                                  << ", order=" << order 
+                                  << ", control_points=" << new_num
+                                  << ", distinct_knots=" << num_knots
+                                  << ", total_knots_with_multiplicity=" << total_knots_with_multiplicity << std::endl;
+                        
+                        curve = new Geom_BSplineCurve(closed_poles, closed_weights, closed_knots, closed_multiplicities, degree, Standard_False, Standard_True); // 设置周期性为true
+                        std::cout << "[STEP Exporter]   Created CLOSED non-rational Bezier curve as periodic BSpline" << std::endl;
+                    } else {
+                        // 非闭合非有理贝塞尔曲线
+                        // 贝塞尔曲线的节点向量：两端重复order次，没有内部节点
+                        // 节点向量 = [0, 1]，多重性 = [order, order]
+                        Standard_Integer num_distinct_knots = 2;
+                        TColStd_Array1OfReal knots(1, num_distinct_knots);
+                        TColStd_Array1OfInteger multiplicities(1, num_distinct_knots);
+                        
+                        knots.SetValue(1, 0.0);
+                        knots.SetValue(2, 1.0);
+                        multiplicities.SetValue(1, order);
+                        multiplicities.SetValue(2, order);
+                        
+                        // 验证节点数量：控制点数量 + 次数 + 1 = 节点总数（包括重复）
+                        Standard_Integer total_knots = 0;
+                        for (int i = 1; i <= multiplicities.Length(); i++) {
+                            total_knots += multiplicities.Value(i);
+                        }
+                        std::cout << "[STEP Exporter]   Non-rational Bezier: degree=" << degree 
+                                  << ", order=" << order 
+                                  << ", control_points=" << control_points.size()
+                                  << ", total_knots=" << total_knots << std::endl;
+                        
+                        // 创建权重数组（全为1.0）
+                        TColStd_Array1OfReal weights(1, static_cast<Standard_Integer>(control_points.size()));
+                        for (int w = 1; w <= static_cast<Standard_Integer>(control_points.size()); w++) {
+                            weights.SetValue(w, 1.0);
+                        }
+                        
+                        curve = new Geom_BSplineCurve(poles, weights, knots, multiplicities, degree);
+                        std::cout << "[STEP Exporter]   Created non-rational Bezier curve as BSpline" << std::endl;
+                    }
+                }
+            } else if (spline_type == "NURBS") {
+                // 调试：打印 spline_info 的所有键
+                std::cout << "[STEP Exporter]   spline_info keys: ";
+                for (const auto& pair : spline_info) {
+                    std::cout << pair.first << " ";
+                }
+                std::cout << std::endl;
+                
+                // 检查是否为有理圆（有圆心和半径信息）
+                bool is_circle = false;
+                gp_Pnt circle_center;
+                double circle_radius = 0.0;
+                auto center_it = spline_info.find("circle_center");
+                auto radius_it = spline_info.find("circle_radius");
+                if (center_it != spline_info.end() && radius_it != spline_info.end() && 
+                    PyList_Check(center_it->second) && PyFloat_Check(radius_it->second)) {
+                    PyObject* center_list = center_it->second;
+                    if (PyList_Size(center_list) >= 3) {
+                        double cx = PyFloat_AsDouble(PyList_GetItem(center_list, 0));
+                        double cy = PyFloat_AsDouble(PyList_GetItem(center_list, 1));
+                        double cz = PyFloat_AsDouble(PyList_GetItem(center_list, 2));
+                        circle_center = gp_Pnt(cx, cy, cz);
+                        circle_radius = PyFloat_AsDouble(radius_it->second);
+                        is_circle = true;
+                        std::cout << "[STEP Exporter]   Detected rational circle: center=(" 
+                                  << cx << ", " << cy << ", " << cz << "), radius=" << circle_radius << std::endl;
+                    }
+                }
+                
+                // 如果检测到圆，创建解析圆
+                if (is_circle && circle_radius > 1e-12) {
+                    try {
+                        // 创建XY平面上的圆（假设圆在XY平面内）
+                        gp_Ax2 axis(circle_center, gp_Dir(0, 0, 1));
+                        Handle(Geom_Circle) geom_circle = new Geom_Circle(axis, circle_radius);
+                        curve = geom_circle;
+                        std::cout << "[STEP Exporter]   Created analytic circle from center and radius" << std::endl;
+                        // 设置close_curve为true，因为圆是闭合的
+                        close_curve = true;
+                        // 跳过NURBS曲线创建，直接进入边创建
+                        // 设置spline_type为"CIRCLE"用于调试
+                        spline_type = "CIRCLE";
+                    } catch (const Standard_Failure& e) {
+                        std::cerr << "[STEP Exporter]   WARNING: Failed to create analytic circle: " << e.GetMessageString() << std::endl;
+                        is_circle = false; // 回退到NURBS曲线
+                    }
+                }
+                
+                // 如果不是圆，继续NURBS曲线创建
+                if (!is_circle) {
+                    // 创建控制点数组
+                    TColgp_Array1OfPnt poles(1, static_cast<Standard_Integer>(control_points.size()));
+                    for (size_t i = 0; i < control_points.size(); i++) {
+                        poles.SetValue(static_cast<Standard_Integer>(i + 1), control_points[i]);
+                    }
+                
+                // 获取权重
+                TColStd_Array1OfReal weights(1, static_cast<Standard_Integer>(control_points.size()));
+                auto weights_it = spline_info.find("weights");
+                if (weights_it != spline_info.end() && PyList_Check(weights_it->second)) {
+                    PyObject* weights_list = weights_it->second;
+                    Py_ssize_t num_weights = PyList_Size(weights_list);
+                    std::cout << "[STEP Exporter]   NURBS weights count: " << num_weights << std::endl;
+                    for (Py_ssize_t w = 0; w < std::min(num_weights, (Py_ssize_t)control_points.size()); w++) {
+                        double weight_val = PyFloat_AsDouble(PyList_GetItem(weights_list, w));
+                        weights.SetValue(static_cast<Standard_Integer>(w + 1), weight_val);
+                        std::cout << "[STEP Exporter]     Weight " << w << ": " << std::fixed << std::setprecision(15) << weight_val << std::endl;
+                    }
+                } else {
+                    // 默认权重为1
+                    std::cout << "[STEP Exporter]   No weights found, using default weights = 1.0" << std::endl;
+                    for (int w = 1; w <= static_cast<int>(control_points.size()); w++) {
+                        weights.SetValue(w, 1.0);
+                    }
+                }
+                
+                // 获取阶数
+                int order = 3;
+                auto order_it = spline_info.find("order");
+                if (order_it != spline_info.end()) {
+                    std::cout << "[STEP Exporter]   Found order key, type: " << Py_TYPE(order_it->second)->tp_name << std::endl;
+                    if (PyLong_Check(order_it->second)) {
+                        order = PyLong_AsLong(order_it->second);
+                        std::cout << "[STEP Exporter]   NURBS order from Python: " << order << std::endl;
+                    } else {
+                        std::cout << "[STEP Exporter]   NURBS order value is not integer, using default: " << order << std::endl;
+                    }
+                } else {
+                    std::cout << "[STEP Exporter]   NURBS order not found, using default: " << order << std::endl;
+                }
+                
+                // 计算度数（阶数-1）
+                int degree = order - 1;
+                if (degree < 1) degree = 1;
+                
+                // 获取闭合标志
+                close_curve = false;
+                auto cyclic_it = spline_info.find("use_cyclic_u");
+                if (cyclic_it != spline_info.end()) {
+                    std::cout << "[STEP Exporter]   Found use_cyclic_u key for NURBS, type: " << Py_TYPE(cyclic_it->second)->tp_name << std::endl;
+                    if (PyBool_Check(cyclic_it->second)) {
+                        close_curve = PyObject_IsTrue(cyclic_it->second) ? true : false;
+                        std::cout << "[STEP Exporter]   use_cyclic_u (bool): " << close_curve << std::endl;
+                    } else if (PyLong_Check(cyclic_it->second)) {
+                        long cyclic_val = PyLong_AsLong(cyclic_it->second);
+                        close_curve = (cyclic_val != 0);
+                        std::cout << "[STEP Exporter]   use_cyclic_u (int): " << cyclic_val << ", converted to: " << close_curve << std::endl;
+                    } else {
+                        std::cout << "[STEP Exporter]   use_cyclic_u value is not bool or int, using default: " << close_curve << std::endl;
+                    }
+                } else {
+                    std::cout << "[STEP Exporter]   use_cyclic_u not found for NURBS, using default: " << close_curve << std::endl;
+                }
+                
+                // 获取节点向量
+                Standard_Integer num_knots;
+                if (close_curve) {
+                    // 周期性曲线：节点数量 = 控制点数量 + 阶数
+                    num_knots = static_cast<Standard_Integer>(control_points.size() + order);
+                } else {
+                    // 非周期性曲线：节点数量 = 控制点数量 + 阶数
+                    num_knots = static_cast<Standard_Integer>(control_points.size() + order);
+                }
+                TColStd_Array1OfReal knots(1, num_knots);
+                TColStd_Array1OfInteger multiplicities(1, num_knots);
+                
+                auto knots_it = spline_info.find("knots_u");
+                if (knots_it != spline_info.end() && PyList_Check(knots_it->second)) {
+                    PyObject* knots_list = knots_it->second;
+                    Py_ssize_t py_num_knots = PyList_Size(knots_list);
+                    std::cout << "[STEP Exporter]   NURBS knots count: " << py_num_knots << ", computed num_knots: " << num_knots << std::endl;
+                    
+                    // 将Python列表转换为C++ vector
+                    std::vector<double> knot_values;
+                    for (Py_ssize_t k = 0; k < py_num_knots; k++) {
+                        double knot_val = PyFloat_AsDouble(PyList_GetItem(knots_list, k));
+                        knot_values.push_back(knot_val);
+                        std::cout << "[STEP Exporter]     Knot " << k << ": " << knot_val << std::endl;
+                    }
+                    
+                    // 计算唯一节点和多重性
+                    std::vector<double> unique_knots;
+                    std::vector<int> knot_mults;
+                    if (!knot_values.empty()) {
+                        unique_knots.push_back(knot_values[0]);
+                        knot_mults.push_back(1);
+                        for (size_t i = 1; i < knot_values.size(); i++) {
+                            if (knot_values[i] == knot_values[i-1]) {
+                                knot_mults.back()++;
+                            } else {
+                                unique_knots.push_back(knot_values[i]);
+                                knot_mults.push_back(1);
+                            }
+                        }
+                    }
+                    
+                    // 检查节点数量是否匹配
+                    int total_knots = 0;
+                    for (int mult : knot_mults) total_knots += mult;
+                    if (total_knots != num_knots) {
+                        std::cerr << "[STEP Exporter]   Warning: Knot count mismatch, using default knots" << std::endl;
+                        // 使用默认准均匀节点向量
+                        int n = static_cast<int>(control_points.size()) - 1;
+                        int degree = order - 1;
+                        // 计算准均匀节点向量
+                        for (int k = 1; k <= num_knots; k++) {
+                            if (k <= degree) {
+                                knots.SetValue(k, 0.0);
+                            } else if (k > num_knots - degree) {
+                                knots.SetValue(k, static_cast<double>(n - degree + 1));
+                            } else {
+                                knots.SetValue(k, static_cast<double>(k - degree - 1));
+                            }
+                        }
+                        // 设置多重性：两端为order，内部为1
+                        for (int m = 1; m <= multiplicities.Length(); m++) {
+                            if (m == 1 || m == multiplicities.Length()) {
+                                multiplicities.SetValue(m, order);
+                            } else {
+                                multiplicities.SetValue(m, 1);
+                            }
+                        }
+                    } else {
+                        // 使用从Python提取的节点向量
+                        // 将unique_knots复制到knots数组（长度为num_knots，但实际唯一节点数可能更少）
+                        // 实际上，我们需要构建包含重复值的节点向量，或者使用唯一节点配合多重性
+                        // OpenCASCADE期望knots数组包含重复值，而multiplicities指定每个节点的重复次数
+                        // 因此，我们需要构建包含重复值的节点向量，并设置多重性为1
+                        // 但更简单的方法是直接使用原始节点向量（包含重复值），并将多重性设置为1
+                        // 然而，对于准均匀节点向量，首尾节点重复order次，中间节点不重复
+                        // 我们可以直接使用原始节点向量，并设置多重性为1（所有节点）
+                        // 但这样会忽略重复信息。实际上，我们需要将节点向量视为唯一节点，并设置相应的多重性
+                        // 实现：knots数组包含唯一节点，multiplicities包含重复次数
+                        Standard_Integer num_unique_knots = static_cast<Standard_Integer>(unique_knots.size());
+                        if (num_unique_knots != num_knots) {
+                            // 节点向量包含重复值，使用唯一节点和多重性
+                            knots.Resize(1, num_unique_knots, false);
+                            multiplicities.Resize(1, num_unique_knots, false);
+                            for (size_t i = 0; i < unique_knots.size(); i++) {
+                                knots.SetValue(static_cast<Standard_Integer>(i + 1), unique_knots[i]);
+                                multiplicities.SetValue(static_cast<Standard_Integer>(i + 1), knot_mults[i]);
+                            }
+                        } else {
+                            // 节点向量没有重复值，直接使用
+                            for (size_t i = 0; i < knot_values.size(); i++) {
+                                knots.SetValue(static_cast<Standard_Integer>(i + 1), knot_values[i]);
+                                multiplicities.SetValue(static_cast<Standard_Integer>(i + 1), 1);
+                            }
+                        }
+                    }
+                    
+                    // 调试输出节点向量信息
+                    std::cout << "[STEP Exporter]   Unique knots count: " << knots.Length() << std::endl;
+                    std::cout << "[STEP Exporter]   Knots array: ";
+                    for (int i = 1; i <= knots.Length(); i++) {
+                        std::cout << knots.Value(i) << " ";
+                    }
+                    std::cout << std::endl;
+                    std::cout << "[STEP Exporter]   Multiplicities array: ";
+                    for (int i = 1; i <= multiplicities.Length(); i++) {
+                        std::cout << multiplicities.Value(i) << " ";
+                    }
+                    std::cout << std::endl;
+                    
+                    // 验证节点向量与控制点匹配
+                    int sum_mults = 0;
+                    for (int i = 1; i <= multiplicities.Length(); i++) {
+                        sum_mults += multiplicities.Value(i);
+                    }
+                    std::cout << "[STEP Exporter]   Sum of multiplicities: " << sum_mults << std::endl;
+                    std::cout << "[STEP Exporter]   Expected sum (control_points.size() + degree + 1): " << control_points.size() + (order - 1) + 1 << std::endl;
+                } else {
+                    // 默认均匀节点向量
+                    std::cout << "[STEP Exporter]   No knots found, using default uniform knots" << std::endl;
+                    for (int k = 1; k <= knots.Length(); k++) {
+                        knots.SetValue(k, k - 1);
+                    }
+                    // 设置多重性：两端为order，内部为1
+                    for (int m = 1; m <= multiplicities.Length(); m++) {
+                        if (m == 1 || m == multiplicities.Length()) {
+                            multiplicities.SetValue(m, order);
+                        } else {
+                            multiplicities.SetValue(m, 1);
+                        }
+                    }
+                }
+                
+                // 创建NURBS曲线（注意：Blender的order是degree+1）
+                // degree已在前面定义
+                
+                // 调试输出
+                std::cout << "[STEP Exporter]   Creating NURBS curve with " << poles.Length() << " poles, "
+                          << weights.Length() << " weights, " << knots.Length() << " unique knots, "
+                          << "degree=" << degree << ", close_curve=" << close_curve << std::endl;
+                std::cout << "[STEP Exporter]   DEBUG_BEFORE_VALIDATION: close_curve=" << close_curve 
+                          << " (bool:" << (close_curve ? "true" : "false") << ")"
+                          << ", poles.Length()=" << poles.Length() << ", degree=" << degree << std::endl;
+                
+#if 1
+                // 验证节点向量与控制点匹配
+                int sum_mults = 0;
+                for (int i = 1; i <= multiplicities.Length(); i++) {
+                    sum_mults += multiplicities.Value(i);
+                }
+                // 对于周期性曲线，使用不同的公式
+                std::cout << "[STEP Exporter]   DEBUG_IN_VALIDATION: close_curve=" << close_curve 
+                          << " (bool:" << (close_curve ? "true" : "false") << ")" << std::endl;
+                int expected_sum;
+                if (close_curve) {
+                    expected_sum = poles.Length() + order;  // 周期性曲线公式：控制点数 + 阶数
+                    std::cout << "[STEP Exporter]   DEBUG: Using periodic formula: expected = poles(" << poles.Length() << ") + order(" << order << ") = " << expected_sum << std::endl;
+                } else {
+                    expected_sum = poles.Length() + degree + 1;  // 非周期性曲线公式：控制点数 + 度数 + 1
+                    std::cout << "[STEP Exporter]   DEBUG: Using non-periodic formula: expected = poles(" << poles.Length() << ") + degree(" << degree << ") + 1 = " << expected_sum << std::endl;
+                }
+                std::cout << "[STEP Exporter]   Validation: sum of multiplicities = " << sum_mults 
+                          << ", expected = " << expected_sum << std::endl;
+                if (sum_mults != expected_sum) {
+                    std::cout << "[STEP Exporter]   ERROR: Poles and degree mismatch! Adjusting multiplicities..." << std::endl;
+                    // 对于周期性曲线，调整节点重数以满足周期性公式
+                    if (close_curve && multiplicities.Length() >= 2) {
+                        int first_mult = multiplicities.Value(1);
+                        int last_mult = multiplicities.Value(multiplicities.Length());
+                        if (first_mult == degree + 1 && last_mult == degree + 1) {
+                            std::cout << "[STEP Exporter]   Adjusting periodic curve: reducing end multiplicities from " 
+                                      << degree + 1 << " to " << degree << std::endl;
+                            multiplicities.SetValue(1, degree);
+                            multiplicities.SetValue(multiplicities.Length(), degree);
+                            sum_mults = sum_mults - 2;  // 首尾各减少1
+                            std::cout << "[STEP Exporter]   New sum after end adjustment: " << sum_mults << std::endl;
+                            // 检查是否还需要进一步调整
+                            if (sum_mults != expected_sum) {
+                                int diff = expected_sum - sum_mults;
+                                std::cout << "[STEP Exporter]   Need additional adjustment: diff = " << diff << std::endl;
+                                // 尝试在内部节点中均匀分布调整，而不是集中在单个节点上
+                                // 这里我们暂时保持原样，后续可能需要更智能的调整
+                            }
+                        }
+                    }
+                    // 如果仍然不匹配，跳过曲线
+                    if (sum_mults != expected_sum) {
+                        std::cout << "[STEP Exporter]   Skipping this curve due to mismatch" << std::endl;
+                        continue;
+                    }
+                }
+#endif
+                
+                // 对于闭合曲线，检查节点向量是否适合周期性曲线
+                // 对于周期性B样条曲线，节点向量应该是均匀的，并且首尾节点重复度应为degree
+                if (close_curve) {
+                    std::cout << "[STEP Exporter]   Creating CLOSED (periodic) NURBS curve" << std::endl;
+                    // 验证节点向量是否适合周期性曲线
+                    // 检查首尾节点重复度是否为degree
+                    if (multiplicities.Length() >= 2) {
+                        int first_mult = multiplicities.Value(1);
+                        int last_mult = multiplicities.Value(multiplicities.Length());
+                        if (first_mult == degree && last_mult == degree) {
+                            std::cout << "[STEP Exporter]   Knot multiplicities match degree at ends" << std::endl;
+                        } else {
+                            std::cout << "[STEP Exporter]   WARNING: Knot multiplicities at ends: first=" << first_mult 
+                                      << ", last=" << last_mult << ", expected=" << degree << std::endl;
+                        }
+                    }
+                }
+                
+                // 检查是否所有权重都为1.0（非有理曲线）
+                bool isRational = false;
+                for (int w = 1; w <= weights.Length(); w++) {
+                    if (fabs(weights.Value(w) - 1.0) > 1e-12) {
+                        isRational = true;
+                        break;
+                    }
+                }
+                
+                // 尝试使用适当的构造函数创建曲线
+                std::cout << "[STEP Exporter]   DEBUG_BEFORE_CONSTRUCTOR_SELECTION: close_curve=" << close_curve << std::endl;
+                
+                // 对于闭合曲线，根据是否有理选择创建策略
+                if (close_curve) {
+                    if (isRational) {
+                        // 对于有理闭合曲线（如圆），尝试直接创建周期性有理曲线
+                        std::cout << "[STEP Exporter]   Attempting to create PERIODIC RATIONAL NURBS curve" << std::endl;
+                        try {
+                            curve = new Geom_BSplineCurve(poles, weights, knots, multiplicities, degree, Standard_True, Standard_True);
+                            std::cout << "[STEP Exporter]   Periodic rational NURBS curve created successfully" << std::endl;
+                        } catch (const Standard_Failure& e) {
+                            std::cerr << "[STEP Exporter]   WARNING: Periodic rational constructor failed: " << e.GetMessageString() << std::endl;
+                            // 回退到非周期性有理曲线，然后尝试SetPeriodic()
+                            std::cout << "[STEP Exporter]   Falling back to non-periodic rational curve" << std::endl;
+                            curve = new Geom_BSplineCurve(poles, weights, knots, multiplicities, degree, Standard_False, Standard_True);
+                            
+                            // 尝试将非周期性曲线设置为周期性
+                            Handle(Geom_BSplineCurve) bspline_curve = Handle(Geom_BSplineCurve)::DownCast(curve);
+                            if (!bspline_curve.IsNull() && !bspline_curve->IsPeriodic()) {
+                                std::cout << "[STEP Exporter]   Attempting to make rational curve periodic using SetPeriodic()" << std::endl;
+                                try {
+                                    bspline_curve->SetPeriodic();
+                                    std::cout << "[STEP Exporter]   Rational curve made periodic successfully" << std::endl;
+                                } catch (const Standard_Failure& e2) {
+                                    std::cerr << "[STEP Exporter]   WARNING: SetPeriodic() also failed: " << e2.GetMessageString() << std::endl;
+                                    std::cout << "[STEP Exporter]   Keeping rational curve as non-periodic (closed but not periodic)" << std::endl;
+                                }
+                            }
+                        }
+                    } else {
+                        // 对于非有理闭合曲线，尝试创建周期性曲线
+                        std::cout << "[STEP Exporter]   Creating PERIODIC NON-RATIONAL NURBS curve" << std::endl;
+                        try {
+                            curve = new Geom_BSplineCurve(poles, weights, knots, multiplicities, degree, Standard_True, Standard_False);
+                            std::cout << "[STEP Exporter]   Periodic non-rational NURBS curve created successfully" << std::endl;
+                        } catch (const Standard_Failure& e) {
+                            std::cerr << "[STEP Exporter]   WARNING: Periodic non-rational constructor failed: " << e.GetMessageString() << std::endl;
+                            // 回退到非周期性非有理曲线
+                            std::cout << "[STEP Exporter]   Falling back to non-periodic non-rational curve" << std::endl;
+                            curve = new Geom_BSplineCurve(poles, weights, knots, multiplicities, degree, Standard_False, Standard_False);
+                        }
+                    }
+                } else {
+                    // 非闭合曲线
+                    if (isRational) {
+                        std::cout << "[STEP Exporter]   Creating RATIONAL NURBS curve" << std::endl;
+                        curve = new Geom_BSplineCurve(poles, weights, knots, multiplicities, degree, Standard_False, Standard_True);
+                    } else {
+                        std::cout << "[STEP Exporter]   Creating NON-RATIONAL NURBS curve" << std::endl;
+                        curve = new Geom_BSplineCurve(poles, weights, knots, multiplicities, degree, Standard_False, Standard_False);
+                    }
+                }
+            }
+            
+            if (!curve.IsNull()) {
+                // 调试：检查曲线属性
+                Handle(Geom_BSplineCurve) bspline_curve = Handle(Geom_BSplineCurve)::DownCast(curve);
+                if (!bspline_curve.IsNull()) {
+                    std::cout << "[STEP Exporter]   Curve created - IsRational: " << (bspline_curve->IsRational() ? "YES" : "NO") 
+                              << ", IsPeriodic: " << (bspline_curve->IsPeriodic() ? "YES" : "NO") 
+                              << ", Degree: " << bspline_curve->Degree()
+                              << ", NbPoles: " << bspline_curve->NbPoles()
+                              << ", NbKnots: " << bspline_curve->NbKnots() << std::endl;
+                }
+                // 将几何曲线转换为边
+                // 如果曲线需要闭合，检查是否为周期性曲线
+                if (close_curve) {
+                    if (curve->IsPeriodic()) {
+                        std::cout << "[STEP Exporter]   Curve is already periodic" << std::endl;
+                    } else {
+                        // 使用bspline_curve检查是否为有理曲线
+                        if (!bspline_curve.IsNull()) {
+                            if (!bspline_curve->IsRational()) {
+                                std::cerr << "[STEP Exporter]   WARNING: Non-rational curve should be periodic but is not. Check knot vector and multiplicities." << std::endl;
+                                std::cout << "[STEP Exporter]   B-spline curve parameters: degree=" << bspline_curve->Degree()
+                                          << ", poles=" << bspline_curve->NbPoles()
+                                          << ", knots=" << bspline_curve->NbKnots()
+                                          << ", periodic=" << bspline_curve->IsPeriodic() << std::endl;
+                            } else {
+                                std::cout << "[STEP Exporter]   Rational closed curve (non-periodic) - this is expected" << std::endl;
+                            }
+                        } else {
+                            // 如果bspline_curve为空，输出通用警告
+                            std::cerr << "[STEP Exporter]   WARNING: Closed curve is not periodic and cannot determine if rational" << std::endl;
+                        }
+                    }
+                }
+                BRepBuilderAPI_MakeEdge edgeMaker(curve);
+                if (edgeMaker.IsDone()) {
+                    TopoDS_Edge edge = edgeMaker.Edge();
+                    builder.Add(compound, edge);
+                    valid_edge_count++;
+                    std::cout << "[STEP Exporter]   Created edge from " << spline_type << " curve" << std::endl;
+                }
+            }
+        }
+        
+        if (valid_edge_count == 0) {
+            std::cerr << "[STEP Exporter] No valid edges created" << std::endl;
+            return TopoDS_Shape();
+        }
+        
+        std::cout << "[STEP Exporter] Created " << valid_edge_count << " edges from curve data" << std::endl;
+        return compound;
+
+    } // end try
+    catch (const Standard_Failure& e) {
+        std::cerr << "[STEP Exporter] Error creating shape from curve data: " << e.GetMessageString() << std::endl;
+        return TopoDS_Shape();
+    }
+}
+
+// 从Python字典创建曲线形状
+static TopoDS_Shape create_shape_from_curve_dict(PyObject* obj_dict, double scale = 1.0) {
+    if (!obj_dict || !PyDict_Check(obj_dict)) {
+        std::cerr << "[STEP Exporter] Invalid curve dictionary" << std::endl;
+        return TopoDS_Shape();
+    }
+    
+    // 获取splines列表
+    PyObject* splines_obj = PyDict_GetItemString(obj_dict, "splines");
+    if (!splines_obj || !PyList_Check(splines_obj)) {
+        std::cerr << "[STEP Exporter] No valid splines list in curve data" << std::endl;
+        return TopoDS_Shape();
+    }
+    
+    Py_ssize_t num_splines = PyList_Size(splines_obj);
+    std::cout << "[STEP Exporter] Curve data contains " << num_splines << " splines" << std::endl;
+    
+    // 将Python样条数据转换为C++结构
+    std::vector<std::map<std::string, PyObject*>> splines_data;
+    
+    for (Py_ssize_t i = 0; i < num_splines; i++) {
+        PyObject* spline_dict = PyList_GetItem(splines_obj, i);
+        if (!spline_dict || !PyDict_Check(spline_dict)) {
+            std::cerr << "[STEP Exporter]   Spline " << i << " is not a dictionary, skipping" << std::endl;
+            continue;
+        }
+        
+        std::map<std::string, PyObject*> spline_info;
+        
+        // 获取样条类型
+        PyObject* type_obj = PyDict_GetItemString(spline_dict, "type");
+        if (type_obj) {
+            spline_info["type"] = type_obj;
+        }
+        
+        // 获取控制点
+        PyObject* control_points_obj = PyDict_GetItemString(spline_dict, "control_points");
+        if (control_points_obj) {
+            spline_info["control_points"] = control_points_obj;
+        }
+        
+        // 获取权重（如果存在）
+        PyObject* weights_obj = PyDict_GetItemString(spline_dict, "weights");
+        if (weights_obj) {
+            spline_info["weights"] = weights_obj;
+        }
+        
+        // 获取节点向量（如果存在）
+        PyObject* knots_obj = PyDict_GetItemString(spline_dict, "knots_u");
+        if (knots_obj) {
+            spline_info["knots_u"] = knots_obj;
+        }
+        
+        // 获取阶数（如果存在）
+        PyObject* order_obj = PyDict_GetItemString(spline_dict, "order");
+        if (order_obj) {
+            spline_info["order"] = order_obj;
+        }
+        
+        // 获取闭合标志（如果存在）
+        PyObject* cyclic_obj = PyDict_GetItemString(spline_dict, "use_cyclic_u");
+        if (cyclic_obj) {
+            spline_info["use_cyclic_u"] = cyclic_obj;
+        }
+        
+        splines_data.push_back(spline_info);
+        std::cout << "[STEP Exporter]   Added spline " << i << " data" << std::endl;
+    }
+    
+    if (splines_data.empty()) {
+        std::cerr << "[STEP Exporter] No valid splines data extracted" << std::endl;
+        return TopoDS_Shape();
+    }
+    
+    // 调用现有的曲线创建函数
+    return create_shape_from_curve_data(splines_data, scale);
 }
 
 // 修复几何形状（增强版，支持实体）
@@ -1056,7 +1942,12 @@ static PyObject* export_scene(PyObject* self, PyObject* args) {
         STEPControl_Controller::Init();
         
         // 优化设置以减少文件大小
-        Interface_Static::SetCVal("write.step.schema", "AP203"); // 使用最简单的AP203 schema
+        Interface_Static::SetCVal("write.step.schema", "AP214"); // 使用AP214以支持有理曲线
+        // 强制有理B样条曲线标志
+        Interface_Static::SetIVal("write.step.bspline.curve.rational", 1);
+        // 尝试其他可能的参数名以确保有理曲线正确导出
+        Interface_Static::SetIVal("write.step.curve.rational", 1);
+        Interface_Static::SetIVal("write.step.bspline.rational", 1);
         Interface_Static::SetCVal("write.step.product.name", filename);
         Interface_Static::SetCVal("write.step.company", "");
         Interface_Static::SetCVal("write.step.author", "");
@@ -1861,6 +2752,30 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
                       << ": " << obj_name 
                       << " [Elapsed: " << std::setprecision(1) << elapsed_sec << "s]" << std::endl;
 
+            // 检查对象类型
+            PyObject* type_obj = PyDict_GetItemString(obj_dict, "type");
+            if (type_obj && PyUnicode_Check(type_obj)) {
+                const char* obj_type = PyUnicode_AsUTF8(type_obj);
+                if (obj_type && strcmp(obj_type, "curve") == 0) {
+                    std::cout << "[STEP Exporter]   Object type: curve, processing as curve data" << std::endl;
+                    TopoDS_Shape shape = create_shape_from_curve_dict(obj_dict, scale);
+                    if (!shape.IsNull()) {
+                        if (fix_geometry) {
+                            shape = fix_shape_enhanced(shape, sew_tolerance);
+                        }
+                        if (!shape.IsNull()) {
+                            shapes.push_back(shape);
+                            std::cout << "[STEP Exporter]   ✓ Curve shape created successfully" << std::endl;
+                        } else {
+                            std::cerr << "[STEP Exporter]   ✗ Curve shape is null after fixing" << std::endl;
+                        }
+                    } else {
+                        std::cerr << "[STEP Exporter]   ✗ Failed to create shape from curve data" << std::endl;
+                    }
+                    continue; // 跳过网格处理
+                }
+            }
+
             // 获取顶点数据
             std::vector<std::vector<double>> vertices;
             PyObject* vertices_obj = PyDict_GetItemString(obj_dict, "vertices");
@@ -2239,7 +3154,7 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
                     total_faces_processed++;
                     
                     // 进度报告
-                    if (f >= next_report) {
+                    if (static_cast<size_t>(f) >= next_report) {
                         double object_face_progress = (f * 100.0) / num_faces;
                         double total_progress = (total_faces_in_scene > 0) ? (total_faces_processed * 100.0) / total_faces_in_scene : 0.0;
                         std::chrono::steady_clock::time_point current_time = std::chrono::steady_clock::now();
@@ -2336,11 +3251,15 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
             }
             
             // 验证形状
-            int face_count = 0;
-            for (TopExp_Explorer exp(shape, TopAbs_FACE); exp.More(); exp.Next()) face_count++;
-            if (face_count == 0) {
-                std::cerr << "[STEP Exporter] ✗ Shape " << i + 1 << " has no faces, skipping." << std::endl;
-                continue;
+            TopAbs_ShapeEnum shapeType = shape.ShapeType();
+            // 对于实体和壳，需要至少一个面
+            if (shapeType == TopAbs_SOLID || shapeType == TopAbs_SHELL) {
+                int face_count = 0;
+                for (TopExp_Explorer exp(shape, TopAbs_FACE); exp.More(); exp.Next()) face_count++;
+                if (face_count == 0) {
+                    std::cerr << "[STEP Exporter] ✗ Shape " << i + 1 << " has no faces, skipping." << std::endl;
+                    continue;
+                }
             }
             
             // 检查形状是否为空
@@ -2382,13 +3301,34 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
                 } else {
                     // 对于非实体形状（壳、面、复合），体积为0是正常的
                     // 检查这些形状是否有实际的几何内容
-                    int face_count = 0;
-                    for (TopExp_Explorer exp(shape, TopAbs_FACE); exp.More(); exp.Next()) face_count++;
-                    if (face_count == 0) {
-                        std::cerr << "[STEP Exporter] ✗ Shape " << i + 1 << " has no faces and negligible volume, skipping. ShapeType: " << shapeType << std::endl;
+                    if (shapeType == TopAbs_SHELL || shapeType == TopAbs_FACE) {
+                        // 壳和面需要至少一个面
+                        int face_count = 0;
+                        for (TopExp_Explorer exp(shape, TopAbs_FACE); exp.More(); exp.Next()) face_count++;
+                        if (face_count == 0) {
+                            std::cerr << "[STEP Exporter] ✗ Shape " << i + 1 << " has no faces and negligible volume, skipping. ShapeType: " << shapeType << std::endl;
+                            continue;
+                        }
+                        std::cout << "[STEP Exporter] ✓ Shape " << i + 1 << " has negligible volume but has " << face_count << " faces, proceeding. ShapeType: " << shapeType << std::endl;
+                    } else if (shapeType == TopAbs_COMPOUND) {
+                        // 复合体检查是否包含边或面
+                        int edge_count = 0;
+                        for (TopExp_Explorer exp(shape, TopAbs_EDGE); exp.More(); exp.Next()) edge_count++;
+                        int face_count = 0;
+                        for (TopExp_Explorer exp(shape, TopAbs_FACE); exp.More(); exp.Next()) face_count++;
+                        if (edge_count == 0 && face_count == 0) {
+                            std::cerr << "[STEP Exporter] ✗ Shape " << i + 1 << " has no edges or faces, skipping. ShapeType: COMPOUND" << std::endl;
+                            continue;
+                        }
+                        std::cout << "[STEP Exporter] ✓ Shape " << i + 1 << " has " << edge_count << " edges and " << face_count << " faces, proceeding. ShapeType: COMPOUND" << std::endl;
+                    } else if (shapeType == TopAbs_EDGE || shapeType == TopAbs_WIRE) {
+                        // 边和线是有效的曲线形状
+                        std::cout << "[STEP Exporter] ✓ Shape " << i + 1 << " is a curve (EDGE/WIRE), proceeding. ShapeType: " << shapeType << std::endl;
+                    } else {
+                        // 其他形状类型（如顶点）跳过
+                        std::cerr << "[STEP Exporter] ✗ Shape " << i + 1 << " has negligible volume and unsupported type, skipping. ShapeType: " << shapeType << std::endl;
                         continue;
                     }
-                    std::cout << "[STEP Exporter] ✓ Shape " << i + 1 << " has negligible volume but has " << face_count << " faces, proceeding. ShapeType: " << shapeType << std::endl;
                 }
             }
             
@@ -2844,8 +3784,21 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
                                 }
                             } else {
                                 // 既没有实体也没有壳
-                                transfer_mode = STEPControl_ManifoldSolidBrep;
-                                std::cout << "[STEP Exporter]   Shape " << i + 1 << " is COMPOUND (no SOLID or SHELL), forcing ManifoldSolidBrep for Bambu compatibility." << std::endl;
+                                // 检查复合体是否只包含边（曲线形状）
+                                int edge_count = 0;
+                                int face_count = 0;
+                                for (TopExp_Explorer exp(finalShape, TopAbs_EDGE); exp.More(); exp.Next()) edge_count++;
+                                for (TopExp_Explorer exp(finalShape, TopAbs_FACE); exp.More(); exp.Next()) face_count++;
+                                
+                                if (edge_count > 0 && face_count == 0) {
+                                    // 只有边，没有面 - 这是曲线形状
+                                    transfer_mode = STEPControl_GeometricCurveSet;
+                                    std::cout << "[STEP Exporter]   Shape " << i + 1 << " is COMPOUND with " << edge_count << " edges (curve shape), using GeometricCurveSet." << std::endl;
+                                } else {
+                                    // 其他情况，强制使用ManifoldSolidBrep以提高Bambu兼容性
+                                    transfer_mode = STEPControl_ManifoldSolidBrep;
+                                    std::cout << "[STEP Exporter]   Shape " << i + 1 << " is COMPOUND (no SOLID or SHELL), forcing ManifoldSolidBrep for Bambu compatibility." << std::endl;
+                                }
                             }
                         }
                     }
@@ -2957,8 +3910,17 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
                     break;
                 
                 default:
-                    transfer_mode = STEPControl_ManifoldSolidBrep;
-                    std::cout << "[STEP Exporter]   Shape " << i + 1 << " type " << finalShape.ShapeType() << ", forcing ManifoldSolidBrep for Bambu compatibility." << std::endl;
+                    // 检查是否为曲线形状（EDGE或WIRE）
+                    TopAbs_ShapeEnum shapeType = finalShape.ShapeType();
+                    if (shapeType == TopAbs_EDGE || shapeType == TopAbs_WIRE) {
+                        // 曲线形状使用GeometricCurveSet
+                        transfer_mode = STEPControl_GeometricCurveSet;
+                        std::cout << "[STEP Exporter]   Shape " << i + 1 << " is " << (shapeType == TopAbs_EDGE ? "EDGE" : "WIRE") << " (curve shape), using GeometricCurveSet." << std::endl;
+                    } else {
+                        // 其他类型强制使用ManifoldSolidBrep以提高Bambu兼容性
+                        transfer_mode = STEPControl_ManifoldSolidBrep;
+                        std::cout << "[STEP Exporter]   Shape " << i + 1 << " type " << shapeType << ", forcing ManifoldSolidBrep for Bambu compatibility." << std::endl;
+                    }
                     break;
             }
             

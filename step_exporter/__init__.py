@@ -15,6 +15,7 @@ bl_info = {
 
 import sys
 import os
+import math
 sys.path.append(os.path.abspath(os.path.dirname(__file__)))
 
 import bpy
@@ -48,16 +49,16 @@ try:
     # 验证模块功能
     if hasattr(step_exporter, 'get_version'):
         module_version = step_exporter.get_version()
-        print(f"[STEP Exporter] ✓ C++ extension module loaded successfully (direct import)")
+        print(f"[STEP Exporter] [OK] C++ extension module loaded successfully (direct import)")
         print(f"[STEP Exporter] Module version: {module_version}")
         CPP_MODULE_LOADED = True
     else:
         MODULE_LOAD_ERROR = "C++ module missing required functions"
-        print(f"[STEP Exporter] ✗ C++ module loaded but missing functions")
+        print(f"[STEP Exporter] [ERROR] C++ module loaded but missing functions")
         
 except ImportError as e:
     MODULE_LOAD_ERROR = f"ImportError: {str(e)}"
-    print(f"[STEP Exporter] ✗ Failed to import C++ module directly: {e}")
+    print(f"[STEP Exporter] [ERROR] Failed to import C++ module directly: {e}")
     
     # 尝试从 lib 子目录导入
     try:
@@ -69,7 +70,7 @@ except ImportError as e:
             
             if hasattr(step_exporter, 'get_version'):
                 module_version = step_exporter.get_version()
-                print(f"[STEP Exporter] ✓ C++ extension module loaded successfully (from lib)")
+                print(f"[STEP Exporter] [OK] C++ extension module loaded successfully (from lib)")
                 print(f"[STEP Exporter] Module version: {module_version}")
                 CPP_MODULE_LOADED = True
             else:
@@ -220,14 +221,14 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
             # 收集要导出的对象
             objects_data = []
             
-            # 确定要导出的对象列表
+            # 确定要导出的对象列表（支持网格和曲线）
             if self.use_selected and context.selected_objects:
-                export_objects = [obj for obj in context.selected_objects if obj.type == 'MESH']
+                export_objects = [obj for obj in context.selected_objects if obj.type in ('MESH', 'CURVE')]
             else:
-                export_objects = [obj for obj in context.scene.objects if obj.type == 'MESH']
+                export_objects = [obj for obj in context.scene.objects if obj.type in ('MESH', 'CURVE')]
             
             if not export_objects:
-                self.report({'ERROR'}, "No mesh objects found to export.")
+                self.report({'ERROR'}, "No mesh or curve objects found to export.")
                 end_progress(context)
                 return {'CANCELLED'}
             
@@ -243,20 +244,33 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
             
             # Python数据准备阶段：占总进度的20%
             python_progress_weight = 20
+            mesh_count = 0
+            curve_count = 0
             for idx, obj in enumerate(export_objects):
-                print(f"[Python DEBUG] Processing object {idx}: '{obj.name}'")
-                mesh_data = self.get_mesh_data_enhanced(obj, context, scale, self.apply_modifiers)
-                if mesh_data:
-                    objects_data.append(mesh_data)
+                print(f"[Python DEBUG] Processing object {idx}: '{obj.name}' (type: {obj.type})")
+                obj_data = None
+                if obj.type == 'MESH':
+                    obj_data = self.get_mesh_data_enhanced(obj, context, scale, self.apply_modifiers)
+                    if obj_data:
+                        mesh_count += 1
+                elif obj.type == 'CURVE':
+                    obj_data = self.get_curve_data_enhanced(obj, context, scale, self.apply_modifiers)
+                    if obj_data:
+                        curve_count += 1
+                
+                if obj_data:
+                    objects_data.append(obj_data)
                 
                 # 更新进度：Python阶段
                 object_progress = (idx + 1) / len(export_objects) * python_progress_weight
-                update_progress(object_progress, f"正在处理对象 {idx+1}/{len(export_objects)}")
+                update_progress(object_progress, f"正在处理对象 {idx+1}/{len(export_objects)}", context)
             
             if not objects_data:
-                self.report({'ERROR'}, "No valid mesh data to export.")
+                self.report({'ERROR'}, "No valid mesh or curve data to export.")
                 end_progress(context)
                 return {'CANCELLED'}
+            
+            print(f"[STEP Exporter] Data preparation complete: {mesh_count} mesh objects, {curve_count} curve objects")
             
             # 调用 C++ 增强版导出函数
             # 转换单位字符串：Blender 中使用 'mm'/'m'，STEP 中使用 'MILLIMETER'/'METER'
@@ -277,7 +291,53 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
             sys.stdout.flush()
             
             # C++处理阶段：设置基础进度为20%
-            update_progress(python_progress_weight, "正在导出 STEP 文件...")
+            update_progress(python_progress_weight, "正在导出 STEP 文件...", context)
+            
+            # 创建带暂停功能的回调函数
+            def create_progress_callback(ctx):
+                last_pause_progress = -999
+                pause_count = 0
+                def callback(progress):
+                    nonlocal last_pause_progress, pause_count
+                    print(f"[Python Progress] C++ callback: {progress:.1f}%")
+                    update_progress(progress, f"导出进度: {progress:.1f}%", ctx)
+                    
+                    # 每0.1%进度暂停一下，让UI有机会刷新
+                    if abs(progress - last_pause_progress) > 0.1:
+                        pause_count += 1
+                        last_pause_progress = progress
+                        print(f"[Python Progress] UI pause #{pause_count} at progress {progress:.1f}%")
+                        
+                        # 让UI有机会刷新 - 尝试多种方法
+                        try:
+                            # 方法1: 强制重绘计时器
+                            if hasattr(bpy.ops.wm, 'redraw_timer'):
+                                bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP', iterations=1)
+                                print(f"[Python Progress] Redraw timer called")
+                            
+                            # 方法2: 处理事件队列多次，确保事件被处理
+                            if hasattr(bpy.app, 'process_events'):
+                                # 多次处理事件，但不要阻塞太久
+                                for i in range(5):
+                                    bpy.app.process_events()
+                            
+                            # 方法3: 短暂延迟，让Windows消息循环有机会运行
+                            import time
+                            # 使用忙等待但定期处理事件
+                            start = time.perf_counter()
+                            while time.perf_counter() - start < 0.01:  # 最多10毫秒
+                                if hasattr(bpy.app, 'process_events'):
+                                    bpy.app.process_events()
+                                # 非常短暂的睡眠，允许其他线程运行
+                                time.sleep(0.0001)
+                            
+                            print(f"[Python Progress] UI pause completed")
+                                
+                        except Exception as e:
+                            print(f"[Python Progress] UI refresh error: {e}")
+                return callback
+            
+            progress_callback = create_progress_callback(context)
             
             success = step_exporter.export_scene_enhanced(
                 self.filepath,
@@ -290,16 +350,11 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
                 step_unit,
                 1 if self.enable_logging else 0,
                 sew_tolerance_m,
-                lambda progress: (
-                    print(f"[Python Progress] C++ callback: {progress:.1f}%"),
-                    update_progress(progress, f"导出进度: {progress:.1f}%"),
-                    # 保留UI更新调用以确保刷新
-                    hasattr(bpy.ops.wm, 'redraw_timer') and bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP', iterations=1)
-                )[1]
+                progress_callback
             )
             
             # C++处理完成，进度到100%
-            update_progress(100, "导出完成")
+            update_progress(100, "导出完成", context)
             
             if success:
                 self.report({'INFO'}, f"Successfully exported {len(objects_data)} object(s) to {self.filepath}")
@@ -402,7 +457,329 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
         return {
             'name': obj.name,
             'vertices': vertices,
-            'faces': faces
+            'faces': faces,
+            'type': 'mesh'
+        }
+
+    def get_curve_data_enhanced(self, obj, context, scale, apply_modifiers=True):
+        """获取曲线数据（贝塞尔曲线、NURBS曲线等）"""
+        if obj.type != 'CURVE':
+            return None
+        
+        import sys
+        print(f"[Python DEBUG] get_curve_data_enhanced called for object '{obj.name}'")
+        sys.stdout.flush()
+        curve = obj.data
+        
+        # 获取最终几何（应用修改器）
+        depsgraph = context.evaluated_depsgraph_get() if apply_modifiers else None
+        if depsgraph:
+            eval_obj = obj.evaluated_get(depsgraph)
+            eval_curve = eval_obj.data
+        else:
+            eval_obj = obj
+            eval_curve = curve
+        
+        splines_data = []
+        
+        for spline_idx, spline in enumerate(eval_curve.splines):
+            spline_type = spline.type  # 'POLY', 'BEZIER', 'NURBS'
+            print(f"[Python DEBUG] Processing spline {spline_idx}: type={spline_type}")
+            
+            spline_info = {
+                'type': spline_type,
+                'order': spline.order_u if hasattr(spline, 'order_u') else 3,
+                'resolution_u': spline.resolution_u,
+                'use_cyclic_u': spline.use_cyclic_u,
+                'use_endpoint_u': spline.use_endpoint_u,
+            }
+            print(f"[Python DEBUG] Spline info: type={spline_info['type']}, order={spline_info['order']}, use_cyclic_u={spline_info['use_cyclic_u']}")
+            
+            # 获取控制点（应用世界变换）
+            control_points = []
+            weights = []
+            
+            if spline_type == 'POLY' or spline_type == 'NURBS':
+                points = spline.points
+                for point_idx, point in enumerate(points):
+                    # Blender中的点坐标是4D: (x, y, z, w)，其中w是权重（对于NURBS）
+                    local_co = point.co
+                    world_co = eval_obj.matrix_world @ local_co.to_3d()
+                    scaled_co = [round(float(world_co.x) * scale, 12), 
+                                 round(float(world_co.y) * scale, 12), 
+                                 round(float(world_co.z) * scale, 12)]
+                    control_points.append(scaled_co)
+                    weights.append(float(point.weight))
+                
+                # 设置控制点和权重
+                spline_info['control_points'] = control_points
+                if spline_type == 'NURBS':
+                    spline_info['weights'] = weights
+                else:
+                    # 对于POLY曲线，权重全部设为1.0
+                    spline_info['weights'] = [1.0] * len(weights)
+                
+                # 对于NURBS曲线，尝试获取节点向量
+                if spline_type == 'NURBS':
+                    for attr in ['knots_u', 'knots', 'knot_vector']:
+                        if hasattr(spline, attr):
+                            val = getattr(spline, attr)
+                            if val:
+                                spline_info['knots_u'] = [float(k) for k in val]
+                                print(f"[Python DEBUG] NURBS knots from {attr}: {spline_info['knots_u']}")
+                                break
+                    else:
+                        print(f"[Python DEBUG] No knots attribute found for NURBS, using default knots")
+                        # 计算默认准均匀节点向量
+                        n = len(control_points) - 1
+                        order = spline.order_u
+                        num_knots = n + order + 1
+                        knots = []
+                        for i in range(num_knots):
+                            if i < order:
+                                knots.append(0.0)
+                            elif i > n:
+                                knots.append(float(n - order + 2))
+                            else:
+                                knots.append(float(i - order + 1))
+                        # 归一化到[0,1]
+                        if knots[-1] > 0:
+                            max_knot = knots[-1]
+                            knots = [k / max_knot for k in knots]
+                        spline_info['knots_u'] = knots
+                        print(f"[Python DEBUG] Computed default knots: {knots}")
+            
+            elif spline_type == 'BEZIER':
+                # 将贝塞尔曲线转换为NURBS曲线，正确传递手柄信息
+                points = spline.bezier_points
+                close_curve = spline.use_cyclic_u
+                original_close_curve = close_curve  # 保存原始闭合状态
+                print(f"[Python DEBUG] Bezier curve with {len(points)} control points, closed: {close_curve}")
+                
+                # 调试：打印第一个点的属性
+                if points:
+                    bp0 = points[0]
+                    print(f"[Python DEBUG] BezierSplinePoint attributes: {[attr for attr in dir(bp0) if not attr.startswith('__')]}")
+                
+                # 初始化控制点和权重列表
+                control_points = []
+                weights = []
+                
+                # 段数：开放曲线为n-1，闭合曲线为n
+                num_segments = len(points) - 1 if not close_curve else len(points)
+                
+                # 收集每个贝塞尔段的4个控制点
+                segment_controls = []  # 每个元素是4个控制点的列表
+                for seg_idx in range(num_segments):
+                    # 获取当前段的起点和终点索引
+                    if close_curve:
+                        start_idx = seg_idx
+                        end_idx = (seg_idx + 1) % len(points)
+                    else:
+                        start_idx = seg_idx
+                        end_idx = seg_idx + 1
+                    
+                    bp_start = points[start_idx]
+                    bp_end = points[end_idx]
+                    
+                    # 四个控制点：起点、起点右手柄、终点左手柄、终点
+                    seg_points = []
+                    for bp, handle_attr in [(bp_start, 'co'),
+                                            (bp_start, 'handle_right'),
+                                            (bp_end, 'handle_left'),
+                                            (bp_end, 'co')]:
+                        if handle_attr == 'co':
+                            local_co = bp.co
+                        else:
+                            local_co = getattr(bp, handle_attr)
+                        world_co = eval_obj.matrix_world @ local_co
+                        scaled_co = [round(float(world_co.x) * scale, 12),
+                                     round(float(world_co.y) * scale, 12),
+                                     round(float(world_co.z) * scale, 12)]
+                        seg_points.append(scaled_co)
+                    segment_controls.append(seg_points)
+                
+                # 构建总控制点列表：第一个段添加所有4个点，后续段只添加后3个点（避免重复起点）
+                for seg_idx, seg_points in enumerate(segment_controls):
+                    if seg_idx == 0:
+                        control_points.extend(seg_points)
+                        weights.extend([1.0, 1.0, 1.0, 1.0])
+                    else:
+                        # 跳过第一个点（与上一段最后一个点相同）
+                        control_points.extend(seg_points[1:])
+                        weights.extend([1.0, 1.0, 1.0])
+                
+                # 对于闭合曲线，不添加额外控制点，但添加第一个控制点作为最后一个控制点以实现闭合
+                if close_curve:
+                    # 添加第一个控制点作为最后一个控制点，使曲线闭合
+                    control_points.append(control_points[0])
+                    weights.append(weights[0])
+                    # 不标记为周期性曲线，使用开放曲线算法
+                    close_curve = False
+                
+                # 设置NURBS参数
+                spline_info['type'] = 'NURBS'
+                spline_info['order'] = 4  # 三次贝塞尔曲线
+                spline_info['control_points'] = control_points
+                spline_info['weights'] = weights
+                spline_info['use_cyclic_u'] = close_curve
+                
+                # 计算节点向量
+                # 使用准均匀节点向量算法，与NURBS曲线保持一致
+                # 控制点数量 = n+1, 阶数 = order, 节点数量 = n+order+1
+                n = len(control_points) - 1
+                order = 4  # 三次贝塞尔曲线
+                num_knots = n + order + 1
+                
+                # 根据曲线是否闭合选择节点向量算法
+                if close_curve:
+                    # 对于闭合曲线，生成均匀节点向量，适合周期性B样条曲线
+                    # 阶数 = order，度数 = order - 1
+                    degree = order - 1
+                    # 不同节点值数量 = 控制点数 - 度数 + 3
+                    unique_knot_count = len(control_points) - degree + 3
+                    # 生成从0到1的均匀节点值（包括0和1）
+                    unique_knots = [i / (unique_knot_count - 1) for i in range(unique_knot_count)]
+                    # 构建完整节点向量：前degree个节点为0，中间节点为unique_knots[1:-1]，后degree个节点为1
+                    knots = [0.0] * degree  # 前degree个节点为0
+                    knots.extend(unique_knots[1:-1])  # 中间节点，排除首尾
+                    knots.extend([1.0] * degree)  # 后degree个节点为1
+                    print(f"[Python DEBUG] Generated uniform knots for closed curve: {knots}")
+                else:
+                    # 对于开放曲线，使用准均匀节点向量：两端重复order次，中间均匀分布
+                    knots = []
+                    for i in range(num_knots):
+                        if i < order:
+                            knots.append(0.0)
+                        elif i > n:
+                            knots.append(float(n - order + 2))
+                        else:
+                            knots.append(float(i - order + 1))
+                    
+                    # 归一化节点向量到范围[0,1]
+                    if knots[-1] > 0:
+                        max_knot = knots[-1]
+                        knots = [k / max_knot for k in knots]
+                
+                spline_info['knots_u'] = knots
+                print(f"[Python DEBUG] Converted Bezier to NURBS: {len(control_points)} control points, {len(knots)} knots, closed: {close_curve}, n={n}, order={order}")
+                
+                # 特殊处理：有理贝塞尔圆 - 生成有理NURBS圆
+                if "BezierCircle" in obj.name and len(points) == 4 and original_close_curve:
+                    print(f"[Python DEBUG] Generating rational NURBS circle for {obj.name}")
+                    # 计算世界坐标下的圆心和半径（从贝塞尔控制点估算）
+                    # 使用原始贝塞尔控制点的世界坐标平均值作为圆心
+                    bezier_points = points
+                    world_coords = []
+                    print(f"[Python DEBUG] eval_obj.matrix_world: {eval_obj.matrix_world}")
+                    print(f"[Python DEBUG] obj.matrix_world: {obj.matrix_world}")
+                    for bp in bezier_points:
+                        local_co = bp.co
+                        world_co = obj.matrix_world @ local_co
+                        scaled_co = [float(world_co.x) * scale, float(world_co.y) * scale, float(world_co.z) * scale]
+                        world_coords.append(scaled_co)
+                        print(f"[Python DEBUG] Local co: {local_co}, world co: {world_co}, scaled: {scaled_co}")
+                    
+                    # 计算圆心（世界坐标平均值）
+                    center_x = sum(wc[0] for wc in world_coords) / len(world_coords)
+                    center_y = sum(wc[1] for wc in world_coords) / len(world_coords)
+                    center_z = sum(wc[2] for wc in world_coords) / len(world_coords)
+                    # 半径：最大距离（世界坐标）
+                    radius = max(math.sqrt((wc[0] - center_x)**2 + (wc[1] - center_y)**2 + (wc[2] - center_z)**2) for wc in world_coords)
+                    
+                    # 标准NURBS圆控制点（9个点），使用周期性NURBS表示
+                    # 角度：0°, 45°, 90°, 135°, 180°, 225°, 270°, 315°, 360°（不重复0°）
+                    angles = [0, math.pi/4, math.pi/2, 3*math.pi/4, math.pi, 5*math.pi/4, 3*math.pi/2, 7*math.pi/4, 2*math.pi]
+                    # 控制点坐标（在世界坐标系中的圆上）
+                    control_points = []
+                    for angle in angles:
+                        x = center_x + radius * math.cos(angle)
+                        y = center_y + radius * math.sin(angle)
+                        control_points.append([round(x, 12), round(y, 12), round(center_z, 12)])
+                    
+                    # 权重：1, √2/2, 1, √2/2, 1, √2/2, 1, √2/2, 1
+                    sqrt2_over_2 = math.sqrt(2) / 2
+                    weights = [1.0, sqrt2_over_2, 1.0, sqrt2_over_2, 1.0, sqrt2_over_2, 1.0, sqrt2_over_2, 1.0]
+                    
+                    # 为周期性NURBS圆生成节点向量
+                    # 使用与普通闭合曲线相同的均匀节点向量算法
+                    order = 4
+                    degree = order - 1  # 3
+                    # 不同节点值数量 = 控制点数 - 度数 + 3
+                    unique_knot_count = len(control_points) - degree + 3  # 9 - 3 + 3 = 9
+                    # 生成从0到1的均匀节点值（包括0和1）
+                    unique_knots = [i / (unique_knot_count - 1) for i in range(unique_knot_count)]
+                    # 构建完整节点向量：前degree个节点为0，中间节点为unique_knots[1:-1]，后degree个节点为1
+                    knots = [0.0] * degree  # 前degree个节点为0
+                    knots.extend(unique_knots[1:-1])  # 中间节点，排除首尾
+                    knots.extend([1.0] * degree)  # 后degree个节点为1
+                    print(f"[Python DEBUG] Generated uniform knots for periodic NURBS circle: {knots}")
+                    
+                    # 替换控制点、权重、节点向量和阶数
+                    spline_info['control_points'] = control_points
+                    spline_info['weights'] = weights
+                    spline_info['knots_u'] = knots
+                    spline_info['order'] = 4
+                    spline_info['use_cyclic_u'] = True  # 恢复为周期性曲线
+                    
+                    print(f"[Python DEBUG] Generated rational NURBS circle with {len(control_points)}control points")
+                    print(f"[Python DEBUG] World center: ({center_x}, {center_y}, {center_z}), radius: {radius}")
+                    print(f"[Python DEBUG] Weights: {weights}")
+                    print(f"[Python DEBUG] Knots: {knots}")
+                    print(f"[Python DEBUG] use_cyclic_u set to: {spline_info['use_cyclic_u']}")
+                    # 添加圆心和半径信息，以便C++代码可以创建解析圆
+                    spline_info['circle_center'] = [center_x, center_y, center_z]
+                    spline_info['circle_radius'] = radius
+            
+                print(f"[Python DEBUG] NURBS weights: {weights}")
+                print(f"[Python DEBUG] NURBS order_u: {spline.order_u}")
+                # 调试：打印spline的所有属性
+                print(f"[Python DEBUG] Spline attributes: {[attr for attr in dir(spline) if not attr.startswith('__')]}")
+                # 检查knots相关属性，仅当spline_info中还没有knots_u时
+                if 'knots_u' not in spline_info:
+                    for attr in ['knots_u', 'knots', 'knots_u', 'knot_vector']:
+                        if hasattr(spline, attr):
+                            val = getattr(spline, attr)
+                            print(f"[Python DEBUG] Found attribute {attr}: {val}")
+                            if val:
+                                spline_info['knots_u'] = [float(k) for k in val]
+                                print(f"[Python DEBUG] NURBS knots_u: {spline_info['knots_u']}")
+                                break
+                    else:
+                        print(f"[Python DEBUG] No knots attribute found, using default knots")
+                        # 尝试计算默认节点向量
+                        # 控制点数量 = n+1, 阶数 = order, 节点数量 = n+order+1
+                        n = len(control_points) - 1
+                        order = spline.order_u
+                        num_knots = n + order + 1
+                        # 准均匀节点向量：两端重复order次，中间均匀分布
+                        knots = []
+                        for i in range(num_knots):
+                            if i < order:
+                                knots.append(0.0)
+                            elif i > n:
+                                knots.append(float(n - order + 2))
+                            else:
+                                knots.append(float(i - order + 1))
+                        spline_info['knots_u'] = knots
+                        print(f"[Python DEBUG] Computed default knots: {knots}")
+                else:
+                    print(f"[Python DEBUG] Using pre-set knots_u from special handling")
+            
+            splines_data.append(spline_info)
+        
+        if not splines_data:
+            print(f"[Python] Skipping curve object '{obj.name}': no valid splines.")
+            return None
+        
+        print(f"[Python] Prepared curve '{obj.name}': {len(splines_data)} splines")
+        
+        return {
+            'name': obj.name,
+            'type': 'curve',
+            'splines': splines_data,
+            'dimensions': curve.dimensions,
+            'resolution_u': curve.resolution_u
         }
 
 # ====================== 菜单函数 ======================

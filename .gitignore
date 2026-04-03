@@ -23,3 +23,4 @@ vcpkg_installed/
 build_*.txt
 *.crash.*
 x64/
+*.code-workspace

@@ -68,6 +68,9 @@ cd vcpkg
 .\vcpkg install opencascade:x64-windows@7.9.3
 ```
 
+Remove-Item -Recurse -Force F:\git\vcpkg\buildtrees\opencascade\x64-windows-dbg\win64\vc14\bind\TKGeomAlgo.dll -ErrorAction SilentlyContinue
+Remove-Item -Recurse -Force F:\git\vcpkg\buildtrees\opencascade\x64-windows-dbg\ -ErrorAction SilentlyContinue
+
 ### Build blender2step with Visual Studio Community 2022
 
 1. 

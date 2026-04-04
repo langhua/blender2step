@@ -89,6 +89,7 @@
 #include <Geom_BSplineCurve.hxx>
 #include <Geom_Circle.hxx>
 #include <GC_MakeCircle.hxx>
+#include <GeomConvert.hxx>  // For GeomConvert::PeriodicCurve
 // BRep_Tool already included above
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepBuilderAPI_NurbsConvert.hxx>

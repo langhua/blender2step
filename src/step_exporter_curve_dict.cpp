@@ -66,6 +66,18 @@ TopoDS_Shape create_shape_from_curve_dict(PyObject* obj_dict, double scale) {
             spline_info["use_cyclic_u"] = cyclic_obj;
         }
         
+        // 获取圆心信息（用于有理NURBS圆的解析表示）
+        PyObject* circle_center_obj = PyDict_GetItemString(spline_dict, "circle_center");
+        if (circle_center_obj) {
+            spline_info["circle_center"] = circle_center_obj;
+        }
+        
+        // 获取半径信息（用于有理NURBS圆的解析表示）
+        PyObject* circle_radius_obj = PyDict_GetItemString(spline_dict, "circle_radius");
+        if (circle_radius_obj) {
+            spline_info["circle_radius"] = circle_radius_obj;
+        }
+        
         splines_data.push_back(spline_info);
         std::cout << "[STEP Exporter]   Added spline " << i << " data" << std::endl;
     }

@@ -28,41 +28,74 @@ bool add_curve_to_compound(const Handle(Geom_Curve)& curve, const std::string& s
         Handle(Geom_BSplineCurve) bspline_curve = Handle(Geom_BSplineCurve)::DownCast(curve);
         if (!bspline_curve.IsNull()) {
             std::cout << "[STEP Exporter]   Curve created - IsRational: " << (bspline_curve->IsRational() ? "YES" : "NO") 
-                      << ", IsPeriodic: " << (bspline_curve->IsPeriodic() ? "YES" : "NO") 
+                      << ", IsPeriodic: " << (bspline_curve->IsPeriodic() ? "YES" : "NO")
                       << ", Degree: " << bspline_curve->Degree()
                       << ", NbPoles: " << bspline_curve->NbPoles()
                       << ", NbKnots: " << bspline_curve->NbKnots() << std::endl;
         }
         // 将几何曲线转换为边
-        // 如果曲线需要闭合，检查是否为周期性曲线
-        if (close_curve) {
-            if (curve->IsPeriodic()) {
-                std::cout << "[STEP Exporter]   Curve is already periodic" << std::endl;
-            } else {
-                // 使用bspline_curve检查是否为有理曲线
-                if (!bspline_curve.IsNull()) {
-                    if (!bspline_curve->IsRational()) {
-                        std::cerr << "[STEP Exporter]   WARNING: Non-rational curve should be periodic but is not. Check knot vector and multiplicities." << std::endl;
-                        std::cout << "[STEP Exporter]   B-spline curve parameters: degree=" << bspline_curve->Degree()
-                                  << ", poles=" << bspline_curve->NbPoles()
-                                  << ", knots=" << bspline_curve->NbKnots()
-                                  << ", periodic=" << bspline_curve->IsPeriodic() << std::endl;
-                    } else {
-                        std::cout << "[STEP Exporter]   Rational closed curve (non-periodic) - this is expected" << std::endl;
+        // 
+        // 策略：对于闭合曲线，尝试多种参数范围以确保最佳效果
+        //
+        // 背景：
+        //   非周期性 B 样条的 FirstParameter()/LastParameter() 返回内部节点范围，
+        //   例如 knots=[0,0,0,0.125,...,0.875,1,1,1], degree=3 -> 返回 [0.125, 0.875]
+        //   这只覆盖 ~75% 的参数域，导致圆弧不完整
+        //
+        // 两级回退策略：
+        //   1. 首先尝试完整节点范围 [Knot(1), Knot(NbKnots)] 以获得完整的曲线
+        //   2. 如果失败（参数超出有效域），回退到 FirstParam/LastParam
+        
+        BRepBuilderAPI_MakeEdge edgeMaker;
+        bool edgeCreated = false;
+        
+        if (close_curve && !curve.IsNull()) {
+            Handle(Geom_BSplineCurve) bsp = Handle(Geom_BSplineCurve)::DownCast(curve);
+            
+            if (!bsp.IsNull() && !bsp->IsPeriodic()) {
+                double fullU1 = bsp->Knot(1);               // 第一个节点（通常是0）
+                double fullU2 = bsp->Knot(bsp->NbKnots());  // 最后一个节点（通常是1）
+                double safeU1 = bsp->FirstParameter();       // 安全下界
+                double safeU2 = bsp->LastParameter();        // 安全上界
+                
+                std::cout << "[STEP Exporter]   Attempting FULL KNOT RANGE [" << fullU1 << ", " << fullU2 
+                          << "] for closed curve (safe range: [" << safeU1 << ", " << safeU2 << "])" << std::endl;
+                
+                // 第一级：尝试完整节点范围
+                edgeMaker.Init(curve, fullU1, fullU2);
+                
+                if (!edgeMaker.IsDone()) {
+                    std::cerr << "[STEP Exporter]   WARNING: Full knot range failed, falling back to safe range [" 
+                              << safeU1 << ", " << safeU2 << "]" << std::endl;
+                    // 第二级：回退到安全的参数范围
+                    edgeMaker.Init(curve, safeU1, safeU2);
+                    
+                    if (!edgeMaker.IsDone()) {
+                        std::cerr << "[STEP Exporter]   ERROR: Safe range also failed, trying default Init()" << std::endl;
+                        edgeMaker.Init(curve);
                     }
-                } else {
-                    // 如果bspline_curve为空，输出通用警告
-                    std::cerr << "[STEP Exporter]   WARNING: Closed curve is not periodic and cannot determine if rational" << std::endl;
                 }
+            } else {
+                // 周期性曲线或其他类型：使用默认范围
+                double u1 = curve->FirstParameter();
+                double u2 = curve->LastParameter();
+                std::cout << "[STEP Exporter]   Creating edge with default range [" << u1 << ", " << u2 
+                          << "] for closed " << spline_type << " curve" << std::endl;
+                edgeMaker.Init(curve, u1, u2);
             }
+        } else {
+            // 非闭合曲线：使用默认范围
+            edgeMaker.Init(curve);
         }
-        BRepBuilderAPI_MakeEdge edgeMaker(curve);
+        
         if (edgeMaker.IsDone()) {
             TopoDS_Edge edge = edgeMaker.Edge();
             builder.Add(compound, edge);
             valid_edge_count++;
             std::cout << "[STEP Exporter]   Created edge from " << spline_type << " curve" << std::endl;
             return true;
+        } else {
+            std::cerr << "[STEP Exporter]   ERROR: Failed to create edge for " << spline_type << " curve" << std::endl;
         }
     }
     return false;

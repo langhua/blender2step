@@ -336,21 +336,22 @@ bool process_nurbs_spline(const std::map<std::string, PyObject*>& spline_info, s
                     std::cout << "[STEP Exporter]   Periodic rational NURBS curve created successfully" << std::endl;
                 } catch (const Standard_Failure& e) {
                     std::cerr << "[STEP Exporter]   WARNING: Periodic rational constructor failed: " << e.GetMessageString() << std::endl;
-                    // 回退到非周期性有理曲线，然后尝试SetPeriodic()
+                    // 回退到非周期性有理曲线
                     std::cout << "[STEP Exporter]   Falling back to non-periodic rational curve" << std::endl;
                     curve = new Geom_BSplineCurve(poles, weights, knots, multiplicities, degree, Standard_False, Standard_True);
                     
-                    // 尝试将非周期性曲线设置为周期性
                     Handle(Geom_BSplineCurve) bspline_curve = Handle(Geom_BSplineCurve)::DownCast(curve);
-                    if (!bspline_curve.IsNull() && !bspline_curve->IsPeriodic()) {
-                        std::cout << "[STEP Exporter]   Attempting to make rational curve periodic using SetPeriodic()" << std::endl;
-                        try {
-                            bspline_curve->SetPeriodic();
-                            std::cout << "[STEP Exporter]   Rational curve made periodic successfully" << std::endl;
-                        } catch (const Standard_Failure& e2) {
-                            std::cerr << "[STEP Exporter]   WARNING: SetPeriodic() also failed: " << e2.GetMessageString() << std::endl;
-                            std::cout << "[STEP Exporter]   Keeping rational curve as non-periodic (closed but not periodic)" << std::endl;
-                        }
+                    if (!bspline_curve.IsNull()) {
+                        int originalPoles = bspline_curve->NbPoles();
+                        std::cout << "[STEP Exporter]   Created non-periodic rational curve with " 
+                                  << originalPoles << " poles, param range [" 
+                                  << bspline_curve->FirstParameter() << ", " << bspline_curve->LastParameter() << "]" << std::endl;
+                        
+                        // 不再尝试 SetPeriodic() 或 GeomConvert 转换
+                        // 因为它们会减少控制点数量破坏精确几何（9个控制点的圆变成6个）
+                        // 非周期性曲线将由 add_curve_to_compound 处理（使用两级回退参数范围）
+                        std::cout << "[STEP Exporter]   INFO: Preserving non-periodic curve with " 
+                                  << originalPoles << " poles (exact geometry)" << std::endl;
                     }
                 }
             } else {

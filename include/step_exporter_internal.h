@@ -88,6 +88,13 @@ int transfer_shapes_to_step(STEPControl_Writer& writer,
                              int advanced_brep,
                              int enable_logging);
 
+// Cylinder surface reconstruction for mesh-based objects
+TopoDS_Shape create_solid_from_mesh_with_cylinders(
+    const std::vector<std::vector<double>>& vertices,
+    const std::vector<std::vector<int>>& faces,
+    double tolerance = 1.0e-6,
+    bool make_solid = true);
+
 // Export result logging
 void log_export_result(const std::chrono::steady_clock::time_point& start_time, bool success, PyObject* progress_callback);
 

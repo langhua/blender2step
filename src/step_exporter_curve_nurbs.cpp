@@ -13,6 +13,8 @@ bool process_nurbs_spline(const std::map<std::string, PyObject*>& spline_info, s
     bool is_circle = false;
     gp_Pnt circle_center;
     double circle_radius = 0.0;
+    
+    // 方法1: 从spline_info获取圆心和半径
     auto center_it = spline_info.find("circle_center");
     auto radius_it = spline_info.find("circle_radius");
     if (center_it != spline_info.end() && radius_it != spline_info.end() && 
@@ -26,6 +28,52 @@ bool process_nurbs_spline(const std::map<std::string, PyObject*>& spline_info, s
             circle_radius = PyFloat_AsDouble(radius_it->second);
             is_circle = true;
             std::cout << "[STEP Exporter]   Detected rational circle: center=(" 
+                      << cx << ", " << cy << ", " << cz << "), radius=" << circle_radius << std::endl;
+        }
+    }
+    
+    // 方法2: 检测Blender NURBS圆（9个控制点，特定权重模式）
+    if (!is_circle && control_points.size() == 9) {
+        // 检查权重模式：1, 0.7071, 1, 0.7071, 1, 0.7071, 1, 0.7071, 1
+        bool has_circle_weights = true;
+        std::vector<double> expected_weights = {1.0, 0.7071, 1.0, 0.7071, 1.0, 0.7071, 1.0, 0.7071, 1.0};
+        auto weights_it = spline_info.find("weights");
+        if (weights_it != spline_info.end() && PyList_Check(weights_it->second)) {
+            PyObject* weights_list = weights_it->second;
+            Py_ssize_t num_weights = PyList_Size(weights_list);
+            if (num_weights == 9) {
+                for (Py_ssize_t i = 0; i < 9; i++) {
+                    double weight_val = PyFloat_AsDouble(PyList_GetItem(weights_list, i));
+                    if (fabs(weight_val - expected_weights[i]) > 0.0001) {
+                        has_circle_weights = false;
+                        break;
+                    }
+                }
+            } else {
+                has_circle_weights = false;
+            }
+        } else {
+            has_circle_weights = false;
+        }
+        
+        if (has_circle_weights) {
+            // Blender NURBS圆：控制点0, 2, 4, 6是象限点，控制点1, 3, 5, 7是中间点
+            // 圆心是控制点0和控制点4的中点
+            gp_Pnt p0 = control_points[0];
+            gp_Pnt p4 = control_points[4];
+            double cx = (p0.X() + p4.X()) / 2.0;
+            double cy = (p0.Y() + p4.Y()) / 2.0;
+            double cz = (p0.Z() + p4.Z()) / 2.0;
+            circle_center = gp_Pnt(cx, cy, cz);
+            
+            // 半径是从圆心到控制点0的距离
+            double dx = p0.X() - cx;
+            double dy = p0.Y() - cy;
+            double dz = p0.Z() - cz;
+            circle_radius = sqrt(dx*dx + dy*dy + dz*dz);
+            
+            is_circle = true;
+            std::cout << "[STEP Exporter]   Detected Blender NURBS circle: center=(" 
                       << cx << ", " << cy << ", " << cz << "), radius=" << circle_radius << std::endl;
         }
     }
@@ -161,24 +209,45 @@ bool process_nurbs_spline(const std::map<std::string, PyObject*>& spline_info, s
             for (int mult : knot_mults) total_knots += mult;
             if (total_knots != num_knots) {
                 std::cerr << "[STEP Exporter]   Warning: Knot count mismatch, using default knots" << std::endl;
-                // 使用默认准均匀节点向量
+                // 根据闭合状态生成适当的默认节点向量
                 int n = static_cast<int>(control_points.size()) - 1;
-                // 计算准均匀节点向量
-                for (int k = 1; k <= num_knots; k++) {
-                    if (k <= degree) {
-                        knots.SetValue(k, 0.0);
-                    } else if (k > num_knots - degree) {
-                        knots.SetValue(k, static_cast<double>(n - degree + 1));
-                    } else {
-                        knots.SetValue(k, static_cast<double>(k - degree - 1));
+                
+                if (close_curve) {
+                    // 闭合周期性NURBS：均匀节点向量，首尾节点重数为degree，中间节点重数为1
+                    std::cout << "[STEP Exporter]   Generating uniform knots for closed periodic NURBS" << std::endl;
+                    // 对于周期性曲线，节点数量 = control_points.size() + order
+                    // 首尾节点重数应为degree，中间节点重数为1
+                    knots.Resize(1, num_knots, false);
+                    multiplicities.Resize(1, num_knots, false);
+                    for (int k = 1; k <= num_knots; k++) {
+                        knots.SetValue(k, static_cast<double>(k - 1)); // 0, 1, 2, ..., num_knots-1
+                        // 设置重数：首尾为degree，中间为1
+                        if (k == 1 || k == num_knots) {
+                            multiplicities.SetValue(k, degree);
+                        } else {
+                            multiplicities.SetValue(k, 1);
+                        }
                     }
-                }
-                // 设置多重性：两端为order，内部为1
-                for (int m = 1; m <= multiplicities.Length(); m++) {
-                    if (m == 1 || m == multiplicities.Length()) {
-                        multiplicities.SetValue(m, order);
-                    } else {
-                        multiplicities.SetValue(m, 1);
+                    std::cout << "[STEP Exporter]   Periodic knots: " << num_knots << " knots, end multiplicities = " << degree << std::endl;
+                } else {
+                    // 开放NURBS：准均匀节点向量，两端重数为order，中间重数为1
+                    std::cout << "[STEP Exporter]   Generating uniform knots for open NURBS" << std::endl;
+                    // 计算唯一节点和重数
+                    int num_unique_knots = n - degree + 2; // 0 到 n-degree+1
+                    double last_knot = static_cast<double>(n - degree + 1);
+                    // 调整数组大小以存储唯一节点
+                    knots.Resize(1, num_unique_knots, false);
+                    multiplicities.Resize(1, num_unique_knots, false);
+                    // 设置节点值
+                    for (int i = 1; i <= num_unique_knots; i++) {
+                        double knot_val = static_cast<double>(i - 1); // 0, 1, 2, ..., last_knot
+                        knots.SetValue(i, knot_val);
+                        // 设置重数：两端为order，中间为1
+                        if (i == 1 || i == num_unique_knots) {
+                            multiplicities.SetValue(i, order);
+                        } else {
+                            multiplicities.SetValue(i, 1);
+                        }
                     }
                 }
             } else {
@@ -198,6 +267,60 @@ bool process_nurbs_spline(const std::map<std::string, PyObject*>& spline_info, s
                     for (size_t i = 0; i < knot_values.size(); i++) {
                         knots.SetValue(static_cast<Standard_Integer>(i + 1), knot_values[i]);
                         multiplicities.SetValue(static_cast<Standard_Integer>(i + 1), 1);
+                    }
+                    
+
+                }
+                
+                // 对于闭合曲线，确保节点向量适合周期性曲线
+                if (close_curve) {
+                    std::cout << "[STEP Exporter]   Checking knot vector for periodic curve..." << std::endl;
+                    
+                    // 检查节点向量是否适合周期性曲线
+                    bool valid_periodic_knots = true;
+                    
+                    // 1. 检查首尾节点多重性是否为degree
+                    if (multiplicities.Length() >= 2) {
+                        int first_mult = multiplicities.Value(1);
+                        int last_mult = multiplicities.Value(multiplicities.Length());
+                        if (first_mult != degree || last_mult != degree) {
+                            std::cout << "[STEP Exporter]   End multiplicities not equal to degree: first=" 
+                                      << first_mult << ", last=" << last_mult << ", expected=" << degree << std::endl;
+                            valid_periodic_knots = false;
+                        }
+                    }
+                    
+                    // 2. 检查多重性总和是否正确
+                    int sum_mults = 0;
+                    for (int i = 1; i <= multiplicities.Length(); i++) {
+                        sum_mults += multiplicities.Value(i);
+                    }
+                    int expected_sum = poles.Length() + order;  // 周期性曲线公式
+                    if (sum_mults != expected_sum) {
+                        std::cout << "[STEP Exporter]   Sum of multiplicities mismatch: " << sum_mults 
+                                  << " != " << expected_sum << std::endl;
+                        valid_periodic_knots = false;
+                    }
+                    
+                    // 如果节点向量不适合周期性曲线，使用默认周期性节点向量
+                    if (!valid_periodic_knots) {
+                        std::cout << "[STEP Exporter]   Knot vector not suitable for periodic curve, using default periodic knots" << std::endl;
+                        // 生成默认周期性节点向量
+                        knots.Resize(1, num_knots, false);
+                        multiplicities.Resize(1, num_knots, false);
+                        for (int k = 1; k <= num_knots; k++) {
+                            knots.SetValue(k, static_cast<double>(k - 1)); // 0, 1, 2, ..., num_knots-1
+                            multiplicities.SetValue(k, 1);
+                        }
+                        // 设置首尾重数为degree
+                        if (num_knots >= 1) {
+                            multiplicities.SetValue(1, degree);
+                            multiplicities.SetValue(num_knots, degree);
+                        }
+                        std::cout << "[STEP Exporter]   Default periodic knots generated: " << num_knots 
+                                  << " knots, end multiplicities = " << degree << std::endl;
+                    } else {
+                        std::cout << "[STEP Exporter]   Knot vector is suitable for periodic curve" << std::endl;
                     }
                 }
             }

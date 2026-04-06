@@ -42,45 +42,50 @@ try:
     if script_dir not in sys.path:
         sys.path.insert(0, script_dir)
     
-    # 尝试导入 _step_exporter 模块
-    import _step_exporter
-    step_exporter = _step_exporter
+    # 添加 lib 目录到系统 PATH 环境变量，确保 Windows 能找到依赖的 DLL
+    lib_path = os.path.join(script_dir, "lib")
+    if os.path.exists(lib_path):
+        os.environ["PATH"] = lib_path + ";" + os.environ.get("PATH", "")
+        print(f"[STEP Exporter] Added lib path to system PATH: {lib_path}")
     
-    # 验证模块功能
-    if hasattr(step_exporter, 'get_version'):
-        module_version = step_exporter.get_version()
-        print(f"[STEP Exporter] [OK] C++ extension module loaded successfully (direct import)")
-        print(f"[STEP Exporter] Module version: {module_version}")
-        CPP_MODULE_LOADED = True
-    else:
-        MODULE_LOAD_ERROR = "C++ module missing required functions"
-        print(f"[STEP Exporter] [ERROR] C++ module loaded but missing functions")
-        
-except ImportError as e:
-    MODULE_LOAD_ERROR = f"ImportError: {str(e)}"
-    print(f"[STEP Exporter] [ERROR] Failed to import C++ module directly: {e}")
-    
-    # 尝试从 lib 子目录导入
+    # 优先从 lib 子目录导入
     try:
-        lib_path = os.path.join(script_dir, "lib")
         if os.path.exists(lib_path) and lib_path not in sys.path:
             sys.path.insert(0, lib_path)
-            import _step_exporter as step_exporter_lib
-            step_exporter = step_exporter_lib
+        import _step_exporter as step_exporter_lib
+        step_exporter = step_exporter_lib
+        
+        if hasattr(step_exporter, 'get_version'):
+            module_version = step_exporter.get_version()
+            print(f"[STEP Exporter] [OK] C++ extension module loaded successfully (from lib)")
+            print(f"[STEP Exporter] Module version: {module_version}")
+            CPP_MODULE_LOADED = True
+        else:
+            MODULE_LOAD_ERROR = "C++ module from lib missing required functions"
+            print(f"[STEP Exporter] ✗ C++ module from lib missing functions")
             
-            if hasattr(step_exporter, 'get_version'):
-                module_version = step_exporter.get_version()
-                print(f"[STEP Exporter] [OK] C++ extension module loaded successfully (from lib)")
-                print(f"[STEP Exporter] Module version: {module_version}")
-                CPP_MODULE_LOADED = True
-            else:
-                MODULE_LOAD_ERROR = "C++ module from lib missing required functions"
-                print(f"[STEP Exporter] ✗ C++ module from lib missing functions")
-                
     except ImportError as e2:
         MODULE_LOAD_ERROR = f"ImportError from lib: {str(e2)}"
         print(f"[STEP Exporter] ✗ Failed to import C++ module from lib: {e2}")
         
+        # 尝试直接导入作为后备
+        try:
+            import _step_exporter
+            step_exporter = _step_exporter
+            
+            if hasattr(step_exporter, 'get_version'):
+                module_version = step_exporter.get_version()
+                print(f"[STEP Exporter] [OK] C++ extension module loaded successfully (direct import)")
+                print(f"[STEP Exporter] Module version: {module_version}")
+                CPP_MODULE_LOADED = True
+            else:
+                MODULE_LOAD_ERROR = "C++ module missing required functions"
+                print(f"[STEP Exporter] [ERROR] C++ module loaded but missing functions")
+                
+        except ImportError as e:
+            MODULE_LOAD_ERROR = f"ImportError: {str(e)}"
+            print(f"[STEP Exporter] [ERROR] Failed to import C++ module directly: {e}")
+            
 except Exception as e:
     MODULE_LOAD_ERROR = f"Unexpected error: {str(e)}"
     print(f"[STEP Exporter] ✗ Unexpected error loading C++ module: {e}")
@@ -180,11 +185,11 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
         if CPP_MODULE_LOADED and step_exporter:
             try:
                 version = step_exporter.get_version()
-                box.label(text=f"✓ Module v{version} loaded", icon='CHECKMARK')
+                box.label(text=f"C++ module v{version} loaded", icon='CHECKMARK')
             except:
-                box.label(text="✓ C++ module loaded", icon='CHECKMARK')
+                box.label(text="C++ module loaded", icon='CHECKMARK')
         else:
-            box.label(text="✗ C++ extension not loaded", icon='ERROR')
+            box.label(text="C++ extension not loaded", icon='ERROR')
             if MODULE_LOAD_ERROR:
                 box.label(text=f"Error: {MODULE_LOAD_ERROR[:50]}...", icon='ERROR')
             box.label(text="Check system console for details", icon='ERROR')
@@ -486,9 +491,19 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
             spline_type = spline.type  # 'POLY', 'BEZIER', 'NURBS'
             print(f"[Python DEBUG] Processing spline {spline_idx}: type={spline_type}")
             
+            # 确保order至少为2（NURBS的order_u可能返回0）
+            # 对于NURBS，order必须 >= 4（degree >= 3）以匹配C++端期望
+            order_u = getattr(spline, 'order_u', 4)
+            if spline_type == 'NURBS' and order_u < 4:
+                order_u = 4  # NURBS order至少为4（degree 3）
+                print(f"[Python DEBUG] Fixed invalid order for {spline_type}, using order={order_u}")
+            elif order_u < 3:  # 其他曲线类型至少为3
+                order_u = 4
+                print(f"[Python DEBUG] Fixed invalid order for {spline_type}, using order={order_u}")
+            
             spline_info = {
                 'type': spline_type,
-                'order': spline.order_u if hasattr(spline, 'order_u') else 3,
+                'order': order_u,
                 'resolution_u': spline.resolution_u,
                 'use_cyclic_u': spline.use_cyclic_u,
                 'use_endpoint_u': spline.use_endpoint_u,
@@ -529,25 +544,39 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
                                 print(f"[Python DEBUG] NURBS knots from {attr}: {spline_info['knots_u']}")
                                 break
                     else:
-                        print(f"[Python DEBUG] No knots attribute found for NURBS, using default knots")
-                        # 计算默认准均匀节点向量
-                        n = len(control_points) - 1
-                        order = spline.order_u
-                        num_knots = n + order + 1
-                        knots = []
-                        for i in range(num_knots):
-                            if i < order:
-                                knots.append(0.0)
-                            elif i > n:
-                                knots.append(float(n - order + 2))
-                            else:
-                                knots.append(float(i - order + 1))
-                        # 归一化到[0,1]
-                        if knots[-1] > 0:
-                            max_knot = knots[-1]
-                            knots = [k / max_knot for k in knots]
+                        print(f"[Python DEBUG] No knots attribute found for NURBS, using periodic knots for closed NURBS")
+                        # 修正节点向量计算以匹配C++端期望
+                        # C++端期望：num_knots = control_points.size() + order
+                        num_control_points = len(control_points)
+                        # 使用已修正的order（确保至少为4）
+                        order = spline_info['order']
+                        if spline_type == 'NURBS' and order < 4:
+                            order = 4
+                            print(f"[Python DEBUG] Adjusted order to {order} for NURBS circle")
+                        degree = order - 1
+                        num_knots = num_control_points + order  # 与C++端一致
+                        print(f"[Python DEBUG] NURBS circle: control_points={num_control_points}, order={order}, num_knots={num_knots}")
+                        
+                        if spline.use_cyclic_u:
+                            # 周期性NURBS：均匀节点向量 [0, 1, 2, ..., num_knots-1]
+                            knots = [float(i) for i in range(num_knots)]
+                            print(f"[Python DEBUG] Computed PERIODIC knots for closed NURBS: {knots} (count={num_knots})")
+                        else:
+                            # 开放NURBS：准均匀节点向量
+                            # 节点数量 = num_control_points + order
+                            # 前 order 个节点为 0，后 order 个节点为 n-degree+1，中间均匀分布
+                            n = num_control_points - 1
+                            knots = []
+                            for i in range(num_knots):
+                                if i < order:
+                                    knots.append(0.0)
+                                elif i >= num_knots - order:
+                                    knots.append(float(n - degree + 1))
+                                else:
+                                    knots.append(float(i - order + 1))
+                            print(f"[Python DEBUG] Computed UNIFORM knots for open NURBS: {knots} (count={num_knots})")
+                        
                         spline_info['knots_u'] = knots
-                        print(f"[Python DEBUG] Computed default knots: {knots}")
             
             elif spline_type == 'BEZIER':
                 # 将贝塞尔曲线转换为NURBS曲线，正确传递手柄信息
@@ -748,21 +777,30 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
                     else:
                         print(f"[Python DEBUG] No knots attribute found, using default knots")
                         # 尝试计算默认节点向量
-                        # 控制点数量 = n+1, 阶数 = order, 节点数量 = n+order+1
+                        # 对于闭合（周期性）NURBS，使用均匀节点向量
                         n = len(control_points) - 1
-                        order = spline.order_u
-                        num_knots = n + order + 1
-                        # 准均匀节点向量：两端重复order次，中间均匀分布
-                        knots = []
-                        for i in range(num_knots):
-                            if i < order:
-                                knots.append(0.0)
-                            elif i > n:
-                                knots.append(float(n - order + 2))
-                            else:
-                                knots.append(float(i - order + 1))
+                        # NURBS order 必须 ≥ 3 (degree ≥ 2)
+                        order = max(3, getattr(spline, 'order_u', 4))
+                        
+                        if spline.use_cyclic_u:
+                            # 周期性NURBS：均匀节点，长度 = n + order
+                            # 例如：9个控制点，order=4 -> 节点数=13 (0到12)
+                            num_knots = n + order
+                            knots = [float(i) for i in range(num_knots)]
+                        else:
+                            # 开放NURBS：准均匀节点，两端重复
+                            num_knots = n + order + 1
+                            knots = []
+                            for i in range(num_knots):
+                                if i < order:
+                                    knots.append(0.0)
+                                elif i > n:
+                                    knots.append(float(n - order + 2))
+                                else:
+                                    knots.append(float(i - order + 1))
+                        
                         spline_info['knots_u'] = knots
-                        print(f"[Python DEBUG] Computed default knots: {knots}")
+                        print(f"[Python DEBUG] Computed {'periodic' if spline.use_cyclic_u else 'uniform'} knots: {knots}")
                 else:
                     print(f"[Python DEBUG] Using pre-set knots_u from special handling")
             
@@ -772,14 +810,22 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
             print(f"[Python] Skipping curve object '{obj.name}': no valid splines.")
             return None
         
-        print(f"[Python] Prepared curve '{obj.name}': {len(splines_data)} splines")
+        print(f"[Python] Prepared curve '{obj.name}': {len(splines_data)} splines, extrude={curve.extrude}, bevel={curve.bevel_depth}")
         
         return {
             'name': obj.name,
             'type': 'curve',
             'splines': splines_data,
             'dimensions': curve.dimensions,
-            'resolution_u': curve.resolution_u
+            'resolution_u': curve.resolution_u,
+            # 挤出信息（用于C++端构建3D实体）
+            # 注意：挤出深度和倒角深度也需要应用缩放，以保持与控制点坐标的一致性
+            'extrude': float(curve.extrude) * scale,
+            'bevel_depth': float(curve.bevel_depth) * scale,
+            'bevel_resolution': int(curve.bevel_resolution),
+            'use_fill_caps': bool(curve.use_fill_caps),
+            # 变换矩阵
+            'matrix_world': [list(row) for row in eval_obj.matrix_world],
         }
 
 # ====================== 菜单函数 ======================

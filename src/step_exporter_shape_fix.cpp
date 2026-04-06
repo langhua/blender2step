@@ -63,7 +63,7 @@ TopoDS_Shape fix_shape_enhanced(const TopoDS_Shape& shape, double tolerance) {
                 }
                 // 方法2：如果直接转换失败，尝试加厚（适用于非闭合壳或微小间隙）
                 std::cout << "[STEP Exporter]   Direct solid conversion failed, trying thickening..." << std::endl;
-                double thicknesses[] = {0.001, -0.001, 0.01, -0.01, 0.1, -0.1};
+                double thicknesses[] = {1.0, -1.0, 2.0, -2.0, 5.0, -5.0};
                 for (double thickness : thicknesses) {
                     try {
                         BRepOffsetAPI_MakeThickSolid thickSolidMaker;
@@ -90,7 +90,7 @@ TopoDS_Shape fix_shape_enhanced(const TopoDS_Shape& shape, double tolerance) {
                 
                 // 方法3：使用BRepOffsetAPI_MakeOffsetShape进行微小偏移（适用于非闭合壳）
                 std::cout << "[STEP Exporter]   Trying offset shape..." << std::endl;
-                double offsets[] = {0.001, -0.001, 0.01, -0.01};
+                double offsets[] = {1.0, -1.0, 2.0, -2.0};
                 for (double offset : offsets) {
                     try {
                         BRepOffsetAPI_MakeOffsetShape offsetMaker;

@@ -63,6 +63,8 @@ add_library(step_exporter SHARED
     src/step_exporter_module.cpp
     # STEP converter
     src/step_converter.cpp
+    # Cylinder surface reconstruction
+    src/step_exporter_cylinder_reconstruct.cpp
 )
 
 # 设置输出名称

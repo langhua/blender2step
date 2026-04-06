@@ -160,7 +160,7 @@ static bool convert_shell_to_solid(TopoDS_Shape& shape_to_use, size_t shape_inde
                     }
                 }
 
-                double thicknesses[] = {0.2, -0.2, 0.5, -0.5, 1.0, -1.0};
+                double thicknesses[] = {1.0, -1.0, 2.0, -2.0, 5.0, -5.0};
                 bool thick_success = false;
                 for (int thick_idx = 0; thick_idx < 6 && !thick_success; thick_idx++) {
                     try {
@@ -195,12 +195,12 @@ static bool convert_shell_to_solid(TopoDS_Shape& shape_to_use, size_t shape_inde
             if (!extrusion_success) {
                 std::cout << "[STEP Exporter]   Trying extrusion along different directions..." << std::endl;
                 gp_Vec directions[] = {
-                    gp_Vec(0.0, 0.0, 0.2),
-                    gp_Vec(0.2, 0.0, 0.0),
-                    gp_Vec(0.0, 0.2, 0.0),
-                    gp_Vec(0.0, 0.0, -0.2),
-                    gp_Vec(-0.2, 0.0, 0.0),
-                    gp_Vec(0.0, -0.2, 0.0)
+                    gp_Vec(0.0, 0.0, 5.0),
+                    gp_Vec(5.0, 0.0, 0.0),
+                    gp_Vec(0.0, 5.0, 0.0),
+                    gp_Vec(0.0, 0.0, -5.0),
+                    gp_Vec(-5.0, 0.0, 0.0),
+                    gp_Vec(0.0, -5.0, 0.0)
                 };
 
                 for (int dir_idx = 0; dir_idx < 6 && !extrusion_success; dir_idx++) {
@@ -372,7 +372,7 @@ static void process_compound_shape(TopoDS_Shape& finalShape, STEPControl_StepMod
 
                         // Try thickening
                         if (!shell_converted) {
-                            double thicknesses[] = {0.2, -0.2, 0.5, -0.5};
+                            double thicknesses[] = {1.0, -1.0, 2.0, -2.0};
                             bool thick_success = false;
                             for (int thick_idx = 0; thick_idx < 4 && !thick_success; thick_idx++) {
                                 try {
@@ -389,7 +389,9 @@ static void process_compound_shape(TopoDS_Shape& finalShape, STEPControl_StepMod
                                             }
                                         }
                                     }
-                                } catch (Standard_Failure& e) {}
+                                } catch (Standard_Failure& e) {
+                                    (void)e; // 防止未引用警告
+                                }
                             }
                         }
 
@@ -398,7 +400,7 @@ static void process_compound_shape(TopoDS_Shape& finalShape, STEPControl_StepMod
                             GProp_GProps volProps;
                             BRepGProp::VolumeProperties(shell, volProps);
                             if (fabs(volProps.Mass()) < 1e-12) {
-                                gp_Vec directions[] = {gp_Vec(0.0, 0.0, 0.2), gp_Vec(0.2, 0.0, 0.0), gp_Vec(0.0, 0.2, 0.0)};
+                                gp_Vec directions[] = {gp_Vec(0.0, 0.0, 5.0), gp_Vec(5.0, 0.0, 0.0), gp_Vec(0.0, 5.0, 0.0)};
                                 for (int dir_idx = 0; dir_idx < 3; dir_idx++) {
                                     BRepPrimAPI_MakePrism prismMaker(shell, directions[dir_idx]);
                                     if (prismMaker.IsDone()) {
@@ -473,7 +475,7 @@ static void process_face_shape(TopoDS_Shape& finalShape, STEPControl_StepModelTy
     if (area > 1e-12) {
         std::cout << "[STEP Exporter]   Face has area > 1e-12, attempting thickening..." << std::endl;
         bool thick_success = false;
-        double thicknesses[] = {0.2, -0.2, 0.5, -0.5, 1.0, -1.0};
+        double thicknesses[] = {1.0, -1.0, 2.0, -2.0, 5.0, -5.0};
 
         for (int thick_idx = 0; thick_idx < 6 && !thick_success; thick_idx++) {
             try {
@@ -501,12 +503,12 @@ static void process_face_shape(TopoDS_Shape& finalShape, STEPControl_StepModelTy
         if (!thick_success) {
             std::cout << "[STEP Exporter]   Trying extrusion along different directions..." << std::endl;
             gp_Vec directions[] = {
-                gp_Vec(0.0, 0.0, 0.2),
-                gp_Vec(0.2, 0.0, 0.0),
-                gp_Vec(0.0, 0.2, 0.0),
-                gp_Vec(0.0, 0.0, -0.2),
-                gp_Vec(-0.2, 0.0, 0.0),
-                gp_Vec(0.0, -0.2, 0.0)
+                gp_Vec(0.0, 0.0, 5.0),
+                gp_Vec(5.0, 0.0, 0.0),
+                gp_Vec(0.0, 5.0, 0.0),
+                gp_Vec(0.0, 0.0, -5.0),
+                gp_Vec(-5.0, 0.0, 0.0),
+                gp_Vec(0.0, -5.0, 0.0)
             };
 
             for (int dir_idx = 0; dir_idx < 6 && !thick_success; dir_idx++) {
@@ -586,8 +588,53 @@ static void determine_transfer_mode(TopoDS_Shape& finalShape, STEPControl_StepMo
         {
             TopAbs_ShapeEnum shapeType = finalShape.ShapeType();
             if (shapeType == TopAbs_EDGE || shapeType == TopAbs_WIRE) {
-                transfer_mode = STEPControl_GeometricCurveSet;
-                std::cout << "[STEP Exporter]   Shape " << shape_index + 1 << " is " << (shapeType == TopAbs_EDGE ? "EDGE" : "WIRE") << ", using GeometricCurveSet." << std::endl;
+                // 尝试将边/线框转换为面，然后挤出为实体
+                std::cout << "[STEP Exporter]   Shape " << shape_index + 1 << " is " << (shapeType == TopAbs_EDGE ? "EDGE" : "WIRE") << ", attempting to convert to face..." << std::endl;
+                
+                TopoDS_Shape shapeToConvert = finalShape;
+                // 如果是单一边，尝试创建线框
+                if (shapeType == TopAbs_EDGE) {
+                    BRepBuilderAPI_MakeWire wireMaker(TopoDS::Edge(shapeToConvert));
+                    if (wireMaker.IsDone()) {
+                        shapeToConvert = wireMaker.Wire();
+                    }
+                }
+                
+                // 检查线框是否闭合
+                bool wireClosed = false;
+                if (shapeToConvert.ShapeType() == TopAbs_WIRE) {
+                    wireClosed = BRep_Tool::IsClosed(TopoDS::Wire(shapeToConvert));
+                    std::cout << "[STEP Exporter]   Wire closed: " << wireClosed << std::endl;
+                }
+                
+                // 如果线框闭合，尝试创建面
+                if (wireClosed) {
+                    BRepBuilderAPI_MakeFace faceMaker(TopoDS::Wire(shapeToConvert));
+                    if (faceMaker.IsDone()) {
+                        TopoDS_Face face = faceMaker.Face();
+                        // 尝试挤出（使用小厚度，假设1.0单位）
+                        gp_Vec extrudeVec(0, 0, 1.0);
+                        BRepPrimAPI_MakePrism prismMaker(face, extrudeVec);
+                        if (prismMaker.IsDone()) {
+                            TopoDS_Shape extruded = prismMaker.Shape();
+                            if (extruded.ShapeType() == TopAbs_SOLID) {
+                                finalShape = extruded;
+                                transfer_mode = STEPControl_ManifoldSolidBrep;
+                                std::cout << "[STEP Exporter]   Successfully converted EDGE/WIRE to SOLID via extrusion." << std::endl;
+                                break;
+                            } else if (extruded.ShapeType() == TopAbs_SHELL) {
+                                finalShape = extruded;
+                                transfer_mode = STEPControl_ManifoldSolidBrep;
+                                std::cout << "[STEP Exporter]   Converted EDGE/WIRE to SHELL via extrusion." << std::endl;
+                                break;
+                            }
+                        }
+                    }
+                }
+                
+                // 如果转换失败，回退到曲面模型
+                transfer_mode = STEPControl_ShellBasedSurfaceModel;
+                std::cout << "[STEP Exporter]   Using ShellBasedSurfaceModel for EDGE/WIRE." << std::endl;
             } else {
                 transfer_mode = STEPControl_ManifoldSolidBrep;
                 std::cout << "[STEP Exporter]   Shape " << shape_index + 1 << " type " << shapeType << ", forcing ManifoldSolidBrep." << std::endl;

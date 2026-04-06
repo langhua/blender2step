@@ -389,6 +389,7 @@ std::vector<TopoDS_Shape> process_all_objects(
             if (enable_logging) {
                 std::cout << "[STEP Exporter] DEBUG: Calling create_solid_from_mesh with tolerance=" << actual_tolerance << std::endl;
             }
+            // 使用标准函数（圆柱体重构暂禁用，边缘匹配问题待解决）
             TopoDS_Shape shape = create_solid_from_mesh(vertices, faces, actual_tolerance, create_solid);
 
             if (!shape.IsNull()) {

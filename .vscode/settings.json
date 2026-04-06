@@ -10,7 +10,7 @@
     "blender.debugAdapter.port": 5678,
     
     // Python配置
-    "python.defaultInterpreterPath": "C:\\Python311\\python.exe",
+    "python.defaultInterpreterPath": "C:\\Python311\\",
     "python.analysis.extraPaths": [
         "./step_exporter/lib"
     ],

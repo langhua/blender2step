@@ -113,22 +113,31 @@ bool setup_step_writer(STEPControl_Writer& writer, const char* filename, const c
         Interface_Static::SetCVal("write.step.curve.representation", "parametric"); // 参数化曲线表示
         Interface_Static::SetCVal("write.step.surface.representation", "parametric"); // 参数化曲面表示，保留倒角
         
-        // 立即刷新输出并验证设置
-        std::cout << "[STEP Exporter] DEBUG SETTINGS APPLIED - forcing flush" << std::endl;
-        std::cout.flush();
-    } else {
-        std::cout << "[STEP Exporter] Advanced BREP settings enabled." << std::endl;
-        // 应用保留倒角等解析曲面特征的设置
-        Interface_Static::SetIVal("write.step.representation", 1); // 允许高级表示
-        Interface_Static::SetCVal("write.step.brep.representation", "advanced_brep"); // 使用高级BREP表示
-        // 确保解析曲面被启用，以保留倒角等特征
-        Interface_Static::SetIVal("write.step.surface.mode", 1); // 允许曲面模式
-        Interface_Static::SetIVal("write.step.brep.curve.mode", 1); // 允许BREP曲线模式
-        Interface_Static::SetIVal("write.step.geom.brep.mode", 1); // 允许几何BREP模式
-        Interface_Static::SetCVal("write.step.curve.representation", "parametric"); // 参数化曲线表示
-        Interface_Static::SetCVal("write.step.surface.representation", "parametric"); // 参数化曲面表示，保留倒角
-        std::cout << "[STEP Exporter] Applied advanced BREP settings to preserve chamfers and analytic surfaces." << std::endl;
-    }
+        // 禁用SEAM_CURVE的导出，避免FreeCAD中显示黑色竖线
+        Interface_Static::SetIVal("write.step.edge.mode", 0); // 禁用边缘模式，避免SEAM_CURVE
+        Interface_Static::SetIVal("write.step.seam", 0); // 禁用缝合曲线
+    
+    // 立即刷新输出并验证设置
+    std::cout << "[STEP Exporter] DEBUG SETTINGS APPLIED - forcing flush" << std::endl;
+    std::cout.flush();
+} else {
+    std::cout << "[STEP Exporter] Advanced BREP settings enabled." << std::endl;
+    // 应用保留倒角等解析曲面特征的设置
+    Interface_Static::SetIVal("write.step.representation", 1); // 允许高级表示
+    Interface_Static::SetCVal("write.step.brep.representation", "advanced_brep"); // 使用高级BREP表示
+    // 确保解析曲面被启用，以保留倒角等特征
+    Interface_Static::SetIVal("write.step.surface.mode", 1); // 允许曲面模式
+    Interface_Static::SetIVal("write.step.brep.curve.mode", 1); // 允许BREP曲线模式
+    Interface_Static::SetIVal("write.step.geom.brep.mode", 1); // 允许几何BREP模式
+    Interface_Static::SetCVal("write.step.curve.representation", "parametric"); // 参数化曲线表示
+    Interface_Static::SetCVal("write.step.surface.representation", "parametric"); // 参数化曲面表示，保留倒角
+    
+    // 禁用SEAM_CURVE的导出，避免FreeCAD中显示黑色竖线
+    Interface_Static::SetIVal("write.step.edge.mode", 0); // 禁用边缘模式，避免SEAM_CURVE
+    Interface_Static::SetIVal("write.step.seam", 0); // 禁用缝合曲线
+    
+    std::cout << "[STEP Exporter] Applied advanced BREP settings to preserve chamfers and analytic surfaces." << std::endl;
+}
     
     // 调试：验证关键设置的值
     std::cout << "[STEP Exporter] DEBUG: write.step.shape.repr = " << Interface_Static::IVal("write.step.shape.repr") << std::endl;
@@ -152,6 +161,9 @@ bool setup_step_writer(STEPControl_Writer& writer, const char* filename, const c
     std::cout << "[STEP Exporter] DEBUG: write.step.geom.brep.mode = " << Interface_Static::IVal("write.step.geom.brep.mode") << std::endl;
     std::cout << "[STEP Exporter] DEBUG: write.step.curve.representation = " << Interface_Static::CVal("write.step.curve.representation") << std::endl;
     std::cout << "[STEP Exporter] DEBUG: write.step.surface.representation = " << Interface_Static::CVal("write.step.surface.representation") << std::endl;
+    // 添加SEAM_CURVE设置的调试输出
+    std::cout << "[STEP Exporter] DEBUG: write.step.edge.mode = " << Interface_Static::IVal("write.step.edge.mode") << std::endl;
+    std::cout << "[STEP Exporter] DEBUG: write.step.seam = " << Interface_Static::IVal("write.step.seam") << std::endl;
     std::cout.flush();
     
     // 在writer创建后验证设置

@@ -1,4 +1,4 @@
-﻿// STEP Exporter export_scene_enhanced function (main orchestrator)
+// STEP Exporter export_scene_enhanced function (main orchestrator)
 #include "../include/step_exporter_internal.h"
 #include <iostream>
 #include <iomanip>
@@ -16,9 +16,10 @@ PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
     const char* unit;
     int enable_logging;
     double sew_tolerance;
+    int create_exploded_view;
     PyObject* progress_callback = NULL;
 
-    if (!parse_export_args(args, filename, scene_data_list, scale, fix_geometry, create_solid, advanced_brep, step_schema, unit, enable_logging, sew_tolerance, progress_callback)) {
+    if (!parse_export_args(args, filename, scene_data_list, scale, fix_geometry, create_solid, advanced_brep, step_schema, unit, enable_logging, sew_tolerance, create_exploded_view, progress_callback)) {
         return NULL;
     }
 
@@ -61,6 +62,7 @@ PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
         std::cout << "[STEP Exporter] Fix geometry: " << (fix_geometry ? "Yes" : "No") << std::endl;
         std::cout << "[STEP Exporter] Create solid: " << (create_solid ? "Yes" : "No") << std::endl;
         std::cout << "[STEP Exporter] Advanced BREP: " << (advanced_brep ? "Yes" : "No") << std::endl;
+        std::cout << "[STEP Exporter] Create exploded view: " << (create_exploded_view ? "Yes" : "No") << std::endl;
         std::cout << "[STEP Exporter] STEP Schema: " << step_schema << std::endl;
         std::cout << "[STEP Exporter] Unit: " << unit << std::endl;
         std::cout << "[STEP Exporter] Sewing Tolerance: " << sew_tolerance << " m" << std::endl;
@@ -106,7 +108,8 @@ PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
             progress_callback,
             total_faces_in_scene,
             total_faces_processed,
-            objects_start_time);
+            objects_start_time,
+            create_exploded_view);
 
         if (shapes.empty()) {
             std::cerr << "[STEP Exporter] ✗ No valid shapes to export" << std::endl;

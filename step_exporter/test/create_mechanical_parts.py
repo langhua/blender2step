@@ -61,17 +61,18 @@ def create_nurbs_circle(name, center, radius):
     """
     curve_data = bpy.data.curves.new(name=name, type='CURVE')
     curve_data.dimensions = '3D'
-    curve_data.resolution_u = 64
-    curve_data.render_resolution_u = 64
+    curve_data.resolution_u = 256  # 提高分辨率，使曲线更平滑
+    curve_data.render_resolution_u = 256  # 提高渲染分辨率
     curve_data.bevel_depth = 0
     curve_data.extrude = 0
     curve_data.fill_mode = 'FULL'
+    curve_data.bevel_resolution = 32  # 提高倒角分辨率
     
     spline = curve_data.splines.new('NURBS')
     spline.use_cyclic_u = True
     spline.use_endpoint_u = False
     spline.order_u = 4  # Degree 3
-    spline.resolution_u = 64
+    spline.resolution_u = 256  # 提高分辨率，使曲线更平滑
     
     # 添加9个控制点
     num_points = 9
@@ -100,6 +101,11 @@ def create_nurbs_circle(name, center, radius):
     
     obj = bpy.data.objects.new(name, curve_data)
     bpy.context.collection.objects.link(obj)
+    
+    # 调整对象显示设置
+    obj.display_type = 'SOLID'  # 对象显示为实心
+    obj.show_wire = False  # 不显示线框
+    obj.show_all_edges = False  # 不显示所有边缘
     
     return obj
 
@@ -157,9 +163,44 @@ def extrude_curve_to_solid(obj, depth, offset_z=0):
     obj.data.extrude = depth
     obj.data.bevel_depth = 0  # 不使用倒角
     obj.data.use_fill_caps = True  # 重要！填充端盖=实心体
+    obj.data.fill_mode = 'FULL'  # 填充模式设置为完全填充
+    
+    # 调整对象显示设置
+    obj.display_type = 'SOLID'  # 对象显示为实心
+    obj.show_wire = False  # 不显示线框
+    obj.show_all_edges = False  # 不显示所有边缘
+    
+    # 确保曲线有材质，这样在实心视图中会显示为实体
+    if not obj.data.materials:
+        # 创建一个默认材质
+        mat = bpy.data.materials.new(name=f"{obj.name}_Material")
+        mat.use_nodes = True
+        # 设置一个简单的漫反射材质
+        principled = mat.node_tree.nodes.get('Principled BSDF')
+        if principled:
+            principled.inputs['Base Color'].default_value = (0.8, 0.8, 0.8, 1.0)  # 灰色
+        obj.data.materials.append(mat)
     
     # 调整位置使底部在正确位置
     obj.location.z += offset_z + depth / 2
+    
+    # 调整Blender视图设置，确保在实体视图中显示
+    # 获取当前视图
+    for area in bpy.context.screen.areas:
+        if area.type == 'VIEW_3D':
+            for space in area.spaces:
+                if space.type == 'VIEW_3D':
+                    # 设置为实体视图
+                    space.shading.type = 'SOLID'
+                    # 禁用线框显示
+                    space.overlay.show_wireframes = False
+    
+    # 强制更新对象和场景
+    obj.update_tag(refresh={'DATA'})
+    bpy.context.view_layer.update()
+    
+    # 强制Blender刷新显示
+    bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP', iterations=1)
     
     return obj
 
@@ -287,6 +328,110 @@ def create_pin(name, center, diameter, length):
     return pin
 
 
+def create_tapered_cylinder(name, center, bottom_radius, top_radius, height):
+    """
+    创建带斜率的圆柱体 - 使用 NURBS 曲线 + 挤出
+    
+    导出效果：
+    - FreeCAD 中显示为带斜率的圆柱体
+    - 可以测量直径、半径，显示为解析曲面
+    
+    Args:
+        name: 圆柱体名称
+        center: 圆柱体中心位置 (x, y, z)
+        bottom_radius: 底部半径
+        top_radius: 顶部半径
+        height: 圆柱体高度
+    """
+    # 计算底部中心位置
+    bottom_center = (center[0], center[1], center[2] - height / 2)
+    
+    # 创建底部圆形曲线
+    curve_data = bpy.data.curves.new(name=f"{name}_profile", type='CURVE')
+    curve_data.dimensions = '3D'
+    curve_data.resolution_u = 256
+    curve_data.render_resolution_u = 256
+    curve_data.bevel_depth = 0
+    curve_data.extrude = 0
+    curve_data.fill_mode = 'FULL'
+    
+    # 创建NURBS圆形
+    spline = curve_data.splines.new('NURBS')
+    spline.use_cyclic_u = True
+    spline.use_endpoint_u = False
+    spline.order_u = 4  # Degree 3
+    spline.resolution_u = 256
+    
+    # 添加9个控制点
+    num_points = 9
+    spline.points.add(num_points - 1)
+    
+    # 标准NURBS圆参数
+    weight = math.sqrt(2.0) / 2.0
+    factor = bottom_radius * (math.sqrt(2.0) / (1 + weight))
+    
+    cx, cy, cz = bottom_center
+    
+    control_points = [
+        (cx + bottom_radius, cy, cz, 1.0),
+        (cx + factor, cy + factor, cz, weight),
+        (cx, cy + bottom_radius, cz, 1.0),
+        (cx - factor, cy + factor, cz, weight),
+        (cx - bottom_radius, cy, cz, 1.0),
+        (cx - factor, cy - factor, cz, weight),
+        (cx, cy - bottom_radius, cz, 1.0),
+        (cx + factor, cy - factor, cz, weight),
+        (cx + bottom_radius, cy, cz, 1.0),
+    ]
+    
+    for i, (x, y, z, w) in enumerate(control_points):
+        spline.points[i].co = (x, y, z, w)
+    
+    # 创建曲线对象
+    obj = bpy.data.objects.new(name, curve_data)
+    bpy.context.collection.objects.link(obj)
+    
+    # 设置挤出深度
+    obj.data.extrude = height
+    obj.data.bevel_depth = 0
+    obj.data.use_fill_caps = True
+    obj.data.fill_mode = 'FULL'
+    
+    # 设置斜率（通过缩放顶部）
+    # 计算缩放因子
+    scale_factor = top_radius / bottom_radius
+    
+    # 创建一个空对象作为缩放中心
+    empty = bpy.data.objects.new(f"{name}_scale_center", None)
+    empty.location = (center[0], center[1], center[2] + height / 2)  # 顶部中心
+    bpy.context.collection.objects.link(empty)
+    
+    # 将曲线对象设为empty的子对象
+    obj.parent = empty
+    
+    # 缩放empty对象，从而缩放曲线的顶部
+    empty.scale = (scale_factor, scale_factor, 1.0)
+    
+    # 调整对象显示设置
+    obj.display_type = 'SOLID'
+    obj.show_wire = False
+    obj.show_all_edges = False
+    
+    # 确保曲线有材质
+    if not obj.data.materials:
+        mat = bpy.data.materials.new(name=f"{obj.name}_Material")
+        mat.use_nodes = True
+        principled = mat.node_tree.nodes.get('Principled BSDF')
+        if principled:
+            principled.inputs['Base Color'].default_value = (0.8, 0.8, 0.8, 1.0)
+        obj.data.materials.append(mat)
+    
+    # 调整位置
+    obj.location = (0, 0, -height / 2)  # 相对于父对象的位置
+    
+    return obj
+
+
 def create_flange_simple(name, center, outer_diameter, thickness):
     """
     创建简化法兰盘 - 无螺栓孔（避免布尔运算）
@@ -368,13 +513,35 @@ def create_mechanical_demo_scene():
     print("   ✓ 定位销 Ø8×L30")
     print("     → 解析圆柱体")
     
+    print("\n[6/6] 创建带2°斜率的圆柱体...")
+    # 计算2°斜率对应的顶部半径
+    height = 100  # 高度100mm
+    bottom_radius = 25  # 底部半径25mm
+    slope_degree = 2  # 2°斜率
+    slope_rad = math.radians(slope_degree)
+    top_radius = bottom_radius - height * math.tan(slope_rad)
+    
+    tapered_cylinder = create_tapered_cylinder(
+        "Cylinder_Tapered_2deg",
+        [0, -80, 0],
+        bottom_radius,
+        top_radius,
+        height
+    )
+    print(f"   ✓ 带2°斜率的圆柱体")
+    print(f"     → 底部半径: {bottom_radius}mm")
+    print(f"     → 顶部半径: {top_radius:.2f}mm")
+    print(f"     → 高度: {height}mm")
+    print("     → 斜率: {slope_degree}°")
+    
     print("\n" + "="*60)
     print("✓ 机械零件创建完成！（纯NURBS曲线版）")
-    print("  共 4 个物体，全部为 CURVE 类型:")
+    print("  共 5 个物体，全部为 CURVE 类型:")
     print("  1. 实心圆柱体 - 解析圆柱面")
     print("  2. M12六角螺栓 - 解析棱柱+圆柱")
     print("  3. M12六角螺母 - 解析棱柱")
     print("  4. 定位销 - 解析圆柱")
+    print("  5. 带2°斜率的圆柱体 - 解析曲面")
     print("="*60)
     print("\n下一步：File → Export → STEP (Enhanced)")
     print("在FreeCAD中验证：")

@@ -36,7 +36,7 @@ PyObject* export_step(PyObject* self, PyObject* args);
 PyObject* export_scene(PyObject* self, PyObject* args);
 PyObject* export_scene_enhanced(PyObject* self, PyObject* args);
 
-// Enhanced export helper functions
+// 增强版导出参数解析
 bool parse_export_args(PyObject* args, 
                        const char*& filename, 
                        PyObject*& scene_data_list, 
@@ -48,6 +48,7 @@ bool parse_export_args(PyObject* args,
                        const char*& unit, 
                        int& enable_logging, 
                        double& sew_tolerance, 
+                       int& create_exploded_view, 
                        PyObject*& progress_callback);
 
 void call_progress_callback(PyObject* progress_callback, int enable_logging, double progress);
@@ -68,6 +69,7 @@ TopoDS_Shape process_object(PyObject* obj_dict,
                             const std::chrono::steady_clock::time_point& objects_start_time,
                             PyObject* progress_callback);
 
+// 处理所有对象
 std::vector<TopoDS_Shape> process_all_objects(
     PyObject* scene_data_list,
     double scale,
@@ -78,7 +80,9 @@ std::vector<TopoDS_Shape> process_all_objects(
     PyObject* progress_callback,
     size_t& total_faces_in_scene,
     size_t& total_faces_processed,
-    const std::chrono::steady_clock::time_point& objects_start_time);
+    const std::chrono::steady_clock::time_point& objects_start_time,
+    bool create_exploded_view = false
+);
 
 // Enhanced export transfer functions
 int transfer_shapes_to_step(STEPControl_Writer& writer,
@@ -93,7 +97,9 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
     const std::vector<std::vector<double>>& vertices,
     const std::vector<std::vector<int>>& faces,
     double tolerance = 1.0e-6,
-    bool make_solid = true);
+    bool make_solid = true,
+    bool create_exploded_view = false
+);
 
 // Export result logging
 void log_export_result(const std::chrono::steady_clock::time_point& start_time, bool success, PyObject* progress_callback);

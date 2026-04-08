@@ -227,7 +227,9 @@ std::vector<TopoDS_Shape> process_all_objects(
     PyObject* progress_callback,
     size_t& total_faces_in_scene,
     size_t& total_faces_processed,
-    const std::chrono::steady_clock::time_point& objects_start_time) {
+    const std::chrono::steady_clock::time_point& objects_start_time,
+    bool create_exploded_view
+) {
     
     std::vector<TopoDS_Shape> shapes;
     
@@ -389,11 +391,27 @@ std::vector<TopoDS_Shape> process_all_objects(
             if (enable_logging) {
                 std::cout << "[STEP Exporter] DEBUG: Calling create_solid_from_mesh with tolerance=" << actual_tolerance << std::endl;
             }
-            // 使用标准函数（圆柱体重构暂禁用，边缘匹配问题待解决）
-            TopoDS_Shape shape = create_solid_from_mesh(vertices, faces, actual_tolerance, create_solid);
+            // 使用带圆柱体重构的函数
+            TopoDS_Shape shape = create_solid_from_mesh_with_cylinders(vertices, faces, actual_tolerance, create_solid, create_exploded_view);
 
             if (!shape.IsNull()) {
-                if (fix_geometry) {
+                // 对于解析圆锥体（SOLID类型且面数<=3），跳过几何修复
+                // 因为解析几何已经是精确的，不需要修复
+                bool skipFix = false;
+                if (shape.ShapeType() == TopAbs_SOLID) {
+                    int faceCount = 0;
+                    for (TopExp_Explorer exp(shape, TopAbs_FACE); exp.More(); exp.Next()) {
+                        faceCount++;
+                    }
+                    if (faceCount <= 3) {
+                        skipFix = true;
+                        if (enable_logging) {
+                            std::cout << "[STEP Exporter] Skipping geometry fix for analytical cone (faces: " << faceCount << ")" << std::endl;
+                        }
+                    }
+                }
+                
+                if (fix_geometry && shape.ShapeType() != TopAbs_COMPOUND && !skipFix) {
                     shape = fix_shape_enhanced(shape, actual_tolerance);
                 }
 
@@ -402,10 +420,14 @@ std::vector<TopoDS_Shape> process_all_objects(
                     if (enable_logging) {
                         std::cout << "[STEP Exporter]   ✓ Shape created successfully (Type: ";
                         switch (shape.ShapeType()) {
-                            case TopAbs_SOLID: std::cout << "SOLID"; break;
-                            case TopAbs_SHELL: std::cout << "SHELL"; break;
-                            case TopAbs_FACE: std::cout << "FACE"; break;
-                            case TopAbs_COMPOUND: std::cout << "COMPOUND"; break;
+                            case TopAbs_SOLID: std::cout << "SOLID";
+                                break;
+                            case TopAbs_SHELL: std::cout << "SHELL";
+                                break;
+                            case TopAbs_FACE: std::cout << "FACE";
+                                break;
+                            case TopAbs_COMPOUND: std::cout << "COMPOUND";
+                                break;
                             default: std::cout << "OTHER";
                         }
                         std::cout << ")" << std::endl;

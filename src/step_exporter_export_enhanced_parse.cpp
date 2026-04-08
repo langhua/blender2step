@@ -12,6 +12,7 @@ bool parse_export_args(PyObject* args,
                        const char*& unit, 
                        int& enable_logging, 
                        double& sew_tolerance, 
+                       int& create_exploded_view, 
                        PyObject*& progress_callback) {
     // 设置默认值（与export_scene_enhanced一致）
     scale = 1.0;
@@ -22,16 +23,25 @@ bool parse_export_args(PyObject* args,
     unit = "MILLIMETER";
     enable_logging = 1;
     sew_tolerance = 0.001;
+    create_exploded_view = 0;
     progress_callback = NULL;
 
-    // 解析参数：filename, scene_data_list, scale, [fix_geometry], [create_solid], [advanced_brep], [step_schema], [unit], [enable_logging], [sew_tolerance], [progress_callback]
-    // 尝试解析11个参数（包含进度回调）
-    if (!PyArg_ParseTuple(args, "sOd|iiissidO", &filename, &scene_data_list, &scale, &fix_geometry, &create_solid, &advanced_brep, &step_schema, &unit, &enable_logging, &sew_tolerance, &progress_callback)) {
-        // 如果失败，尝试解析10个参数（无进度回调）
+    // 解析参数：filename, scene_data_list, scale, [fix_geometry], [create_solid], [advanced_brep], [step_schema], [unit], [enable_logging], [sew_tolerance], [create_exploded_view], [progress_callback]
+    // 尝试解析12个参数（包含进度回调）
+    if (!PyArg_ParseTuple(args, "sOd|iiissidiO", &filename, &scene_data_list, &scale, &fix_geometry, &create_solid, &advanced_brep, &step_schema, &unit, &enable_logging, &sew_tolerance, &create_exploded_view, &progress_callback)) {
+        // 如果失败，尝试解析11个参数（无进度回调）
         PyErr_Clear();
-        if (!PyArg_ParseTuple(args, "sOd|iiissid", &filename, &scene_data_list, &scale, &fix_geometry, &create_solid, &advanced_brep, &step_schema, &unit, &enable_logging, &sew_tolerance)) {
-            PyErr_SetString(PyExc_TypeError, "export_scene_enhanced() expected: filename, scene_data_list, scale, [fix_geometry], [create_solid], [advanced_brep], [step_schema], [unit], [enable_logging], [sew_tolerance], [progress_callback]");
-            return false;
+        if (!PyArg_ParseTuple(args, "sOd|iiissidi", &filename, &scene_data_list, &scale, &fix_geometry, &create_solid, &advanced_brep, &step_schema, &unit, &enable_logging, &sew_tolerance, &create_exploded_view)) {
+            // 如果失败，尝试解析10个参数（无create_exploded_view和进度回调）
+            PyErr_Clear();
+            if (!PyArg_ParseTuple(args, "sOd|iiissidO", &filename, &scene_data_list, &scale, &fix_geometry, &create_solid, &advanced_brep, &step_schema, &unit, &enable_logging, &sew_tolerance, &progress_callback)) {
+                // 如果失败，尝试解析9个参数（无create_exploded_view和进度回调）
+                PyErr_Clear();
+                if (!PyArg_ParseTuple(args, "sOd|iiissid", &filename, &scene_data_list, &scale, &fix_geometry, &create_solid, &advanced_brep, &step_schema, &unit, &enable_logging, &sew_tolerance)) {
+                    PyErr_SetString(PyExc_TypeError, "export_scene_enhanced() expected: filename, scene_data_list, scale, [fix_geometry], [create_solid], [advanced_brep], [step_schema], [unit], [enable_logging], [sew_tolerance], [create_exploded_view], [progress_callback]");
+                    return false;
+                }
+            }
         }
     }
     

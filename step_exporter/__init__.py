@@ -135,6 +135,12 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
         default=True,
     ) # type: ignore
     
+    create_exploded_view: BoolProperty(
+        name="Create Exploded View",
+        description="Create an exploded view with separated cone face, bottom face, and top face",
+        default=False,
+    ) # type: ignore
+    
     step_schema: EnumProperty(
         name="STEP Schema",
         description="STEP application protocol",
@@ -208,6 +214,7 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
         box.label(text="Advanced BREP & Solid Creation", icon='MOD_SOLIDIFY')
         box.prop(self, "create_solid")
         box.prop(self, "advanced_brep")
+        box.prop(self, "create_exploded_view")
         box.prop(self, "step_schema")
         box.prop(self, "sew_tolerance")
         

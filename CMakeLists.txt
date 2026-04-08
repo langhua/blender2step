@@ -2,7 +2,14 @@ cmake_minimum_required(VERSION 3.20)
 project(blender2step LANGUAGES C CXX)
 
 # ====== 1. 设置 vcpkg 工具链 ======
-set(CMAKE_TOOLCHAIN_FILE "F:/git/vcpkg/scripts/buildsystems/vcpkg.cmake" CACHE STRING "Vcpkg toolchain file")
+# 尝试使用相对路径
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/vcpkg/scripts/buildsystems/vcpkg.cmake")
+    set(CMAKE_TOOLCHAIN_FILE "${CMAKE_CURRENT_SOURCE_DIR}/vcpkg/scripts/buildsystems/vcpkg.cmake" CACHE STRING "Vcpkg toolchain file")
+elseif(EXISTS "f:/git/vcpkg/scripts/buildsystems/vcpkg.cmake")
+    set(CMAKE_TOOLCHAIN_FILE "f:/git/vcpkg/scripts/buildsystems/vcpkg.cmake" CACHE STRING "Vcpkg toolchain file")
+else()
+    message(FATAL_ERROR "Could not find vcpkg toolchain file. Please install vcpkg and set the correct path.")
+endif()
 
 # 设置C++标准
 set(CMAKE_CXX_STANDARD 17)

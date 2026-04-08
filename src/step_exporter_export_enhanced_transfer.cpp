@@ -451,6 +451,10 @@ static void process_compound_shape(TopoDS_Shape& finalShape, STEPControl_StepMod
             if (edge_count > 0 && face_count == 0) {
                 transfer_mode = STEPControl_GeometricCurveSet;
                 std::cout << "[STEP Exporter]   Shape " << shape_index + 1 << " is COMPOUND with " << edge_count << " edges (curve shape), using GeometricCurveSet." << std::endl;
+            } else if (face_count > 0) {
+                // COMPOUND containing FACEs (e.g., exploded view) - use ShellBasedSurfaceModel
+                transfer_mode = STEPControl_ShellBasedSurfaceModel;
+                std::cout << "[STEP Exporter]   Shape " << shape_index + 1 << " is COMPOUND with " << face_count << " faces (exploded view), using ShellBasedSurfaceModel." << std::endl;
             } else {
                 transfer_mode = STEPControl_ManifoldSolidBrep;
                 std::cout << "[STEP Exporter]   Shape " << shape_index + 1 << " is COMPOUND (no SOLID or SHELL), forcing ManifoldSolidBrep." << std::endl;

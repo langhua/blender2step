@@ -1,0 +1,45 @@
+// 分析圆角圆柱的几何关系
+
+// 当前问题：圆角凹陷
+// 原因：圆心位置和圆弧角度设置错误
+
+// 正确的圆角几何关系：
+// 1. 圆心应该位于圆柱顶部外边缘 (mainRadius, 0, cylinderHeight)
+// 2. 圆弧应该从p2到p3，角度从270°到0°（逆时针）
+// 3. 这样圆角会向外凸起
+
+// 当前错误的几何关系：
+// - 圆心：(mainRadius - filletR, 0, cylinderHeight)
+// - 点p2：(mainRadius, 0, cylinderHeight) - 相对圆心在X轴正方向，角度0°
+// - 点p3：(mainRadius - filletR, 0, cylinderHeight + filletR) - 相对圆心在Z轴正方向，角度90°
+// - 圆弧从0°到90°，导致向内凹陷
+
+// 正确的几何关系：
+// - 圆心：(mainRadius, 0, cylinderHeight)
+// - 点p2：(mainRadius, 0, cylinderHeight) - 相对圆心在原点，角度270°（或-90°）
+// - 点p3：(mainRadius - filletR, 0, cylinderHeight + filletR) - 相对圆心在(-filletR, 0, filletR)，角度135°
+// - 圆弧从270°到135°，向外凸起
+
+// 但是这样p2就在圆心上，不对！
+
+// 重新思考：
+// 圆角应该是从圆柱顶部外边缘开始，向外凸起，然后平滑过渡到顶部内边缘
+// 圆心应该在圆柱顶部外边缘的"上方"，即 (mainRadius, 0, cylinderHeight + filletR)
+// 点p2：(mainRadius, 0, cylinderHeight) - 相对圆心在(0, 0, -filletR)，角度270°
+// 点p3：(mainRadius - filletR, 0, cylinderHeight + filletR) - 相对圆心在(-filletR, 0, 0)，角度180°
+// 圆弧从270°到180°，向外凸起
+
+// 这样p2和p3都在圆上，距离圆心都是filletR
+// p2角度270°（Z轴负方向）
+// p3角度180°（X轴负方向）
+// 圆弧从270°到180°，向外凸起
+
+// 最终轮廓线：
+// p0: (0, 0, 0) - 底部中心
+// p1: (mainRadius, 0, 0) - 底部外边缘
+// p2: (mainRadius, 0, cylinderHeight) - 圆柱顶部外边缘（圆角开始点）
+// p3: (mainRadius - filletR, 0, cylinderHeight + filletR) - 圆角终点（顶部内边缘）
+// p4: (0, 0, cylinderHeight + filletR) - 顶部中心
+
+// 圆心：(mainRadius, 0, cylinderHeight + filletR)
+// 圆弧从p2到p3，角度从270°到180°

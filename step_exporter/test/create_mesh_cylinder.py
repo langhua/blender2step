@@ -179,6 +179,155 @@ def create_tapered_mesh_cylinder(name, center, bottom_radius, top_radius, height
     return obj
 
 
+def create_chamfered_cylinder(name, center, radius, height, chamfer_size, segments=64):
+    """
+    创建顶部带45°倒角的圆柱体
+    
+    Args:
+        name: 圆柱体名称
+        center: 圆柱体中心位置 (x, y, z)
+        radius: 圆柱体半径
+        height: 圆柱体高度
+        chamfer_size: 倒角尺寸（径向减少量）
+        segments: 圆周分段数
+    
+    Returns:
+        带倒角的圆柱体网格对象
+    """
+    try:
+        # 创建基础圆柱体
+        bpy.ops.mesh.primitive_cylinder_add(
+            radius=radius,
+            depth=height,
+            location=[0, 0, 0],
+            vertices=segments
+        )
+        
+        obj = bpy.context.active_object
+        obj.name = name
+        
+        # 进入编辑模式
+        bpy.ops.object.mode_set(mode='EDIT')
+        
+        # 选择顶部边
+        bpy.ops.mesh.select_all(action='DESELECT')
+        bpy.ops.object.mode_set(mode='OBJECT')
+        
+        # 选择顶部的边
+        for edge in obj.data.edges:
+            v1 = obj.data.vertices[edge.vertices[0]]
+            v2 = obj.data.vertices[edge.vertices[1]]
+            if abs(v1.co.z - height/2) < 0.001 and abs(v2.co.z - height/2) < 0.001:
+                edge.select = True
+        
+        bpy.ops.object.mode_set(mode='EDIT')
+        
+        # 使用倒角工具创建45°倒角
+        bpy.ops.mesh.bevel(offset=chamfer_size, segments=1, profile=1.0, clamp_overlap=True)
+        
+        # 退出编辑模式
+        bpy.ops.object.mode_set(mode='OBJECT')
+        
+        # 移动到指定位置
+        obj.location = center
+        
+        # 添加材质
+        if not obj.data.materials:
+            mat = bpy.data.materials.new(name=f"{obj.name}_Material")
+            mat.use_nodes = True
+            principled = mat.node_tree.nodes.get('Principled BSDF')
+            if principled:
+                principled.inputs['Base Color'].default_value = (0.8, 0.8, 0.8, 1.0)
+            obj.data.materials.append(mat)
+        
+        obj.update_tag()
+        bpy.context.view_layer.update()
+        
+        return obj
+    except Exception as e:
+        print(f"创建倒角圆柱失败: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+
+def create_fillet_cylinder(name, center, radius, height, fillet_radius, segments=64):
+    """
+    创建顶部带圆角的圆柱体
+    
+    Args:
+        name: 圆柱体名称
+        center: 圆柱体中心位置 (x, y, z)
+        radius: 圆柱体半径
+        height: 圆柱体高度
+        fillet_radius: 圆角半径
+        segments: 圆周分段数
+    
+    Returns:
+        带圆角的圆柱体网格对象
+    """
+    try:
+        # 创建基础圆柱体
+        bpy.ops.mesh.primitive_cylinder_add(
+            radius=radius,
+            depth=height,
+            location=[0, 0, 0],
+            vertices=segments
+        )
+        
+        obj = bpy.context.active_object
+        obj.name = name
+        
+        # 进入编辑模式
+        bpy.ops.object.mode_set(mode='EDIT')
+        
+        # 选择顶部边
+        bpy.ops.mesh.select_all(action='DESELECT')
+        bpy.ops.object.mode_set(mode='OBJECT')
+        
+        # 选择顶部的边
+        for edge in obj.data.edges:
+            v1 = obj.data.vertices[edge.vertices[0]]
+            v2 = obj.data.vertices[edge.vertices[1]]
+            if abs(v1.co.z - height/2) < 0.001 and abs(v2.co.z - height/2) < 0.001:
+                edge.select = True
+        
+        bpy.ops.object.mode_set(mode='EDIT')
+        
+        # 使用倒角工具创建圆角
+        bpy.ops.mesh.bevel(
+            offset=fillet_radius,
+            segments=8,
+            profile=0.5,
+            clamp_overlap=False
+        )
+        
+        # 退出编辑模式
+        bpy.ops.object.mode_set(mode='OBJECT')
+        
+        # 移动到指定位置
+        obj.location = center
+        
+        # 添加材质
+        if not obj.data.materials:
+            mat = bpy.data.materials.new(name=f"{obj.name}_Material")
+            mat.use_nodes = True
+            principled = mat.node_tree.nodes.get('Principled BSDF')
+            if principled:
+                principled.inputs['Base Color'].default_value = (0.8, 0.8, 0.8, 1.0)
+            obj.data.materials.append(mat)
+        
+        obj.update_tag()
+        bpy.context.view_layer.update()
+        
+        return obj
+    except Exception as e:
+        print(f"创建圆角圆柱失败: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+
 def create_mechanical_demo_scene():
     """
     创建机械设计演示场景
@@ -198,46 +347,98 @@ def create_mechanical_demo_scene():
     print("  • 无布尔运算，导出为纯解析几何体")
     print("  • FreeCAD中可识别为圆柱、棱柱等标准体素\n")
     
-    print("[1/5] 清理场景...")
+    print("[1/6] 清理场景...")
     clear_scene()
     
-    print("[2/5] 创建基础圆柱体...")
+    print("[2/6] 创建基础圆柱体...")
     cylinder = create_mesh_cylinder(
         "Cylinder_R25_H60",
         [0, 0, 0],
         25, 60,
-        segments=32  # 增加分段数，使圆柱体更平滑
+        segments=32
     )
     print("   ✓ 实心圆柱体 R25×H60 (Mesh)")
     print("     → FreeCAD中应显示为完美解析圆柱面")
     
-    print("\n[3/5] 创建带2°斜率的圆柱体...")
-    # 计算2°斜率对应的顶部半径
-    height = 100  # 高度100mm
-    bottom_radius = 25  # 底部半径25mm
-    slope_degree = 2  # 2°斜率
-    slope_rad = math.radians(slope_degree)
+    print("\n[3/6] 创建带斜率的圆柱体...")
+    # 创建3°、4°、5°斜率圆柱
+    slope_configs = [
+        ("Cylinder_Tapered_3deg", 3, [0, -80, 0]),
+        ("Cylinder_Tapered_4deg", 4, [0, 80, 0]),
+        ("Cylinder_Tapered_5deg", 5, [120, 0, 0]),
+    ]
+    
+    height = 100
+    bottom_radius = 25
+    
+    for name, slope_degree, pos in slope_configs:
+        slope_rad = math.radians(slope_degree)
+        top_radius = bottom_radius - height * math.tan(slope_rad)
+        
+        tapered_cylinder = create_tapered_mesh_cylinder(
+            name,
+            pos,
+            bottom_radius,
+            top_radius,
+            height,
+            segments=32
+        )
+        print(f"   ✓ 带{slope_degree}°斜率的圆柱体")
+        print(f"     → 底部半径: {bottom_radius}mm, 顶部半径: {top_radius:.2f}mm")
+    
+    print("\n[4/6] 创建45°倒角圆柱...")
+    chamfer_cylinder = create_chamfered_cylinder(
+        "Cylinder_Chamfer_45deg",
+        [-120, 0, 0],
+        25, 60, 5,  # 半径25，高度60，倒角尺寸5
+        segments=64
+    )
+    if chamfer_cylinder:
+        print("   ✓ 45°倒角圆柱体")
+        print("     → 半径: 25mm, 高度: 60mm, 倒角: 5mm")
+        print("     → 导出应为CONICAL_SURFACE")
+    else:
+        print("   ✗ 创建45°倒角圆柱失败")
+    
+    print("\n[5/6] 创建圆角圆柱...")
+    fillet_cylinder = create_fillet_cylinder(
+        "Cylinder_Fillet_Top",
+        [-120, -80, 0],
+        25, 60, 5,  # 半径25，高度60，圆角半径5
+        segments=64
+    )
+    if fillet_cylinder:
+        print("   ✓ 圆角圆柱体")
+        print("     → 半径: 25mm, 高度: 60mm, 圆角半径: 5mm")
+        print("     → 导出应为TOROIDAL_SURFACE")
+    else:
+        print("   ✗ 创建圆角圆柱失败")
+    
+    print("\n[6/6] 创建带2°斜率的参考圆柱...")
+    slope_rad = math.radians(2)
     top_radius = bottom_radius - height * math.tan(slope_rad)
     
-    tapered_cylinder = create_tapered_mesh_cylinder(
+    tapered_2deg = create_tapered_mesh_cylinder(
         "Cylinder_Tapered_2deg",
-        [0, -80, 0],
+        [0, 160, 0],
         bottom_radius,
         top_radius,
         height,
-        segments=32  # 增加分段数，使圆柱体更平滑
+        segments=32
     )
-    print(f"   ✓ 带2°斜率的圆柱体")
-    print(f"     → 底部半径: {bottom_radius}mm")
-    print(f"     → 顶部半径: {top_radius:.2f}mm")
-    print(f"     → 高度: {height}mm")
-    print("     → 斜率: {slope_degree}°")
+    print(f"   ✓ 带2°斜率的圆柱体（参考）")
+    print(f"     → 底部半径: {bottom_radius}mm, 顶部半径: {top_radius:.2f}mm")
     
     print("\n" + "="*60)
     print("✓ 机械零件创建完成！（Mesh版本）")
-    print("  共 2 个物体，全部为 MESH 类型:")
+    print("  共 7 个物体，全部为 MESH 类型:")
     print("  1. 实心圆柱体 - 导出为解析圆柱面")
-    print("  2. 带2°斜率的圆柱体 - 导出为解析曲面")
+    print("  2. 3°斜率圆柱 - 导出为解析圆锥面")
+    print("  3. 4°斜率圆柱 - 导出为解析圆锥面")
+    print("  4. 5°斜率圆柱 - 导出为解析圆锥面")
+    print("  5. 45°倒角圆柱 - 导出为CONICAL_SURFACE")
+    print("  6. 圆角圆柱 - 导出为TOROIDAL_SURFACE")
+    print("  7. 2°斜率圆柱（参考）- 导出为解析圆锥面")
     print("="*60)
     print("\n下一步：File → Export → STEP (Enhanced)")
     print("在FreeCAD中验证：")

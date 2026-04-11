@@ -1,0 +1,31 @@
+// 圆角圆柱几何关系分析
+
+// 当前问题：圆角凹陷
+// 原因：圆心位置和圆弧角度设置错误
+
+// 当前错误的几何关系：
+// 圆心：(mainRadius - filletR, 0, cylinderHeight)
+// 点p2：(mainRadius, 0, cylinderHeight) - 相对圆心在(filletR, 0, 0)，角度0°
+// 点p3：(mainRadius - filletR, 0, cylinderHeight + filletR) - 相对圆心在(0, 0, filletR)，角度90°
+// 圆弧从0°到90°，导致向内凹陷
+
+// 正确的几何关系：
+// 圆心：(mainRadius, 0, cylinderHeight + filletR)
+// 点p2：(mainRadius, 0, cylinderHeight) - 相对圆心在(0, 0, -filletR)，角度270°（或-90°）
+// 点p3：(mainRadius - filletR, 0, cylinderHeight + filletR) - 相对圆心在(-filletR, 0, 0)，角度180°
+// 圆弧从270°到180°，向外凸起
+
+// 验证：
+// p2到圆心的距离：sqrt(0^2 + 0^2 + (-filletR)^2) = filletR ✓
+// p3到圆心的距离：sqrt((-filletR)^2 + 0^2 + 0^2) = filletR ✓
+// 圆弧从270°到180°，逆时针旋转90°，向外凸起 ✓
+
+// 最终轮廓线：
+// p0: (0, 0, 0) - 底部中心
+// p1: (mainRadius, 0, 0) - 底部外边缘
+// p2: (mainRadius, 0, cylinderHeight) - 圆柱顶部外边缘（圆角开始点）
+// p3: (mainRadius - filletR, 0, cylinderHeight + filletR) - 圆角终点（顶部内边缘）
+// p4: (0, 0, cylinderHeight + filletR) - 顶部中心
+
+// 圆心：(mainRadius, 0, cylinderHeight + filletR)
+// 圆弧从p2到p3，角度从270°到180°

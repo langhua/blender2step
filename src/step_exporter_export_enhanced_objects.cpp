@@ -392,7 +392,7 @@ std::vector<TopoDS_Shape> process_all_objects(
                 std::cout << "[STEP Exporter] DEBUG: Calling create_solid_from_mesh with tolerance=" << actual_tolerance << std::endl;
             }
             // 使用带圆柱体重构的函数
-            TopoDS_Shape shape = create_solid_from_mesh_with_cylinders(vertices, faces, actual_tolerance, create_solid, create_exploded_view);
+            TopoDS_Shape shape = create_solid_from_mesh_with_cylinders(vertices, faces, actual_tolerance, create_solid, create_exploded_view, scale);
 
             if (!shape.IsNull()) {
                 // 对于解析圆锥体（SOLID类型且面数<=3），跳过几何修复

@@ -98,7 +98,8 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
     const std::vector<std::vector<int>>& faces,
     double tolerance = 1.0e-6,
     bool make_solid = true,
-    bool create_exploded_view = false
+    bool create_exploded_view = false,
+    double scale = 1.0
 );
 
 // Export result logging

@@ -53,7 +53,13 @@ bool parse_export_args(PyObject* args,
 
 void call_progress_callback(PyObject* progress_callback, int enable_logging, double progress);
 
-bool setup_step_writer(STEPControl_Writer& writer, const char* filename, const char* step_schema, const char* unit, int advanced_brep, int enable_logging);
+struct StdoutRedirectState {
+    FILE* log_file = nullptr;
+    int saved_stdout_fd = -1;
+    bool stdout_redirected = false;
+};
+
+StdoutRedirectState setup_step_writer(STEPControl_Writer& writer, const char* filename, const char* step_schema, const char* unit, int advanced_brep, int enable_logging, const char* log_filename);
 
 // Enhanced export object processing
 TopoDS_Shape process_object(PyObject* obj_dict, 

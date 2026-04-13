@@ -25,6 +25,9 @@
 #include <Standard_Version.hxx>
 #include <Precision.hxx>
 #include <BRepMesh_IncrementalMesh.hxx>
+#include <Message.hxx>
+#include <Message_Messenger.hxx>
+#include <Message_PrinterOStream.hxx>
 
 #include <TopoDS_Shape.hxx>
 #include <TopoDS_Compound.hxx>
@@ -2459,7 +2462,7 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
         return NULL;
     }
 
-    // 限制缝合容差在合理范围内（最小1微米，最大0.1米）
+    // 限制缝合容差在合理范围内（最小 1 微米，最大 0.1 米）
     if (sew_tolerance < 1.0e-6 - 1e-12) {
         std::cout << "[STEP Exporter] Warning: Sewing tolerance " << sew_tolerance << " m is too small, increasing to 1e-06 m." << std::endl;
         sew_tolerance = 1.0e-6;
@@ -2468,6 +2471,41 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
         std::cout << "[STEP Exporter] Warning: Sewing tolerance " << sew_tolerance << " m is too large, reducing to 0.001 m." << std::endl;
         sew_tolerance = 0.001;
     }
+
+    // 生成日志文件名（基于 STEP 文件名）
+    std::string log_filename;
+    if (enable_logging && filename) {
+        log_filename = std::string(filename) + ".log";
+    }
+    
+    // 重定向 C++ stdout 到日志文件（在最早的位置执行）
+    FILE* log_file = nullptr;
+    int saved_stdout_fd = -1;
+    if (!log_filename.empty()) {
+        errno_t err = fopen_s(&log_file, log_filename.c_str(), "a");
+        if (err == 0 && log_file) {
+            // 不立即输出，因为 stdout 还没有重定向
+            fflush(stdout);
+            saved_stdout_fd = _dup(_fileno(stdout));
+            _dup2(_fileno(log_file), _fileno(stdout));
+            setvbuf(stdout, nullptr, _IONBF, 0);
+            
+            // 现在 stdout 已经重定向，可以输出日志了
+            std::cout << "[STEP Exporter] Redirecting C++ stdout to log file: " << log_filename << std::endl;
+            
+            // 配置 OCCT Message_Messenger 使用重定向后的 stdout
+            Handle(Message_Messenger) messenger = Message::DefaultMessenger();
+            if (!messenger.IsNull()) {
+                messenger->AddPrinter(new Message_PrinterOStream(std::cout));
+                std::cout << "[STEP Exporter] OCCT Message_Messenger configured" << std::endl;
+            }
+        } else {
+            std::cerr << "[STEP Exporter] WARNING: Failed to open log file: " << log_filename << " (error: " << err << ")" << std::endl;
+        }
+    } else {
+        std::cerr << "[STEP Exporter] WARNING: Log filename is empty (enable_logging=" << enable_logging << ", filename=" << (filename ? filename : "null") << ")" << std::endl;
+    }
+
     // 最终容差检查
     std::cout << "[STEP Exporter] DEBUG: Final sewing tolerance = " << sew_tolerance << " m" << std::endl;
 
@@ -3981,7 +4019,11 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
         std::cout << "[STEP Exporter] Successfully transferred " << transferred_count << " out of " << shapes.size() << " shapes." << std::endl;
 
         std::cout << "[STEP Exporter] Writing STEP file..." << std::endl;
+        std::cout.flush();
+        fflush(stdout);
         IFSelect_ReturnStatus write_status = writer.Write(filename);
+        std::cout.flush();
+        fflush(stdout);
 
         if (write_status == IFSelect_RetDone) {
             std::cout << "[STEP Exporter] Successfully exported ENHANCED STEP file" << std::endl;
@@ -3993,6 +4035,22 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
             std::cout << "[STEP Exporter] Export finished at: " << std::put_time(std::localtime(&end_time_t), "%Y-%m-%d %H:%M:%S") << std::endl;
             std::cout << "[STEP Exporter] Total export time: " << std::fixed << std::setprecision(3) << export_duration_sec << " seconds" << std::endl;
             std::cout << "[STEP Exporter] =========================================\n" << std::endl;
+            
+            // 关闭日志文件（在恢复 stdout 之前）
+            if (log_file) {
+                std::cout << "[STEP Exporter] Log file closed" << std::endl;
+                fflush(stdout);
+                fclose(log_file);
+                log_file = nullptr;
+            }
+            
+            // 恢复 stdout
+            if (saved_stdout_fd >= 0) {
+                _dup2(saved_stdout_fd, _fileno(stdout));
+                _close(saved_stdout_fd);
+                saved_stdout_fd = -1;
+            }
+            
             if (progress_callback) Py_DECREF(progress_callback);
             Py_RETURN_TRUE;
         } else {
@@ -4005,6 +4063,20 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
             std::cerr << "[STEP Exporter] Export finished at: " << std::put_time(std::localtime(&end_time_t), "%Y-%m-%d %H:%M:%S") << std::endl;
             std::cerr << "[STEP Exporter] Total export time: " << std::fixed << std::setprecision(3) << export_duration_sec << " seconds" << std::endl;
             std::cerr << "[STEP Exporter] =========================================\n" << std::endl;
+            
+            // 关闭日志文件
+            if (log_file) {
+                fclose(log_file);
+                log_file = nullptr;
+            }
+            
+            // 恢复 stdout
+            if (saved_stdout_fd >= 0) {
+                _dup2(saved_stdout_fd, _fileno(stdout));
+                _close(saved_stdout_fd);
+                saved_stdout_fd = -1;
+            }
+            
             if (progress_callback) Py_DECREF(progress_callback);
             Py_RETURN_FALSE;
         }
@@ -4012,16 +4084,58 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
     } catch (const Standard_Failure& e) {
         std::cerr << "[STEP Exporter] OpenCASCADE error: " << e.GetMessageString() << std::endl;
         std::cerr << "[STEP Exporter] =========================================\n" << std::endl;
+        
+        // 关闭日志文件
+        if (log_file) {
+            fclose(log_file);
+            log_file = nullptr;
+        }
+        
+        // 恢复 stdout
+        if (saved_stdout_fd >= 0) {
+            _dup2(saved_stdout_fd, _fileno(stdout));
+            _close(saved_stdout_fd);
+            saved_stdout_fd = -1;
+        }
+        
         if (progress_callback) Py_DECREF(progress_callback);
         Py_RETURN_FALSE;
     } catch (const std::exception& e) {
         std::cerr << "[STEP Exporter] Standard error: " << e.what() << std::endl;
         std::cerr << "[STEP Exporter] =========================================\n" << std::endl;
+        
+        // 关闭日志文件
+        if (log_file) {
+            fclose(log_file);
+            log_file = nullptr;
+        }
+        
+        // 恢复 stdout
+        if (saved_stdout_fd >= 0) {
+            _dup2(saved_stdout_fd, _fileno(stdout));
+            _close(saved_stdout_fd);
+            saved_stdout_fd = -1;
+        }
+        
         if (progress_callback) Py_DECREF(progress_callback);
         Py_RETURN_FALSE;
     } catch (...) {
         std::cerr << "[STEP Exporter] Unknown error" << std::endl;
         std::cerr << "[STEP Exporter] =========================================\n" << std::endl;
+        
+        // 关闭日志文件
+        if (log_file) {
+            fclose(log_file);
+            log_file = nullptr;
+        }
+        
+        // 恢复 stdout
+        if (saved_stdout_fd >= 0) {
+            _dup2(saved_stdout_fd, _fileno(stdout));
+            _close(saved_stdout_fd);
+            saved_stdout_fd = -1;
+        }
+        
         if (progress_callback) Py_DECREF(progress_callback);
         Py_RETURN_FALSE;
     }

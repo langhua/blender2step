@@ -281,7 +281,7 @@ def create_fillet_cylinder(name, center, radius, height, fillet_radius, segments
         # 进入编辑模式
         bpy.ops.object.mode_set(mode='EDIT')
         
-        # 选择顶部边
+        # 选择顶部的边
         bpy.ops.mesh.select_all(action='DESELECT')
         bpy.ops.object.mode_set(mode='OBJECT')
         
@@ -295,8 +295,10 @@ def create_fillet_cylinder(name, center, radius, height, fillet_radius, segments
         bpy.ops.object.mode_set(mode='EDIT')
         
         # 使用倒角工具创建圆角
+        # 对于圆角，需要使用bevel工具，并设置正确的offset
+        # Bevel的offset参数对于圆角（profile=0.5）实际上是圆角半径
         bpy.ops.mesh.bevel(
-            offset=fillet_radius,
+            offset=fillet_radius,  # offset直接等于圆角半径
             segments=8,
             profile=0.5,
             clamp_overlap=False
@@ -390,12 +392,12 @@ def create_mechanical_demo_scene():
     chamfer_cylinder = create_chamfered_cylinder(
         "Cylinder_Chamfer_45deg",
         [-120, 0, 0],
-        25, 60, 5,  # 半径25，高度60，倒角尺寸5
+        25, 60, 3,  # 半径25，高度60，倒角尺寸3
         segments=64
     )
     if chamfer_cylinder:
         print("   ✓ 45°倒角圆柱体")
-        print("     → 半径: 25mm, 高度: 60mm, 倒角: 5mm")
+        print("     → 半径: 25mm, 高度: 60mm, 倒角: 3mm")
         print("     → 导出应为CONICAL_SURFACE")
     else:
         print("   ✗ 创建45°倒角圆柱失败")
@@ -404,12 +406,12 @@ def create_mechanical_demo_scene():
     fillet_cylinder = create_fillet_cylinder(
         "Cylinder_Fillet_Top",
         [-120, -80, 0],
-        25, 60, 5,  # 半径25，高度60，圆角半径5
+        25, 60, 6,  # 半径25，高度60，圆角半径6
         segments=64
     )
     if fillet_cylinder:
         print("   ✓ 圆角圆柱体")
-        print("     → 半径: 25mm, 高度: 60mm, 圆角半径: 5mm")
+        print("     → 半径: 25mm, 高度: 60mm, 圆角半径: 6mm")
         print("     → 导出应为TOROIDAL_SURFACE")
     else:
         print("   ✗ 创建圆角圆柱失败")

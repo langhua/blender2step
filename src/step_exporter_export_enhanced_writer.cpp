@@ -8,8 +8,28 @@
 #include <iostream>
 #include <iomanip>
 #include <chrono>
+#include <fstream>
+#include <io.h>
+#include <fcntl.h>
 
-bool setup_step_writer(STEPControl_Writer& writer, const char* filename, const char* step_schema, const char* unit, int advanced_brep, int enable_logging) {
+StdoutRedirectState setup_step_writer(STEPControl_Writer& writer, const char* filename, const char* step_schema, const char* unit, int advanced_brep, int enable_logging, const char* log_filename) {
+    StdoutRedirectState state;
+    
+    // 重定向 C++ stdout 到日志文件
+    if (enable_logging && log_filename && strlen(log_filename) > 0) {
+        // 使用_fsopen 允许共享读取权限，这样 Python 也可以同时写入
+        state.log_file = _fsopen(log_filename, "a", _SH_DENYNO);
+        if (state.log_file) {
+            state.saved_stdout_fd = _dup(_fileno(stdout));
+            _dup2(_fileno(state.log_file), _fileno(stdout));
+            setvbuf(stdout, nullptr, _IONBF, 0);
+            state.stdout_redirected = true;
+            std::cout << "[STEP Exporter] Redirecting C++ stdout to log file: " << log_filename << std::endl;
+        } else {
+            std::cout << "[STEP Exporter] WARNING: Failed to open log file: " << log_filename << std::endl;
+        }
+    }
+    
     // 必须在调用Init()之前设置所有参数，否则Init()会覆盖默认值
     // 最大限度优化文件大小，匹配FreeCAD导出配置
     // 直接使用用户选择的schema（UI中已移除AP214和AP242通用选项）
@@ -205,5 +225,6 @@ bool setup_step_writer(STEPControl_Writer& writer, const char* filename, const c
         }
     }
     
-    return true;
+    // 不恢复 stdout，让调用者在 writer.Write() 之后恢复
+    return state;
 }

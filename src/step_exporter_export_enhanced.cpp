@@ -89,9 +89,14 @@ PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
     try {
         // Setup STEP writer
         STEPControl_Writer writer;
-        if (!setup_step_writer(writer, filename, step_schema, unit, advanced_brep, enable_logging)) {
-            // Initialization failed - currently won't happen but handle gracefully
+        
+        // 生成日志文件名（基于 STEP 文件名）
+        std::string log_filename;
+        if (enable_logging && filename) {
+            log_filename = std::string(filename) + ".log";
         }
+        
+        StdoutRedirectState redirect_state = setup_step_writer(writer, filename, step_schema, unit, advanced_brep, enable_logging, log_filename.c_str());
 
         // Process all objects and collect shapes
         auto objects_start_time = std::chrono::steady_clock::now();
@@ -137,6 +142,16 @@ PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
         // Write STEP file
         std::cout << "[STEP Exporter] Writing STEP file..." << std::endl;
         IFSelect_ReturnStatus write_status = writer.Write(filename);
+
+        // 恢复 stdout
+        if (redirect_state.stdout_redirected && redirect_state.saved_stdout_fd >= 0) {
+            fflush(stdout);
+            _dup2(redirect_state.saved_stdout_fd, _fileno(stdout));
+            _close(redirect_state.saved_stdout_fd);
+            if (redirect_state.log_file) {
+                fclose(redirect_state.log_file);
+            }
+        }
 
         if (write_status == IFSelect_RetDone) {
             std::cout << "[STEP Exporter] Successfully exported ENHANCED STEP file" << std::endl;

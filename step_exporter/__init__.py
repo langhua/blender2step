@@ -299,10 +299,19 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
                     print(f"[Python DEBUG] First 5 vertices being passed to C++:")
                     for i in range(min(5, len(verts))):
                         print(f"  Vertex {i}: {verts[i]}")
-            import sys
-            sys.stdout.flush()
             
-            # C++处理阶段：设置基础进度为20%
+            # 如果启用日志，设置 progress_report.py 的日志文件
+            # Python 和 C++ 各自打开自己的文件句柄，互不干扰
+            import sys
+            log_file_path = self.filepath + ".log"
+            if self.enable_logging:
+                try:
+                    from . import progress_report
+                    progress_report.step_progress_data.set_log_file(log_file_path)
+                except Exception as e:
+                    print(f"[Python] WARNING: Failed to set log file: {e}", flush=True)
+            
+            # C++ 处理阶段：设置基础进度为 20%
             update_progress(python_progress_weight, "正在导出 STEP 文件...", context)
             
             # 创建带暂停功能的回调函数
@@ -365,8 +374,16 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
                 progress_callback
             )
             
-            # C++处理完成，进度到100%
+            # C++ 处理完成，进度到 100%
             update_progress(100, "导出完成", context)
+            
+            # 关闭 progress_report 的日志文件
+            if self.enable_logging:
+                try:
+                    from . import progress_report
+                    progress_report.step_progress_data.close_log_file()
+                except Exception as e:
+                    print(f"[Python] WARNING: Failed to close progress report log file: {e}", flush=True)
             
             if success:
                 self.report({'INFO'}, f"Successfully exported {len(objects_data)} object(s) to {self.filepath}")

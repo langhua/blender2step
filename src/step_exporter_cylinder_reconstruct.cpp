@@ -823,7 +823,7 @@ private:
                                 cylinder_z_max = std::max(cylinder_z_max, vertex_z);
                             }
                         }
-                    } else if (angle_deg > 20 && angle_deg < 70) {
+                    } else if (angle_deg > 10 && angle_deg < 85) {
                         // 圆角面（法线角度从90°到0°变化）
                         fillet_count++;
                         
@@ -875,9 +875,9 @@ private:
                     std::cout << "[STEP Exporter] [CylDet]   Fillet radius (method3): " << fillet_radius3 << std::endl;
                     std::cout << "[STEP Exporter] [CylDet]   Fillet radius (default): " << fillet_radius_default << std::endl;
                     
-                    // 选择最合理的圆角半径：优先使用默认值（圆柱半径的20%）
-                    double fillet_radius = fillet_radius_default;
-                    std::cout << "[STEP Exporter] [CylDet]   Using default value for fillet radius (20% of cylinder radius)" << std::endl;
+                    // 选择最合理的圆角半径：使用方法2（径向差值），对于顶面圆角，这应该最准确
+                    double fillet_radius = fillet_radius2;
+                    std::cout << "[STEP Exporter] [CylDet]   Using fillet radius from radial difference (method2)" << std::endl;
                     
                     // 确保z_min和z_max是整个圆柱的范围，而不仅仅是侧面或圆角面的范围
                     double overall_z_min = 1e20, overall_z_max = -1e20;
@@ -901,8 +901,8 @@ private:
                     result.radius_bottom = cylinder_radius;
                     result.top_radius = cylinder_radius - fillet_radius;
                     result.fillet_radius = fillet_radius;
-                    // 使用整体Z范围，确保顶盖正确显示
-                    result.cylinder_height = cylinder_z_max;
+                    // 使用整体Z范围计算高度
+                    result.cylinder_height = overall_z_max - overall_z_min;
                     result.z_min = overall_z_min;
                     result.z_max = overall_z_max;
                     

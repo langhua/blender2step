@@ -7,8 +7,10 @@ import bpy
 from bpy.props import FloatProperty, StringProperty
 from bpy.types import Operator, Scene
 import time
+import sys
+import os
 
-# 保存原始的 draw 函数
+# 保存原始VIEW3D_HT_tool_header.draw函数
 step_info_header_draw = lambda s, c: None
 
 def update_ui(self, context):
@@ -21,16 +23,57 @@ def update_ui(self, context):
 # 全局进度数据
 class STEPProgressData:
     def __init__(self):
-        self.progress = -1.0  # -1 表示隐藏，0-100 表示进度
+        self.progress = -1.0  # -1 表示隐藏，-100 表示进度
         self.text = "正在导出 STEP 文件..."
         self.is_running = False
+        self.log_file = None
+        self.use_c_stdout = False  # 标记是否使用 C++ 重定向的 stdout
+    
+    def log(self, message):
+        """日志输出函数，自动选择输出到日志文件或 stdout"""
+        log_msg = f"[STEP Progress] {message}"
+        if self.log_file:
+            print(log_msg, file=self.log_file, flush=True)
+        elif self.use_c_stdout:
+            # 使用 C++ 重定向的 stdout（直接 print 会到 C++ 的 stdout）
+            print(log_msg, flush=True)
+        else:
+            print(log_msg)
+    
+    def set_log_file(self, log_file_path):
+        """设置日志文件路径"""
+        try:
+            self.log_file = open(log_file_path, 'a')
+            self.log(f"Redirected progress output to log file: {log_file_path}")
+        except Exception as e:
+            step_progress_data.log(f"WARNING: Failed to open log file: {e}")
+    
+    def set_use_c_stdout(self, use_c_stdout):
+        """设置是否使用 C++ 重定向的 stdout"""
+        self.use_c_stdout = use_c_stdout
+        if use_c_stdout:
+            self.log("Using C++ redirected stdout")
+    
+    def close_log_file(self):
+        """关闭日志文件"""
+        if self.log_file:
+            try:
+                self.log_file.close()
+                self.log_file = None
+                print(f"[STEP Progress] Closed log file", file=sys.__stdout__, flush=True)
+            except Exception as e:
+                step_progress_data.log(f"WARNING: Failed to close log file: {e}")
     
     def update(self, progress, text=None, context=None):
         self.progress = progress
         if text:
             self.text = text
         # 记录更新（用于调试）
-        print(f"[STEP Progress] Data updated: {progress:.1f}%, text: {text}")
+        log_msg = f"[STEP Progress] Data updated: {progress:.1f}%, text: {text}"
+        if self.log_file:
+            print(log_msg, file=self.log_file, flush=True)
+        else:
+            print(log_msg)
         
         # 更新场景属性（如果已注册）
         try:
@@ -44,12 +87,20 @@ class STEPProgressData:
             
             if scene and hasattr(scene, 'step_progress_indicator'):
                 scene.step_progress_indicator = progress
-                print(f"[STEP Progress] Scene property updated via context")
+                log_msg = f"[STEP Progress] Scene property updated via context"
+                if self.log_file:
+                    print(log_msg, file=self.log_file, flush=True)
+                else:
+                    print(log_msg)
             if text and scene and hasattr(scene, 'step_progress_indicator_text'):
                 scene.step_progress_indicator_text = text
         except Exception as e:
             # 忽略上下文错误，数据已存储在对象中，定时器会尝试更新
-            print(f"[STEP Progress] Context update failed: {e}")
+            log_msg = f"[STEP Progress] Context update failed: {e}"
+            if self.log_file:
+                print(log_msg, file=self.log_file, flush=True)
+            else:
+                print(log_msg)
         
         # 强制UI刷新（尝试所有窗口）
         self._force_ui_refresh()
@@ -85,9 +136,17 @@ class STEPProgressData:
                             except:
                                 pass
             
-            print(f"[STEP Progress] UI refresh forced: {windows_updated} windows, {areas_updated} areas")
+            log_msg = f"[STEP Progress] UI refresh forced: {windows_updated} windows, {areas_updated} areas"
+            if self.log_file:
+                print(log_msg, file=self.log_file, flush=True)
+            else:
+                print(log_msg)
         except Exception as e:
-            print(f"[STEP Progress] UI refresh error: {e}")
+            log_msg = f"[STEP Progress] UI refresh error: {e}"
+            if self.log_file:
+                print(log_msg, file=self.log_file, flush=True)
+            else:
+                print(log_msg)
 
 step_progress_data = STEPProgressData()
 
@@ -124,11 +183,19 @@ class STEPProgressReport(Operator):
         if event.type == 'WINDOW_DEACTIVATE':
             # 窗口失去焦点，记录状态但不停止
             if step_progress_data.is_running:
-                print(f"[STEP Progress] Window deactivated, progress: {step_progress_data.progress:.1f}%")
+                log_msg = f"[STEP Progress] Window deactivated, progress: {step_progress_data.progress:.1f}%"
+                if step_progress_data.log_file:
+                    print(log_msg, file=step_progress_data.log_file, flush=True)
+                else:
+                    print(log_msg)
         elif event.type == 'WINDOW_ACTIVATE':
             # 窗口重新获得焦点，强制立即更新UI
             if step_progress_data.is_running:
-                print(f"[STEP Progress] Window activated, forcing UI refresh, progress: {step_progress_data.progress:.1f}%")
+                log_msg = f"[STEP Progress] Window activated, forcing UI refresh, progress: {step_progress_data.progress:.1f}%"
+                if step_progress_data.log_file:
+                    print(log_msg, file=step_progress_data.log_file, flush=True)
+                else:
+                    print(log_msg)
             if hasattr(context.scene, 'step_progress_indicator'):
                 context.scene.step_progress_indicator = step_progress_data.progress
             if hasattr(context.scene, 'step_progress_indicator_text'):
@@ -154,7 +221,11 @@ class STEPProgressReport(Operator):
         return {'PASS_THROUGH'}
     
     def invoke(self, context, event):
-        print(f"[STEP Progress] Progress operator invoked, window: {context.window}")
+        log_msg = f"[STEP Progress] Progress operator invoked, window: {context.window}"
+        if step_progress_data.log_file:
+            print(log_msg, file=step_progress_data.log_file, flush=True)
+        else:
+            print(log_msg)
         # 保存原始绘制函数
         global step_info_header_draw, step_app_timer
         step_info_header_draw = bpy.types.VIEW3D_HT_tool_header.draw
@@ -185,7 +256,7 @@ class STEPProgressReport(Operator):
         wm = context.window_manager
         
         # 启动事件定时器（用于模态操作符，处理窗口事件）
-        self.timer = wm.event_timer_add(0.1, window=context.window)  # 每0.1秒更新一次
+        self.timer = wm.event_timer_add(0.1, window=context.window)  # 0.1秒更新一次
         
         # 启动后台定时器（即使窗口失去焦点也会运行）
         # 使用闭包变量存储状态
@@ -198,13 +269,13 @@ class STEPProgressReport(Operator):
             
             # 第一次调用时打印
             if background_timer_call_count == 1:
-                print(f"[STEP Progress] Background timer first call, progress: {step_progress_data.progress:.1f}%")
+                step_progress_data.log(f"Background timer first call, progress: {step_progress_data.progress:.1f}%")
             
             if not step_progress_data.is_running:
                 # 停止定时器
                 global step_app_timer
                 step_app_timer = None
-                print("[STEP Progress] Background timer stopped")
+                step_progress_data.log("Background timer stopped")
                 return None
             
             # 每10次调用或进度变化超过1%时输出调试信息
@@ -215,7 +286,7 @@ class STEPProgressReport(Operator):
                 last_logged_progress = step_progress_data.progress
             
             if log_this_time:
-                print(f"[STEP Progress] Background timer running (call #{background_timer_call_count}), progress: {step_progress_data.progress:.1f}%, text: {step_progress_data.text}")
+                step_progress_data.log(f"Background timer running (call #{background_timer_call_count}), progress: {step_progress_data.progress:.1f}%, text: {step_progress_data.text}")
             
             # 更新UI（使用所有可用窗口的上下文）
             try:
@@ -225,12 +296,12 @@ class STEPProgressReport(Operator):
                 
                 # 调试信息：打印窗口管理器数量
                 if log_this_time:
-                    print(f"[STEP Progress] Window managers count: {len(bpy.data.window_managers)}")
+                    step_progress_data.log(f"Window managers count: {len(bpy.data.window_managers)}")
                 
                 for window_manager in bpy.data.window_managers:
                     # 调试信息：打印窗口数量
                     if log_this_time:
-                        print(f"[STEP Progress] Windows count in manager: {len(window_manager.windows)}")
+                        step_progress_data.log(f"Windows count in manager: {len(window_manager.windows)}")
                     
                     for window in window_manager.windows:
                         # 获取该窗口的屏幕和场景
@@ -240,7 +311,7 @@ class STEPProgressReport(Operator):
                         
                         # 调试信息：打印屏幕信息
                         if log_this_time:
-                            print(f"[STEP Progress] Screen name: {screen.name}, areas count: {len(screen.areas)}")
+                            step_progress_data.log(f"Screen name: {screen.name}, areas count: {len(screen.areas)}")
                         
                         # 尝试更新该窗口的场景属性
                         try:
@@ -251,7 +322,7 @@ class STEPProgressReport(Operator):
                                     scene.step_progress_indicator = step_progress_data.progress
                                     windows_updated += 1
                                     if log_this_time:
-                                        print(f"[STEP Progress] Updated scene property for window {window.as_pointer()}")
+                                        step_progress_data.log(f"Updated scene property for window {window.as_pointer()}")
                                 if hasattr(scene, 'step_progress_indicator_text'):
                                     scene.step_progress_indicator_text = step_progress_data.text
                         except Exception as e:
@@ -262,12 +333,12 @@ class STEPProgressReport(Operator):
                                     scene.step_progress_indicator = step_progress_data.progress
                                     windows_updated += 1
                                     if log_this_time:
-                                        print(f"[STEP Progress] Updated scene property via screen.scene for window {window.as_pointer()}")
+                                        step_progress_data.log(f"Updated scene property via screen.scene for window {window.as_pointer()}")
                                 if scene and hasattr(scene, 'step_progress_indicator_text'):
                                     scene.step_progress_indicator_text = step_progress_data.text
                             except Exception as e2:
                                 if log_this_time:
-                                    print(f"[STEP Progress] Failed to update window {window.as_pointer()}: {e2}")
+                                    step_progress_data.log(f"Failed to update window {window.as_pointer()}: {e2}")
                         
                         # 标记所有3D视图区域需要重绘
                         for area in screen.areas:
@@ -276,21 +347,21 @@ class STEPProgressReport(Operator):
                                     area.tag_redraw()
                                     areas_updated += 1
                                     if log_this_time:
-                                        print(f"[STEP Progress] Tagged redraw for area {area.as_pointer()}")
+                                        step_progress_data.log(f"Tagged redraw for area {area.as_pointer()}")
                                 except Exception as e:
                                     if log_this_time:
-                                        print(f"[STEP Progress] Failed to tag redraw for area {area.as_pointer()}: {e}")
+                                        step_progress_data.log(f"Failed to tag redraw for area {area.as_pointer()}: {e}")
                 
                 if log_this_time:
-                    print(f"[STEP Progress] Updated {windows_updated} window(s), {areas_updated} area(s)")
+                    step_progress_data.log(f"Updated {windows_updated} window(s), {areas_updated} area(s)")
             except Exception as e:
                 # 记录所有错误
-                print(f"[STEP Progress] Error in background timer: {e}")
+                step_progress_data.log(f"Error in background timer: {e}")
                 import traceback
                 traceback.print_exc()
             
             # 返回下一次调用的间隔（秒）
-            return 0.1  # 每0.1秒运行一次，提高响应性
+            return 0.1  # 0.1秒运行一次，提高响应速度
         
         # 注册后台定时器
         if step_app_timer:
@@ -299,14 +370,14 @@ class STEPProgressReport(Operator):
             except:
                 pass
         step_app_timer = bpy.app.timers.register(background_timer)
-        print(f"[STEP Progress] Background timer registered: {step_app_timer}")
+        step_progress_data.log(f"Background timer registered: {step_app_timer}")
         
         wm.modal_handler_add(self)
         
         return {'RUNNING_MODAL'}
     
     def stop(self, context):
-        """停止进度条"""
+        """停止进度报告"""
         step_progress_data.is_running = False
         step_progress_data.update(-1, "导出完成")
         if context and hasattr(context.scene, 'step_progress_indicator'):
@@ -319,7 +390,7 @@ def register():
     bpy.utils.register_class(STEPProgressReport)
     
     # 添加场景属性用于进度显示
-    # 进度值：-1 表示隐藏，0-100 表示进度
+    # 进度值：-1 表示隐藏，-100 表示进度
     setattr(Scene, 'step_progress_indicator', FloatProperty(
         default=-1.0,
         subtype='PERCENTAGE',
@@ -359,7 +430,7 @@ def unregister():
 # 便捷函数
 def start_progress(context):
     """启动进度条显示"""
-    print(f"[STEP Progress] start_progress called, context: {context}, window: {context.window if context else None}")
+    step_progress_data.log(f"start_progress called, context: {context}, window: {context.window if context else None}")
     step_progress_data.is_running = True
     step_progress_data.update(0, "正在准备导出...")
     
@@ -368,21 +439,21 @@ def start_progress(context):
     if context:
         try:
             bpy.ops.export_scene.step_progress_report('INVOKE_DEFAULT')
-            print(f"[STEP Progress] Progress operator invoked successfully")
+            step_progress_data.log(f"Progress operator invoked successfully")
             operator_success = True
         except Exception as e:
-            print(f"[STEP Progress] Failed to invoke progress operator: {e}")
+            step_progress_data.log(f"Failed to invoke progress operator: {e}")
             import traceback
             traceback.print_exc()
     else:
-        print(f"[STEP Progress] No context provided, cannot start progress operator")
+        step_progress_data.log(f"No context provided, cannot start progress operator")
     
     # 如果操作符启动失败，启动后备定时器
     global step_app_timer
     if not operator_success and step_app_timer is None:
-        print(f"[STEP Progress] Starting fallback background timer")
+        step_progress_data.log(f"Starting fallback background timer")
         step_app_timer = bpy.app.timers.register(background_progress_update)
-        print(f"[STEP Progress] Fallback background timer registered: {step_app_timer}")
+        step_progress_data.log(f"Fallback background timer registered: {step_app_timer}")
     
     return step_progress_data
 
@@ -402,13 +473,13 @@ def background_progress_update():
     return 0.1
 
 def update_progress(progress, text=None, context=None):
-    """更新进度条"""
+    """更新进度"""
     step_progress_data.update(progress, text, context)
 
 def end_progress(context):
     """结束进度条显示"""
     global step_app_timer
-    print(f"[STEP Progress] end_progress called, is_running: {step_progress_data.is_running}")
+    step_progress_data.log(f"end_progress called, is_running: {step_progress_data.is_running}")
     if step_progress_data.is_running:
         step_progress_data.is_running = False
         step_progress_data.update(-1, "导出完成")
@@ -418,7 +489,7 @@ def end_progress(context):
         if step_app_timer:
             try:
                 bpy.app.timers.remove(step_app_timer)
-                print(f"[STEP Progress] Background timer removed")
+                step_progress_data.log(f"Background timer removed")
             except:
                 pass
             step_app_timer = None
@@ -445,10 +516,18 @@ def end_progress(context):
             # 调用重绘计时器
             if hasattr(bpy.ops.wm, 'redraw_timer'):
                 bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP', iterations=1)
-                print(f"[STEP Progress] Final redraw timer called")
+                step_progress_data.log(f"Final redraw timer called")
                 
         except Exception as e:
-            print(f"[STEP Progress] Final UI refresh error: {e}")
+            step_progress_data.log(f"Final UI refresh error: {e}")
         
         update_ui(None, context)
-        print(f"[STEP Progress] Progress ended")
+        step_progress_data.log(f"Progress ended")
+
+
+
+
+
+
+
+

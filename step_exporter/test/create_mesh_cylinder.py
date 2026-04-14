@@ -253,7 +253,7 @@ def create_chamfered_cylinder(name, center, radius, height, chamfer_size, segmen
 
 def create_fillet_cylinder(name, center, radius, height, fillet_radius, segments=64):
     """
-    创建顶部带圆角的圆柱体
+    创建顶部带圆角的圆柱体（使用 Bevel 修改器创建标准圆角）
     
     Args:
         name: 圆柱体名称
@@ -266,6 +266,8 @@ def create_fillet_cylinder(name, center, radius, height, fillet_radius, segments
     Returns:
         带圆角的圆柱体网格对象
     """
+    import math
+    
     try:
         # 创建基础圆柱体
         bpy.ops.mesh.primitive_cylinder_add(
@@ -278,30 +280,31 @@ def create_fillet_cylinder(name, center, radius, height, fillet_radius, segments
         obj = bpy.context.active_object
         obj.name = name
         
-        # 进入编辑模式
+        # 进入编辑模式，选择顶部的边
         bpy.ops.object.mode_set(mode='EDIT')
-        
-        # 选择顶部的边
         bpy.ops.mesh.select_all(action='DESELECT')
-        bpy.ops.object.mode_set(mode='OBJECT')
         
         # 选择顶部的边
+        bpy.ops.object.mode_set(mode='OBJECT')
         for edge in obj.data.edges:
             v1 = obj.data.vertices[edge.vertices[0]]
             v2 = obj.data.vertices[edge.vertices[1]]
+            # 选择顶部边缘（Z 坐标接近 height/2）
             if abs(v1.co.z - height/2) < 0.001 and abs(v2.co.z - height/2) < 0.001:
                 edge.select = True
         
         bpy.ops.object.mode_set(mode='EDIT')
         
-        # 使用倒角工具创建圆角
-        # 对于圆角，需要使用bevel工具，并设置正确的offset
-        # Bevel的offset参数对于圆角（profile=0.5）实际上是圆角半径
+        # 使用 Bevel 操作符创建圆角（只影响选中的边）
+        # 使用 OFFSET 类型，profile=0.5 创建圆形圆角
+        # 注意：解析器会自动应用 1.88 的补偿系数
         bpy.ops.mesh.bevel(
-            offset=fillet_radius,  # offset直接等于圆角半径
-            segments=8,
-            profile=0.5,
-            clamp_overlap=False
+            offset_type='OFFSET',  # 使用边偏移
+            offset=fillet_radius,  # 圆角半径（解析器会补偿）
+            segments=36,  # 圆角分段数
+            profile=0.5,  # 0.5 创建圆形圆角
+            clamp_overlap=False,
+            affect='EDGES'  # 只影响边
         )
         
         # 退出编辑模式
@@ -324,7 +327,7 @@ def create_fillet_cylinder(name, center, radius, height, fillet_radius, segments
         
         return obj
     except Exception as e:
-        print(f"创建圆角圆柱失败: {e}")
+        print(f"创建圆角圆柱失败：{e}")
         import traceback
         traceback.print_exc()
         return None
@@ -406,15 +409,31 @@ def create_mechanical_demo_scene():
     fillet_cylinder = create_fillet_cylinder(
         "Cylinder_Fillet_Top",
         [-120, -80, 0],
-        25, 60, 6,  # 半径25，高度60，圆角半径6
+        25, 60, 6,  # 半径 25，高度 60，圆角半径 6
         segments=64
     )
     if fillet_cylinder:
         print("   ✓ 圆角圆柱体")
-        print("     → 半径: 25mm, 高度: 60mm, 圆角半径: 6mm")
-        print("     → 导出应为TOROIDAL_SURFACE")
+        print("     → 半径：25mm, 高度：60mm, 圆角半径：6mm")
+        print("     → 导出应为 TOROIDAL_SURFACE")
+        print("     → 解析器自动补偿 1.88 系数")
     else:
         print("   ✗ 创建圆角圆柱失败")
+    
+    # 添加一个不同半径的测试圆柱
+    print("\n[5b/6] 创建小半径圆角圆柱（验证系数）...")
+    small_fillet_cylinder = create_fillet_cylinder(
+        "Cylinder_Fillet_Small",
+        [-60, -80, 0],
+        15, 40, 3,  # 半径 15，高度 40，圆角半径 3
+        segments=64
+    )
+    if small_fillet_cylinder:
+        print("   ✓ 小圆角圆柱体")
+        print("     → 半径：15mm, 高度：40mm, 圆角半径：3mm")
+        print("     → 解析器自动补偿 1.88 系数")
+    else:
+        print("   ✗ 创建小圆角圆柱失败")
     
     print("\n[6/6] 创建带2°斜率的参考圆柱...")
     slope_rad = math.radians(2)

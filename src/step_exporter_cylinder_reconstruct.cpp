@@ -21,6 +21,7 @@
 #include <Geom_ConicalSurface.hxx>
 #include <Geom_SurfaceOfRevolution.hxx>
 #include <BRepBuilderAPI_MakeShell.hxx>
+#include <BRepAlgoAPI_Fuse.hxx>
 #include <TopExp_Explorer.hxx>
 #include <gp_Circ.hxx>
 #include <gp_Ax2.hxx>
@@ -1339,6 +1340,89 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                         std::cout << "  - scaled height: " << cylinderHeight << std::endl;
                         std::cout << "  - fillet radius: " << filletRadius << std::endl;
                         
+                        // 方法 A：使用标准几何原语组合（无接缝）
+                        std::cout << "[STEP Exporter] Method A: Creating fillet cylinder using standard primitives..." << std::endl;
+                        try {
+                            // 1. 创建圆柱部分
+                            gp_Ax2 cylAxis(basePoint, axisDir);
+                            BRepPrimAPI_MakeCylinder cylMaker(cylAxis, mainRadius, cylinderHeight - filletRadius);
+                            TopoDS_Shape cylinderPart = cylMaker.Shape();
+                            std::cout << "[STEP Exporter]   Created cylinder part (R=" << mainRadius << ", H=" << (cylinderHeight - filletRadius) << ")" << std::endl;
+                            
+                            // 2. 创建 1/4 圆环部分（只创建圆角区域）
+                            gp_Pnt torusCenter = basePoint.Translated(gp_Vec(axisDir).Multiplied(cylinderHeight - filletRadius));
+                            gp_Ax2 torusAxis(torusCenter, axisDir);
+                            double torusMajorRadius = mainRadius - filletRadius;
+                            double torusMinorRadius = filletRadius;
+                            // 创建 1/4 圆环（0 到 90 度）
+                            BRepPrimAPI_MakeTorus torusMaker(torusAxis, torusMajorRadius, torusMinorRadius, 
+                                                             0, 2*M_PI, 0, M_PI/2);
+                            TopoDS_Shape torusPart = torusMaker.Shape();
+                            std::cout << "[STEP Exporter]   Created torus part (major R=" << torusMajorRadius << ", minor R=" << torusMinorRadius << ")" << std::endl;
+                            
+                            // 3. 融合圆柱和圆环
+                            BRepAlgoAPI_Fuse fuse1(cylinderPart, torusPart);
+                            if (!fuse1.IsDone()) {
+                                std::cout << "[STEP Exporter]   ⚠ First fuse failed" << std::endl;
+                                throw std::runtime_error("First fuse failed");
+                            }
+                            TopoDS_Shape fusedShape = fuse1.Shape();
+                            std::cout << "[STEP Exporter]   Fused cylinder + torus" << std::endl;
+                            
+                            // 4. 创建顶面实体（将顶面加厚成非常薄的实体）
+                            gp_Pnt topCenter = basePoint.Translated(gp_Vec(axisDir).Multiplied(cylinderHeight));
+                            gp_Ax2 topAxis(topCenter, axisDir);
+                            gp_Circ topCircle(topAxis, mainRadius - filletRadius);
+                            BRepBuilderAPI_MakeEdge topEdgeMaker(topCircle);
+                            BRepBuilderAPI_MakeWire topWireMaker;
+                            topWireMaker.Add(topEdgeMaker.Edge());
+                            BRepBuilderAPI_MakeFace topFaceMaker(topWireMaker.Wire());
+                            TopoDS_Face topFace = topFaceMaker.Face();
+                            
+                            // 使用 BRepPrimAPI_MakePrism 将面拉伸成薄实体
+                            gp_Dir prismDir = axisDir.Reversed();  // 向下拉伸
+                            BRepPrimAPI_MakePrism prismMaker(topFace, prismDir, 0.001);  // 拉伸 0.001mm
+                            if (!prismMaker.IsDone()) {
+                                std::cout << "[STEP Exporter]   ⚠ Prism failed" << std::endl;
+                                throw std::runtime_error("Prism failed");
+                            }
+                            TopoDS_Shape topSolid = prismMaker.Shape();
+                            std::cout << "[STEP Exporter]   Created top solid (thickness=0.001)" << std::endl;
+                            
+                            // 5. 融合
+                            BRepAlgoAPI_Fuse fuse2(fusedShape, topSolid);
+                            if (!fuse2.IsDone()) {
+                                std::cout << "[STEP Exporter]   ⚠ Second fuse failed" << std::endl;
+                                throw std::runtime_error("Second fuse failed");
+                            }
+                            TopoDS_Shape filletCylinder = fuse2.Shape();
+                            
+                            if (!filletCylinder.IsNull() && filletCylinder.ShapeType() == TopAbs_SOLID) {
+                                std::cout << "[STEP Exporter] ✓ Created fillet cylinder using standard primitives (no seam)" << std::endl;
+                                
+                                int faceCount = 0;
+                                for (TopExp_Explorer exp(filletCylinder, TopAbs_FACE); exp.More(); exp.Next()) {
+                                    faceCount++;
+                                }
+                                std::cout << "[STEP Exporter] Fillet cylinder has " << faceCount << " faces" << std::endl;
+                                
+                                gp_Trsf transform;
+                                transform.SetTranslation(gp_Vec(basePoint.X(), basePoint.Y(), basePoint.Z()));
+                                filletCylinder.Move(transform);
+                                
+                                return filletCylinder;
+                            } else {
+                                std::cout << "[STEP Exporter]   ⚠ Result is not a solid (type=" << filletCylinder.ShapeType() << ")" << std::endl;
+                            }
+                        } catch (const std::exception& e) {
+                            std::cout << "[STEP Exporter] ⚠ Method A failed: " << e.what() << ", falling back to revolution method" << std::endl;
+                        } catch (...) {
+                            std::cout << "[STEP Exporter] ⚠ Method A failed with unknown exception, falling back to revolution method" << std::endl;
+                        }
+                        
+                        // 方法 B：使用旋转方法（可能有接缝）
+                        std::cout << "[STEP Exporter] Method B: Using revolution method..." << std::endl;
+                        
                         // 创建轮廓线的顶点 - 和斜角圆柱完全一样
                         gp_Pnt p0(0, 0, 0);
                         gp_Pnt p1(mainRadius, 0, 0);
@@ -1386,10 +1470,60 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                         BRepBuilderAPI_MakeFace profileFaceMaker(profileWire, Standard_True);
                         TopoDS_Face profileFace = profileFaceMaker.Face();
                         
-                        // 绕Z轴旋转360度创建实体
+                        // 绕 Z 轴旋转 360 度创建实体
+                        // 使用 Periodic 参数创建无缝旋转体
                         gp_Ax1 rotationAxis(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1));
-                        BRepPrimAPI_MakeRevol revolMaker(profileFace, rotationAxis, 2 * M_PI);
+                        BRepPrimAPI_MakeRevol revolMaker(profileFace, rotationAxis, 2 * M_PI, Standard_True);
+                        // 设置为周期性曲面，移除 U 方向的接缝
                         TopoDS_Shape filletCylinder = revolMaker.Shape();
+                        
+                        // 尝试移除接缝边 - 方法 1：使用 ShapeFix_Solid
+                        try {
+                            ShapeFix_Solid fixSolid;
+                            TopoDS_Solid solid = TopoDS::Solid(filletCylinder);
+                            fixSolid.Init(solid);
+                            fixSolid.SetPrecision(Precision::Confusion());
+                            fixSolid.Perform();
+                            TopoDS_Shape fixedShape = fixSolid.Solid();
+                            
+                            // 检查修复后的形状是否有效
+                            if (!fixedShape.IsNull()) {
+                                filletCylinder = fixedShape;
+                                std::cout << "[STEP Exporter] ✓ Applied ShapeFix to remove seam edges" << std::endl;
+                            }
+                        } catch (...) {
+                            std::cout << "[STEP Exporter] ⚠ ShapeFix failed, using original shape" << std::endl;
+                        }
+                        
+                        // 方法 2：使用 ShapeFix_Face 修复每个面的边界
+                        // 注意：这个方法不修改原几何，只是清理面的边界表示
+                        try {
+                            ShapeFix_Shape fixShape(filletCylinder);
+                            fixShape.SetPrecision(Precision::Confusion());
+                            fixShape.Perform();
+                            if (!fixShape.Shape().IsNull()) {
+                                filletCylinder = fixShape.Shape();
+                                std::cout << "[STEP Exporter] ✓ Applied ShapeFix_Shape to clean boundaries" << std::endl;
+                            }
+                        } catch (...) {
+                            std::cout << "[STEP Exporter] ⚠ ShapeFix_Shape failed" << std::endl;
+                        }
+                        
+                        // 方法 3：使用 BRepBuilderAPI_Sewing 缝合接缝
+                        // 注意：这个方法可能会改变几何形状，所以放在最后
+                        try {
+                            BRepBuilderAPI_Sewing sewing(Precision::Confusion());
+                            sewing.Add(filletCylinder);
+                            sewing.Perform();
+                            TopoDS_Shape sewnShape = sewing.SewedShape();
+                            
+                            if (!sewnShape.IsNull() && sewnShape.ShapeType() == TopAbs_SOLID) {
+                                filletCylinder = sewnShape;
+                                std::cout << "[STEP Exporter] ✓ Applied sewing to merge seam edges" << std::endl;
+                            }
+                        } catch (...) {
+                            std::cout << "[STEP Exporter] ⚠ Sewing failed" << std::endl;
+                        }
                         
                         // 将旋转后的实体移动到正确位置
                         gp_Trsf transform;

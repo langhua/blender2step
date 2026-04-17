@@ -129,16 +129,11 @@ static bool extract_vertices(PyObject* vertices_obj, std::vector<std::vector<dou
 }
 
 // Helper function to extract faces from Python object
-static bool extract_faces(PyObject* faces_obj, std::vector<std::vector<int>>& faces, size_t& total_faces_processed, size_t total_faces_in_scene, int enable_logging, PyObject* progress_callback, const std::chrono::steady_clock::time_point& face_start_time) {
+static bool extract_faces(PyObject* faces_obj, std::vector<std::vector<int>>& faces, size_t& total_faces_processed, size_t total_faces_in_scene, int enable_logging, const std::chrono::steady_clock::time_point& face_start_time) {
     if (!PyList_Check(faces_obj)) {
         return false;
     }
     Py_ssize_t num_faces = PyList_Size(faces_obj);
-    
-    // 进度报告设置
-    size_t report_interval = num_faces / 100;
-    if (report_interval == 0) report_interval = 1;
-    size_t next_report = report_interval;
     
     for (Py_ssize_t f = 0; f < num_faces; f++) {
         PyObject* face_item = PyList_GetItem(faces_obj, f);
@@ -179,38 +174,6 @@ static bool extract_faces(PyObject* faces_obj, std::vector<std::vector<int>>& fa
         
         // 更新总处理面数
         total_faces_processed++;
-        
-        // 进度报告
-        if (static_cast<size_t>(f) >= next_report) {
-            double object_face_progress = (f * 100.0) / num_faces;
-            double total_progress = (total_faces_in_scene > 0) ? (total_faces_processed * 100.0) / total_faces_in_scene : 0.0;
-            std::chrono::steady_clock::time_point current_time = std::chrono::steady_clock::now();
-            auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(current_time - face_start_time).count();
-            double estimated_total_ms = (object_face_progress > 1e-9) ? (elapsed_ms * 100.0) / object_face_progress : 0.0;
-            double remaining_ms = (estimated_total_ms > elapsed_ms) ? (estimated_total_ms - elapsed_ms) : 0.0;
-            double remaining_sec = remaining_ms / 1000.0;
-            
-            if (enable_logging) {
-                std::cout << "[STEP Exporter]   Face progress: " << std::fixed << std::setprecision(1) << object_face_progress 
-                          << "% (" << f << "/" << num_faces << " faces) - "
-                          << "Total progress: " << std::setprecision(1) << total_progress << "% - "
-                          << "Elapsed: " << (elapsed_ms / 1000.0) << "s, "
-                          << "Remaining: " << std::setprecision(0) << remaining_sec << "s" << std::endl;
-            }
-            
-            // 更新Blender进度条
-            double mapped_progress = 20.0 + total_progress * 0.8;
-            call_progress_callback(progress_callback, enable_logging, mapped_progress);
-            
-            next_report += report_interval;
-        }
-    }
-    
-    // 面循环结束后更新进度，确保进度条前进
-    if (num_faces > 0) {
-        double total_progress = (total_faces_in_scene > 0) ? (total_faces_processed * 100.0) / total_faces_in_scene : 0.0;
-        double mapped_progress = 20.0 + total_progress * 0.8;
-        call_progress_callback(progress_callback, enable_logging, mapped_progress);
     }
     
     return true;
@@ -281,21 +244,9 @@ std::vector<TopoDS_Shape> process_all_objects(
             obj_name = PyUnicode_AsUTF8(name_obj);
         }
 
-        // 计算对象进度
-        double object_progress = (i * 100.0) / num_objects;
-        std::chrono::steady_clock::time_point current_time = std::chrono::steady_clock::now();
-        auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(current_time - objects_start_time).count();
-        double elapsed_sec = elapsed_ms / 1000.0;
-        
-        // 更新进度条：C++处理阶段占总进度的80%（从20%到100%）
-        double mapped_progress = 20.0 + object_progress * 0.8;
-        call_progress_callback(progress_callback, enable_logging, mapped_progress);
-        
         if (enable_logging) {
             std::cout << "\n[STEP Exporter] Processing object " << i + 1 << "/" << num_objects
-                      << " (" << std::fixed << std::setprecision(1) << object_progress << "%)"
-                      << ": " << obj_name 
-                      << " [Elapsed: " << std::setprecision(1) << elapsed_sec << "s]" << std::endl;
+                      << ": " << obj_name << std::endl;
         }
 
         // 检查对象类型
@@ -316,6 +267,10 @@ std::vector<TopoDS_Shape> process_all_objects(
                         if (enable_logging) {
                             std::cout << "[STEP Exporter]   ✓ Curve shape created successfully" << std::endl;
                         }
+                        // 对象处理完成，更新进度
+                        double completed_progress = ((i + 1) * 100.0) / num_objects;
+                        double completed_mapped_progress = 20.0 + completed_progress * 0.8;
+                        call_progress_callback(progress_callback, enable_logging, completed_mapped_progress);
                     } else {
                         std::cerr << "[STEP Exporter]   ✗ Curve shape is null after fixing" << std::endl;
                     }
@@ -366,7 +321,7 @@ std::vector<TopoDS_Shape> process_all_objects(
             }
             
             std::chrono::steady_clock::time_point face_start_time = std::chrono::steady_clock::now();
-            extract_faces(faces_obj, faces, total_faces_processed, total_faces_in_scene, enable_logging, progress_callback, face_start_time);
+            extract_faces(faces_obj, faces, total_faces_processed, total_faces_in_scene, enable_logging, face_start_time);
         } else {
             std::cerr << "[STEP Exporter]   No faces found or faces is not a list" << std::endl;
             continue;
@@ -432,6 +387,10 @@ std::vector<TopoDS_Shape> process_all_objects(
                         }
                         std::cout << ")" << std::endl;
                     }
+                    // 对象处理完成，更新进度
+                    double completed_progress = ((i + 1) * 100.0) / num_objects;
+                    double completed_mapped_progress = 20.0 + completed_progress * 0.8;
+                    call_progress_callback(progress_callback, enable_logging, completed_mapped_progress);
                 } else {
                     std::cerr << "[STEP Exporter]   ✗ Shape is null after fixing" << std::endl;
                 }

@@ -1355,8 +1355,10 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                             double torusMajorRadius = mainRadius - filletRadius;
                             double torusMinorRadius = filletRadius;
                             // 创建 1/4 圆环（0 到 90 度）
+                            // 使用 6 参数版本：Axis, MajorRadius, MinorRadius, Angle1, Angle2, Angle3
+                            // Angle1=0, Angle2=2π (全圆周), Angle3=π/2 (半圆环)
                             BRepPrimAPI_MakeTorus torusMaker(torusAxis, torusMajorRadius, torusMinorRadius, 
-                                                             0, 2*M_PI, 0, M_PI/2);
+                                                             0, 2*M_PI, M_PI/2);
                             TopoDS_Shape torusPart = torusMaker.Shape();
                             std::cout << "[STEP Exporter]   Created torus part (major R=" << torusMajorRadius << ", minor R=" << torusMinorRadius << ")" << std::endl;
                             

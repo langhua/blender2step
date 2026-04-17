@@ -20,6 +20,9 @@ static PyMethodDef step_exporter_methods[] = {
     {"export_step", export_step, METH_VARARGS, "Export simple shape to STEP"},
     {"export_scene", export_scene, METH_VARARGS, "Export scene objects to STEP (Legacy)"},
     {"export_scene_enhanced", export_scene_enhanced, METH_VARARGS, "Export scene objects to STEP with advanced BREP and solid creation"},
+    {"init_incremental_export", init_incremental_export, METH_VARARGS, "Initialize incremental export"},
+    {"add_object_to_export", add_object_to_export, METH_VARARGS, "Add single object to incremental export"},
+    {"finalize_incremental_export", finalize_incremental_export, METH_NOARGS, "Finalize incremental export and write file"},
     {"get_version", get_version, METH_NOARGS, "Get module version"},
     {NULL, NULL, 0, NULL}
 };

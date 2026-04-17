@@ -1,6 +1,8 @@
 // STEP Exporter for Blender - C++ Extension Module (Complete Enhanced Version)
 // Save as: step_exporter.cpp
 
+#include "../include/step_exporter_internal.h"
+
 
 
 #include <Python.h>
@@ -114,9 +116,9 @@ TopoDS_Shape static fix_shape(const TopoDS_Shape& shape, double tolerance = 1.0e
         
         BRepCheck_Analyzer analyzer(fixedShape);
         if (analyzer.IsValid()) {
-            std::cout << "[STEP Exporter] Shape is valid" << std::endl;
+            LOG_MSG("[STEP Exporter] Shape is valid");
         } else {
-            std::cout << "[STEP Exporter] Shape still has issues" << std::endl;
+            LOG_MSG("[STEP Exporter] Shape still has issues");
         }
         
         return fixedShape;
@@ -2422,6 +2424,7 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
     std::cout << "[STEP Exporter] DEBUG: enable_logging = " << enable_logging << ", progress_callback = " << (progress_callback != NULL ? "non-NULL" : "NULL") << std::endl;
     auto call_progress = [&](double progress) {
         std::cout << "[STEP Exporter] DEBUG: call_progress invoked with progress = " << progress << std::endl;
+        std::cout.flush();
         if (progress_callback != NULL) {
             // 确保进度在0-100范围内
             if (progress < 0.0) progress = 0.0;
@@ -2481,7 +2484,8 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
     // 重定向 C++ stdout 到日志文件（在最早的位置执行）
     FILE* log_file = nullptr;
     int saved_stdout_fd = -1;
-    if (!log_filename.empty()) {
+    // 禁用日志重定向，让 C++ 日志输出到 Blender 的终端
+    if (false && !log_filename.empty()) {
         errno_t err = fopen_s(&log_file, log_filename.c_str(), "a");
         if (err == 0 && log_file) {
             // 不立即输出，因为 stdout 还没有重定向
@@ -2784,6 +2788,7 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
             // 更新进度条：C++处理阶段占总进度的80%（从20%到100%）
             double mapped_progress = 20.0 + object_progress * 0.8;
             call_progress(mapped_progress);
+            std::cout.flush();
             
             std::cout << "\n[STEP Exporter] Processing object " << i + 1 << "/" << num_objects
                       << " (" << std::fixed << std::setprecision(1) << object_progress << "%)"
@@ -4141,6 +4146,431 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
     }
 }
 
+// ====================== 增量导出全局状态 ======================
+
+static STEPControl_Writer* g_incremental_writer = NULL;
+static std::string g_incremental_filename = "";
+static int g_incremental_object_count = 0;
+static int g_incremental_total_objects = 0;
+static std::string g_incremental_step_schema = "AP214IS";
+static std::string g_incremental_unit = "MILLIMETER";
+static int g_incremental_fix_geometry = 1;
+static int g_incremental_create_solid = 1;
+static int g_incremental_advanced_brep = 1;
+static int g_incremental_enable_logging = 1;
+static double g_incremental_scale = 1.0;
+static double g_incremental_sew_tolerance = 0.001;
+static FILE* g_incremental_log_file = nullptr;
+static int g_incremental_saved_stdout_fd = -1;
+
+// 初始化增量导出
+static PyObject* init_incremental_export(PyObject* self, PyObject* args) {
+    const char* filename;
+    int total_objects;
+    double scale = 1.0;
+    int fix_geometry = 1;
+    int create_solid = 1;
+    int advanced_brep = 1;
+    const char* step_schema = "AP214IS";
+    const char* unit = "MILLIMETER";
+    int enable_logging = 1;
+    double sew_tolerance = 0.001;
+
+    if (!PyArg_ParseTuple(args, "sid|iiissid", &filename, &total_objects, &scale, &fix_geometry, &create_solid, &advanced_brep, &step_schema, &unit, &enable_logging, &sew_tolerance)) {
+        PyErr_SetString(PyExc_TypeError, "init_incremental_export() expected: filename, total_objects, scale, [fix_geometry], [create_solid], [advanced_brep], [step_schema], [unit], [enable_logging], [sew_tolerance]");
+        return NULL;
+    }
+
+    // 清理之前的状态
+    if (g_incremental_writer) {
+        delete g_incremental_writer;
+        g_incremental_writer = NULL;
+    }
+
+    // 保存参数
+    g_incremental_filename = filename;
+    g_incremental_total_objects = total_objects;
+    g_incremental_object_count = 0;
+    g_incremental_step_schema = step_schema;
+    g_incremental_unit = unit;
+    g_incremental_fix_geometry = fix_geometry;
+    g_incremental_create_solid = create_solid;
+    g_incremental_advanced_brep = advanced_brep;
+    g_incremental_enable_logging = enable_logging;
+    g_incremental_scale = scale;
+    g_incremental_sew_tolerance = sew_tolerance;
+
+    if (g_incremental_sew_tolerance == 0.0) {
+        g_incremental_sew_tolerance = 0.001;
+    }
+
+    // 重定向日志
+    g_incremental_log_file = nullptr;
+    g_incremental_saved_stdout_fd = -1;
+    std::string log_filename;
+    if (enable_logging && filename) {
+        log_filename = std::string(filename) + ".log";
+        errno_t err = fopen_s(&g_incremental_log_file, log_filename.c_str(), "a");
+        if (err == 0 && g_incremental_log_file) {
+            fflush(stdout);
+            g_incremental_saved_stdout_fd = _dup(_fileno(stdout));
+            _dup2(_fileno(g_incremental_log_file), _fileno(stdout));
+            setvbuf(stdout, nullptr, _IONBF, 0);
+        }
+    }
+
+    if (enable_logging) {
+        std::cout << "\n[STEP Exporter] =========================================" << std::endl;
+        std::cout << "[STEP Exporter] Initializing INCREMENTAL export to: " << filename << std::endl;
+        std::cout << "[STEP Exporter] Total objects: " << total_objects << std::endl;
+        std::cout << "[STEP Exporter] Scale factor: " << scale << std::endl;
+        std::cout << "[STEP Exporter] Fix geometry: " << (fix_geometry ? "Yes" : "No") << std::endl;
+        std::cout << "[STEP Exporter] Create solid: " << (create_solid ? "Yes" : "No") << std::endl;
+        std::cout << "[STEP Exporter] Advanced BREP: " << (advanced_brep ? "Yes" : "No") << std::endl;
+        std::cout << "[STEP Exporter] STEP Schema: " << step_schema << std::endl;
+        std::cout << "[STEP Exporter] Unit: " << unit << std::endl;
+        std::cout << "[STEP Exporter] Sewing Tolerance: " << sew_tolerance << " m" << std::endl;
+    }
+
+    // 配置STEP参数
+    Interface_Static::SetCVal("write.step.schema", step_schema);
+    Interface_Static::SetCVal("write.step.product.name", filename);
+    Interface_Static::SetCVal("write.step.company", "");
+    Interface_Static::SetCVal("write.step.author", "");
+    
+    const char* unit_mapped = unit;
+    if (strcmp(unit, "MILLIMETER") == 0) {
+        unit_mapped = "MM";
+    } else if (strcmp(unit, "METER") == 0) {
+        unit_mapped = "M";
+    }
+    Interface_Static::SetCVal("write.step.unit", unit_mapped);
+    Interface_Static::SetCVal("write.step.length.unit", unit_mapped);
+    Interface_Static::SetCVal("write.step.angular.unit", "RADIAN");
+    
+    double precision_val = 0.01;
+    if (strcmp(unit, "METER") == 0) {
+        precision_val = 0.00001;
+    }
+    Interface_Static::SetRVal("write.precision.val", precision_val);
+    Interface_Static::SetIVal("write.step.precision.mode", 0);
+    Interface_Static::SetIVal("write.step.assembly", 0);
+    Interface_Static::SetIVal("write.step.shape.repr", 0);
+    Interface_Static::SetCVal("write.step.nonmanifold", "0");
+    Interface_Static::SetCVal("write.step.product.context", "mechanical");
+    Interface_Static::SetCVal("write.step.product.definition", "part");
+    Interface_Static::SetIVal("write.step.pcurve", 0);
+    Interface_Static::SetIVal("write.step.surface.pcurve", 0);
+    Interface_Static::SetIVal("write.step.curve.pcurve", 0);
+    Interface_Static::SetIVal("write.step.curve.precision.mode", 0);
+    Interface_Static::SetIVal("write.step.surface.precision.mode", 0);
+    Interface_Static::SetIVal("write.step.vertex.precision.mode", 0);
+    Interface_Static::SetIVal("write.step.subshape.names", 0);
+    Interface_Static::SetIVal("write.step.write.conformance.class", 0);
+    Interface_Static::SetIVal("write.step.no.auxiliary.values", 1);
+    Interface_Static::SetIVal("write.step.comments", 0);
+    Interface_Static::SetCVal("write.step.resource.name", "");
+    Interface_Static::SetCVal("write.step.resource.usage", "");
+    Interface_Static::SetIVal("write.step.codify", 0);
+    Interface_Static::SetIVal("write.step.compress", 0);
+
+    if (!advanced_brep) {
+        Interface_Static::SetIVal("write.step.shape.repr", 0);
+        Interface_Static::SetIVal("write.step.pcurve", 0);
+        Interface_Static::SetIVal("write.step.surface.pcurve", 0);
+        Interface_Static::SetIVal("write.step.curve.pcurve", 0);
+        Interface_Static::SetIVal("write.step.brep.pcurve", 0);
+        Interface_Static::SetIVal("write.step.surfacecurve.pcurve", 0);
+        Interface_Static::SetIVal("write.step.curve.pcurve.mode", 0);
+        Interface_Static::SetIVal("write.step.brep.mode", 0);
+        Interface_Static::SetIVal("write.step.surface.curve.mode", 0);
+        Interface_Static::SetIVal("write.step.curve.mode", 0);
+        Interface_Static::SetIVal("write.step.geom.curve.mode", 0);
+        Interface_Static::SetIVal("write.step.geom.surface.mode", 0);
+        Interface_Static::SetIVal("write.surfacecurve.mode", 0);
+        Interface_Static::SetIVal("write.step.geom.mode", 0);
+        Interface_Static::SetIVal("write.step.brep.surface.mode", 0);
+        Interface_Static::SetIVal("write.step.curve.continuity", 0);
+        Interface_Static::SetIVal("write.step.surface.continuity", 0);
+        Interface_Static::SetIVal("write.step.representation", 1);
+        Interface_Static::SetCVal("write.step.brep.representation", "advanced_brep");
+        Interface_Static::SetIVal("write.step.surface.mode", 1);
+        Interface_Static::SetIVal("write.step.brep.curve.mode", 1);
+        Interface_Static::SetIVal("write.step.geom.brep.mode", 1);
+        Interface_Static::SetCVal("write.step.curve.representation", "parametric");
+        Interface_Static::SetCVal("write.step.surface.representation", "parametric");
+    } else {
+        Interface_Static::SetIVal("write.step.representation", 1);
+        Interface_Static::SetCVal("write.step.brep.representation", "advanced_brep");
+        Interface_Static::SetIVal("write.step.surface.mode", 1);
+        Interface_Static::SetIVal("write.step.brep.curve.mode", 1);
+        Interface_Static::SetIVal("write.step.geom.brep.mode", 1);
+        Interface_Static::SetCVal("write.step.curve.representation", "parametric");
+        Interface_Static::SetCVal("write.step.surface.representation", "parametric");
+    }
+
+    STEPControl_Controller::Init();
+
+    g_incremental_writer = new STEPControl_Writer();
+
+    if (enable_logging) {
+        std::cout << "[STEP Exporter] Incremental export initialized successfully" << std::endl;
+    }
+
+    Py_RETURN_TRUE;
+}
+
+// 添加单个对象到增量导出
+static PyObject* add_object_to_export(PyObject* self, PyObject* args) {
+    PyObject* obj_dict;
+    PyObject* progress_callback = NULL;
+
+    if (!PyArg_ParseTuple(args, "O|O", &obj_dict, &progress_callback)) {
+        PyErr_SetString(PyExc_TypeError, "add_object_to_export() expected: obj_dict, [progress_callback]");
+        return NULL;
+    }
+
+    if (!g_incremental_writer) {
+        PyErr_SetString(PyExc_RuntimeError, "Incremental export not initialized. Call init_incremental_export first.");
+        return NULL;
+    }
+
+    if (!PyDict_Check(obj_dict)) {
+        PyErr_SetString(PyExc_TypeError, "obj_dict must be a dictionary");
+        return NULL;
+    }
+
+    if (progress_callback != NULL && progress_callback != Py_None) {
+        if (!PyCallable_Check(progress_callback)) {
+            PyErr_SetString(PyExc_TypeError, "progress_callback must be callable");
+            return NULL;
+        }
+        Py_INCREF(progress_callback);
+    } else {
+        progress_callback = NULL;
+    }
+
+    auto call_progress = [&](double progress) {
+        if (progress_callback != NULL) {
+            if (progress < 0.0) progress = 0.0;
+            if (progress > 100.0) progress = 100.0;
+            
+            PyObject* arg = PyFloat_FromDouble(progress);
+            if (arg) {
+                PyObject* result = PyObject_CallFunction(progress_callback, "(O)", arg);
+                Py_DECREF(arg);
+                if (result) {
+                    Py_DECREF(result);
+                } else {
+                    PyErr_Clear();
+                }
+            }
+        }
+    };
+
+    g_incremental_object_count++;
+    int obj_index = g_incremental_object_count;
+    int total = g_incremental_total_objects;
+
+    const char* obj_name = "Unnamed";
+    PyObject* name_obj = PyDict_GetItemString(obj_dict, "name");
+    if (name_obj && PyUnicode_Check(name_obj)) {
+        obj_name = PyUnicode_AsUTF8(name_obj);
+    }
+
+    if (g_incremental_enable_logging) {
+        std::cout << "\n[STEP Exporter] Processing object " << obj_index << "/" << total << ": " << obj_name << std::endl;
+    }
+
+    try {
+        TopoDS_Shape shape;
+        
+        // 检查对象类型
+        PyObject* type_obj = PyDict_GetItemString(obj_dict, "type");
+        if (type_obj && PyUnicode_Check(type_obj)) {
+            const char* obj_type = PyUnicode_AsUTF8(type_obj);
+            if (obj_type && strcmp(obj_type, "curve") == 0) {
+                if (g_incremental_enable_logging) {
+                    std::cout << "[STEP Exporter]   Object type: curve" << std::endl;
+                }
+                shape = create_shape_from_curve_dict(obj_dict, g_incremental_scale);
+            } else {
+                // 网格对象
+                std::vector<std::vector<double>> vertices;
+                PyObject* vertices_obj = PyDict_GetItemString(obj_dict, "vertices");
+                if (vertices_obj && PyList_Check(vertices_obj)) {
+                    Py_ssize_t num_vertices = PyList_Size(vertices_obj);
+                    for (Py_ssize_t v = 0; v < num_vertices; v++) {
+                        PyObject* vertex_item = PyList_GetItem(vertices_obj, v);
+                        if (PyTuple_Check(vertex_item) && PyTuple_Size(vertex_item) >= 3) {
+                            std::vector<double> vertex(3);
+                            for (int k = 0; k < 3; k++) {
+                                PyObject* coord = PyTuple_GetItem(vertex_item, k);
+                                vertex[k] = PyFloat_AsDouble(coord);
+                            }
+                            vertices.push_back(vertex);
+                        } else if (PyList_Check(vertex_item) && PyList_Size(vertex_item) >= 3) {
+                            std::vector<double> vertex(3);
+                            for (int k = 0; k < 3; k++) {
+                                PyObject* coord = PyList_GetItem(vertex_item, k);
+                                vertex[k] = PyFloat_AsDouble(coord);
+                            }
+                            vertices.push_back(vertex);
+                        }
+                    }
+                }
+
+                std::vector<std::vector<int>> faces;
+                PyObject* faces_obj = PyDict_GetItemString(obj_dict, "faces");
+                if (faces_obj && PyList_Check(faces_obj)) {
+                    Py_ssize_t num_faces = PyList_Size(faces_obj);
+                    for (Py_ssize_t f = 0; f < num_faces; f++) {
+                        PyObject* face_item = PyList_GetItem(faces_obj, f);
+                        if (PyList_Check(face_item)) {
+                            std::vector<int> face;
+                            Py_ssize_t num_indices = PyList_Size(face_item);
+                            for (Py_ssize_t i = 0; i < num_indices; i++) {
+                                face.push_back((int)PyLong_AsLong(PyList_GetItem(face_item, i)));
+                            }
+                            faces.push_back(face);
+                        }
+                    }
+                }
+
+                shape = create_shape_from_mesh(vertices, faces);
+            }
+        }
+
+        if (shape.IsNull()) {
+            if (g_incremental_enable_logging) {
+                std::cout << "[STEP Exporter]   ✗ Shape is null" << std::endl;
+            }
+            if (progress_callback) Py_DECREF(progress_callback);
+            Py_RETURN_FALSE;
+        }
+
+        // 修复几何
+        if (g_incremental_fix_geometry) {
+            shape = fix_shape_enhanced(shape, g_incremental_sew_tolerance);
+        }
+
+        // 创建实体
+        if (g_incremental_create_solid && shape.ShapeType() == TopAbs_SHELL) {
+            try {
+                BRepBuilderAPI_MakeSolid solidMaker(TopoDS::Shell(shape));
+                if (solidMaker.IsDone()) {
+                    shape = solidMaker.Solid();
+                    if (g_incremental_enable_logging) {
+                        std::cout << "[STEP Exporter]   ✓ Shell converted to solid" << std::endl;
+                    }
+                }
+            } catch (...) {
+                if (g_incremental_enable_logging) {
+                    std::cout << "[STEP Exporter]   ⚠ Failed to convert shell to solid, keeping as shell" << std::endl;
+                }
+            }
+        }
+
+        // 高级BREP处理
+        if (!g_incremental_advanced_brep) {
+            try {
+                BRepMesh_IncrementalMesh mesh(shape, 0.1, false, 0.5 * M_PI / 180.0);
+                mesh.Perform();
+            } catch (...) {
+            }
+        }
+
+        // 传输到STEP writer
+        STEPControl_StepModelType transfer_mode = STEPControl_ManifoldSolidBrep;
+        if (shape.ShapeType() == TopAbs_SHELL) {
+            transfer_mode = STEPControl_ManifoldSolidBrep;
+        } else if (shape.ShapeType() == TopAbs_EDGE || shape.ShapeType() == TopAbs_WIRE) {
+            transfer_mode = STEPControl_GeometricCurveSet;
+        }
+
+        IFSelect_ReturnStatus status = g_incremental_writer->Transfer(shape, transfer_mode);
+        if (status != IFSelect_RetDone) {
+            if (g_incremental_enable_logging) {
+                std::cout << "[STEP Exporter]   ✗ Failed to transfer shape" << std::endl;
+            }
+            if (progress_callback) Py_DECREF(progress_callback);
+            Py_RETURN_FALSE;
+        }
+
+        if (g_incremental_enable_logging) {
+            std::cout << "[STEP Exporter]   ✓ Object " << obj_index << "/" << total << " added successfully" << std::endl;
+        }
+
+        // 计算进度
+        double progress = (obj_index * 100.0) / total;
+        call_progress(progress);
+
+        if (progress_callback) Py_DECREF(progress_callback);
+        Py_RETURN_TRUE;
+
+    } catch (const Standard_Failure& e) {
+        std::cerr << "[STEP Exporter] OpenCASCADE error: " << e.GetMessageString() << std::endl;
+        if (progress_callback) Py_DECREF(progress_callback);
+        Py_RETURN_FALSE;
+    } catch (const std::exception& e) {
+        std::cerr << "[STEP Exporter] Standard error: " << e.what() << std::endl;
+        if (progress_callback) Py_DECREF(progress_callback);
+        Py_RETURN_FALSE;
+    }
+}
+
+// 完成增量导出并写入文件
+static PyObject* finalize_incremental_export(PyObject* self, PyObject* args) {
+    if (!g_incremental_writer) {
+        PyErr_SetString(PyExc_RuntimeError, "Incremental export not initialized or already finalized.");
+        return NULL;
+    }
+
+    if (g_incremental_enable_logging) {
+        std::cout << "\n[STEP Exporter] Finalizing export to: " << g_incremental_filename << std::endl;
+    }
+
+    IFSelect_ReturnStatus write_status = g_incremental_writer->Write(g_incremental_filename.c_str());
+
+    bool success = (write_status == IFSelect_RetDone);
+
+    if (success) {
+        if (g_incremental_enable_logging) {
+            std::cout << "[STEP Exporter] Successfully exported " << g_incremental_object_count << " object(s)" << std::endl;
+            std::cout << "[STEP Exporter] =========================================\n" << std::endl;
+        }
+    } else {
+        std::cerr << "[STEP Exporter] Failed to write STEP file" << std::endl;
+    }
+
+    // 清理
+    delete g_incremental_writer;
+    g_incremental_writer = NULL;
+
+    // 关闭日志
+    if (g_incremental_log_file) {
+        if (g_incremental_enable_logging) {
+            std::cout << "[STEP Exporter] Log file closed" << std::endl;
+            fflush(stdout);
+        }
+        fclose(g_incremental_log_file);
+        g_incremental_log_file = nullptr;
+    }
+
+    // 恢复 stdout
+    if (g_incremental_saved_stdout_fd >= 0) {
+        _dup2(g_incremental_saved_stdout_fd, _fileno(stdout));
+        _close(g_incremental_saved_stdout_fd);
+        g_incremental_saved_stdout_fd = -1;
+    }
+
+    if (success) {
+        Py_RETURN_TRUE;
+    } else {
+        Py_RETURN_FALSE;
+    }
+}
+
 // ====================== 模块定义 (必须保留) ======================
 
 // 模块方法定义表
@@ -4148,6 +4578,9 @@ static PyMethodDef step_exporter_methods[] = {
     {"export_step", export_step, METH_VARARGS, "Export simple shape to STEP"},
     {"export_scene", export_scene, METH_VARARGS, "Export scene objects to STEP (Legacy)"},
     {"export_scene_enhanced", export_scene_enhanced, METH_VARARGS, "Export scene objects to STEP with advanced BREP and solid creation"},
+    {"init_incremental_export", init_incremental_export, METH_VARARGS, "Initialize incremental export"},
+    {"add_object_to_export", add_object_to_export, METH_VARARGS, "Add single object to incremental export"},
+    {"finalize_incremental_export", finalize_incremental_export, METH_NOARGS, "Finalize incremental export and write file"},
     {"get_version", get_version, METH_NOARGS, "Get module version"},
     {NULL, NULL, 0, NULL}
 };

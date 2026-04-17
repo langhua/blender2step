@@ -53,6 +53,23 @@ bool parse_export_args(PyObject* args,
 
 void call_progress_callback(PyObject* progress_callback, int enable_logging, double progress);
 
+// 日志回调类型
+typedef void (*LogCallback)(const char* msg, void* user_data);
+
+// 设置全局日志回调
+void set_log_callback(LogCallback callback, void* user_data);
+
+// 日志宏：通过回调写入日志
+#define LOG_MSG(msg) \
+    do { \
+        if (g_log_callback) { \
+            g_log_callback(msg, g_log_user_data); \
+        } \
+    } while(0)
+
+extern LogCallback g_log_callback;
+extern void* g_log_user_data;
+
 struct StdoutRedirectState {
     FILE* log_file = nullptr;
     int saved_stdout_fd = -1;
@@ -110,5 +127,10 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
 
 // Export result logging
 void log_export_result(const std::chrono::steady_clock::time_point& start_time, bool success, PyObject* progress_callback);
+
+// Incremental export functions
+PyObject* init_incremental_export(PyObject* self, PyObject* args);
+PyObject* add_object_to_export(PyObject* self, PyObject* args);
+PyObject* finalize_incremental_export(PyObject* self, PyObject* args);
 
 #endif // STEP_EXPORTER_INTERNAL_H

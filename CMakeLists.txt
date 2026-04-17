@@ -66,6 +66,8 @@ add_library(step_exporter SHARED
     src/step_exporter_export_enhanced_objects.cpp
     src/step_exporter_export_enhanced_transfer.cpp
     src/step_exporter_export_enhanced.cpp
+    # Incremental export functions
+    src/step_exporter_incremental.cpp
     # Module initialization
     src/step_exporter_module.cpp
     # STEP converter

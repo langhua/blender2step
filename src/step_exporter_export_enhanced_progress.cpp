@@ -23,9 +23,32 @@ void call_progress_callback(PyObject* progress_callback, int enable_logging, dou
             if (result) {
                 Py_DECREF(result);
             } else {
-                // Callback failed, but don't interrupt export
+                // Callback failed, print detailed error
                 if (enable_logging) {
-                    std::cout << "[STEP Exporter] WARNING: Progress callback failed (Python error cleared)" << std::endl;
+                    std::cout << "[STEP Exporter] WARNING: Progress callback failed" << std::endl;
+                    // Print Python error
+                    PyObject *ptype, *pvalue, *ptraceback;
+                    PyErr_Fetch(&ptype, &pvalue, &ptraceback);
+                    if (pvalue) {
+                        PyObject* pStr = PyObject_Str(pvalue);
+                        if (pStr) {
+                            const char* err_str = PyUnicode_AsUTF8(pStr);
+                            if (err_str) {
+                                std::cout << "[STEP Exporter]   Python error: " << err_str << std::endl;
+                            }
+                            Py_DECREF(pStr);
+                        }
+                    }
+                    if (ptype) {
+                        PyObject* pStr = PyObject_Str(ptype);
+                        if (pStr) {
+                            const char* type_str = PyUnicode_AsUTF8(pStr);
+                            if (type_str) {
+                                std::cout << "[STEP Exporter]   Error type: " << type_str << std::endl;
+                            }
+                            Py_DECREF(pStr);
+                        }
+                    }
                 }
                 PyErr_Clear();
             }

@@ -348,7 +348,7 @@ private:
             std::cout << "[STEP Exporter] [CylDet] Standard cylinder detection failed, trying cone detection..." << std::endl;
             
             // 收集所有候选面的Z坐标和半径
-            std::vector<std::pair<double, double>> cone_z_r_pairs;
+            std::vector<std::pair<double, double>> all_cone_z_r_pairs;
             for (size_t i = 0; i < m_faceInfos.size(); i++) {
                 if (!is_candidate[i]) continue;
                 const auto& fi = m_faceInfos[i];
@@ -365,87 +365,102 @@ private:
                     axis_coord = fi.center.Y();
                 }
                 
-                cone_z_r_pairs.push_back({axis_coord, dist});
+                all_cone_z_r_pairs.push_back({axis_coord, dist});
             }
             
-            std::cout << "[STEP Exporter] [CylDet] Cone detection: collected " << cone_z_r_pairs.size() << " candidate points" << std::endl;
+            std::cout << "[STEP Exporter] [CylDet] Cone detection: collected " << all_cone_z_r_pairs.size() << " candidate points" << std::endl;
             
-            if (cone_z_r_pairs.size() >= min_faces * 3) {
+            if (all_cone_z_r_pairs.size() >= min_faces * 3) {
                 // 按Z坐标排序
-                std::sort(cone_z_r_pairs.begin(), cone_z_r_pairs.end());
+                std::sort(all_cone_z_r_pairs.begin(), all_cone_z_r_pairs.end());
                 
-                // 使用线性回归检测半径随Z坐标的变化
-                double sum_z = 0, sum_r = 0, sum_zr = 0, sum_z2 = 0;
-                for (const auto& p : cone_z_r_pairs) {
-                    sum_z += p.first;
-                    sum_r += p.second;
-                    sum_zr += p.first * p.second;
-                    sum_z2 += p.first * p.first;
+                // 排除顶部和底部的一小部分面（可能是圆角和倒角）
+                // 只保留中间80%的面进行锥形检测
+                int total_points = all_cone_z_r_pairs.size();
+                int exclude_count = total_points / 10;  // 排除顶部和底部各10%
+                
+                std::vector<std::pair<double, double>> cone_z_r_pairs;
+                for (int i = exclude_count; i < total_points - exclude_count; i++) {
+                    cone_z_r_pairs.push_back(all_cone_z_r_pairs[i]);
                 }
                 
-                int n = cone_z_r_pairs.size();
-                double mean_z = sum_z / n;
-                double mean_r = sum_r / n;
+                std::cout << "[STEP Exporter] [CylDet] Cone detection: using " << cone_z_r_pairs.size() 
+                          << " points (excluded " << exclude_count << " from top and bottom)" << std::endl;
                 
-                // 线性回归: r = a * z + b
-                double a = (sum_zr - n * mean_z * mean_r) / (sum_z2 - n * mean_z * mean_z);
-                double b = mean_r - a * mean_z;
-                
-                // 计算拟合误差
-                double total_error = 0;
-                for (const auto& p : cone_z_r_pairs) {
-                    double predicted_r = a * p.first + b;
-                    double error = fabs(p.second - predicted_r) / p.second;
-                    total_error += error;
-                }
-                double avg_error = total_error / n;
-                
-                std::cout << "[STEP Exporter] [CylDet] Linear fit: r = " << a << " * z + " << b << ", avg error = " << (avg_error * 100) << "%" << std::endl;
-                
-                // 如果拟合误差小于20%，认为是圆锥
-                if (avg_error < 0.2 && fabs(a) > 1e-6) {
-                    std::cout << "[STEP Exporter] [CylDet] ✓✓✓ Detected CONE from linear fit!" << std::endl;
-                    
-                    // 计算圆锥参数
-                    double z_min = cone_z_r_pairs.front().first;
-                    double z_max = cone_z_r_pairs.back().first;
-                    double r_at_z_min = a * z_min + b;
-                    double r_at_z_max = a * z_max + b;
-                    
-                    // 确保底部半径大于顶部半径
-                    double r_bottom, r_top;
-                    if (r_at_z_min > r_at_z_max) {
-                        r_bottom = r_at_z_min;
-                        r_top = r_at_z_max;
-                        result.z_min = z_min;
-                        result.z_max = z_max;
-                    } else {
-                        r_bottom = r_at_z_max;
-                        r_top = r_at_z_min;
-                        result.z_min = z_max;
-                        result.z_max = z_min;
+                if (cone_z_r_pairs.size() >= min_faces * 2) {
+                    // 使用线性回归检测半径随Z坐标的变化
+                    double sum_z = 0, sum_r = 0, sum_zr = 0, sum_z2 = 0;
+                    for (const auto& p : cone_z_r_pairs) {
+                        sum_z += p.first;
+                        sum_r += p.second;
+                        sum_zr += p.first * p.second;
+                        sum_z2 += p.first * p.first;
                     }
                     
-                    result.radius = (r_bottom + r_top) / 2;
-                    result.radius_bottom = r_bottom;
-                    result.radius_top = r_top;
-                    result.is_cone = true;
+                    int n = cone_z_r_pairs.size();
+                    double mean_z = sum_z / n;
+                    double mean_r = sum_r / n;
                     
-                    // 收集所有候选面
-                    for (size_t i = 0; i < m_faceInfos.size(); i++) {
-                        if (!is_candidate[i]) continue;
-                        result.face_indices.push_back(i);
-                        m_usedFaces.insert(i);
+                    // 线性回归: r = a * z + b
+                    double a = (sum_zr - n * mean_z * mean_r) / (sum_z2 - n * mean_z * mean_z);
+                    double b = mean_r - a * mean_z;
+                    
+                    // 计算拟合误差
+                    double total_error = 0;
+                    for (const auto& p : cone_z_r_pairs) {
+                        double predicted_r = a * p.first + b;
+                        double error = fabs(p.second - predicted_r) / p.second;
+                        total_error += error;
                     }
+                    double avg_error = total_error / n;
                     
-                    // 计算质量评分
-                    double coverage = (double)result.face_indices.size() / m_faces.size();
-                    result.quality_score = coverage * 0.8 + (1 - avg_error) * 0.2;
+                    std::cout << "[STEP Exporter] [CylDet] Linear fit: r = " << a << " * z + " << b << ", avg error = " << (avg_error * 100) << "%" << std::endl;
                     
-                    std::cout << "[STEP Exporter] [CylDet] Cone: R_bottom=" << r_bottom << " R_top=" << r_top 
-                              << " Z_min=" << result.z_min << " Z_max=" << result.z_max << " Q=" << result.quality_score << std::endl;
-                    
-                    return result;
+                    // 如果拟合误差小于20%，认为是圆锥
+                    if (avg_error < 0.2 && fabs(a) > 1e-6) {
+                        std::cout << "[STEP Exporter] [CylDet] ✓✓✓ Detected CONE from linear fit!" << std::endl;
+                        
+                        // 计算圆锥参数 - 使用所有点（包括圆角和倒角）来确定Z范围
+                        double z_min = all_cone_z_r_pairs.front().first;
+                        double z_max = all_cone_z_r_pairs.back().first;
+                        double r_at_z_min = a * z_min + b;
+                        double r_at_z_max = a * z_max + b;
+                        
+                        // 确保底部半径大于顶部半径
+                        double r_bottom, r_top;
+                        if (r_at_z_min > r_at_z_max) {
+                            r_bottom = r_at_z_min;
+                            r_top = r_at_z_max;
+                            result.z_min = z_min;
+                            result.z_max = z_max;
+                        } else {
+                            r_bottom = r_at_z_max;
+                            r_top = r_at_z_min;
+                            result.z_min = z_max;
+                            result.z_max = z_min;
+                        }
+                        
+                        result.radius = (r_bottom + r_top) / 2;
+                        result.radius_bottom = r_bottom;
+                        result.radius_top = r_top;
+                        result.is_cone = true;
+                        
+                        // 收集所有候选面
+                        for (size_t i = 0; i < m_faceInfos.size(); i++) {
+                            if (!is_candidate[i]) continue;
+                            result.face_indices.push_back(i);
+                            m_usedFaces.insert(i);
+                        }
+                        
+                        // 计算质量评分
+                        double coverage = (double)result.face_indices.size() / m_faces.size();
+                        result.quality_score = coverage * 0.8 + (1 - avg_error) * 0.2;
+                        
+                        std::cout << "[STEP Exporter] [CylDet] Cone: R_bottom=" << r_bottom << " R_top=" << r_top 
+                                  << " Z_min=" << result.z_min << " Z_max=" << result.z_max << " Q=" << result.quality_score << std::endl;
+                        
+                        return result;
+                    }
                 }
             }
             
@@ -1167,8 +1182,26 @@ private:
         // 如果所有候选面的数量足够，使用它们进行圆锥检测
         // 注意：不再要求候选面数量大于已分配面数量，因为圆锥体需要所有侧面进行检测
         if (all_z_r_pairs.size() >= 10) {
+            std::cout << "[STEP Exporter] [CylDet] *** FILTER CODE v2 ***" << std::endl;
             std::cout << "[STEP Exporter] [CylDet] Using " << all_z_r_pairs.size() << " candidate faces for cone detection (vs " << z_r_pairs.size() << " assigned)" << std::endl;
-            z_r_pairs = all_z_r_pairs;
+            
+            // 先按Z坐标排序
+            std::sort(all_z_r_pairs.begin(), all_z_r_pairs.end());
+            
+            // 排除顶部和底部的一小部分面（可能是圆角和倒角）
+            // 只保留中间80%的面进行锥形检测
+            int total_points = all_z_r_pairs.size();
+            int exclude_count = total_points / 10;  // 排除顶部和底部各10%
+            
+            std::vector<std::pair<double, double>> filtered_z_r_pairs;
+            for (int i = exclude_count; i < total_points - exclude_count; i++) {
+                filtered_z_r_pairs.push_back(all_z_r_pairs[i]);
+            }
+            
+            std::cout << "[STEP Exporter] [CylDet] Cone detection: using " << filtered_z_r_pairs.size() 
+                      << " points (excluded " << exclude_count << " from top and bottom)" << std::endl;
+            
+            z_r_pairs = filtered_z_r_pairs;
         }
         
         // 检测是否是圆锥体（带斜率的圆柱体）
@@ -1222,8 +1255,15 @@ private:
                     result.radius_top = avg_top_r;
                     result.radius_bottom = avg_bottom_r;
                     result.radius = avg_radius;  // 使用平均半径
+                    
+                    // 设置圆锥的Z范围（使用过滤后的z_r_pairs）
+                    result.z_min = z_r_pairs.front().first;
+                    result.z_max = z_r_pairs.back().first;
+                    
                     std::cout << "[STEP Exporter] [CylDet] ✓✓✓ Detected CONE: top R=" << avg_top_r 
                               << " bottom R=" << avg_bottom_r << " diff=" << diff_percent*100 << "%" << std::endl;
+                    std::cout << "[STEP Exporter] [CylDet] Cone Z range: " << result.z_min << " to " << result.z_max 
+                              << " (height=" << (result.z_max - result.z_min) << ")" << std::endl;
                     
                     // 如果是疑似锥形圆柱，检查是否有顶部圆角和底部斜倒角
                     if (is_suspected_tapered) {

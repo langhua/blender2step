@@ -15,7 +15,21 @@ endif()
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# ====== 2. 查找 OpenCASCADE ======
+# ====== 2. 查找 ZLIB (OpenCASCADE dependency) ======
+# Must be done BEFORE find_package(OpenCASCADE) because OpenCASCADE depends on ZLIB
+set(ZLIB_LIBRARY "f:/git/blender2step/vcpkg_installed/x64-windows/lib/zlib.lib" CACHE FILEPATH "ZLIB library path")
+set(ZLIB_INCLUDE_DIR "f:/git/blender2step/vcpkg_installed/x64-windows/include" CACHE PATH "ZLIB include path")
+set(ZLIB_FOUND TRUE CACHE BOOL "ZLIB found")
+# Create imported target for ZLIB
+if(NOT TARGET ZLIB::ZLIB)
+    add_library(ZLIB::ZLIB UNKNOWN IMPORTED)
+    set_target_properties(ZLIB::ZLIB PROPERTIES
+        IMPORTED_LOCATION "${ZLIB_LIBRARY}"
+        INTERFACE_INCLUDE_DIRECTORIES "${ZLIB_INCLUDE_DIR}"
+    )
+endif()
+
+# ====== 3. 查找 OpenCASCADE ======
 # 使用 vcpkg 提供的 CONFIG 模式
 set(OpenCASCADE_DIR "f:/git/blender2step/vcpkg_installed/x64-windows/share/opencascade" CACHE PATH "Path to OpenCASCADE config")
 # 优先使用静态库
@@ -34,9 +48,11 @@ foreach(LIB ${OpenCASCADE_LIBRARIES})
     endif()
 endforeach()
 
-# ====== 3. 设置 Python 路径 ======
+# ====== 4. 设置 Python 路径 ======
+# 使用 Blender 4.2 自带的 Python 3.11.7
+# 从 Blender 的 python311.dll 生成的导入库
 set(PYTHON_INCLUDE_DIR "C:/Python311/include")
-set(PYTHON_LIBRARY "C:/Python311/libs/python311.lib")
+set(PYTHON_LIBRARY "F:/git/blender2step/step_exporter/lib/python311.lib")
 
 include_directories(
     ${PYTHON_INCLUDE_DIR}

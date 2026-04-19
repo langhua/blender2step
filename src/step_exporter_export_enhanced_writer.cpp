@@ -1,4 +1,4 @@
-// STEP Exporter writer setup function
+﻿﻿// STEP Exporter writer setup function
 #include "../include/step_exporter_internal.h"
 #include <Interface_Static.hxx>
 #include <STEPControl_Controller.hxx>
@@ -11,6 +11,7 @@
 #include <fstream>
 #include <io.h>
 #include <fcntl.h>
+#include <cstring>
 
 StdoutRedirectState setup_step_writer(STEPControl_Writer& writer, const char* filename, const char* step_schema, const char* unit, int advanced_brep, int enable_logging, const char* log_filename) {
     StdoutRedirectState state;
@@ -136,12 +137,8 @@ StdoutRedirectState setup_step_writer(STEPControl_Writer& writer, const char* fi
         // 禁用SEAM_CURVE的导出，避免FreeCAD中显示黑色竖线
         Interface_Static::SetIVal("write.step.edge.mode", 0); // 禁用边缘模式，避免SEAM_CURVE
         Interface_Static::SetIVal("write.step.seam", 0); // 禁用缝合曲线
-    
-    // 立即刷新输出并验证设置
-    std::cout << "[STEP Exporter] DEBUG SETTINGS APPLIED - forcing flush" << std::endl;
-    std::cout.flush();
-} else {
-    std::cout << "[STEP Exporter] Advanced BREP settings enabled." << std::endl;
+    } else {
+        std::cout << "[STEP Exporter] Advanced BREP settings enabled." << std::endl;
     // 应用保留倒角等解析曲面特征的设置
     Interface_Static::SetIVal("write.step.representation", 1); // 允许高级表示
     Interface_Static::SetCVal("write.step.brep.representation", "advanced_brep"); // 使用高级 BREP 表示

@@ -514,8 +514,8 @@ private:
             }
         }
         
-        // 圆锥检测：检查所有候选面（包括已分配给此圆柱的面）
-        // 对于圆锥体，所有法线垂直于轴线的面都应该被考虑
+        // 圆锥检测：只收集真正的锥形侧面（法线角度80-100°）
+        // 排除圆角面（30-70°）和倒角面（35-55°）
         std::vector<std::pair<double, double>> all_z_r_pairs;  // 所有候选面的轴向坐标和半径
         std::vector<double> all_normal_angles;  // 所有候选面的法线角度
         
@@ -536,6 +536,14 @@ private:
             
             // 记录法线角度（与轴线的夹角）
             double normal_angle = acos(std::min(1.0, std::max(0.0, dot_axis)));
+            double angle_deg = normal_angle * 180.0 / M_PI;
+            
+            // 只收集真正的锥形侧面（法线角度80-100°）
+            // 排除圆角面（30-70°）和倒角面（35-55°）
+            if (angle_deg < 80 || angle_deg > 100) {
+                continue;  // 跳过非锥形侧面
+            }
+            
             all_normal_angles.push_back(normal_angle);
             
             // 为每个顶点单独计算轴向坐标和半径
@@ -561,7 +569,7 @@ private:
             if (all_z_r_pairs.size() <= 15) {
                 std::cout << "[STEP Exporter] [CylDet] Candidate face " << i << ": normal=(" 
                           << fi.normal.X() << "," << fi.normal.Y() << "," << fi.normal.Z() 
-                          << "), angle=" << (normal_angle * 180.0 / M_PI) << "deg, added " << fi.vertex_indices.size() << " vertices" << std::endl;
+                          << "), angle=" << angle_deg << "deg, added " << fi.vertex_indices.size() << " vertices" << std::endl;
                 // 打印顶点坐标
                 if (fi.vertex_indices.size() >= 3) {
                     std::cout << "[STEP Exporter] [CylDet]   Vertices: ";
@@ -580,6 +588,7 @@ private:
         // 检查法线角度的一致性，区分真正的圆锥和斜角圆柱
         bool is_chamfered_cylinder = false;
         bool is_fillet_cylinder = false;
+        bool is_suspected_tapered = false;
         if (all_normal_angles.size() >= 10) {
             // 计算法线角度的分布
             std::sort(all_normal_angles.begin(), all_normal_angles.end());
@@ -644,18 +653,150 @@ private:
             // 调整条件：根据实际数据，near_0可能较少，但60-80°范围内的法线较多
             // 为了避免与斜角圆柱混淆，要求60-80°范围内的法线数量较多
             if (count_near_90 > 5 && count_60_80 > 10) {
-                is_fillet_cylinder = true;
-                std::cout << "[STEP Exporter] [CylDet] ✓✓✓ Detected FILLET CYLINDER (cylinder + fillet)" << std::endl;
-                std::cout << "[STEP Exporter] [CylDet] Fillet detection criteria: count_near_90=" << count_near_90 
-                          << ", count_30_60=" << count_30_60 
-                          << ", count_60_80=" << count_60_80 
-                          << ", count_near_0=" << count_near_0 << std::endl;
+                // 进一步验证：检查"fillet"区域的Z范围和半径变化
+                // 真正的圆角：圆角面集中在顶部或底部的一小部分区域
+                // 锥形圆柱被误判为fillet：侧面法线角度变化是连续的，跨越整个高度
+                
+                // 计算圆角面（30-85°范围，包含锥形侧面）的Z范围
+                double fillet_z_min = 1e20, fillet_z_max = -1e20;
+                double fillet_r_min = 1e20, fillet_r_max = -1e20;
+                int fillet_face_count = 0;
+                
+                // 计算圆柱侧面（85-95°范围）的Z范围
+                double cyl_z_min = 1e20, cyl_z_max = -1e20;
+                int cyl_face_count = 0;
+                
+                for (size_t i = 0; i < m_faceInfos.size(); i++) {
+                    const auto& fi = m_faceInfos[i];
+                    if (fi.area < 1e-10) continue;
+                    
+                    double dot_axis = fabs(fi.normal.Dot(axis));
+                    double dist = point_line_distance(fi.center, centroid, axis);
+                    if (dist < 1e-6) continue;
+                    
+                    double normal_angle = acos(std::min(1.0, std::max(0.0, dot_axis)));
+                    double angle_deg = normal_angle * 180.0 / M_PI;
+                    
+                    double z_coord;
+                    if (fabs(axis.Z()) > 0.9) {
+                        z_coord = fi.center.Z();
+                    } else if (fabs(axis.X()) > 0.9) {
+                        z_coord = fi.center.X();
+                    } else {
+                        z_coord = fi.center.Y();
+                    }
+                    
+                    if (angle_deg >= 30 && angle_deg < 85) {
+                        // 圆角面或锥形侧面（扩展范围以包含锥形圆柱）
+                        fillet_z_min = std::min(fillet_z_min, z_coord);
+                        fillet_z_max = std::max(fillet_z_max, z_coord);
+                        fillet_r_min = std::min(fillet_r_min, dist);
+                        fillet_r_max = std::max(fillet_r_max, dist);
+                        fillet_face_count++;
+                    } else if (angle_deg >= 85 && angle_deg <= 95) {
+                        // 圆柱侧面
+                        cyl_z_min = std::min(cyl_z_min, z_coord);
+                        cyl_z_max = std::max(cyl_z_max, z_coord);
+                        cyl_face_count++;
+                    }
+                }
+                
+                double fillet_z_range = fillet_z_max - fillet_z_min;
+                double cyl_z_range = cyl_z_max - cyl_z_min;
+                double fillet_r_range = fillet_r_max - fillet_r_min;
+                double fillet_avg_r = (fillet_r_min + fillet_r_max) / 2.0;
+                double fillet_radius_variation = (fillet_avg_r > 0) ? (fillet_r_range / fillet_avg_r) : 0;
+                
+                // 获取所有面的Z范围，用于计算"圆角"面的覆盖度
+                double all_z_min = 1e20, all_z_max = -1e20;
+                for (size_t i = 0; i < m_faceInfos.size(); i++) {
+                    const auto& fi = m_faceInfos[i];
+                    if (fi.area < 1e-10) continue;
+                    double z_coord;
+                    if (fabs(axis.Z()) > 0.9) {
+                        z_coord = fi.center.Z();
+                    } else if (fabs(axis.X()) > 0.9) {
+                        z_coord = fi.center.X();
+                    } else {
+                        z_coord = fi.center.Y();
+                    }
+                    all_z_min = std::min(all_z_min, z_coord);
+                    all_z_max = std::max(all_z_max, z_coord);
+                }
+                double total_object_z_range = all_z_max - all_z_min;
+                double fillet_coverage = (total_object_z_range > 0) ? (fillet_z_range / total_object_z_range) : 0;
+                
+                // 判断是否是真正的圆角圆柱：
+                // 1. 圆角面的Z范围应该小于圆柱侧面Z范围的50%
+                // 2. 或者圆角面的半径变化小于15%
+                // 3. 圆角面不应该跨越整个对象高度（否则更可能是锥形圆柱）
+                bool is_true_fillet = false;
+                
+                if (cyl_z_range > 0) {
+                    double fillet_height_ratio = fillet_z_range / cyl_z_range;
+                    std::cout << "[STEP Exporter] [CylDet] [DEBUG] cyl_z_range > 0 branch:" << std::endl;
+                    std::cout << "[STEP Exporter] [CylDet] [DEBUG]   fillet_face_count=" << fillet_face_count << ", cyl_face_count=" << cyl_face_count << std::endl;
+                    std::cout << "[STEP Exporter] [CylDet] [DEBUG]   fillet_height_ratio = " << fillet_height_ratio << std::endl;
+                    std::cout << "[STEP Exporter] [CylDet] [DEBUG]   fillet_radius_variation = " << fillet_radius_variation << std::endl;
+                    std::cout << "[STEP Exporter] [CylDet] [DEBUG]   fillet_coverage = " << fillet_coverage << std::endl;
+                    // 真正的圆角：圆角面Z范围小，或半径变化小，且不跨越整个对象高度
+                    if ((fillet_height_ratio < 0.5 || fillet_radius_variation < 0.15) && fillet_coverage < 0.7) {
+                        is_true_fillet = true;
+                        std::cout << "[STEP Exporter] [CylDet] [DEBUG]   -> is_true_fillet = true (condition 1)" << std::endl;
+                    } else if (fillet_coverage >= 0.7 && fillet_radius_variation > 0.2) {
+                        // "圆角"跨越70%以上的对象高度，且半径变化超过20%，很可能是锥形圆柱
+                        is_suspected_tapered = true;
+                        std::cout << "[STEP Exporter] [CylDet] ⚠ Suspected tapered cylinder (large fillet coverage and radius variation)" << std::endl;
+                        std::cout << "[STEP Exporter] [CylDet]   Fillet Z range: " << fillet_z_range << " vs Total Z range: " << total_object_z_range << std::endl;
+                        std::cout << "[STEP Exporter] [CylDet]   Fillet coverage: " << (fillet_coverage * 100) << "%" << std::endl;
+                        std::cout << "[STEP Exporter] [CylDet]   Fillet radius variation: " << (fillet_radius_variation * 100) << "%" << std::endl;
+                    } else {
+                        is_true_fillet = true;
+                        std::cout << "[STEP Exporter] [CylDet] [DEBUG]   -> is_true_fillet = true (condition 3)" << std::endl;
+                    }
+                } else {
+                    // 如果没有圆柱侧面，检查圆角面的半径变化
+                    // 锥形圆柱的半径变化通常很大（>15%），而真正的圆角半径变化较小
+                    if (fillet_radius_variation < 0.15) {
+                        is_true_fillet = true;
+                    } else {
+                        // 半径变化大，可能是锥形圆柱
+                        // 进一步检查：如果"圆角"跨越整个对象高度，更可能是锥形
+                        if (fillet_coverage > 0.8 && fillet_radius_variation > 0.2) {
+                            // "圆角"跨越80%以上的对象高度，且半径变化超过20%，很可能是锥形圆柱
+                            is_suspected_tapered = true;
+                            std::cout << "[STEP Exporter] [CylDet] ⚠ Suspected tapered cylinder (no cylinder side, large radius variation)" << std::endl;
+                            std::cout << "[STEP Exporter] [CylDet]   Fillet Z range: " << fillet_z_range << " vs Total Z range: " << total_object_z_range << std::endl;
+                            std::cout << "[STEP Exporter] [CylDet]   Fillet coverage: " << (fillet_coverage * 100) << "%" << std::endl;
+                            std::cout << "[STEP Exporter] [CylDet]   Fillet radius variation: " << (fillet_radius_variation * 100) << "%" << std::endl;
+                        } else {
+                            is_true_fillet = true;
+                        }
+                    }
+                }
+                
+                if (is_suspected_tapered) {
+                    // 疑似锥形圆柱，跳过圆角和斜角检测，让锥形检测来处理
+                    std::cout << "[STEP Exporter] [CylDet] ⚠ Skipping fillet/chamfer detection, will try cone detection" << std::endl;
+                } else if (!is_true_fillet) {
+                    std::cout << "[STEP Exporter] [CylDet] ⚠ Suspected tapered cylinder misclassified as fillet" << std::endl;
+                    std::cout << "[STEP Exporter] [CylDet]   Fillet Z range: " << fillet_z_range << " vs Cyl Z range: " << cyl_z_range << std::endl;
+                    std::cout << "[STEP Exporter] [CylDet]   Fillet radius variation: " << (fillet_radius_variation * 100) << "%" << std::endl;
+                } else {
+                    is_fillet_cylinder = true;
+                    std::cout << "[STEP Exporter] [CylDet] ✓✓✓ Detected FILLET CYLINDER (cylinder + fillet)" << std::endl;
+                    std::cout << "[STEP Exporter] [CylDet] Fillet detection criteria: count_near_90=" << count_near_90 
+                              << ", count_30_60=" << count_30_60 
+                              << ", count_60_80=" << count_60_80 
+                              << ", count_near_0=" << count_near_0 << std::endl;
+                }
             }
             
             // 斜角圆柱的特征：法线角度集中在90°和45°附近
             // 斜倒角的45°面应该是明显的平面，法线角度集中在45°附近，且数量应该足够多
             // 调整条件：根据实际数据，30-60°范围内的法线数量可能较多（因为45°附近的法线会被计入这个范围）
-            if (!is_fillet_cylinder && count_near_90 > 10 && count_near_45 > 10) {
+            // 注意：如果疑似锥形圆柱，跳过斜角检测
+            if (!is_fillet_cylinder && !is_suspected_tapered && count_near_90 > 10 && count_near_45 > 10) {
                 is_chamfered_cylinder = true;
                 std::cout << "[STEP Exporter] [CylDet] ✓✓✓ Detected CHAMFERED CYLINDER (cylinder + chamfer)" << std::endl;
                 std::cout << "[STEP Exporter] [CylDet] Chamfer detection criteria: count_near_90=" << count_near_90 
@@ -1083,6 +1224,207 @@ private:
                     result.radius = avg_radius;  // 使用平均半径
                     std::cout << "[STEP Exporter] [CylDet] ✓✓✓ Detected CONE: top R=" << avg_top_r 
                               << " bottom R=" << avg_bottom_r << " diff=" << diff_percent*100 << "%" << std::endl;
+                    
+                    // 如果是疑似锥形圆柱，检查是否有顶部圆角和底部斜倒角
+                    if (is_suspected_tapered) {
+                        std::cout << "[STEP Exporter] [CylDet] Analyzing tapered cylinder features..." << std::endl;
+                        
+                        // 计算锥形侧面的法线角度
+                        double cone_height = z_r_pairs.back().first - z_r_pairs.front().first;
+                        double taper_angle = atan2(avg_bottom_r - avg_top_r, cone_height) * 180.0 / M_PI;
+                        double side_angle = 90.0 - taper_angle;  // 锥形侧面法线与轴线的夹角
+                        
+                        std::cout << "[STEP Exporter] [CylDet] Taper angle: " << taper_angle << "°, side angle: " << side_angle << "°" << std::endl;
+                        
+                        // 计算所有面的法线角度分布（使用正确的角度范围）
+                        int count_near_0 = 0;
+                        int count_near_45 = 0;
+                        int count_60_80 = 0;
+                        int count_near_90 = 0;
+                        
+                        for (size_t i = 0; i < m_faceInfos.size(); i++) {
+                            const auto& fi = m_faceInfos[i];
+                            if (fi.area < 1e-10) continue;
+                            
+                            double dot_axis = fabs(fi.normal.Dot(axis));
+                            double normal_angle = acos(std::min(1.0, std::max(0.0, dot_axis)));
+                            double angle_deg = normal_angle * 180.0 / M_PI;
+                            
+                            if (angle_deg < 10) {
+                                count_near_0++;
+                            } else if (angle_deg >= 35 && angle_deg < 55) {
+                                count_near_45++;
+                            } else if (angle_deg >= 60 && angle_deg < 80) {
+                                count_60_80++;
+                            } else if (angle_deg >= 80 && angle_deg <= 100) {
+                                count_near_90++;
+                            }
+                        }
+                        
+                        std::cout << "[STEP Exporter] [CylDet] Tapered cylinder features: near_0=" << count_near_0 
+                                  << ", near_45=" << count_near_45 
+                                  << ", 60-80=" << count_60_80 
+                                  << ", near_90=" << count_near_90 << std::endl;
+                        
+                        // 计算最大圆角高度（总高度的20%）
+                        double max_fillet_height = fabs(cone_height) * 0.2;
+                        std::cout << "[STEP Exporter] [CylDet] Max fillet height: " << max_fillet_height << " (20% of cone height " << cone_height << ")" << std::endl;
+                        
+                        // 检查顶部圆角：法线角度在30°到70°之间（真正的圆角过渡区域）
+                        // 圆角的特征：法线角度从90°（底部）连续变化到0°（顶部）
+                        // 真正的圆角面应该在30°-70°范围内，且靠近顶部
+                        int count_fillet_range = 0;
+                        for (size_t i = 0; i < m_faceInfos.size(); i++) {
+                            const auto& fi = m_faceInfos[i];
+                            if (fi.area < 1e-10) continue;
+                            
+                            double dot_axis = fabs(fi.normal.Dot(axis));
+                            double normal_angle = acos(std::min(1.0, std::max(0.0, dot_axis)));
+                            double angle_deg = normal_angle * 180.0 / M_PI;
+                            
+                            // 圆角面角度范围：30°到70°（真正的圆角过渡区域）
+                            if (angle_deg >= 30 && angle_deg <= 70) {
+                                count_fillet_range++;
+                            }
+                        }
+                        
+                        if (count_fillet_range > 10) {
+                            result.is_fillet = true;
+                            // 先找到整个物体的顶部Z坐标
+                            double overall_z_max = -1e20;
+                            for (size_t i = 0; i < m_vertices.size(); i++) {
+                                double vz;
+                                if (fabs(axis.Z()) > 0.9) {
+                                    vz = m_vertices[i][2];
+                                } else if (fabs(axis.X()) > 0.9) {
+                                    vz = m_vertices[i][0];
+                                } else {
+                                    vz = m_vertices[i][1];
+                                }
+                                overall_z_max = std::max(overall_z_max, vz);
+                            }
+                            
+                            // 只检测靠近顶部的圆角面（在max_fillet_height范围内）
+                            double fillet_z_min = 1e20;
+                            int valid_fillet_faces = 0;
+                            for (size_t i = 0; i < m_faceInfos.size(); i++) {
+                                const auto& fi = m_faceInfos[i];
+                                if (fi.area < 1e-10) continue;
+                                
+                                double dot_axis = fabs(fi.normal.Dot(axis));
+                                double normal_angle = acos(std::min(1.0, std::max(0.0, dot_axis)));
+                                double angle_deg = normal_angle * 180.0 / M_PI;
+                                
+                                // 圆角面角度范围：30°到70°
+                                if (angle_deg >= 30 && angle_deg <= 70) {
+                                    double height_min = 1e20, height_max = -1e20;
+                                    for (int vi : fi.vertex_indices) {
+                                        double vz;
+                                        if (fabs(axis.Z()) > 0.9) {
+                                            vz = m_vertices[vi][2];
+                                        } else if (fabs(axis.X()) > 0.9) {
+                                            vz = m_vertices[vi][0];
+                                        } else {
+                                            vz = m_vertices[vi][1];
+                                        }
+                                        height_min = std::min(height_min, vz);
+                                        height_max = std::max(height_max, vz);
+                                    }
+                                    
+                                    // 只考虑靠近顶部的面（在max_fillet_height范围内）
+                                    double distance_from_top = overall_z_max - height_max;
+                                    if (distance_from_top < max_fillet_height) {
+                                        fillet_z_min = std::min(fillet_z_min, height_min);
+                                        valid_fillet_faces++;
+                                    }
+                                }
+                            }
+                            
+                            if (valid_fillet_faces > 0) {
+                                double fillet_height = overall_z_max - fillet_z_min;
+                                // 限制圆角高度不超过max_fillet_height
+                                if (fillet_height > max_fillet_height) {
+                                    fillet_height = max_fillet_height;
+                                }
+                                result.fillet_radius = fillet_height;
+                                std::cout << "[STEP Exporter] [CylDet] Detected top fillet on tapered cylinder, radius=" << result.fillet_radius 
+                                          << " (from " << valid_fillet_faces << " valid faces)" << std::endl;
+                            } else {
+                                result.is_fillet = false;
+                                std::cout << "[STEP Exporter] [CylDet] No valid fillet faces found near top" << std::endl;
+                            }
+                        }
+                        
+                        // 检查底部斜倒角：法线角度在35°到55°之间（45°倒角面）
+                        int count_chamfer_range = 0;
+                        for (size_t i = 0; i < m_faceInfos.size(); i++) {
+                            const auto& fi = m_faceInfos[i];
+                            if (fi.area < 1e-10) continue;
+                            
+                            double dot_axis = fabs(fi.normal.Dot(axis));
+                            double normal_angle = acos(std::min(1.0, std::max(0.0, dot_axis)));
+                            double angle_deg = normal_angle * 180.0 / M_PI;
+                            
+                            // 斜倒角面角度范围：35°到55°（45°倒角面）
+                            if (angle_deg >= 35 && angle_deg <= 55) {
+                                count_chamfer_range++;
+                            }
+                        }
+                        
+                        if (count_chamfer_range > 10) {
+                            result.is_chamfered = true;
+                            // 先找到整个物体的底部Z坐标
+                            double overall_z_min = 1e20;
+                            for (size_t i = 0; i < m_vertices.size(); i++) {
+                                double vz;
+                                if (fabs(axis.Z()) > 0.9) {
+                                    vz = m_vertices[i][2];
+                                } else if (fabs(axis.X()) > 0.9) {
+                                    vz = m_vertices[i][0];
+                                } else {
+                                    vz = m_vertices[i][1];
+                                }
+                                overall_z_min = std::min(overall_z_min, vz);
+                            }
+                            
+                            // 只检测靠近底部的斜倒角面
+                            double chamfer_z_max = -1e20;
+                            for (size_t i = 0; i < m_faceInfos.size(); i++) {
+                                const auto& fi = m_faceInfos[i];
+                                if (fi.area < 1e-10) continue;
+                                
+                                double dot_axis = fabs(fi.normal.Dot(axis));
+                                double normal_angle = acos(std::min(1.0, std::max(0.0, dot_axis)));
+                                double angle_deg = normal_angle * 180.0 / M_PI;
+                                
+                                // 斜倒角面角度范围：35°到55°（45°倒角面）
+                                if (angle_deg >= 35 && angle_deg <= 55) {
+                                    double height_min = 1e20, height_max = -1e20;
+                                    for (int vi : fi.vertex_indices) {
+                                        double vz;
+                                        if (fabs(axis.Z()) > 0.9) {
+                                            vz = m_vertices[vi][2];
+                                        } else if (fabs(axis.X()) > 0.9) {
+                                            vz = m_vertices[vi][0];
+                                        } else {
+                                            vz = m_vertices[vi][1];
+                                        }
+                                        height_min = std::min(height_min, vz);
+                                        height_max = std::max(height_max, vz);
+                                    }
+                                    
+                                    // 只考虑靠近底部的面（距离底部10mm以内）
+                                    if (height_min - overall_z_min < 10.0) {
+                                        chamfer_z_max = std::max(chamfer_z_max, height_max);
+                                    }
+                                }
+                            }
+                            double chamfer_height = chamfer_z_max - overall_z_min;
+                            result.chamfer_size = chamfer_height;
+                            result.chamfer_angle = M_PI / 4;  // 45°斜倒角
+                            std::cout << "[STEP Exporter] [CylDet] Detected bottom chamfer on tapered cylinder, size=" << result.chamfer_size << " (from Z-height)" << std::endl;
+                        }
+                    }
                 } else {
                     std::cout << "[STEP Exporter] [CylDet] Not a cone (diff too small): " << diff_percent*100 << "%" << std::endl;
                 }
@@ -1123,8 +1465,8 @@ private:
                 }
             }
             if (!is_dup) {
-            unique.push_back(cyl);
-        }
+                unique.push_back(cyl);
+            }
         }
         
         return unique;
@@ -1316,8 +1658,8 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                     throw Standard_Failure("Invalid height");
                 }
                 
-                // 检查是否是圆角圆柱
-                if (cyl.is_fillet) {
+                // 检查是否是圆角圆柱（排除锥形圆柱，锥形圆柱有自己的处理逻辑）
+                if (cyl.is_fillet && !cyl.is_cone) {
                     std::cout << "[STEP Exporter] Detected fillet cylinder, creating analytical shape..." << std::endl;
                     std::cout << "[STEP Exporter] Fillet cylinder parameters: " << std::endl;
                     std::cout << "  - Cylinder radius: " << cyl.radius << std::endl;
@@ -1577,8 +1919,8 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                     }
                 }
                 
-                // 检查是否是斜角圆柱
-                if (cyl.is_chamfered) {
+                // 检查是否是斜角圆柱（排除锥形圆柱，锥形圆柱有自己的处理逻辑）
+                if (cyl.is_chamfered && !cyl.is_cone) {
                     std::cout << "[STEP Exporter] Detected chamfered cylinder, creating analytical shape..." << std::endl;
                     std::cout << "[STEP Exporter] Chamfered cylinder parameters: " << std::endl;
                     std::cout << "  - Cylinder radius: " << cyl.radius << std::endl;
@@ -1730,6 +2072,244 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                         bottom_point.Z() / scale
                     );
                     
+                    // 如果是锥形圆柱且有圆角或斜倒角，使用旋转创建完整形状
+                    if (cyl.is_fillet || cyl.is_chamfered) {
+                        std::cout << "[STEP Exporter] Detected tapered cylinder with fillet/chamfer, creating via revolution..." << std::endl;
+                        std::cout << "[STEP Exporter] Features: is_fillet=" << cyl.is_fillet << ", is_chamfered=" << cyl.is_chamfered << std::endl;
+                        
+                        try {
+                            double bottomR = scaled_bottom_radius;
+                            double topR = scaled_top_radius;
+                            double totalHeight = scaled_cone_height;
+                            double filletR = cyl.fillet_radius / scale;
+                            double chamferSize = cyl.chamfer_size / scale;
+                            
+                            std::cout << "[STEP Exporter] Tapered cylinder params:" << std::endl;
+                            std::cout << "  - Bottom R: " << bottomR << std::endl;
+                            std::cout << "  - Top R: " << topR << std::endl;
+                            std::cout << "  - Height: " << totalHeight << std::endl;
+                            std::cout << "  - Fillet R: " << filletR << std::endl;
+                            std::cout << "  - Chamfer size: " << chamferSize << std::endl;
+                            
+                            // 使用局部坐标系创建轮廓线（原点在底部中心，XZ平面）
+                            // 轮廓线从底部到顶部，依次添加：底部斜倒角、锥形主体、顶部圆角
+                            
+                            // 1. 底部斜倒角起点（底部外边缘）
+                            gp_Pnt p0(0, 0, 0);  // 底部中心
+                            gp_Pnt p1;  // 斜倒角起点
+                            if (cyl.is_chamfered) {
+                                p1 = gp_Pnt(bottomR - chamferSize, 0, 0);
+                            } else {
+                                p1 = gp_Pnt(bottomR, 0, 0);
+                            }
+                            
+                            // 2. 斜倒角终点
+                            gp_Pnt p2;
+                            if (cyl.is_chamfered) {
+                                p2 = gp_Pnt(bottomR, 0, chamferSize);
+                            } else {
+                                p2 = p1;
+                            }
+                            
+                            // 3. 锥形主体终点（圆角起点）
+                            // 对于有圆角的锥形圆柱，需要根据圆角半径计算锥形主体的实际终点
+                            double taperedHeight = totalHeight;
+                            if (cyl.is_chamfered) taperedHeight -= chamferSize;
+                            
+                            // 锥形斜率
+                            double taperSlope = (bottomR - topR) / totalHeight;
+                            
+                            // 锥形主体终点的Z坐标（圆角起点）
+                            double p3Z;
+                            double p3R;
+                            
+                            if (cyl.is_fillet) {
+                                // 锥形主体高度 = 总高度 - 顶部圆角高度 - 底部斜角高度
+                                double taperedBodyHeight = totalHeight - filletR - chamferSize;
+                                
+                                // 锥形主体终点（圆角起点）
+                                p3Z = chamferSize + taperedBodyHeight;
+                                p3R = topR + filletR;
+                                
+                                gp_Pnt p3(p3R, 0, p3Z);
+                                
+                                // 圆角终点：在顶部边缘，半径为topR
+                                gp_Pnt p4(topR, 0, totalHeight);
+                                
+                                // 圆角圆心：在(topR, 0, p3Z)
+                                gp_Pnt filletCenter(topR, 0, p3Z);
+                                
+                                // 5. 顶部中心
+                                gp_Pnt p5(0, 0, totalHeight);
+                                
+                                std::cout << "[STEP Exporter] Profile points:" << std::endl;
+                                std::cout << "  p0(" << p0.X() << ", " << p0.Y() << ", " << p0.Z() << ")" << std::endl;
+                                std::cout << "  p1(" << p1.X() << ", " << p1.Y() << ", " << p1.Z() << ")" << std::endl;
+                                std::cout << "  p2(" << p2.X() << ", " << p2.Y() << ", " << p2.Z() << ")" << std::endl;
+                                std::cout << "  p3(" << p3.X() << ", " << p3.Y() << ", " << p3.Z() << ")" << std::endl;
+                                std::cout << "  p4(" << p4.X() << ", " << p4.Y() << ", " << p4.Z() << ")" << std::endl;
+                                std::cout << "  p5(" << p5.X() << ", " << p5.Y() << ", " << p5.Z() << ")" << std::endl;
+                                
+                                // 创建轮廓线的边
+                                BRepBuilderAPI_MakeEdge edge0(p0, p1);  // 底部线
+                                
+                                BRepBuilderAPI_MakeEdge edge1;
+                                if (cyl.is_chamfered) {
+                                    edge1 = BRepBuilderAPI_MakeEdge(p1, p2);  // 斜倒角
+                                } else {
+                                    edge1 = edge0;  // 重复使用
+                                }
+                                
+                                BRepBuilderAPI_MakeEdge edge2(p2, p3);  // 锥形主体
+                                
+                                // 圆角圆弧：连接p3和p4的圆弧，使用filletR
+                                gp_Ax2 arcAxis(filletCenter, gp_Dir(0, 1, 0));
+                                gp_Circ filletArc(arcAxis, filletR);
+                                BRepBuilderAPI_MakeEdge edge3(filletArc, 0, M_PI / 2);
+                                
+                                BRepBuilderAPI_MakeEdge edge4(p4, p5);  // 顶部线
+                                BRepBuilderAPI_MakeEdge edge5(p5, p0);  // 轴线
+                                
+                                // 创建轮廓线
+                                BRepBuilderAPI_MakeWire profileWireMaker;
+                                profileWireMaker.Add(edge0.Edge());
+                                if (cyl.is_chamfered) {
+                                    profileWireMaker.Add(edge1.Edge());
+                                }
+                                profileWireMaker.Add(edge2.Edge());
+                                profileWireMaker.Add(edge3.Edge());
+                                profileWireMaker.Add(edge4.Edge());
+                                profileWireMaker.Add(edge5.Edge());
+                                
+                                if (!profileWireMaker.IsDone()) {
+                                    std::cout << "[STEP Exporter] ⚠ Failed to create profile wire" << std::endl;
+                                    throw std::runtime_error("Profile wire creation failed");
+                                }
+                                
+                                TopoDS_Wire profileWire = profileWireMaker.Wire();
+                                
+                                // 创建面
+                                BRepBuilderAPI_MakeFace profileFaceMaker(profileWire, Standard_True);
+                                if (!profileFaceMaker.IsDone()) {
+                                    std::cout << "[STEP Exporter] ⚠ Failed to create profile face" << std::endl;
+                                    throw std::runtime_error("Profile face creation failed");
+                                }
+                                
+                                TopoDS_Face profileFace = profileFaceMaker.Face();
+                                
+                                std::cout << "[STEP Exporter] ✓ Created profile face" << std::endl;
+                                
+                                // 绕 Z 轴旋转 360 度创建实体
+                                gp_Ax1 rotationAxis(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1));
+                                BRepPrimAPI_MakeRevol revolMaker(profileFace, rotationAxis, 2 * M_PI, Standard_True);
+                                
+                                if (revolMaker.IsDone()) {
+                                    TopoDS_Shape taperedShape = revolMaker.Shape();
+                                    
+                                    // 应用位置变换
+                                    gp_Pnt originalBasePoint = scaled_cone_bottom_point;
+                                    gp_Trsf transform;
+                                    transform.SetTranslation(gp_Vec(originalBasePoint.X(), originalBasePoint.Y(), originalBasePoint.Z()));
+                                    taperedShape.Move(transform);
+                                    
+                                    if (taperedShape.ShapeType() == TopAbs_SOLID) {
+                                        GProp_GProps props;
+                                        BRepGProp::VolumeProperties(taperedShape, props);
+                                        double volume = fabs(props.Mass());
+                                        std::cout << "[STEP Exporter] ✓ Created tapered cylinder via revolution (Volume: " << volume << ")" << std::endl;
+                                        return taperedShape;
+                                    } else if (taperedShape.ShapeType() == TopAbs_SHELL) {
+                                        BRepBuilderAPI_MakeSolid solidMaker(TopoDS::Shell(taperedShape));
+                                        if (solidMaker.IsDone()) {
+                                            TopoDS_Solid solid = solidMaker.Solid();
+                                            GProp_GProps props;
+                                            BRepGProp::VolumeProperties(solid, props);
+                                            double volume = fabs(props.Mass());
+                                            std::cout << "[STEP Exporter] ✓ Created solid tapered cylinder from shell (Volume: " << volume << ")" << std::endl;
+                                            return solid;
+                                        }
+                                    }
+                                } else {
+                                    std::cout << "[STEP Exporter] ⚠ Revolution failed" << std::endl;
+                                }
+                            } else {
+                                // 没有圆角的情况
+                                p3Z = taperedHeight + (cyl.is_chamfered ? chamferSize : 0);
+                                p3R = bottomR - taperSlope * p3Z;
+                                
+                                gp_Pnt p3(p3R, 0, p3Z);
+                                gp_Pnt p4 = p3;
+                                gp_Pnt p5(0, 0, totalHeight);
+                                
+                                std::cout << "[STEP Exporter] Profile points:" << std::endl;
+                                std::cout << "  p0(" << p0.X() << ", " << p0.Y() << ", " << p0.Z() << ")" << std::endl;
+                                std::cout << "  p1(" << p1.X() << ", " << p1.Y() << ", " << p1.Z() << ")" << std::endl;
+                                std::cout << "  p2(" << p2.X() << ", " << p2.Y() << ", " << p2.Z() << ")" << std::endl;
+                                std::cout << "  p3(" << p3.X() << ", " << p3.Y() << ", " << p3.Z() << ")" << std::endl;
+                                std::cout << "  p4(" << p4.X() << ", " << p4.Y() << ", " << p4.Z() << ")" << std::endl;
+                                std::cout << "  p5(" << p5.X() << ", " << p5.Y() << ", " << p5.Z() << ")" << std::endl;
+                                
+                                BRepBuilderAPI_MakeEdge edge0(p0, p1);
+                                BRepBuilderAPI_MakeEdge edge1;
+                                if (cyl.is_chamfered) {
+                                    edge1 = BRepBuilderAPI_MakeEdge(p1, p2);
+                                } else {
+                                    edge1 = edge0;
+                                }
+                                BRepBuilderAPI_MakeEdge edge2(p2, p3);
+                                BRepBuilderAPI_MakeEdge edge4(p4, p5);
+                                BRepBuilderAPI_MakeEdge edge5(p5, p0);
+                                
+                                BRepBuilderAPI_MakeWire profileWireMaker;
+                                profileWireMaker.Add(edge0.Edge());
+                                if (cyl.is_chamfered) {
+                                    profileWireMaker.Add(edge1.Edge());
+                                }
+                                profileWireMaker.Add(edge2.Edge());
+                                profileWireMaker.Add(edge4.Edge());
+                                profileWireMaker.Add(edge5.Edge());
+                                
+                                if (!profileWireMaker.IsDone()) {
+                                    throw std::runtime_error("Profile wire creation failed");
+                                }
+                                
+                                TopoDS_Wire profileWire = profileWireMaker.Wire();
+                                BRepBuilderAPI_MakeFace profileFaceMaker(profileWire, Standard_True);
+                                if (!profileFaceMaker.IsDone()) {
+                                    throw std::runtime_error("Profile face creation failed");
+                                }
+                                
+                                TopoDS_Face profileFace = profileFaceMaker.Face();
+                                
+                                gp_Ax1 rotationAxis(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1));
+                                BRepPrimAPI_MakeRevol revolMaker(profileFace, rotationAxis, 2 * M_PI, Standard_True);
+                                
+                                if (revolMaker.IsDone()) {
+                                    TopoDS_Shape taperedShape = revolMaker.Shape();
+                                    gp_Pnt originalBasePoint = scaled_cone_bottom_point;
+                                    gp_Trsf transform;
+                                    transform.SetTranslation(gp_Vec(originalBasePoint.X(), originalBasePoint.Y(), originalBasePoint.Z()));
+                                    taperedShape.Move(transform);
+                                    
+                                    if (taperedShape.ShapeType() == TopAbs_SOLID) {
+                                        return taperedShape;
+                                    } else if (taperedShape.ShapeType() == TopAbs_SHELL) {
+                                        BRepBuilderAPI_MakeSolid solidMaker(TopoDS::Shell(taperedShape));
+                                        if (solidMaker.IsDone()) {
+                                            return solidMaker.Solid();
+                                        }
+                                    }
+                                }
+                            }
+                        } catch (const Standard_Failure& e) {
+                            std::cerr << "[STEP Exporter] Revolution failed: " << e.GetMessageString() << std::endl;
+                        } catch (...) {
+                            std::cerr << "[STEP Exporter] Revolution failed with unknown exception" << std::endl;
+                        }
+                        
+                        std::cout << "[STEP Exporter] ⚠ Falling back to simple cone..." << std::endl;
+                    }
+                    
                     std::cout << "[STEP Exporter] Detected cone (tapered cylinder), creating analytical cone..." << std::endl;
                     std::cout << "[STEP Exporter] Cone parameters: " << std::endl;
                     std::cout << "  - Bottom radius: " << scaled_bottom_radius << " (scaled from " << cyl.radius_bottom << ")" << std::endl;
@@ -1770,7 +2350,7 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                             std::cout << "  - Axis direction: (" << axisDir.X() << ", " << axisDir.Y() << ", " << axisDir.Z() << ")" << std::endl;
                             std::cout << "  - Bottom radius: " << r1 << std::endl;
                             std::cout << "  - Top radius: " << r2 << std::endl;
-                            std::cout << "  - Height: " << height << std::endl;
+                            std::cout << "  - Height: " << scaled_cone_height << std::endl;
                             
                             // 尝试使用不同的参数创建BRepPrimAPI_MakeCone
                             gp_Ax2 axis(basePoint, axisDir);
@@ -1779,7 +2359,7 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                             if (coneMaker.IsDone()) {
                                 TopoDS_Shape result = coneMaker.Shape();
                                 std::cout << "[STEP Exporter] ✓ Created analytical cone (Method 1): bottom R=" 
-                                          << r1 << " top R=" << r2 << " H=" << height << std::endl;
+                                          << r1 << " top R=" << r2 << " H=" << scaled_cone_height << std::endl;
                                 std::cout << "[STEP Exporter] Shape type: " << result.ShapeType() << std::endl;
                                 
                                 // 检查创建的形状是否包含两个端面
@@ -1816,7 +2396,7 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                                 if (coneMakerZ.IsDone()) {
                                     TopoDS_Shape result = coneMakerZ.Shape();
                                     std::cout << "[STEP Exporter] ✓ Created analytical cone with Z-axis: bottom R=" 
-                                              << r1 << " top R=" << r2 << " H=" << height << std::endl;
+                                              << r1 << " top R=" << r2 << " H=" << scaled_cone_height << std::endl;
                                     
                                     // 检查创建的形状是否包含两个端面
                                     int faceCount = 0;
@@ -1843,18 +2423,18 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                         std::cout << "[STEP Exporter] Method 2: Using Geom_ConicalSurface..." << std::endl;
                         try {
                             // 验证底部点和顶部点的位置
-                            std::cout << "[STEP Exporter] Original bottom_point: (" << bottom_point.X() << ", " << bottom_point.Y() << ", " << bottom_point.Z() << ")" << std::endl;
+                            std::cout << "[STEP Exporter] Scaled bottom_point: (" << scaled_cone_bottom_point.X() << ", " << scaled_cone_bottom_point.Y() << ", " << scaled_cone_bottom_point.Z() << ")" << std::endl;
                             
                             // 计算顶部点
                             gp_Vec axisVec(cyl.axis_direction.X(), cyl.axis_direction.Y(), cyl.axis_direction.Z());
                             axisVec.Normalize();
-                            gp_Pnt top_point = bottom_point.Translated(axisVec.Multiplied(height));
+                            gp_Pnt top_point = scaled_cone_bottom_point.Translated(axisVec.Multiplied(scaled_cone_height));
                             std::cout << "[STEP Exporter] Calculated top_point: (" << top_point.X() << ", " << top_point.Y() << ", " << top_point.Z() << ")" << std::endl;
                             
                             // 确保正确的圆锥方向：底部半径大于顶部半径
-                            double r1 = cyl.radius_bottom;
-                            double r2 = cyl.radius_top;
-                            gp_Pnt basePoint = bottom_point;
+                            double r1 = scaled_bottom_radius;
+                            double r2 = scaled_top_radius;
+                            gp_Pnt basePoint = scaled_cone_bottom_point;
                             gp_Pnt actualTopPoint = top_point;
                             gp_Dir axisDir = cyl.axis_direction;
                             bool swapped = false;
@@ -1865,7 +2445,7 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                                 axisDir = axisDir.Reversed();  // 使用Reversed()返回新的方向
                                 // 交换方向后，新的底部点应该是原始的顶部点，新的顶部点应该是原始的底部点
                                 basePoint = top_point;
-                                actualTopPoint = bottom_point;
+                                actualTopPoint = scaled_cone_bottom_point;
                                 swapped = true;
                                 std::cout << "[STEP Exporter] Swapped cone direction: bottom R=" << r1 << " top R=" << r2 << std::endl;
                                 std::cout << "[STEP Exporter] New basePoint: (" << basePoint.X() << ", " << basePoint.Y() << ", " << basePoint.Z() << ")" << std::endl;
@@ -1876,8 +2456,8 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                             // 计算圆锥的半顶角
                             double radiusDiff = fabs(r1 - r2);
                             std::cout << "[STEP Exporter] Radius difference: " << radiusDiff << " (r1=" << r1 << ", r2=" << r2 << ")" << std::endl;
-                            std::cout << "[STEP Exporter] Height: " << height << std::endl;
-                            double angle = atan(radiusDiff / height);
+                            std::cout << "[STEP Exporter] Height: " << scaled_cone_height << std::endl;
+                            double angle = atan(radiusDiff / scaled_cone_height);
                             
                             // 创建圆锥面
                             // Geom_ConicalSurface的V参数表示从圆锥顶点沿轴线的距离
@@ -1894,25 +2474,25 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                             
                             // 由于V参数范围太大，导致数值精度问题
                             // 使用一种不同的方法：将圆锥坐标系的原点放在顶部点，使用反转的轴线方向
-                            // 这样可以使用较小的V参数范围[0, height]
-                            gp_Pnt topCenter = basePoint.Translated(gp_Vec(axisDir.X(), axisDir.Y(), axisDir.Z()).Multiplied(height));
+                            // 这样可以使用较小的V参数范围[0, scaled_cone_height]
+                            gp_Pnt topCenter = basePoint.Translated(gp_Vec(axisDir.X(), axisDir.Y(), axisDir.Z()).Multiplied(scaled_cone_height));
                             gp_Ax3 coneAxisTop(topCenter, axisDir.Reversed());
                             // 使用r2作为参考半径
                             // 在V=0处，半径 = r2（顶部）
-                            // 在V=height处，半径 = r2 + height * tan(angle) = r1（底部）
+                            // 在V=scaled_cone_height处，半径 = r2 + scaled_cone_height * tan(angle) = r1（底部）
                             
                             std::cout << "[STEP Exporter] Using reversed axis approach with top center as origin" << std::endl;
                             std::cout << "[STEP Exporter] Top center: (" << topCenter.X() << ", " << topCenter.Y() << ", " << topCenter.Z() << ")" << std::endl;
                             
                             Handle(Geom_ConicalSurface) coneSurface = new Geom_ConicalSurface(coneAxisTop, angle, r2);
                             
-                            // 创建圆锥面（从0到2π，从0到height/cos(angle)）
-                            // 由于圆锥面的参数化公式中，Z = height - V * cos(angle)
-                            // 要让底部边缘的Z坐标为0，需要V = height / cos(angle)
+                            // 创建圆锥面（从0到2π，从0到scaled_cone_height/cos(angle)）
+                            // 由于圆锥面的参数化公式中，Z = scaled_cone_height - V * cos(angle)
+                            // 要让底部边缘的Z坐标为0，需要V = scaled_cone_height / cos(angle)
                             Standard_Real u1 = 0.0;
                             Standard_Real u2 = 2.0 * M_PI;
                             Standard_Real v1 = 0.0;
-                            Standard_Real v2 = height / cos(angle);
+                            Standard_Real v2 = scaled_cone_height / cos(angle);
                             
                             std::cout << "[STEP Exporter] V parameter range: [" << v1 << ", " << v2 << "] (adjusted for Z=0 at bottom)" << std::endl;
                             
@@ -1928,11 +2508,11 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                                 Handle(Geom_Surface) surface = BRep_Tool::Surface(coneFace, loc);
                                 gp_Pnt pointOnCone;
                                 gp_Vec d1u, d1v;
-                                surface->D1(M_PI/4, height/2, pointOnCone, d1u, d1v);  // 在圆锥面上取一点
+                                surface->D1(M_PI/4, scaled_cone_height/2, pointOnCone, d1u, d1v);  // 在圆锥面上取一点
                                 gp_Dir normal = d1u.Crossed(d1v).Normalized();
                                 
                                 // 计算该点的径向方向（从轴线指向该点）
-                                gp_Pnt axisPoint = basePoint.Translated(gp_Vec(axisDir.X(), axisDir.Y(), axisDir.Z()).Multiplied(height/2));
+                                gp_Pnt axisPoint = basePoint.Translated(gp_Vec(axisDir.X(), axisDir.Y(), axisDir.Z()).Multiplied(scaled_cone_height/2));
                                 gp_Vec radialDir(pointOnCone.X() - axisPoint.X(), pointOnCone.Y() - axisPoint.Y(), pointOnCone.Z() - axisPoint.Z());
                                 radialDir.Normalize();
                                 
@@ -1946,7 +2526,7 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                                     std::cout << "[STEP Exporter] Reversed cone face direction to point outward" << std::endl;
                                     // 再次检查方向
                                     surface = BRep_Tool::Surface(coneFace, loc);
-                                    surface->D1(M_PI/4, height/2, pointOnCone, d1u, d1v);
+                                    surface->D1(M_PI/4, scaled_cone_height/2, pointOnCone, d1u, d1v);
                                     normal = d1u.Crossed(d1v).Normalized();
                                     std::cout << "[STEP Exporter] New cone face normal: (" << normal.X() << ", " << normal.Y() << ", " << normal.Z() << ")" << std::endl;
                                 }
@@ -2279,13 +2859,13 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                 } else {
                     // 方法1: 使用BRepPrimAPI_MakeCylinder
                     std::cout << "[STEP Exporter] Method 1: Using BRepPrimAPI_MakeCylinder..." << std::endl;
-                    gp_Ax2 axis(bottom_point, cyl.axis_direction);
-                    BRepPrimAPI_MakeCylinder cylMaker(axis, cyl.radius, height);
+                    gp_Ax2 axis(scaled_bottom_point, cyl.axis_direction);
+                    BRepPrimAPI_MakeCylinder cylMaker(axis, scaled_radius, scaled_height);
                     
                     if (cylMaker.IsDone()) {
                         TopoDS_Shape result = cylMaker.Shape();
                         std::cout << "[STEP Exporter] ✓ Created analytical cylinder (Method 1): R=" 
-                                  << cyl.radius << " H=" << height << std::endl;
+                                  << scaled_radius << " H=" << scaled_height << std::endl;
                         std::cout << "[STEP Exporter] Shape type: " << result.ShapeType() << std::endl;
                         return result;
                     } else {
@@ -2296,14 +2876,14 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                     std::cout << "[STEP Exporter] Method 2: Using Geom_CylindricalSurface..." << std::endl;
                     try {
                         // 创建圆柱坐标系
-                        gp_Ax3 cylAxis(bottom_point, cyl.axis_direction);
-                        Handle(Geom_CylindricalSurface) cylSurface = new Geom_CylindricalSurface(cylAxis, cyl.radius);
+                        gp_Ax3 cylAxis(scaled_bottom_point, cyl.axis_direction);
+                        Handle(Geom_CylindricalSurface) cylSurface = new Geom_CylindricalSurface(cylAxis, scaled_radius);
                         
-                        // 创建圆柱面（从0到2π，从0到height）
+                        // 创建圆柱面（从0到2π，从0到scaled_height）
                         Standard_Real u1 = 0.0;
                         Standard_Real u2 = 2.0 * M_PI;
                         Standard_Real v1 = 0.0;
-                        Standard_Real v2 = height;
+                        Standard_Real v2 = scaled_height;
                         
                         TopoDS_Face cylFace = BRepBuilderAPI_MakeFace(cylSurface, u1, u2, v1, v2, Precision::Confusion());
                         
@@ -2311,16 +2891,16 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                             std::cout << "[STEP Exporter] ✓ Created cylindrical face (Method 2)" << std::endl;
                             
                             // 创建底部圆形端面
-                            gp_Pnt bottomCenter = bottom_point;
-                            gp_Circ bottomCircle(gp_Ax2(bottomCenter, cyl.axis_direction), cyl.radius);
+                            gp_Pnt bottomCenter = scaled_bottom_point;
+                            gp_Circ bottomCircle(gp_Ax2(bottomCenter, cyl.axis_direction), scaled_radius);
                             BRepBuilderAPI_MakeEdge bottomEdge(bottomCircle);
                             BRepBuilderAPI_MakeWire bottomWire(bottomEdge.Edge());
                             BRepBuilderAPI_MakeFace bottomCircularFace(bottomWire.Wire());
                             
                             // 创建顶部圆形端面
                             gp_Vec axisVec(cyl.axis_direction.X(), cyl.axis_direction.Y(), cyl.axis_direction.Z());
-                            gp_Pnt topCenter = bottom_point.Translated(axisVec.Multiplied(height));
-                            gp_Circ topCircle(gp_Ax2(topCenter, cyl.axis_direction), cyl.radius);
+                            gp_Pnt topCenter = scaled_bottom_point.Translated(axisVec.Multiplied(scaled_height));
+                            gp_Circ topCircle(gp_Ax2(topCenter, cyl.axis_direction), scaled_radius);
                             BRepBuilderAPI_MakeEdge topEdge(topCircle);
                             BRepBuilderAPI_MakeWire topWire(topEdge.Edge());
                             BRepBuilderAPI_MakeFace topCircularFace(topWire.Wire());

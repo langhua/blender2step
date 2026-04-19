@@ -98,6 +98,7 @@ private:
 static NullStreamBuf g_null_buf;
 static LogStreamBuf g_log_buf;
 static std::streambuf* g_original_cout_buf = NULL;
+static std::streambuf* g_original_cerr_buf = NULL;
 
 // 初始化增量导出
 PyObject* init_incremental_export(PyObject* self, PyObject* args) {
@@ -139,9 +140,11 @@ PyObject* init_incremental_export(PyObject* self, PyObject* args) {
         ::g_log_user_data = (void*)log_callback;
     }
     
-    // 重定向std::cout到日志缓冲区，所有cout输出都通过日志回调
+    // 重定向std::cout和std::cerr到日志缓冲区，所有输出都通过日志回调
     g_original_cout_buf = std::cout.rdbuf();
+    g_original_cerr_buf = std::cerr.rdbuf();
     std::cout.rdbuf(&g_log_buf);
+    std::cerr.rdbuf(&g_log_buf);
 
     // 保存参数
     g_incremental_filename = filename;
@@ -376,7 +379,7 @@ PyObject* add_object_to_export(PyObject* self, PyObject* args) {
                     }
                 }
 
-                shape = create_shape_from_mesh(vertices, faces);
+                shape = create_solid_from_mesh_with_cylinders(vertices, faces, g_incremental_sew_tolerance, g_incremental_create_solid, false, g_incremental_scale);
             }
         }
 
@@ -486,10 +489,14 @@ PyObject* finalize_incremental_export(PyObject* self, PyObject* args) {
     delete g_incremental_writer;
     g_incremental_writer = NULL;
 
-    // 恢复std::cout
+    // 恢复std::cout和std::cerr
     if (g_original_cout_buf) {
         std::cout.rdbuf(g_original_cout_buf);
         g_original_cout_buf = NULL;
+    }
+    if (g_original_cerr_buf) {
+        std::cerr.rdbuf(g_original_cerr_buf);
+        g_original_cerr_buf = NULL;
     }
 
     // 清理日志回调

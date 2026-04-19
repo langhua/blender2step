@@ -74,3 +74,12 @@ Remove-Item -Recurse -Force F:\git\vcpkg\buildtrees\opencascade\x64-windows-dbg\
 ### Build blender2step with Visual Studio Community 2022
 
 1. 
+
+
+### Auto Test
+
+1. Export a step file from Blender and screenshot it in FreeCAD.
+blender --background --python .\step_exporter\test\run_test.py -- --test-number 29
+
+2. Screenshot it in FreeCAD only.
+blender --background --python .\step_exporter\test\run_test.py -- --test-number 29 --skip-export

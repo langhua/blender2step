@@ -1,4 +1,4 @@
-﻿// STEP Exporter writer setup function
+// STEP Exporter writer setup function
 #include "../include/step_exporter_internal.h"
 #include <Interface_Static.hxx>
 #include <STEPControl_Controller.hxx>

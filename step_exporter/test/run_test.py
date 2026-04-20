@@ -54,6 +54,29 @@ def export_step(args):
     for obj in objects_to_export:
         print(f'  - {obj.name}')
     
+    # 添加step_exporter目录到sys.path
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    step_exporter_dir = os.path.dirname(script_dir)
+    step_exporter_lib_dir = os.path.join(step_exporter_dir, 'lib')
+    if step_exporter_dir not in sys.path:
+        sys.path.insert(0, step_exporter_dir)
+        print(f'Added {step_exporter_dir} to sys.path')
+    if step_exporter_lib_dir not in sys.path:
+        sys.path.insert(0, step_exporter_lib_dir)
+        print(f'Added {step_exporter_lib_dir} to sys.path')
+    
+    # 添加step_exporter和lib目录到DLL搜索路径
+    # 首先修改PATH环境变量（在os.add_dll_directory之前）
+    if step_exporter_lib_dir not in os.environ.get('PATH', ''):
+        os.environ['PATH'] = step_exporter_lib_dir + os.pathsep + os.environ.get('PATH', '')
+        print(f'Added {step_exporter_lib_dir} to PATH (beginning)')
+    
+    # 使用os.add_dll_directory()添加DLL搜索路径
+    if hasattr(os, 'add_dll_directory'):
+        if os.path.exists(step_exporter_lib_dir):
+            os.add_dll_directory(step_exporter_lib_dir)
+            print(f'Added {step_exporter_lib_dir} to DLL search path')
+    
     # 直接导入C++扩展模块
     import _step_exporter as cpp_exporter
     
@@ -249,7 +272,7 @@ def main():
         
         if os.path.exists(create_script):
             # 读取并执行create_mesh_cylinder.py的内容
-            with open(create_script, 'r') as f:
+            with open(create_script, 'r', encoding='utf-8') as f:
                 code = f.read()
             
             # 创建一个命名空间来执行脚本

@@ -2,6 +2,9 @@ cmake_minimum_required(VERSION 3.20)
 project(blender2step LANGUAGES C CXX)
 
 # ====== 1. 设置 vcpkg 工具链 ======
+# 禁用 vcpkg manifest 模式
+set(VCPKG_MANIFEST_MODE OFF CACHE BOOL "Disable vcpkg manifest mode")
+
 # 尝试使用相对路径
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/vcpkg/scripts/buildsystems/vcpkg.cmake")
     set(CMAKE_TOOLCHAIN_FILE "${CMAKE_CURRENT_SOURCE_DIR}/vcpkg/scripts/buildsystems/vcpkg.cmake" CACHE STRING "Vcpkg toolchain file")
@@ -30,7 +33,8 @@ if(NOT TARGET ZLIB::ZLIB)
 endif()
 
 # ====== 3. 查找 OpenCASCADE ======
-# 使用 vcpkg 提供的 CONFIG 模式
+# 设置依赖库路径
+set(freetype_DIR "f:/git/blender2step/vcpkg_installed/x64-windows/share/freetype" CACHE PATH "freetype config dir")
 set(OpenCASCADE_DIR "f:/git/blender2step/vcpkg_installed/x64-windows/share/opencascade" CACHE PATH "Path to OpenCASCADE config")
 # 优先使用静态库
 set(OpenCASCADE_USE_STATIC_LIBS ON)
@@ -49,10 +53,16 @@ foreach(LIB ${OpenCASCADE_LIBRARIES})
 endforeach()
 
 # ====== 4. 设置 Python 路径 ======
-# 使用 Blender 4.2 自带的 Python 3.11.7
-# 从 Blender 的 python311.dll 生成的导入库
+# 使用标准 Python 3.11 头文件和导入库
+# 运行时由Blender环境提供python311.dll
 set(PYTHON_INCLUDE_DIR "C:/Python311/include")
-set(PYTHON_LIBRARY "F:/git/blender2step/step_exporter/lib/python311.lib")
+set(PYTHON_LIBRARY "C:/Python311/libs/python311.lib")
+
+# 禁用 vcpkg 自动检测 Python
+set(Python3_EXECUTABLE "" CACHE FILEPATH "Python3 executable")
+set(Python3_LIBRARY "" CACHE FILEPATH "Python3 library")
+set(Python3_INCLUDE_DIR "" CACHE PATH "Python3 include dir")
+set(Python3_ROOT_DIR "" CACHE PATH "Python3 root dir")
 
 include_directories(
     ${PYTHON_INCLUDE_DIR}
@@ -92,6 +102,12 @@ add_library(step_exporter SHARED
     src/step_exporter_cylinder_reconstruct.cpp
 )
 
+# 设置 Python 头文件路径（使用 Blender 自带的 Python 3.11 头文件）
+include_directories(
+    ${PYTHON_INCLUDE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
 # 设置输出名称
 set_target_properties(step_exporter PROPERTIES
     OUTPUT_NAME "_step_exporter"
@@ -99,16 +115,13 @@ set_target_properties(step_exporter PROPERTIES
     SUFFIX ".pyd"
 )
 
-find_package(Python3 COMPONENTS Development REQUIRED)
-target_include_directories(step_exporter PRIVATE ${Python3_INCLUDE_DIRS})
-
 # ====== 5. 链接库 ======
-# 方法1：使用 vcpkg 提供的库列表（推荐）
+# Python 扩展模块需要链接 Python 导入库来解析符号
+# 运行时由Blender环境提供python311.dll
 target_link_libraries(step_exporter
     PRIVATE
         ${OpenCASCADE_LIBRARIES}  # 使用 vcpkg 找到的所有库
-        ${PYTHON_LIBRARY}
-        ${Python3_LIBRARIES}
+        ${PYTHON_LIBRARY}  # Python 导入库，用于解析符号
     PUBLIC
         # Windows 系统库
         kernel32.lib

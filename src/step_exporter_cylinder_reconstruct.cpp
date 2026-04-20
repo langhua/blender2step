@@ -2415,17 +2415,17 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                                 double taperedBodyHeight = totalHeight - filletR - chamferSize;
                                 
                                 // 锥形主体终点（圆角起点）的Z坐标
-                                p3Z = chamferSize + taperedBodyHeight;
+                                p3Z = totalHeight - filletR;
                                 
-                                // 锥形主体终点的半径：根据锥形斜率计算
-                                // 在高度p3Z处的半径 = bottomR - taperSlope * p3Z
-                                p3R = bottomR - taperSlope * p3Z;
+                                // 锥形主体终点的半径：圆角起点半径 = topR + filletR
+                                p3R = topR + filletR;
                                 
                                 // 圆角终点：在顶部边缘，半径为topR
                                 gp_Pnt p4(topR, 0, totalHeight);
                                 
-                                // 圆角圆心：在(p3R, 0, p3Z)
-                                gp_Pnt filletCenter(p3R, 0, p3Z);
+                                // 圆角圆心：在(topR, 0, totalHeight - filletR)
+                                // 这样圆角从p3(topR+filletR, totalHeight-filletR)到p4(topR, totalHeight)
+                                gp_Pnt filletCenter(topR, 0, totalHeight - filletR);
                                 
                                 // 5. 顶部中心
                                 gp_Pnt p5(0, 0, totalHeight);

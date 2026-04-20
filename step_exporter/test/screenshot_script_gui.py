@@ -1,70 +1,75 @@
 """
 FreeCAD截图脚本 - 使用GUI模式
-用法: FreeCAD.exe screenshot_script_gui.py
-
-参数通过环境变量传递:
-  STEP_FILE - STEP文件路径
-  OUTPUT_IMAGE - 输出图片路径
-  IMAGE_WIDTH - 图片宽度 (默认1920)
-  IMAGE_HEIGHT - 图片高度 (默认1080)
+用法: FreeCAD screenshot_script_gui.py -- <step_file> <output_image> [width] [height]
 """
 
 import sys
 import os
 
-# 从环境变量读取参数
-step_file = os.environ.get('STEP_FILE')
-output_image = os.environ.get('OUTPUT_IMAGE')
-width = int(os.environ.get('IMAGE_WIDTH', '1920'))
-height = int(os.environ.get('IMAGE_HEIGHT', '1080'))
+def main():
+    args = sys.argv
+    if '--' in args:
+        idx = args.index('--')
+        args = args[idx + 1:]
+    
+    # 优先从环境变量读取参数（支持run_test.py调用方式）
+    step_file = os.environ.get('STEP_FILE')
+    output_image = os.environ.get('OUTPUT_IMAGE')
+    width = int(os.environ.get('IMAGE_WIDTH', '1920'))
+    height = int(os.environ.get('IMAGE_HEIGHT', '1080'))
+    
+    # 如果环境变量没有设置，尝试从命令行参数读取
+    if not step_file and len(args) >= 1:
+        step_file = args[0]
+    if not output_image and len(args) >= 2:
+        output_image = args[1]
+    if len(args) >= 3:
+        width = int(args[2])
+    if len(args) >= 4:
+        height = int(args[3])
+    
+    if not step_file or not output_image:
+        print("用法: FreeCAD screenshot_script_gui.py -- <step_file> <output_image> [width] [height]")
+        print("或通过环境变量: STEP_FILE, OUTPUT_IMAGE, IMAGE_WIDTH, IMAGE_HEIGHT")
+        sys.exit(1)
+    
+    print(f"Opening STEP file: {step_file}")
+    
+    import FreeCAD
+    import FreeCADGui
+    import Import
+    
+    doc = FreeCAD.newDocument("Screenshot")
+    Import.insert(step_file, doc.Name)
+    doc.recompute()
+    
+    objects = doc.Objects
+    print(f"Found {len(objects)} objects")
+    
+    # 确保输出目录存在
+    output_dir = os.path.dirname(output_image)
+    if output_dir and not os.path.exists(output_dir):
+        os.makedirs(output_dir, exist_ok=True)
+    
+    # 使用FreeCADGui截图
+    try:
+        view = FreeCADGui.ActiveDocument.ActiveView
+        view.viewAxonometric()
+        view.fitAll()
+        
+        # 等待渲染完成
+        import time
+        time.sleep(1)
+        
+        view.saveImage(output_image, width, height, "White")
+        print(f"SUCCESS: Screenshot saved to {output_image}")
+    except Exception as e:
+        print(f"ERROR: Screenshot failed: {e}")
+        import traceback
+        traceback.print_exc()
+    
+    FreeCAD.closeDocument(doc.Name)
+    print("Done!")
 
-if not step_file or not output_image:
-    print("错误: 请设置环境变量 STEP_FILE 和 OUTPUT_IMAGE")
-    sys.exit(1)
-
-print(f"Opening STEP file: {step_file}")
-
-# 导入FreeCAD模块
-import FreeCAD
-import FreeCADGui
-import Import
-
-# 创建新文档
-doc = FreeCAD.newDocument("Screenshot")
-
-# 导入STEP文件
-Import.insert(step_file, doc.Name)
-
-# 重新计算
-doc.recompute()
-
-print("Document loaded and recomputed")
-
-# 获取视图
-view = FreeCADGui.ActiveDocument.ActiveView
-
-# 设置为等轴测视图
-view.viewAxonometric()
-
-# 设置为正交相机
-FreeCADGui.SendMsgToActiveView("OrthographicCamera")
-
-# 适应视图
-view.fitAll()
-
-# 确保输出目录存在
-output_dir = os.path.dirname(output_image)
-if output_dir and not os.path.exists(output_dir):
-    os.makedirs(output_dir, exist_ok=True)
-
-# 保存截图
-print(f"Saving screenshot to: {output_image} ({width}x{height})")
-view.saveImage(output_image, width, height, "White")
-
-print("Screenshot saved successfully!")
-
-# 关闭文档
-FreeCAD.closeDocument(doc.Name)
-
-# 退出FreeCAD
-FreeCADGui.getMainWindow().close()
+if __name__ == "__main__":
+    main()

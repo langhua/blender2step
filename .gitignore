@@ -24,3 +24,4 @@ build_*.txt
 *.crash.*
 x64/
 *.code-workspace
+test*.txt

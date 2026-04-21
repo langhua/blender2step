@@ -22,6 +22,7 @@
 #include <Geom_SurfaceOfRevolution.hxx>
 #include <BRepBuilderAPI_MakeShell.hxx>
 #include <BRepAlgoAPI_Fuse.hxx>
+#include <BRepAlgoAPI_Cut.hxx>
 #include <TopExp_Explorer.hxx>
 #include <gp_Circ.hxx>
 #include <gp_Ax2.hxx>
@@ -177,7 +178,7 @@ public:
                       const std::vector<std::vector<int>>& faces)
         : m_vertices(vertices), m_faces(faces) {}
     
-    // 主入口：检测所有圆柱面
+    // 主入口：检测所有圆柱面（迭代检测）
     std::vector<CylinderCandidate> detect(double radius_tol=0.15, double min_faces=8) {
         
         // 1. 分析面的几何属性
@@ -185,29 +186,59 @@ public:
         
         std::cout << "[STEP Exporter] [CylDet] Analyzed " << m_faceInfos.size() << " faces" << std::endl;
         
-        // 2. 尝试沿主坐标轴方向检测圆柱
+        // 2. 迭代检测圆柱，直到没有新的圆柱被找到
         std::vector<CylinderCandidate> results;
+        int max_iterations = 10;
         
-        // 候选轴线方向（只检测Z轴方向，避免X/Y轴方向的误判）
-        std::vector<gp_Dir> axes = {
-            gp_Dir(0, 0, 1),    // +Z
-            gp_Dir(0, 0, -1)    // -Z
-        };
-        
-        for (const auto& axis : axes) {
-            auto cyl = try_detect_cylinder(axis, radius_tol, min_faces);
-            if (!cyl.face_indices.empty() && cyl.quality_score > 0.5) {
-                results.push_back(cyl);
-                std::cout << "[STEP Exporter] [CylDet] ✓ Found cylinder: axis=(" 
-                          << axis.X()<<","<<axis.Y()<<","<<axis.Z() 
-                          << ") R=" << cyl.radius 
-                          << " N=" << cyl.face_indices.size() 
-                          << " Q=" << cyl.quality_score << std::endl;
+        for (int iter = 0; iter < max_iterations; iter++) {
+            std::cout << "[STEP Exporter] [CylDet] === Iteration " << iter << " ===" << std::endl;
+            
+            // 统计未使用的候选面数量
+            int unused_count = 0;
+            for (size_t i = 0; i < m_faceInfos.size(); i++) {
+                if (!m_usedFaces.count(i)) {
+                    double dot_axis = fabs(m_faceInfos[i].normal.Dot(gp_Dir(0, 0, 1)));
+                    if (dot_axis < 0.87 && m_faceInfos[i].area > 1e-10) {
+                        unused_count++;
+                    }
+                }
+            }
+            std::cout << "[STEP Exporter] [CylDet] Unused candidate faces: " << unused_count << std::endl;
+            
+            bool found_new = false;
+            
+            // 候选轴线方向（只检测Z轴方向，避免X/Y轴方向的误判）
+            std::vector<gp_Dir> axes = {
+                gp_Dir(0, 0, 1),    // +Z
+                gp_Dir(0, 0, -1)    // -Z
+            };
+            
+            for (const auto& axis : axes) {
+                auto cyl = try_detect_cylinder(axis, radius_tol, min_faces);
+                if (!cyl.face_indices.empty() && cyl.quality_score >= 0.5) {
+                    // 标记面为已使用
+                    for (int fidx : cyl.face_indices) {
+                        m_usedFaces.insert(fidx);
+                    }
+                    results.push_back(cyl);
+                    found_new = true;
+                    std::cout << "[STEP Exporter] [CylDet] ✓ Found cylinder (iter " << iter << "): axis=(" 
+                              << axis.X()<<","<<axis.Y()<<","<<axis.Z() 
+                              << ") R=" << cyl.radius 
+                              << " N=" << cyl.face_indices.size() 
+                              << " Q=" << cyl.quality_score << std::endl;
+                }
+            }
+            
+            // 去重（避免+Z和-Z重复检测同一个圆柱）
+            results = deduplicate_cylinders(results);
+            
+            // 如果没有找到新的圆柱，停止迭代
+            if (!found_new) {
+                std::cout << "[STEP Exporter] [CylDet] No new cylinder found, stopping iterations" << std::endl;
+                break;
             }
         }
-        
-        // 去重（避免+Z和-Z重复检测同一个圆柱）
-        results = deduplicate_cylinders(results);
         
         std::cout << "[STEP Exporter] [CylDet] Total cylinders detected: " << results.size() << std::endl;
         
@@ -450,7 +481,7 @@ private:
                         for (size_t i = 0; i < m_faceInfos.size(); i++) {
                             if (!is_candidate[i]) continue;
                             result.face_indices.push_back(i);
-                            m_usedFaces.insert(i);
+                            // 注意：不在这里标记面为已使用，而是在detect函数中确认圆锥有效后才标记
                         }
                         
                         // 计算质量评分
@@ -495,7 +526,7 @@ private:
                     // 法线应该与径向方向一致（平行或反平行）
                     if (dot_radial > 0.7) {  // 约45度以内
                         result.face_indices.push_back(fidx);
-                        m_usedFaces.insert(fidx); // 标记为已使用
+                        // 注意：不在这里标记面为已使用，而是在detect函数中确认圆柱有效后才标记
                         
                         // 计算面的轴向坐标（根据轴线方向选择正确的坐标）
                         double axis_coord;
@@ -1711,6 +1742,9 @@ private:
             double coverage = (double)result.face_indices.size() / m_faces.size();
             double face_ratio = (double)result.face_indices.size() / best_cluster_count;
             result.quality_score = coverage * 0.4 + face_ratio * 0.4 + best_cluster_consistency * 0.2;
+            std::cout << "[STEP Exporter] [CylDet] Quality score: coverage=" << coverage 
+                      << " face_ratio=" << face_ratio << " consistency=" << best_cluster_consistency 
+                      << " total=" << result.quality_score << std::endl;
         }
         
         return result;
@@ -1801,10 +1835,10 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
             // 过滤条件：
             // 1. 面数至少为32（避免端面）
             // 2. 质量评分至少为0.5
-            // 3. 半径不能超过最小半径的2倍（避免端面）
+            // 3. 半径不能超过最小半径的4倍（避免端面，但允许螺孔圆柱的外圆柱面通过）
             if (cyl.face_indices.size() >= 32 && 
                 cyl.quality_score >= 0.5 &&
-                cyl.radius <= min_radius * 2.0) {
+                cyl.radius <= min_radius * 4.0) {
                 filtered_cylinders.push_back(cyl);
             } else {
                 std::cout << "[STEP Exporter] [CylDet] Filtered out cylinder: axis=(" 
@@ -1863,6 +1897,21 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
         if (isStandardCylinder) {
             std::cout << "[STEP Exporter] Detected standard cylinder, creating analytical surface..." << std::endl;
             
+            // 检查是否有多个同轴圆柱面（如螺孔圆柱的内外表面）
+            bool isHollowCylinder = (filtered_cylinders.size() >= 2);
+            double innerRadius = 0, outerRadius = 0;
+            
+            if (isHollowCylinder) {
+                // 找到最小和最大半径
+                innerRadius = 1e20;
+                outerRadius = 0;
+                for (const auto& cyl : filtered_cylinders) {
+                    if (cyl.radius < innerRadius) innerRadius = cyl.radius;
+                    if (cyl.radius > outerRadius) outerRadius = cyl.radius;
+                }
+                std::cout << "[STEP Exporter] Detected hollow cylinder: inner R=" << innerRadius << ", outer R=" << outerRadius << std::endl;
+            }
+            
             // 优先选择Z轴方向的圆柱体
             const CylinderCandidate* bestCyl = nullptr;
             double best_z_alignment = 0;
@@ -1896,7 +1945,6 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                     }
                     
                     // 调整轴点位置到圆柱体的底部
-                    // 对于圆锥体，底部点的Z坐标应该是cyl.z_min，而不是cyl.axis_point.Z() + cyl.z_min
                     gp_Pnt bottom_point(
                         cyl.axis_point.X(),
                         cyl.axis_point.Y(),
@@ -1905,7 +1953,7 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                     std::cout << "[STEP Exporter] Adjusted axis point to bottom: (" 
                               << bottom_point.X() << ", " << bottom_point.Y() << ", " << bottom_point.Z() << ")" << std::endl;
                     
-                    // 应用缩放因子，将尺寸调整为与Blender一致
+                    // 应用缩放因子
                     double scaled_radius = cyl.radius / scale;
                     double scaled_height = height / scale;
                     gp_Pnt scaled_bottom_point(
@@ -1914,7 +1962,46 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                         bottom_point.Z() / scale
                     );
                     
-                    // 创建解析圆柱体
+                    // 如果是空心圆柱，创建管状体
+                    if (isHollowCylinder) {
+                        double scaled_inner_radius = innerRadius / scale;
+                        double scaled_outer_radius = outerRadius / scale;
+                        
+                        std::cout << "[STEP Exporter] Creating hollow cylinder..." << std::endl;
+                        std::cout << "[STEP Exporter] Parameters: " << std::endl;
+                        std::cout << "  - Inner radius: " << scaled_inner_radius << std::endl;
+                        std::cout << "  - Outer radius: " << scaled_outer_radius << std::endl;
+                        std::cout << "  - Height: " << scaled_height << std::endl;
+                        
+                        // 创建外圆柱
+                        gp_Ax2 outerAxis(scaled_bottom_point, cyl.axis_direction);
+                        BRepPrimAPI_MakeCylinder outerCylMaker(outerAxis, scaled_outer_radius, scaled_height, 2*M_PI);
+                        TopoDS_Shape outerCyl = outerCylMaker.Shape();
+                        
+                        if (outerCyl.IsNull() || outerCyl.ShapeType() != TopAbs_SOLID) {
+                            std::cerr << "[STEP Exporter] Failed to create outer cylinder: shape is null or not a solid" << std::endl;
+                        } else {
+                            // 创建内圆柱（用于布尔减法）
+                            BRepPrimAPI_MakeCylinder innerCylMaker(outerAxis, scaled_inner_radius, scaled_height, 2*M_PI);
+                            TopoDS_Shape innerCyl = innerCylMaker.Shape();
+                            
+                            if (innerCyl.IsNull() || innerCyl.ShapeType() != TopAbs_SOLID) {
+                                std::cerr << "[STEP Exporter] Failed to create inner cylinder: shape is null or not a solid" << std::endl;
+                            } else {
+                                // 布尔减法：外圆柱 - 内圆柱
+                                BRepAlgoAPI_Cut cutMaker(outerCyl, innerCyl);
+                                if (!cutMaker.IsDone()) {
+                                    std::cerr << "[STEP Exporter] Failed to cut cylinders" << std::endl;
+                                } else {
+                                    TopoDS_Shape hollowCyl = cutMaker.Shape();
+                                    std::cout << "[STEP Exporter] ✓ Created hollow cylinder (tube)" << std::endl;
+                                    return hollowCyl;
+                                }
+                            }
+                        }
+                    }
+                    
+                    // 创建解析圆柱体（实心）
                     std::cout << "[STEP Exporter] Creating analytical cylinder..." << std::endl;
                     std::cout << "[STEP Exporter] Parameters: " << std::endl;
                     std::cout << "  - Axis point: (" << scaled_bottom_point.X() << ", " << scaled_bottom_point.Y() << ", " << scaled_bottom_point.Z() << ")" << std::endl;

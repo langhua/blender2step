@@ -40,6 +40,36 @@ try:
     print('Fitting all objects...')
     view.fitAll()
     
+    # 切换到着色模式（美化渲染）
+    print('Switching to shaded mode...')
+    
+    # 设置显示模式为着色
+    for obj in doc.Objects:
+        if hasattr(obj, 'ViewObject'):
+            # 尝试多种显示模式
+            try:
+                obj.ViewObject.DisplayMode = "Shaded"
+            except:
+                try:
+                    obj.ViewObject.DisplayMode = "Flat Lines"
+                except:
+                    obj.ViewObject.DisplayMode = "Gouraud"
+            
+            # 设置材质颜色（浅蓝色）
+            obj.ViewObject.ShapeColor = (0.4, 0.6, 0.8)
+            # 设置透明度
+            obj.ViewObject.Transparency = 0
+            # 隐藏边线
+            obj.ViewObject.LineWidth = 0.0
+            obj.ViewObject.LineColor = (0.2, 0.2, 0.2)
+            # 启用光照
+            obj.ViewObject.Lighting = "One side"
+    
+    # 等待渲染完成
+    print('Waiting for rendering...')
+    import time
+    time.sleep(3)
+    
     # 截图
     print(f'Saving screenshot to: {output_image}')
     view.saveImage(output_image, width, height, "White")

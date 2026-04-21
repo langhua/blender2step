@@ -93,15 +93,15 @@ def export_step(args):
     for obj in objects_to_export:
         print(f'  - {obj.name}')
     
-    # 添加路径
+    # 添加路径（注意：step_exporter_dir必须先添加，以便优先加载新编译的pyd文件）
     script_dir = os.path.dirname(os.path.abspath(__file__))
     step_exporter_dir = os.path.dirname(script_dir)
     step_exporter_lib_dir = os.path.join(step_exporter_dir, 'lib')
     
-    if step_exporter_dir not in sys.path:
-        sys.path.insert(0, step_exporter_dir)
     if step_exporter_lib_dir not in sys.path:
         sys.path.insert(0, step_exporter_lib_dir)
+    if step_exporter_dir not in sys.path:
+        sys.path.insert(0, step_exporter_dir)
     
     # DLL搜索路径
     if step_exporter_lib_dir not in os.environ.get('PATH', ''):

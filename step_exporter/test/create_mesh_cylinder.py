@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 机械设计物体生成器 v4.0 - Mesh版本
 使用Mesh创建圆柱体，导出时美化为曲线型圆柱体

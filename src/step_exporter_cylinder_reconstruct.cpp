@@ -74,6 +74,8 @@ struct CylinderCandidate {
     // 圆角圆柱参数
     bool is_fillet;          // 是否是圆角圆柱
     double fillet_radius;    // 圆角半径
+    bool has_top_fillet;     // 是否有顶部圆角
+    bool has_bottom_fillet;  // 是否有底部圆角
 };
 
 // 辅助函数前向声明
@@ -907,9 +909,9 @@ private:
                 std::cout << "[STEP Exporter] [CylDet] [Small Taper Check] 80-90deg faces=" << small_taper_face_count
                           << ", radius_variation=" << (small_taper_radius_variation * 100) << "%" << std::endl;
                 
-                // 如果80-90°范围内的面半径变化>10%，标记为疑似小角度锥形圆柱
-                // 提高阈值以避免将圆倒角误判为圆锥
-                if (small_taper_radius_variation > 0.10) {
+                // 如果80-90°范围内的面半径变化>5%，标记为疑似小角度锥形圆柱
+                // 降低阈值以检测小角度锥形圆柱（如4°）
+                if (small_taper_radius_variation > 0.05) {
                     is_suspected_tapered = true;
                     std::cout << "[STEP Exporter] [CylDet] ⚠ Early detection: Suspected small-angle tapered cylinder" << std::endl;
                     std::cout << "[STEP Exporter] [CylDet]   80-90deg face count: " << small_taper_face_count << std::endl;
@@ -925,7 +927,8 @@ private:
             // 调整条件：根据实际数据，near_0可能较少，但60-90°范围内的法线较多
             // 为了避免与斜角圆柱混淆，要求60-90°范围内的法线数量较多
             // 降低阈值以检测小圆角圆柱
-            if (count_near_90 > 3 && (count_60_80 > 5 || count_80_90 > 5 || count_30_60 > 5)) {
+            // 重要：排除45°附近的面（可能是斜角），只检查60-90°范围
+            if (count_near_90 > 3 && (count_60_80 > 5 || count_80_90 > 5)) {
                 // 进一步验证：检查"fillet"区域的Z范围和半径变化
                 // 真正的圆角：圆角面集中在顶部或底部的一小部分区域
                 // 锥形圆柱被误判为fillet：侧面法线角度变化是连续的，跨越整个高度
@@ -1005,7 +1008,13 @@ private:
                 // 3. 圆角面不应该跨越整个对象高度（否则更可能是锥形圆柱）
                 bool is_true_fillet = false;
                 
-                if (cyl_z_range > 0) {
+                // 关键修复：如果没有圆角面，不能是真正的圆角圆柱
+                if (fillet_face_count == 0) {
+                    std::cout << "[STEP Exporter] [CylDet] [DEBUG] No fillet faces found, cannot be true fillet" << std::endl;
+                    is_true_fillet = false;
+                    is_suspected_tapered = true;
+                    std::cout << "[STEP Exporter] [CylDet] ⚠ Suspected tapered cylinder (no fillet faces)" << std::endl;
+                } else if (cyl_z_range > 0) {
                     double fillet_height_ratio = fillet_z_range / cyl_z_range;
                     std::cout << "[STEP Exporter] [CylDet] [DEBUG] cyl_z_range > 0 branch:" << std::endl;
                     std::cout << "[STEP Exporter] [CylDet] [DEBUG]   fillet_face_count=" << fillet_face_count << ", cyl_face_count=" << cyl_face_count << std::endl;
@@ -1085,16 +1094,35 @@ private:
                 double cylinder_radius = 0;
                 int cylinder_count = 0;
                 
-                double chamfer_z_min = 1e20, chamfer_z_max = -1e20;
-                double chamfer_r_min = 1e20, chamfer_r_max = -1e20;
-                int chamfer_count = 0;
+                double top_chamfer_z_min = 1e20, top_chamfer_z_max = -1e20;
+                double top_chamfer_r_min = 1e20, top_chamfer_r_max = -1e20;
+                int top_chamfer_count = 0;
+                
+                double bottom_chamfer_z_min = 1e20, bottom_chamfer_z_max = -1e20;
+                double bottom_chamfer_r_min = 1e20, bottom_chamfer_r_max = -1e20;
+                int bottom_chamfer_count = 0;
+                
+                // 首先找出整个物体的Z范围
+                double overall_z_min = 1e20, overall_z_max = -1e20;
+                for (size_t i = 0; i < m_vertices.size(); i++) {
+                    double vertex_z = m_vertices[i][2];
+                    overall_z_min = std::min(overall_z_min, vertex_z);
+                    overall_z_max = std::max(overall_z_max, vertex_z);
+                }
+                double overall_z_range = overall_z_max - overall_z_min;
+                double z_threshold = overall_z_min + overall_z_range * 0.5;
                 
                 for (size_t i = 0; i < m_faceInfos.size(); i++) {
                     const auto& fi = m_faceInfos[i];
                     if (fi.area < 1e-10) continue;
                     
                     double dot_axis = fabs(fi.normal.Dot(axis));
-                    if (dot_axis >= 0.71) continue;
+                    // 圆角圆柱检测：使用更宽松的过滤条件，允许角度小于45°的面
+                    // 圆角面的法线角度从0°到90°变化，需要包括所有角度
+                    // 只排除真正的顶部/底部平面（角度接近0°）
+                    double normal_angle_for_filter = acos(std::min(1.0, std::max(0.0, dot_axis)));
+                    double angle_deg_for_filter = normal_angle_for_filter * 180.0 / M_PI;
+                    if (angle_deg_for_filter < 1.0) continue;  // 排除角度小于1°的面（真正的平面）
                     
                     double dist = point_line_distance(fi.center, centroid, axis);
                     if (dist < 1e-6) continue;
@@ -1134,12 +1162,11 @@ private:
                     } else if (angle_deg > 35 && angle_deg < 55) {
                         // 倒角面 - 使用顶点计算半径范围和Z范围
                         // 遍历倒角面的所有顶点，找出最大和最小半径和Z坐标
+                        double face_z_min = 1e20, face_z_max = -1e20;
                         for (int vid : fi.vertex_indices) {
                             if (vid >= 0 && vid < (int)m_vertices.size()) {
                                 gp_Pnt vertex(m_vertices[vid][0], m_vertices[vid][1], m_vertices[vid][2]);
                                 double vertex_dist = point_line_distance(vertex, centroid, axis);
-                                chamfer_r_min = std::min(chamfer_r_min, vertex_dist);
-                                chamfer_r_max = std::max(chamfer_r_max, vertex_dist);
                                 
                                 double vertex_z;
                                 if (fabs(axis.Z()) > 0.9) {
@@ -1149,20 +1176,62 @@ private:
                                 } else {
                                     vertex_z = m_vertices[vid][1];
                                 }
-                                chamfer_z_min = std::min(chamfer_z_min, vertex_z);
-                                chamfer_z_max = std::max(chamfer_z_max, vertex_z);
+                                face_z_min = std::min(face_z_min, vertex_z);
+                                face_z_max = std::max(face_z_max, vertex_z);
+                                
+                                if (z_coord >= z_threshold) {
+                                    // 顶部倒角
+                                    top_chamfer_r_min = std::min(top_chamfer_r_min, vertex_dist);
+                                    top_chamfer_r_max = std::max(top_chamfer_r_max, vertex_dist);
+                                    top_chamfer_z_min = std::min(top_chamfer_z_min, vertex_z);
+                                    top_chamfer_z_max = std::max(top_chamfer_z_max, vertex_z);
+                                } else {
+                                    // 底部倒角
+                                    bottom_chamfer_r_min = std::min(bottom_chamfer_r_min, vertex_dist);
+                                    bottom_chamfer_r_max = std::max(bottom_chamfer_r_max, vertex_dist);
+                                    bottom_chamfer_z_min = std::min(bottom_chamfer_z_min, vertex_z);
+                                    bottom_chamfer_z_max = std::max(bottom_chamfer_z_max, vertex_z);
+                                }
                             }
                         }
-                        chamfer_count++;
+                        if (z_coord >= z_threshold) {
+                            top_chamfer_count++;
+                        } else {
+                            bottom_chamfer_count++;
+                        }
                     }
                 }
                 
-                if (cylinder_count > 0 && chamfer_count > 0) {
+                if (cylinder_count > 0 && (top_chamfer_count > 0 || bottom_chamfer_count > 0)) {
                     cylinder_radius /= cylinder_count;
                     
-                    // 计算倒角尺寸和角度
-                    double chamfer_height = fabs(chamfer_z_max - chamfer_z_min);
-                    double chamfer_radial_diff = cylinder_radius - chamfer_r_min;
+                    // 确定倒角位置：顶部、底部或两者都有
+                    bool has_top_chamfer = (top_chamfer_count > 0);
+                    bool has_bottom_chamfer = (bottom_chamfer_count > 0);
+                    
+                    double chamfer_height = 0;
+                    double chamfer_radial_diff = 0;
+                    double chamfer_r_min_val = 1e20;
+                    
+                    if (has_top_chamfer && !has_bottom_chamfer) {
+                        // 只有顶部倒角
+                        chamfer_height = fabs(top_chamfer_z_max - top_chamfer_z_min);
+                        chamfer_radial_diff = cylinder_radius - top_chamfer_r_min;
+                        chamfer_r_min_val = top_chamfer_r_min;
+                        std::cout << "[STEP Exporter] [CylDet] Detected TOP chamfer only" << std::endl;
+                    } else if (!has_top_chamfer && has_bottom_chamfer) {
+                        // 只有底部倒角
+                        chamfer_height = fabs(bottom_chamfer_z_max - bottom_chamfer_z_min);
+                        chamfer_radial_diff = cylinder_radius - bottom_chamfer_r_min;
+                        chamfer_r_min_val = bottom_chamfer_r_min;
+                        std::cout << "[STEP Exporter] [CylDet] Detected BOTTOM chamfer only" << std::endl;
+                    } else {
+                        // 上下都有倒角
+                        chamfer_height = fabs(top_chamfer_z_max - bottom_chamfer_z_min);
+                        chamfer_radial_diff = cylinder_radius - std::min(top_chamfer_r_min, bottom_chamfer_r_min);
+                        chamfer_r_min_val = std::min(top_chamfer_r_min, bottom_chamfer_r_min);
+                        std::cout << "[STEP Exporter] [CylDet] Detected BOTH top and bottom chamfers" << std::endl;
+                    }
                     
                     // 确保倒角尺寸为正
                     if (chamfer_radial_diff < 0) {
@@ -1176,19 +1245,21 @@ private:
                     result.is_fillet = false;
                     result.radius = cylinder_radius;
                     result.radius_bottom = cylinder_radius;
-                    result.top_radius = chamfer_r_min;
+                    result.top_radius = chamfer_r_min_val;
                     result.chamfer_size = chamfer_radial_diff;
                     result.chamfer_angle = chamfer_angle;
-                    result.cylinder_height = chamfer_z_max - cylinder_z_min;  // 使用整个物体的高度
+                    result.cylinder_height = cylinder_z_max - cylinder_z_min;
                     result.z_min = cylinder_z_min;
-                    result.z_max = chamfer_z_max;
+                    result.z_max = cylinder_z_max;
                     
                     std::cout << "[STEP Exporter] [CylDet] Chamfered cylinder params:" << std::endl;
                     std::cout << "[STEP Exporter] [CylDet]   Cylinder radius: " << cylinder_radius << std::endl;
                     std::cout << "[STEP Exporter] [CylDet]   Cylinder height: " << result.cylinder_height << std::endl;
-                    std::cout << "[STEP Exporter] [CylDet]   Top radius: " << chamfer_r_min << std::endl;
+                    std::cout << "[STEP Exporter] [CylDet]   Top radius: " << chamfer_r_min_val << std::endl;
                     std::cout << "[STEP Exporter] [CylDet]   Chamfer size: " << chamfer_radial_diff << std::endl;
                     std::cout << "[STEP Exporter] [CylDet]   Chamfer angle: " << (chamfer_angle * 180.0 / M_PI) << " deg" << std::endl;
+                    std::cout << "[STEP Exporter] [CylDet]   Top chamfer: " << (has_top_chamfer ? "YES" : "NO") << std::endl;
+                    std::cout << "[STEP Exporter] [CylDet]   Bottom chamfer: " << (has_bottom_chamfer ? "YES" : "NO") << std::endl;
                 }
             }
             
@@ -1198,9 +1269,13 @@ private:
                 double cylinder_radius = 0;
                 int cylinder_count = 0;
                 
-                double fillet_z_min = 1e20, fillet_z_max = -1e20;
-                double fillet_r_min = 1e20, fillet_r_max = -1e20;
-                int fillet_count = 0;
+                double top_fillet_z_min = 1e20, top_fillet_z_max = -1e20;
+                double top_fillet_r_min = 1e20, top_fillet_r_max = -1e20;
+                int top_fillet_count = 0;
+                
+                double bottom_fillet_z_min = 1e20, bottom_fillet_z_max = -1e20;
+                double bottom_fillet_r_min = 1e20, bottom_fillet_r_max = -1e20;
+                int bottom_fillet_count = 0;
                 
                 // 收集圆角面的法线和中心点
                 std::vector<gp_Vec> fillet_normals;
@@ -1209,18 +1284,42 @@ private:
                 // 收集所有圆角面的顶点用于详细分析
                 std::vector<std::pair<double, double>> all_fillet_vertices; // (z, distance)
                 
+                // 首先找出整个物体的Z范围
+                double overall_z_min = 1e20, overall_z_max = -1e20;
+                for (size_t i = 0; i < m_vertices.size(); i++) {
+                    double vertex_z = m_vertices[i][2];
+                    overall_z_min = std::min(overall_z_min, vertex_z);
+                    overall_z_max = std::max(overall_z_max, vertex_z);
+                }
+                double overall_z_range = overall_z_max - overall_z_min;
+                double z_threshold = overall_z_min + overall_z_range * 0.5;
+                
                 for (size_t i = 0; i < m_faceInfos.size(); i++) {
                     const auto& fi = m_faceInfos[i];
                     if (fi.area < 1e-10) continue;
                     
                     double dot_axis = fabs(fi.normal.Dot(axis));
-                    if (dot_axis >= 0.71) continue;
+                    // 圆角圆柱检测：使用更宽松的过滤条件，允许角度小于45°的面
+                    // 圆角面的法线角度从0°到90°变化，需要包括所有角度
+                    // 只排除真正的顶部/底部平面（角度接近0°）
+                    double normal_angle_for_filter = acos(std::min(1.0, std::max(0.0, dot_axis)));
+                    double angle_deg_for_filter = normal_angle_for_filter * 180.0 / M_PI;
+                    if (angle_deg_for_filter < 5.0) continue;  // 排除角度小于5°的面（真正的平面）
                     
                     double dist = point_line_distance(fi.center, centroid, axis);
                     if (dist < 1e-6) continue;
                     
                     double normal_angle = acos(std::min(1.0, std::max(0.0, dot_axis)));
                     double angle_deg = normal_angle * 180.0 / M_PI;
+                    
+                    double z_coord;
+                    if (fabs(axis.Z()) > 0.9) {
+                        z_coord = fi.center.Z();
+                    } else if (fabs(axis.X()) > 0.9) {
+                        z_coord = fi.center.X();
+                    } else {
+                        z_coord = fi.center.Y();
+                    }
                     
                     if (angle_deg > 80 && angle_deg < 100) {
                         // 圆柱侧面
@@ -1241,9 +1340,9 @@ private:
                                 cylinder_z_max = std::max(cylinder_z_max, vertex_z);
                             }
                         }
-                    } else if (angle_deg > 10 && angle_deg < 85) {
+                    } else if (angle_deg > 1 && angle_deg < 89.5) {
                         // 圆角面（法线角度从 90°到 0°变化）
-                        fillet_count++;
+                        // 扩展检测范围以覆盖更完整的1/4圆角（1°到89.5°）
                         
                         // 收集所有圆角面顶点，按 Z 坐标排序
                         std::vector<std::pair<double, double>> vertex_z_dist_pairs; // (z, distance)
@@ -1264,33 +1363,84 @@ private:
                                 
                                 vertex_z_dist_pairs.push_back({vertex_z, vertex_dist});
                                 all_fillet_vertices.push_back({vertex_z, vertex_dist});
-                                
-                                fillet_z_min = std::min(fillet_z_min, vertex_z);
-                                fillet_z_max = std::max(fillet_z_max, vertex_z);
                             }
                         }
                         
-                        // 按 Z 坐标排序，找到底部（靠近圆柱侧面）的顶点
+                        // 按 Z 坐标排序，确定圆角位置
                         if (!vertex_z_dist_pairs.empty()) {
                             std::sort(vertex_z_dist_pairs.begin(), vertex_z_dist_pairs.end());
                             
-                            // 使用底部 10% 的顶点的平均距离作为 fillet_r_min
-                            int bottom_count = std::max(1, (int)(vertex_z_dist_pairs.size() * 0.1));
-                            double bottom_dist_sum = 0;
-                            for (int i = 0; i < bottom_count; i++) {
-                                bottom_dist_sum += vertex_z_dist_pairs[i].second;
-                            }
-                            double bottom_avg_dist = bottom_dist_sum / bottom_count;
-                            
-                            // 只更新 fillet_r_min，如果这个值更小（更靠近圆柱侧面）
-                            if (bottom_avg_dist < fillet_r_min) {
-                                fillet_r_min = bottom_avg_dist;
-                            }
-                            
-                            // 更新 fillet_r_max，使用顶部顶点的距离
-                            double top_dist = vertex_z_dist_pairs.back().second;
-                            if (top_dist > fillet_r_max) {
-                                fillet_r_max = top_dist;
+                            // 使用面的中心Z坐标判断位置
+                            if (z_coord >= z_threshold) {
+                                // 顶部圆角
+                                top_fillet_count++;
+                                
+                                // 对于顶部圆角：
+                                // - 底部（最小Z）靠近圆柱侧面，半径大
+                                // - 顶部（最大Z）靠近顶部平面，半径小
+                                // 圆角半径 = 大半径 - 小半径 = 底部半径 - 顶部半径
+                                
+                                // 使用底部 10% 的顶点的平均距离作为大半径（靠近圆柱侧面）
+                                int bottom_count = std::max(1, (int)(vertex_z_dist_pairs.size() * 0.1));
+                                double bottom_dist_sum = 0;
+                                for (int i = 0; i < bottom_count; i++) {
+                                    bottom_dist_sum += vertex_z_dist_pairs[i].second;
+                                }
+                                double bottom_avg_dist = bottom_dist_sum / bottom_count;
+                                
+                                if (bottom_avg_dist > top_fillet_r_max) {
+                                    top_fillet_r_max = bottom_avg_dist;
+                                }
+                                
+                                // 使用顶部 10% 的顶点的平均距离作为小半径（靠近顶部平面）
+                                int top_count = std::max(1, (int)(vertex_z_dist_pairs.size() * 0.1));
+                                double top_dist_sum = 0;
+                                for (int i = (int)vertex_z_dist_pairs.size() - top_count; i < (int)vertex_z_dist_pairs.size(); i++) {
+                                    top_dist_sum += vertex_z_dist_pairs[i].second;
+                                }
+                                double top_avg_dist = top_dist_sum / top_count;
+                                
+                                if (top_avg_dist < top_fillet_r_min) {
+                                    top_fillet_r_min = top_avg_dist;
+                                }
+                                
+                                top_fillet_z_min = std::min(top_fillet_z_min, vertex_z_dist_pairs.front().first);
+                                top_fillet_z_max = std::max(top_fillet_z_max, vertex_z_dist_pairs.back().first);
+                            } else {
+                                // 底部圆角
+                                bottom_fillet_count++;
+                                
+                                // 对于底部圆角：
+                                // - 底部（最小Z）靠近底部平面，半径小
+                                // - 顶部（最大Z）靠近圆柱侧面，半径大
+                                // 圆角半径 = 大半径 - 小半径 = 顶部半径 - 底部半径
+                                
+                                // 使用顶部 10% 的顶点的平均距离作为大半径（靠近圆柱侧面）
+                                int top_count = std::max(1, (int)(vertex_z_dist_pairs.size() * 0.1));
+                                double top_dist_sum = 0;
+                                for (int i = (int)vertex_z_dist_pairs.size() - top_count; i < (int)vertex_z_dist_pairs.size(); i++) {
+                                    top_dist_sum += vertex_z_dist_pairs[i].second;
+                                }
+                                double top_avg_dist = top_dist_sum / top_count;
+                                
+                                if (top_avg_dist > bottom_fillet_r_max) {
+                                    bottom_fillet_r_max = top_avg_dist;
+                                }
+                                
+                                // 使用底部 10% 的顶点的平均距离作为小半径（靠近底部平面）
+                                int bottom_count = std::max(1, (int)(vertex_z_dist_pairs.size() * 0.1));
+                                double bottom_dist_sum = 0;
+                                for (int i = 0; i < bottom_count; i++) {
+                                    bottom_dist_sum += vertex_z_dist_pairs[i].second;
+                                }
+                                double bottom_avg_dist = bottom_dist_sum / bottom_count;
+                                
+                                if (bottom_avg_dist < bottom_fillet_r_min) {
+                                    bottom_fillet_r_min = bottom_avg_dist;
+                                }
+                                
+                                bottom_fillet_z_min = std::min(bottom_fillet_z_min, vertex_z_dist_pairs.front().first);
+                                bottom_fillet_z_max = std::max(bottom_fillet_z_max, vertex_z_dist_pairs.back().first);
                             }
                         }
                         
@@ -1300,115 +1450,63 @@ private:
                     }
                 }
                 
-                if (cylinder_count > 0 && fillet_count > 0) {
+                if (cylinder_count > 0 && (top_fillet_count > 0 || bottom_fillet_count > 0)) {
                     cylinder_radius /= cylinder_count;
                     
-                    // 调试信息：显示圆角尺寸与斜倒角尺寸的对比
-                    std::cout << "[STEP Exporter] [CylDet] Debug: Fillet size calculation:" << std::endl;
+                    // 确定圆角位置：顶部、底部或两者都有
+                    bool has_top_fillet = (top_fillet_count > 0);
+                    bool has_bottom_fillet = (bottom_fillet_count > 0);
+                    
+                    double fillet_radius = 0;
+                    
+                    if (has_top_fillet && !has_bottom_fillet) {
+                        // 只有顶部圆角
+                        // 关键修复：圆角半径应该使用圆柱侧面顶部到顶部平面底部的Z高度
+                        // 圆角的完整Z范围 = cylinder_z_max（圆柱侧面顶部）到 top_fillet_z_min（圆角过渡区域底部）
+                        // 但top_fillet_z_min是圆角面的最小Z，应该是圆柱侧面顶部
+                        // top_fillet_z_max是圆角面的最大Z，应该是顶部平面底部
+                        
+                        // 使用圆角面的Z范围（从圆柱侧面顶部到顶部平面底部）
+                        double top_fillet_z_height = top_fillet_z_max - top_fillet_z_min;
+                        double top_fillet_r_diff = top_fillet_r_max - top_fillet_r_min;
+                        
+                        // 关键修复：圆角半径应该等于Z高度变化（对于1/4圆弧）
+                        // 但由于圆角面检测范围是5°到88°，可能没有覆盖完整的圆角
+                        // 所以使用R差值作为圆角半径（更准确）
+                        fillet_radius = top_fillet_r_diff;
+                        
+                        std::cout << "[STEP Exporter] [CylDet] Detected TOP fillet only" << std::endl;
+                        std::cout << "[STEP Exporter] [CylDet]   Top fillet Z range: " << top_fillet_z_max << " - " << top_fillet_z_min << " = " << top_fillet_z_height << std::endl;
+                        std::cout << "[STEP Exporter] [CylDet]   Top fillet R range: " << top_fillet_r_max << " - " << top_fillet_r_min << " = " << top_fillet_r_diff << std::endl;
+                        std::cout << "[STEP Exporter] [CylDet]   Fillet radius (using R diff): " << fillet_radius << std::endl;
+                    } else if (!has_top_fillet && has_bottom_fillet) {
+                        // 只有底部圆角
+                        double bottom_fillet_z_height = bottom_fillet_z_max - bottom_fillet_z_min;
+                        double bottom_fillet_r_diff = bottom_fillet_r_max - bottom_fillet_r_min;
+                        
+                        fillet_radius = bottom_fillet_r_diff;
+                        
+                        std::cout << "[STEP Exporter] [CylDet] Detected BOTTOM fillet only" << std::endl;
+                        std::cout << "[STEP Exporter] [CylDet]   Bottom fillet Z range: " << bottom_fillet_z_max << " - " << bottom_fillet_z_min << " = " << bottom_fillet_z_height << std::endl;
+                        std::cout << "[STEP Exporter] [CylDet]   Bottom fillet R range: " << bottom_fillet_r_max << " - " << bottom_fillet_r_min << " = " << bottom_fillet_r_diff << std::endl;
+                        std::cout << "[STEP Exporter] [CylDet]   Fillet radius (using R diff): " << fillet_radius << std::endl;
+                    } else {
+                        // 上下都有圆角
+                        double top_fillet_r_diff = top_fillet_r_max - top_fillet_r_min;
+                        double bottom_fillet_r_diff = bottom_fillet_r_max - bottom_fillet_r_min;
+                        fillet_radius = (top_fillet_r_diff + bottom_fillet_r_diff) / 2.0;
+                        std::cout << "[STEP Exporter] [CylDet] Detected BOTH top and bottom fillets" << std::endl;
+                        std::cout << "[STEP Exporter] [CylDet]   Top fillet R diff: " << top_fillet_r_diff << std::endl;
+                        std::cout << "[STEP Exporter] [CylDet]   Bottom fillet R diff: " << bottom_fillet_r_diff << std::endl;
+                        std::cout << "[STEP Exporter] [CylDet]   Fillet radius (avg R diff): " << fillet_radius << std::endl;
+                    }
+                    
+                    std::cout << "[STEP Exporter] [CylDet] Fillet cylinder params:" << std::endl;
                     std::cout << "[STEP Exporter] [CylDet]   Cylinder radius: " << cylinder_radius << std::endl;
-                    std::cout << "[STEP Exporter] [CylDet]   Fillet min radius: " << fillet_r_min << std::endl;
-                    std::cout << "[STEP Exporter] [CylDet]   Fillet max radius: " << fillet_r_max << std::endl;
-                    std::cout << "[STEP Exporter] [CylDet]   Fillet Z range: " << fillet_z_max << " - " << fillet_z_min << " = " << (fillet_z_max - fillet_z_min) << std::endl;
-                    
-                    // 详细调试：输出圆角区域的顶点分布（采样前 20 个点）
-                    std::cout << "[STEP Exporter] [CylDet] Fillet vertex distribution (sample):" << std::endl;
-                    std::cout << "[STEP Exporter] [CylDet]   Total fillet faces: " << fillet_count << std::endl;
-                    std::cout << "[STEP Exporter] [CylDet]   Total fillet vertices: " << all_fillet_vertices.size() << std::endl;
-                    
-                    // 按 Z 坐标排序所有顶点
-                    if (!all_fillet_vertices.empty()) {
-                        std::sort(all_fillet_vertices.begin(), all_fillet_vertices.end());
-                        
-                        // 输出 Z 范围和对应的半径范围
-                        double z_range = all_fillet_vertices.back().first - all_fillet_vertices.front().first;
-                        double r_range = 0;
-                        double min_r = all_fillet_vertices.front().second;
-                        double max_r = all_fillet_vertices.front().second;
-                        for (const auto& p : all_fillet_vertices) {
-                            min_r = std::min(min_r, p.second);
-                            max_r = std::max(max_r, p.second);
-                        }
-                        r_range = max_r - min_r;
-                        
-                        std::cout << "[STEP Exporter] [CylDet]   Z range: " << z_range << ", R range: " << r_range << std::endl;
-                        std::cout << "[STEP Exporter] [CylDet]   Min R: " << min_r << ", Max R: " << max_r << std::endl;
-                        
-                        // 采样输出 20 个点的 Z 和 R 值
-                        int sample_count = std::min(20, (int)all_fillet_vertices.size());
-                        int step = all_fillet_vertices.size() / sample_count;
-                        std::cout << "[STEP Exporter] [CylDet]   Sample points (Z, R):" << std::endl;
-                        for (int i = 0; i < sample_count; i++) {
-                            int idx = i * step;
-                            std::cout << "[STEP Exporter] [CylDet]     [" << idx << "] Z=" << all_fillet_vertices[idx].first 
-                                      << ", R=" << all_fillet_vertices[idx].second << std::endl;
-                        }
-                        
-                        // 尝试拟合圆角半径
-                        // 假设圆角中心在 (z_min, cylinder_radius)，计算平均半径
-                        double z_min = all_fillet_vertices.front().first;
-                        double r_sum = 0;
-                        int r_count = 0;
-                        for (const auto& p : all_fillet_vertices) {
-                            double dz = p.first - z_min;
-                            double dr = cylinder_radius - p.second;
-                            double r = sqrt(dz * dz + dr * dr);
-                            r_sum += r;
-                            r_count++;
-                        }
-                        double avg_radius = r_sum / r_count;
-                        std::cout << "[STEP Exporter] [CylDet]   Fitted radius (center at z_min): " << avg_radius << std::endl;
-                        
-                        // 另一种方法：使用 Z 范围和 R 范围计算
-                        // 对于 90° 圆角，应该有 z_range ≈ r_range ≈ radius
-                        // 如果不相等，取平均值
-                        double avg_radius2 = (z_range + r_range) / 2.0;
-                        std::cout << "[STEP Exporter] [CylDet]   Average radius (z_range + r_range)/2: " << avg_radius2 << std::endl;
-                    }
-                    
-                    // 尝试多种方法计算圆角半径，选择最合理的
-                    double fillet_radius1 = cylinder_radius - fillet_r_min;
-                    double fillet_radius2 = fillet_r_max - fillet_r_min;
-                    
-                    // method3: 使用整个物体的Z范围减去圆柱侧面的Z范围
-                    // 这样可以准确得到顶部和底部两个圆角的总Z范围
-                    double overall_z_min = 1e20, overall_z_max = -1e20;
-                    for (size_t i = 0; i < m_vertices.size(); i++) {
-                        double vertex_z;
-                        if (fabs(axis.Z()) > 0.9) {
-                            vertex_z = m_vertices[i][2];
-                        } else if (fabs(axis.X()) > 0.9) {
-                            vertex_z = m_vertices[i][0];
-                        } else {
-                            vertex_z = m_vertices[i][1];
-                        }
-                        overall_z_min = std::min(overall_z_min, vertex_z);
-                        overall_z_max = std::max(overall_z_max, vertex_z);
-                    }
-                    double overall_z_range = overall_z_max - overall_z_min;
-                    double cylinder_side_range = cylinder_z_max - cylinder_z_min;
-                    double fillet_actual_z_range = overall_z_range - cylinder_side_range;
-                    double fillet_radius3 = fillet_actual_z_range / 2.0; // 除以2，因为有顶部和底部两个圆角
-                    
-                    // 使用圆柱半径的 20% 作为默认值（基于测试模型）
-                    double fillet_radius_default = cylinder_radius * 0.2;
-                    
-                    std::cout << "[STEP Exporter] [CylDet]   Fillet radius (method1): " << fillet_radius1 << std::endl;
-                    std::cout << "[STEP Exporter] [CylDet]   Fillet radius (method2): " << fillet_radius2 << std::endl;
-                    std::cout << "[STEP Exporter] [CylDet]   Fillet actual Z range: " << fillet_actual_z_range << std::endl;
-                    std::cout << "[STEP Exporter] [CylDet]   Fillet radius (method3): " << fillet_radius3 << std::endl;
-                    std::cout << "[STEP Exporter] [CylDet]   Fillet radius (default): " << fillet_radius_default << std::endl;
-                    
-                    // 选择最合理的圆角半径：
-                    // method1: 圆柱半径 - 圆角面最小半径（可能不准确，因为圆角面可能包含多个部分）
-                    // method2: 圆角面最大半径 - 最小半径（可能不准确）
-                    // method3: 圆角面实际Z范围除以2（顶部和底部各一个圆角，对于90°圆角应该准确）
-                    // 
-                    // 对于圆倒角圆柱，method3是最可靠的，因为它基于圆角面的实际Z范围
-                    // 每个圆角的高度等于圆角半径（对于90°圆角）
-                    double fillet_radius = fillet_radius3;
-                    std::cout << "[STEP Exporter] [CylDet]   Using fillet radius from method3 (actual Z range / 2)" << std::endl;
-                    
-                    // overall_z_min and overall_z_max are already calculated above
+                    std::cout << "[STEP Exporter] [CylDet]   Cylinder height: " << (cylinder_z_max - cylinder_z_min) << std::endl;
+                    std::cout << "[STEP Exporter] [CylDet]   Fillet radius: " << fillet_radius << std::endl;
+                    std::cout << "[STEP Exporter] [CylDet]   Top fillet: " << (has_top_fillet ? "YES" : "NO") << std::endl;
+                    std::cout << "[STEP Exporter] [CylDet]   Bottom fillet: " << (has_bottom_fillet ? "YES" : "NO") << std::endl;
                     
                     result.is_fillet = true;
                     result.is_cone = false;
@@ -1417,16 +1515,11 @@ private:
                     result.radius_bottom = cylinder_radius;
                     result.top_radius = cylinder_radius - fillet_radius;
                     result.fillet_radius = fillet_radius;
-                    // 圆柱高度应该是圆柱侧面的高度，不包括圆角部分
                     result.cylinder_height = cylinder_z_max - cylinder_z_min;
                     result.z_min = overall_z_min;
                     result.z_max = overall_z_max;
-                    
-                    std::cout << "[STEP Exporter] [CylDet] Fillet cylinder params:" << std::endl;
-                    std::cout << "[STEP Exporter] [CylDet]   Cylinder radius: " << cylinder_radius << std::endl;
-                    std::cout << "[STEP Exporter] [CylDet]   Cylinder height: " << result.cylinder_height << std::endl;
-                    std::cout << "[STEP Exporter] [CylDet]   Top radius: " << result.top_radius << std::endl;
-                    std::cout << "[STEP Exporter] [CylDet]   Fillet radius: " << fillet_radius << std::endl;
+                    result.has_top_fillet = has_top_fillet;
+                    result.has_bottom_fillet = has_bottom_fillet;
                 }
             }
         }
@@ -1496,11 +1589,18 @@ private:
                 std::cout << "(" << sorted_pairs[i].first << ", " << sorted_pairs[i].second << ") ";
             }
             std::cout << std::endl;
+            std::cout.flush();
+            
+            std::cout << "[STEP Exporter] [CylDet] [Hollow Check v2] sorted_pairs.size()=" << sorted_pairs.size() << std::endl;
+            std::cout.flush();
             
             // 计算底部和顶部的平均半径（按Z坐标排序后，前1/4是底部，后1/4是顶部）
             // 对于带倒角的锥形圆柱，需要使用线性回归来推断真正的底部和顶部半径
             int bottom_count = sorted_pairs.size() / 4;
             int top_count = sorted_pairs.size() / 4;
+            
+            std::cout << "[STEP Exporter] [CylDet] [Hollow Check v2] top_count=" << top_count << ", bottom_count=" << bottom_count << std::endl;
+            std::cout.flush();
             
             if (top_count > 0 && bottom_count > 0) {
                 double avg_bottom_r = 0, avg_top_r = 0;
@@ -1554,13 +1654,19 @@ private:
                 double radius_diff = fabs(avg_top_r - avg_bottom_r);
                 double avg_radius = (avg_top_r + avg_bottom_r) / 2;
                 
-                double diff_percent = radius_diff / avg_radius;
-                std::cout << "[STEP Exporter] [CylDet] Radius diff check: " << diff_percent*100 << "% (threshold: 0.05%)" << std::endl;
+                double diff_percent = (avg_radius > 1e-10) ? (radius_diff / avg_radius) : 0;
+                std::cout << "[STEP Exporter] [CylDet] Radius diff check: " << diff_percent*100 << "% (threshold: 0.05%), all_z_r_pairs.size()=" << all_z_r_pairs.size() << std::endl;
+                std::cout.flush();
                 
                 // 检查是否是空心圆柱的特征：在相同的Z坐标上有两个不同的半径（内外表面）
                 // 注意：圆锥体的半径随Z变化，不应该被认为是空心圆柱
                 bool isHollowCylinderFeature = false;
+                std::cout << "[STEP Exporter] [CylDet] [Hollow v3] ENTERING hollow check block" << std::endl;
+                std::cout.flush();
+                std::cout.flush();
                 if (all_z_r_pairs.size() >= 20) {
+                    std::cout << "[STEP Exporter] [CylDet] [Hollow v3] all_z_r_pairs.size() >= 20, proceeding with hollow check" << std::endl;
+                    std::cout.flush();
                     // 首先检查半径是否随Z有明显变化（圆锥特征）
                     // 如果半径随Z变化超过5%，则可能是圆锥而不是空心圆柱
                     double min_r = 1e20, max_r = -1e20;
@@ -1574,10 +1680,18 @@ private:
                     double radius_variation = (max_r - min_r) / ((max_r + min_r) / 2);
                     double z_range = max_z - min_z;
                     
-                    std::cout << "[STEP Exporter] [CylDet] Hollow cylinder check: radius_variation=" << radius_variation*100 
+                    std::cout << "[STEP Exporter] [CylDet] [Hollow Check v2] radius_variation=" << radius_variation*100 
                               << "%, z_range=" << z_range << std::endl;
+                    std::cout.flush();
                     
-                    // 关键修复：检查法线角度分布
+                    // 关键修复：即使半径变化大，也要检查是否是空心圆柱
+                    // 空心圆柱的特征：在相同Z坐标下有两个不同的半径（内外表面）
+                    // 锥形圆柱的特征：半径随Z坐标线性变化，在相同Z坐标下只有一个半径
+                    
+                    std::cout << "[STEP Exporter] [CylDet] [Hollow Check v2] Before normal angle loop, m_faceInfos.size()=" << m_faceInfos.size() << std::endl;
+                    std::cout.flush();
+                    
+                    // 检查法线角度分布
                     // 圆柱的法线角度应该集中在90度附近（垂直于轴线）
                     // 圆锥的法线角度应该有一个分布（因为侧面是倾斜的）
                     int count_near_90 = 0;
@@ -1602,102 +1716,78 @@ private:
                     double near_90_ratio = (total_side_faces > 0) ? (double)count_near_90 / total_side_faces : 0;
                     std::cout << "[STEP Exporter] [CylDet] Normal angle check: near_90=" << count_near_90 
                               << "/" << total_side_faces << " (ratio=" << near_90_ratio*100 << "%)" << std::endl;
+                    std::cout.flush();
                     
                     // 如果超过80%的侧面法线都在90度附近，则很可能是圆柱而不是圆锥
                     bool is_likely_cylinder = (near_90_ratio > 0.8);
                     
+                    std::cout << "[STEP Exporter] [CylDet] [Hollow Check] is_likely_cylinder=" << is_likely_cylinder << std::endl;
+                    std::cout.flush();
+                    
                     // 空心圆柱检测：检查是否存在多个半径聚类（空心圆柱的内外表面）
-                    // 即使半径变化很大，如果存在多个半径聚类，也可能是空心圆柱而不是圆锥
                     bool is_likely_hollow = false;
-                    if (radius_variation > 0.05) {
-                        // 半径变化大，检查是否存在多个半径聚类
-                        std::sort(all_z_r_pairs.begin(), all_z_r_pairs.end(), 
-                            [](const std::pair<double, double>& a, const std::pair<double, double>& b) {
-                                return a.second < b.second;
-                            });
-                        
-                        // 提取半径值
-                        std::vector<double> radius_values;
-                        for (auto& pair : all_z_r_pairs) {
-                            radius_values.push_back(pair.second);
-                        }
-                        
-                        // 计算半径分布的直方图
-                        double r_min = radius_values.front();
-                        double r_max = radius_values.back();
-                        double r_range = r_max - r_min;
-                        if (r_range > 1.0) {  // 半径差异超过1mm
-                            int num_bins = 20;
-                            double bin_width = r_range / num_bins;
-                            std::vector<int> bin_counts(num_bins, 0);
-                            for (double r : radius_values) {
-                                int bin = std::min(num_bins - 1, static_cast<int>((r - r_min) / bin_width));
-                                bin_counts[bin]++;
-                            }
-                            // 检查是否有多个峰值（每个峰值代表一个半径聚类）
-                            int peak_count = 0;
-                            for (int i = 1; i < num_bins - 1; i++) {
-                                if (bin_counts[i] > bin_counts[i-1] && bin_counts[i] > bin_counts[i+1] && bin_counts[i] > 10) {
-                                    peak_count++;
-                                }
-                            }
-                            if (peak_count >= 2) {
-                                is_likely_hollow = true;
-                                std::cout << "[STEP Exporter] [CylDet] [Hollow Check] Detected multiple radius clusters (" 
-                                          << peak_count << " peaks), likely hollow cylinder" << std::endl;
-                            }
+                    
+                    std::cout << "[STEP Exporter] [CylDet] [Hollow Check] >>> STARTING HISTOGRAM ANALYSIS <<<" << std::endl;
+                    
+                    // 按半径排序进行直方图分析
+                    std::sort(all_z_r_pairs.begin(), all_z_r_pairs.end(), 
+                        [](const std::pair<double, double>& a, const std::pair<double, double>& b) {
+                            return a.second < b.second;
+                        });
+                    
+                    // 关键修复：空心圆柱的特征是在相同Z坐标下有两个不同的半径（内外表面）
+                    // 锥形圆柱的特征是半径随Z坐标线性变化
+                    // 不能仅凭半径分布有多个峰值就判断为空心圆柱，因为锥形圆柱也有两个峰值（顶部和底部半径）
+                    
+                    // 分组检查相同Z坐标下的半径变化
+                    // 关键修复：使用更精细的Z坐标分组精度（1.0而不是0.1）
+                    // 锥形圆柱的顶部和底部点在不同的Z坐标，不应该被分到同一组
+                    std::map<int, std::set<double>> z_radius_groups;
+                    for (auto& pair : all_z_r_pairs) {
+                        int z_bucket = static_cast<int>(pair.first); // 按Z坐标分组（精度1.0）
+                        z_radius_groups[z_bucket].insert(pair.second);
+                    }
+                    
+                    int multi_radius_count = 0;
+                    double min_multi_z = 1e20, max_multi_z = -1e20;
+                    for (auto& group : z_radius_groups) {
+                        if (group.second.size() >= 2) { // 同一个Z坐标有多个半径
+                            multi_radius_count++;
+                            double z_val = group.first;
+                            min_multi_z = std::min(min_multi_z, z_val);
+                            max_multi_z = std::max(max_multi_z, z_val);
                         }
                     }
                     
-                    // 关键修复：如果法线角度集中在90度附近，即使半径变化大，也认为是空心圆柱
-                    if (is_likely_cylinder && radius_variation > 0.05) {
-                        is_likely_hollow = true;
-                        std::cout << "[STEP Exporter] [CylDet] [Hollow Check] Normal angles concentrated at 90°, likely hollow cylinder despite radius variation" << std::endl;
-                    }
+                    // 计算多个半径出现的Z范围
+                    double multi_z_range = max_multi_z - min_multi_z;
                     
-                    // 如果半径变化超过5%，且不是空心圆柱，则可能是圆锥，不检查空心圆柱特征
-                    if (radius_variation > 0.05 && !is_likely_hollow) {
-                        std::cout << "[STEP Exporter] [CylDet] Not hollow cylinder: significant radius variation detected (likely cone)" << std::endl;
-                    } else if (is_likely_hollow) {
-                        // 是空心圆柱，设置标志
+                    // 如果多个半径的Z范围只占总体Z范围的一小部分（<50%），则不认为是空心圆柱
+                    double multi_z_ratio = (z_range > 0) ? (multi_z_range / z_range) : 0;
+                    
+                    // 计算多个半径的比例
+                    double multi_radius_ratio = static_cast<double>(multi_radius_count) / z_radius_groups.size();
+                    
+                    // 关键修复：如果早期已经标记为疑似锥形圆柱，不应该再被判定为空心圆柱
+                    // 锥形圆柱的顶部和底部平面在相同Z坐标下有不同的半径，会被误判为空心圆柱
+                    if (is_suspected_tapered) {
+                        std::cout << "[STEP Exporter] [CylDet] [Hollow Check] Skipping hollow check: already suspected tapered cylinder" << std::endl;
+                        isHollowCylinderFeature = false;
+                        is_likely_hollow = false;
+                    } else if (multi_radius_ratio > 0.5 && multi_z_ratio > 0.5) { // 超过50%的Z位置有多个半径，且范围超过50%
                         isHollowCylinderFeature = true;
-                        std::cout << "[STEP Exporter] [CylDet] Detected hollow cylinder feature (multiple radius clusters or cylinder-like normals)" << std::endl;
+                        is_likely_hollow = true;
+                        std::cout << "[STEP Exporter] [CylDet] [Hollow Check] Detected hollow cylinder feature: " << multi_radius_count 
+                                  << "/" << z_radius_groups.size() << " Z positions have multiple radii (ratio=" << multi_radius_ratio 
+                                  << "), Z range ratio=" << multi_z_ratio << ")" << std::endl;
                     } else {
-                        // 分组检查相同Z坐标下的半径变化
-                        std::map<int, std::set<double>> z_radius_groups;
-                        for (auto& pair : all_z_r_pairs) {
-                            int z_bucket = static_cast<int>(pair.first * 10); // 按Z坐标分组（精度0.1）
-                            z_radius_groups[z_bucket].insert(pair.second);
-                        }
-                        
-                        int multi_radius_count = 0;
-                        double min_multi_z = 1e20, max_multi_z = -1e20;
-                        for (auto& group : z_radius_groups) {
-                            if (group.second.size() >= 2) { // 同一个Z坐标有多个半径
-                                multi_radius_count++;
-                                double z_val = group.first / 10.0;
-                                min_multi_z = std::min(min_multi_z, z_val);
-                                max_multi_z = std::max(max_multi_z, z_val);
-                            }
-                        }
-                        
-                        // 计算多个半径出现的Z范围
-                        double multi_z_range = max_multi_z - min_multi_z;
-                        
-                        // 如果多个半径的Z范围只占总体Z范围的一小部分（<50%），则不认为是空心圆柱
-                        double multi_z_ratio = (z_range > 0) ? (multi_z_range / z_range) : 0;
-                        
-                        // 如果超过一定比例的Z位置都有多个半径，且多个半径的Z范围占总体Z范围的大部分，则认为是空心圆柱特征
-                        double multi_radius_ratio = static_cast<double>(multi_radius_count) / z_radius_groups.size();
-                        if (multi_radius_ratio > 0.5 && multi_z_ratio > 0.5) { // 超过50%的Z位置有多个半径，且范围超过50%
-                            isHollowCylinderFeature = true;
-                            std::cout << "[STEP Exporter] [CylDet] Detected hollow cylinder feature: " << multi_radius_count 
-                                      << "/" << z_radius_groups.size() << " Z positions have multiple radii (ratio=" << multi_radius_ratio 
-                                      << "), Z range ratio=" << multi_z_ratio << ")" << std::endl;
-                        } else {
-                            std::cout << "[STEP Exporter] [CylDet] Not hollow cylinder: multi_radius_ratio=" << multi_radius_ratio 
-                                      << ", multi_z_ratio=" << multi_z_ratio << std::endl;
-                        }
+                        std::cout << "[STEP Exporter] [CylDet] [Hollow Check] Not hollow cylinder: multi_radius_ratio=" << multi_radius_ratio 
+                                  << ", multi_z_ratio=" << multi_z_ratio << std::endl;
+                    }
+                    
+                    // 关键修复：如果是空心圆柱，即使半径变化大也不应该是锥形
+                    if (is_likely_hollow) {
+                        std::cout << "[STEP Exporter] [CylDet] [Hollow Check] Hollow cylinder detected, NOT treating as tapered" << std::endl;
                     }
                 }
                 
@@ -1817,6 +1907,7 @@ private:
                     // 1. 收集所有顶部面（角度0-10°）
                     // 2. 计算顶部面的平均半径
                     // 3. 圆角半径 = 顶部面平均半径 - 线性回归预测的顶部半径
+                    // 关键修复：检查是否存在圆角过渡区域（10-70°），如果只有0-10°的顶面和70-90°的侧面，没有过渡面，则不是圆角
                     
                     // 收集顶部面（角度0-10°）
                     std::vector<double> top_face_radii;
@@ -1839,8 +1930,14 @@ private:
                     
                     std::cout << "[STEP Exporter] [CylDet] Top faces (0-10°): " << top_face_radii.size() << std::endl;
                     
-                    // 如果顶部面数量足够，计算圆角半径
-                    if (top_face_radii.size() > 5) {
+                    // 关键修复：检查是否存在圆角过渡区域
+                    // 真正的圆角：有连续的角度分布从侧面角度（70-90°）到顶部（0-10°）
+                    // 平顶锥形圆柱：只有顶部面（0-10°）和侧面（70-90°），没有中间过渡面
+                    int transition_face_count = count_10_30 + count_30_50 + count_50_70;
+                    std::cout << "[STEP Exporter] [CylDet] Transition faces (10-70°): " << transition_face_count << std::endl;
+                    
+                    // 如果顶部面数量足够，且存在过渡面，则计算圆角半径
+                    if (top_face_radii.size() > 5 && transition_face_count > 10) {
                         // 计算顶部面的平均半径
                         double avg_top_face_r = 0;
                         for (double r : top_face_radii) {
@@ -1862,7 +1959,11 @@ private:
                                   << " (from top face radius difference, " << top_face_radii.size() << " top faces)" << std::endl;
                     } else {
                         result.is_fillet = false;
-                        std::cout << "[STEP Exporter] [CylDet] No valid top faces found" << std::endl;
+                        if (top_face_radii.size() <= 5) {
+                            std::cout << "[STEP Exporter] [CylDet] No valid top faces found" << std::endl;
+                        } else {
+                            std::cout << "[STEP Exporter] [CylDet] No transition faces found, flat top tapered cylinder (not fillet)" << std::endl;
+                        }
                     }
                     
                     // 检查底部斜倒角：法线角度在35°到55°之间（45°倒角面）
@@ -2357,47 +2458,96 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                         std::cout << "  - scaled height: " << cylinderHeight << std::endl;
                         std::cout << "  - fillet radius: " << filletRadius << std::endl;
                         std::cout << "  - main radius: " << mainRadius << std::endl;
+                        std::cout << "  - has_top_fillet: " << (cyl.has_top_fillet ? "YES" : "NO") << std::endl;
+                        std::cout << "  - has_bottom_fillet: " << (cyl.has_bottom_fillet ? "YES" : "NO") << std::endl;
                         
-                        // 计算总高度（圆柱侧面高度 + 两个圆角高度）
-                        double totalHeight = cylinderHeight + 2 * filletRadius;
+                        // 根据圆角位置计算总高度和轮廓线
+                        double totalHeight = cylinderHeight;
+                        if (cyl.has_top_fillet) totalHeight += filletRadius;
+                        if (cyl.has_bottom_fillet) totalHeight += filletRadius;
                         
                         // 创建轮廓线的顶点 - 包含中心轴以创建实心体
-                        gp_Pnt p0(0, 0, 0);
-                        gp_Pnt p1(mainRadius - filletRadius, 0, 0);
-                        gp_Pnt p2(mainRadius, 0, filletRadius);
-                        gp_Pnt p3(mainRadius, 0, cylinderHeight + filletRadius);
-                        gp_Pnt p4(mainRadius - filletRadius, 0, totalHeight);
-                        gp_Pnt p5(0, 0, totalHeight);
+                        std::vector<gp_Pnt> profilePoints;
+                        std::vector<BRepBuilderAPI_MakeEdge> edges;
                         
-                        // 底部圆角的圆心
-                        gp_Pnt bottomFilletCenter(mainRadius - filletRadius, 0, filletRadius);
-                        // 顶部圆角的圆心
-                        gp_Pnt topFilletCenter(mainRadius - filletRadius, 0, cylinderHeight + filletRadius);
+                        // 点0：底部中心（在轴线上）
+                        profilePoints.push_back(gp_Pnt(0, 0, 0));
+                        
+                        double currentZ = 0;
+                        
+                        // 底部圆角（如果有）
+                        if (cyl.has_bottom_fillet) {
+                            // 底部圆角起点：在轴线上，Z=0
+                            // 底部圆角终点：在圆柱侧面，Z=filletRadius，X=mainRadius
+                            profilePoints.push_back(gp_Pnt(mainRadius - filletRadius, 0, 0));
+                            profilePoints.push_back(gp_Pnt(mainRadius, 0, filletRadius));
+                            currentZ = filletRadius;
+                        } else {
+                            // 没有底部圆角，直接到圆柱侧面底部
+                            profilePoints.push_back(gp_Pnt(mainRadius, 0, 0));
+                        }
+                        
+                        // 圆柱侧面
+                        double sideTopZ = currentZ + cylinderHeight;
+                        if (cyl.has_top_fillet) {
+                            profilePoints.push_back(gp_Pnt(mainRadius, 0, sideTopZ));
+                        } else {
+                            profilePoints.push_back(gp_Pnt(mainRadius, 0, totalHeight));
+                        }
+                        
+                        // 顶部圆角（如果有）
+                        if (cyl.has_top_fillet) {
+                            profilePoints.push_back(gp_Pnt(mainRadius - filletRadius, 0, totalHeight));
+                        }
+                        
+                        // 顶部中心
+                        profilePoints.push_back(gp_Pnt(0, 0, totalHeight));
                         
                         std::cout << "[STEP Exporter] Debug: Profile points:" << std::endl;
-                        std::cout << "  p0(" << p0.X() << ", " << p0.Y() << ", " << p0.Z() << ")" << std::endl;
-                        std::cout << "  p1(" << p1.X() << ", " << p1.Y() << ", " << p1.Z() << ")" << std::endl;
-                        std::cout << "  p2(" << p2.X() << ", " << p2.Y() << ", " << p2.Z() << ")" << std::endl;
-                        std::cout << "  p3(" << p3.X() << ", " << p3.Y() << ", " << p3.Z() << ")" << std::endl;
-                        std::cout << "  p4(" << p4.X() << ", " << p4.Y() << ", " << p4.Z() << ")" << std::endl;
-                        std::cout << "  p5(" << p5.X() << ", " << p5.Y() << ", " << p5.Z() << ")" << std::endl;
+                        for (size_t i = 0; i < profilePoints.size(); i++) {
+                            std::cout << "  p" << i << "(" << profilePoints[i].X() << ", " << profilePoints[i].Y() << ", " << profilePoints[i].Z() << ")" << std::endl;
+                        }
                         
                         // 创建轮廓线的边
-                        BRepBuilderAPI_MakeEdge edge0(p0, p1);
-                        BRepBuilderAPI_MakeEdge edge1(p1, p2);
-                        BRepBuilderAPI_MakeEdge edge2(p2, p3);
-                        BRepBuilderAPI_MakeEdge edge3(p3, p4);
-                        BRepBuilderAPI_MakeEdge edge4(p4, p5);
-                        BRepBuilderAPI_MakeEdge edge5(p5, p0);
-                        
-                        // 创建轮廓线
                         BRepBuilderAPI_MakeWire profileWireMaker;
+                        
+                        // 从底部中心到第一个侧面点
+                        BRepBuilderAPI_MakeEdge edge0(profilePoints[0], profilePoints[1]);
                         profileWireMaker.Add(edge0.Edge());
-                        profileWireMaker.Add(edge1.Edge());
-                        profileWireMaker.Add(edge2.Edge());
-                        profileWireMaker.Add(edge3.Edge());
-                        profileWireMaker.Add(edge4.Edge());
-                        profileWireMaker.Add(edge5.Edge());
+                        
+                        // 底部圆角圆弧（如果有）
+                        if (cyl.has_bottom_fillet) {
+                            gp_Pnt bottomFilletCenter(mainRadius - filletRadius, 0, filletRadius);
+                            gp_Ax2 arcAxis(bottomFilletCenter, gp_Dir(0, -1, 0));
+                            gp_Circ bottomFilletArc(arcAxis, filletRadius);
+                            BRepBuilderAPI_MakeEdge edge1(bottomFilletArc, -M_PI / 2, 0);
+                            profileWireMaker.Add(edge1.Edge());
+                        }
+                        
+                        // 圆柱侧面
+                        int sideEdgeIndex = cyl.has_bottom_fillet ? 2 : 1;
+                        BRepBuilderAPI_MakeEdge edgeSide(profilePoints[sideEdgeIndex], profilePoints[sideEdgeIndex + 1]);
+                        profileWireMaker.Add(edgeSide.Edge());
+                        
+                        // 顶部圆角圆弧（如果有）
+                        if (cyl.has_top_fillet) {
+                            int topFilletStartIndex = sideEdgeIndex + 1;
+                            gp_Pnt topFilletCenter(mainRadius - filletRadius, 0, totalHeight - filletRadius);
+                            gp_Ax2 arcAxis(topFilletCenter, gp_Dir(0, 1, 0));
+                            gp_Circ topFilletArc(arcAxis, filletRadius);
+                            BRepBuilderAPI_MakeEdge edgeTopFillet(topFilletArc, 0, M_PI / 2);
+                            profileWireMaker.Add(edgeTopFillet.Edge());
+                        }
+                        
+                        // 顶部到中心
+                        int lastPointIndex = profilePoints.size() - 1;
+                        int secondLastIndex = lastPointIndex - 1;
+                        BRepBuilderAPI_MakeEdge edgeTop(profilePoints[secondLastIndex], profilePoints[lastPointIndex]);
+                        profileWireMaker.Add(edgeTop.Edge());
+                        
+                        // 中心轴线
+                        BRepBuilderAPI_MakeEdge edgeAxis(profilePoints[lastPointIndex], profilePoints[0]);
+                        profileWireMaker.Add(edgeAxis.Edge());
                         
                         if (!profileWireMaker.IsDone()) {
                             std::cout << "[STEP Exporter]   Profile wire creation failed, trying with lines only" << std::endl;

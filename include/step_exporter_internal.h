@@ -10,11 +10,13 @@ extern const char* MODULE_VERSION;
 // Basic shape functions
 TopoDS_Shape fix_shape(const TopoDS_Shape& shape, double tolerance = 1.0e-6);
 TopoDS_Shape create_shape_from_mesh(const std::vector<std::vector<double>>& vertices,
-                                    const std::vector<std::vector<int>>& faces);
+                                    const std::vector<std::vector<int>>& faces,
+                                    double scale = 1.0);
 TopoDS_Shape create_solid_from_mesh(const std::vector<std::vector<double>>& vertices,
                                     const std::vector<std::vector<int>>& faces,
                                     double tolerance = 1.0e-6,
-                                    bool make_solid = true);
+                                    bool make_solid = true,
+                                    double scale = 1.0);
 
 // Curve shape functions
 TopoDS_Shape create_shape_from_curve_data(const std::vector<std::map<std::string, PyObject*>>& splines_data, double scale = 1.0);

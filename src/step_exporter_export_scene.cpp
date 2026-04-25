@@ -384,7 +384,7 @@ PyObject* export_scene(PyObject* self, PyObject* args) {
             }
 
             if (!vertices.empty() && !faces.empty()) {
-                TopoDS_Shape shape = create_shape_from_mesh(vertices, faces);
+                TopoDS_Shape shape = create_shape_from_mesh(vertices, faces, scale);
                 
                 if (!shape.IsNull()) {
                     if (fix_geometry) {

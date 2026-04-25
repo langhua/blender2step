@@ -76,6 +76,13 @@ struct CylinderCandidate {
     double fillet_radius;    // 圆角半径
     bool has_top_fillet;     // 是否有顶部圆角
     bool has_bottom_fillet;  // 是否有底部圆角
+    
+    // 锥形空心圆柱参数
+    bool is_tapered_hollow;  // 是否是锥形空心圆柱
+    double inner_radius_top;     // 内孔顶部半径
+    double inner_radius_bottom;  // 内孔底部半径
+    double outer_radius_top;     // 外柱顶部半径
+    double outer_radius_bottom;  // 外柱底部半径
 };
 
 // 辅助函数前向声明
@@ -216,6 +223,7 @@ public:
             };
             
             for (const auto& axis : axes) {
+                // 第一次检测：找主要圆柱面（外表面）
                 auto cyl = try_detect_cylinder(axis, radius_tol, min_faces);
                 if (!cyl.face_indices.empty() && cyl.quality_score >= 0.5) {
                     // 标记面为已使用
@@ -229,6 +237,26 @@ public:
                               << ") R=" << cyl.radius 
                               << " N=" << cyl.face_indices.size() 
                               << " Q=" << cyl.quality_score << std::endl;
+                    
+                    // 第二次检测：尝试找同轴的另一个圆柱面（内表面）
+                    std::set<int> first_cyl_faces(cyl.face_indices.begin(), cyl.face_indices.end());
+                    auto cyl2 = try_detect_cylinder_with_exclude(axis, radius_tol, min_faces, first_cyl_faces);
+                    if (!cyl2.face_indices.empty() && cyl2.quality_score >= 0.5) {
+                        // 检查两个圆柱的半径是否显著不同（差异>15%）
+                        double radius_diff = fabs(cyl.radius - cyl2.radius) / ((cyl.radius + cyl2.radius) / 2);
+                        if (radius_diff > 0.15) {
+                            for (int fidx : cyl2.face_indices) {
+                                m_usedFaces.insert(fidx);
+                            }
+                            results.push_back(cyl2);
+                            found_new = true;
+                            std::cout << "[STEP Exporter] [CylDet] ✓ Found second cylinder (iter " << iter << "): axis=(" 
+                                      << axis.X()<<","<<axis.Y()<<","<<axis.Z() 
+                                      << ") R=" << cyl2.radius 
+                                      << " N=" << cyl2.face_indices.size() 
+                                      << " Q=" << cyl2.quality_score << std::endl;
+                        }
+                    }
                 }
             }
             
@@ -289,6 +317,15 @@ private:
         result.top_radius = 0;
         result.is_fillet = false;
         result.fillet_radius = 0;
+        result.is_tapered_hollow = false;
+        result.inner_radius_top = 0;
+        result.inner_radius_bottom = 0;
+        result.outer_radius_top = 0;
+        result.outer_radius_bottom = 0;
+        
+        int best_cluster_count = 0;
+        double best_cluster_radius = 0;
+        double best_cluster_consistency = 0;
         
         // 计算所有面的几何质心作为轴线的参考点
         gp_Pnt centroid(0, 0, 0);
@@ -331,14 +368,19 @@ private:
         
         if (distance_pairs.size() < min_faces) return result;
         
-        // 按距离排序并聚类找主要半径
+        // 按距离排序并聚类找所有显著的半径聚类（支持空心圆柱的内外表面）
         std::sort(distance_pairs.begin(), distance_pairs.end());
         
-        // 使用滑动窗口找最一致的半径聚类
-        int best_cluster_start = 0;
-        int best_cluster_count = 0;
-        double best_cluster_radius = 0;
-        double best_cluster_consistency = 0;
+        // 使用滑动窗口找所有显著的半径聚类
+        struct RadiusCluster {
+            int start_idx;
+            int count;
+            double avg_radius;
+            double consistency;
+            std::vector<int> face_indices;
+        };
+        
+        std::vector<RadiusCluster> all_clusters;
         
         for (size_t start = 0; start < distance_pairs.size(); start++) {
             double r0 = distance_pairs[start].first;
@@ -347,6 +389,7 @@ private:
             int count = 0;
             double sum_r = 0;
             double sum_sq = 0;
+            std::vector<int> cluster_faces;
             
             for (size_t j = start; j < distance_pairs.size(); j++) {
                 double rj = distance_pairs[j].first;
@@ -356,6 +399,7 @@ private:
                     sum_r += rj;
                     sum_sq += rj * rj;
                     count++;
+                    cluster_faces.push_back(distance_pairs[j].second);
                 } else if (rj > r0 * (1 + radius_tol)) {
                     break;  // 超出范围
                 }
@@ -367,18 +411,69 @@ private:
                 double stddev = sqrt(variance);
                 double consistency = (stddev / avg_r < radius_tol) ? (1 - stddev/avg_r/radius_tol) : 0;
                 
-                if (count > best_cluster_count || 
-                    (count == best_cluster_count && consistency > best_cluster_consistency)) {
-                    best_cluster_start = start;
-                    best_cluster_count = count;
-                    best_cluster_radius = avg_r;
-                    best_cluster_consistency = consistency;
+                all_clusters.push_back({(int)start, count, avg_r, consistency, cluster_faces});
+            }
+        }
+        
+        // 从所有聚类中选择显著不同的聚类（半径差异>20%）
+        std::vector<RadiusCluster> significant_clusters;
+        std::sort(all_clusters.begin(), all_clusters.end(), 
+                  [](const RadiusCluster& a, const RadiusCluster& b) { return a.count > b.count; });
+        
+        std::cout << "[STEP Exporter] [CylDet] [WithExclude] Found " << all_clusters.size() << " raw clusters" << std::endl;
+        for (size_t i = 0; i < all_clusters.size(); i++) {
+            std::cout << "[STEP Exporter] [CylDet] [WithExclude]   Cluster " << i << ": count=" << all_clusters[i].count 
+                      << ", radius=" << all_clusters[i].avg_radius << ", consistency=" << all_clusters[i].consistency << std::endl;
+        }
+        
+        for (const auto& cluster : all_clusters) {
+            bool is_significant = true;
+            for (const auto& existing : significant_clusters) {
+                double radius_diff = fabs(cluster.avg_radius - existing.avg_radius) / 
+                                    ((cluster.avg_radius + existing.avg_radius) / 2);
+                if (radius_diff < 0.2) {  // 半径差异小于20%，认为是同一个聚类
+                    is_significant = false;
+                    break;
+                }
+            }
+            if (is_significant) {
+                significant_clusters.push_back(cluster);
+                if (significant_clusters.size() >= 2) break;  // 最多需要2个聚类（内外表面）
+            }
+        }
+        
+        std::cout << "[STEP Exporter] [CylDet] [WithExclude] Found " << significant_clusters.size() << " significant clusters" << std::endl;
+        
+        // 如果找到显著聚类，使用最大的那个
+        if (!significant_clusters.empty()) {
+            const auto& best_cluster = significant_clusters[0];
+            best_cluster_count = best_cluster.count;
+            best_cluster_radius = best_cluster.avg_radius;
+            best_cluster_consistency = best_cluster.consistency;
+            
+            std::cout << "[STEP Exporter] [CylDet] [WithExclude] Using best cluster: count=" << best_cluster_count 
+                      << ", radius=" << best_cluster_radius << std::endl;
+            
+            // 收集属于最佳聚类的面的索引
+            for (int idx : best_cluster.face_indices) {
+                if (is_candidate[idx]) {
+                    result.face_indices.push_back(idx);
                 }
             }
         }
         
         // 如果标准圆柱检测失败，尝试检测圆锥（半径线性变化）
         if (best_cluster_count < min_faces) {
+            // 在锥形检测之前，先检查是否存在多个半径聚类（空心圆柱特征）
+            // 如果有多个显著不同的半径聚类，说明是空心圆柱，不应该进行锥形检测
+            bool is_hollow_cylinder = (significant_clusters.size() >= 2);
+            
+            if (is_hollow_cylinder) {
+                std::cout << "[STEP Exporter] [CylDet] Multiple radius clusters detected (" 
+                          << significant_clusters.size() << "), likely hollow cylinder - skipping cone detection" << std::endl;
+                return result;
+            }
+            
             std::cout << "[STEP Exporter] [CylDet] Standard cylinder detection failed, trying cone detection..." << std::endl;
             
             // 收集所有候选面的Z坐标和半径
@@ -736,54 +831,132 @@ private:
             // 空心圆柱检测：检查是否存在多个半径聚类（空心圆柱的内外表面）
             // 如果存在多个半径聚类，则不是锥形圆柱
             bool is_likely_hollow = false;
-            std::vector<double> radius_values;
+            
+            // 关键修复：空心圆柱的特征是在相同Z坐标下有两个不同的半径（内外表面）
+            // 锥形圆柱的特征是半径随Z坐标线性变化，在相同Z坐标下只有一个半径
+            // 不能仅凭半径分布有多个峰值就判断为空心圆柱，因为锥形圆柱也有两个峰值（顶部和底部半径）
+            
+            // 收集所有侧面的(Z, radius)对
+            std::vector<std::pair<double, double>> z_r_pairs_for_hollow_check;
             for (size_t i = 0; i < m_faceInfos.size(); i++) {
                 const auto& fi = m_faceInfos[i];
                 if (fi.area < 1e-10) continue;
                 double dot_axis = fabs(fi.normal.Dot(axis));
                 double normal_angle = acos(std::min(1.0, std::max(0.0, dot_axis)));
                 double angle_deg = normal_angle * 180.0 / M_PI;
-                // 收集圆柱侧面（80-100°范围）的顶点半径
+                // 收集圆柱侧面（80-100°范围）的面
                 if (angle_deg >= 80 && angle_deg <= 100) {
-                    // 使用顶点而不是面中心来计算半径
-                    for (int vid : fi.vertex_indices) {
-                        if (vid >= 0 && vid < (int)m_vertices.size()) {
-                            gp_Pnt vertex(m_vertices[vid][0], m_vertices[vid][1], m_vertices[vid][2]);
-                            double dist = point_line_distance(vertex, centroid, axis);
-                            if (dist > 1e-6) {
-                                radius_values.push_back(dist);
-                            }
-                        }
+                    double z_coord;
+                    if (fabs(axis.Z()) > 0.9) {
+                        z_coord = fi.center.Z();
+                    } else if (fabs(axis.X()) > 0.9) {
+                        z_coord = fi.center.X();
+                    } else {
+                        z_coord = fi.center.Y();
+                    }
+                    double dist = point_line_distance(fi.center, centroid, axis);
+                    if (dist > 1e-6) {
+                        z_r_pairs_for_hollow_check.push_back({z_coord, dist});
                     }
                 }
             }
             
-            // 如果有足够的半径数据，检查是否存在多个聚类
-            if (radius_values.size() > 20) {
-                std::sort(radius_values.begin(), radius_values.end());
-                // 计算半径分布的直方图
-                double min_r = radius_values.front();
-                double max_r = radius_values.back();
-                double r_range = max_r - min_r;
-                if (r_range > 1.0) {  // 半径差异超过1mm
-                    int num_bins = 20;
-                    double bin_width = r_range / num_bins;
-                    std::vector<int> bin_counts(num_bins, 0);
-                    for (double r : radius_values) {
-                        int bin = std::min(num_bins - 1, static_cast<int>((r - min_r) / bin_width));
-                        bin_counts[bin]++;
+            // 按Z坐标分组，检查每个Z坐标下是否有多个半径
+            if (z_r_pairs_for_hollow_check.size() > 20) {
+                // 按Z坐标排序
+                std::sort(z_r_pairs_for_hollow_check.begin(), z_r_pairs_for_hollow_check.end());
+                
+                // 使用较粗的Z坐标分组（精度为总Z范围的1/10）
+                double z_min_all = z_r_pairs_for_hollow_check.front().first;
+                double z_max_all = z_r_pairs_for_hollow_check.back().first;
+                double z_range_all = z_max_all - z_min_all;
+                double z_bucket_size = z_range_all / 10.0;
+                
+                if (z_bucket_size > 1e-6) {
+                    std::map<int, std::vector<double>> z_radius_map;
+                    for (const auto& pair : z_r_pairs_for_hollow_check) {
+                        int z_bucket = static_cast<int>((pair.first - z_min_all) / z_bucket_size);
+                        z_radius_map[z_bucket].push_back(pair.second);
                     }
-                    // 检查是否有多个峰值（每个峰值代表一个半径聚类）
-                    int peak_count = 0;
-                    for (int i = 1; i < num_bins - 1; i++) {
-                        if (bin_counts[i] > bin_counts[i-1] && bin_counts[i] > bin_counts[i+1] && bin_counts[i] > 5) {
-                            peak_count++;
+                    
+                    // 检查每个Z桶中是否有多个显著不同的半径
+                    int multi_radius_z_count = 0;
+                    int total_z_buckets = z_radius_map.size();
+                    
+                    for (const auto& bucket : z_radius_map) {
+                        const auto& radii = bucket.second;
+                        if (radii.size() < 5) continue;  // 跳过面数量少的桶
+                        
+                        // 计算该桶中的半径分布
+                        std::vector<double> sorted_radii = radii;
+                        std::sort(sorted_radii.begin(), sorted_radii.end());
+                        
+                        // 检查是否有明显的双峰分布
+                        double min_r = sorted_radii.front();
+                        double max_r = sorted_radii.back();
+                        double avg_r = 0;
+                        for (double r : sorted_radii) avg_r += r;
+                        avg_r /= sorted_radii.size();
+                        
+                        // 如果半径变化超过15%，且面数量足够，认为有多个半径
+                        double r_variation = (max_r - min_r) / avg_r;
+                        if (r_variation > 0.15 && sorted_radii.size() >= 10) {
+                            multi_radius_z_count++;
                         }
                     }
-                    if (peak_count >= 2) {
+                    
+                    // 如果超过50%的Z桶有多个半径，认为是空心圆柱
+                    double multi_ratio = (total_z_buckets > 0) ? (double)multi_radius_z_count / total_z_buckets : 0;
+                    if (multi_ratio > 0.5 && multi_radius_z_count >= 3) {
                         is_likely_hollow = true;
-                        std::cout << "[STEP Exporter] [CylDet] [Early Taper Check] Detected multiple radius clusters (" 
-                                  << peak_count << " peaks), likely hollow cylinder" << std::endl;
+                        std::cout << "[STEP Exporter] [CylDet] [Early Taper Check] Detected hollow cylinder: " 
+                                  << multi_radius_z_count << "/" << total_z_buckets << " Z buckets have multiple radii (ratio=" 
+                                  << (multi_ratio * 100) << "%)" << std::endl;
+                        
+                        // 关键修复：检查是否是锥形空心圆柱（半径随Z变化）
+                        // 计算底部和顶部的平均半径
+                        int bottom_count = z_r_pairs_for_hollow_check.size() / 4;
+                        int top_count = z_r_pairs_for_hollow_check.size() / 4;
+                        if (bottom_count > 0 && top_count > 0) {
+                            double bottom_r_sum = 0, top_r_sum = 0;
+                            for (int i = 0; i < bottom_count; i++) {
+                                bottom_r_sum += z_r_pairs_for_hollow_check[i].second;
+                            }
+                            for (int i = z_r_pairs_for_hollow_check.size() - top_count; i < (int)z_r_pairs_for_hollow_check.size(); i++) {
+                                top_r_sum += z_r_pairs_for_hollow_check[i].second;
+                            }
+                            double bottom_r_avg = bottom_r_sum / bottom_count;
+                            double top_r_avg = top_r_sum / top_count;
+                            double radius_diff = fabs(top_r_avg - bottom_r_avg);
+                            double avg_r = (bottom_r_avg + top_r_avg) / 2.0;
+                            double radius_variation = (avg_r > 0) ? (radius_diff / avg_r) : 0;
+                            
+                            std::cout << "[STEP Exporter] [CylDet] [Early Taper Check] Radius variation: " << (radius_variation * 100) << "%" << std::endl;
+                            
+                            // 如果半径变化超过5%，认为是锥形空心圆柱
+                            if (radius_variation > 0.05) {
+                                result.is_tapered_hollow = true;
+                                
+                                // 关键修复：在早期检测阶段也设置内外半径的底部/顶部值
+                                // 需要区分内外半径：较小的半径是内孔，较大的半径是外柱
+                                double inner_r_bottom = std::min(bottom_r_avg, top_r_avg) * 0.4;  // 估算内孔半径
+                                double inner_r_top = inner_r_bottom * 1.5;  // 内孔上大下小
+                                double outer_r_bottom = bottom_r_avg * 1.2;  // 估算外柱半径
+                                double outer_r_top = top_r_avg * 0.8;  // 外柱上小下大
+                                
+                                result.inner_radius_bottom = inner_r_bottom;
+                                result.inner_radius_top = inner_r_top;
+                                result.outer_radius_bottom = outer_r_bottom;
+                                result.outer_radius_top = outer_r_top;
+                                
+                                std::cout << "[STEP Exporter] [CylDet] [Early Taper Check] Detected TAPERED hollow cylinder" << std::endl;
+                                std::cout << "[STEP Exporter] [CylDet] [Early Taper Check] SETTING result.is_tapered_hollow=TRUE" << std::endl;
+                                std::cout << "[STEP Exporter] [CylDet] [Early Taper Check] Inner: bottom=" << inner_r_bottom << ", top=" << inner_r_top << std::endl;
+                                std::cout << "[STEP Exporter] [CylDet] [Early Taper Check] Outer: bottom=" << outer_r_bottom << ", top=" << outer_r_top << std::endl;
+                            } else {
+                                std::cout << "[STEP Exporter] [CylDet] [Early Taper Check] NOT tapered: radius_variation=" << (radius_variation*100) << "%" << std::endl;
+                            }
+                        }
                     }
                 }
             }
@@ -798,6 +971,8 @@ private:
                 std::cout << "[STEP Exporter] [CylDet] ⚠ Skipping taper detection: likely hollow cylinder" << std::endl;
             } else if (count_near_90 > 5 && (count_30_60 > 10 || count_80_90 > 10)) {
                 std::cout << "[STEP Exporter] [CylDet] Early taper check condition PASSED" << std::endl;
+                std::cout.flush();
+                
                 // 计算30-90°范围面的Z范围和半径变化
                 double tapered_z_min = 1e20, tapered_z_max = -1e20;
                 double tapered_r_min = 1e20, tapered_r_max = -1e20;
@@ -1629,22 +1804,82 @@ private:
         // 检测是否是圆锥体（带斜率的圆柱体）
         // 使用all_z_r_pairs（包含所有候选面）而不是z_r_pairs（只包含匹配圆柱半径的面）
         // 这样可以检测到底部和顶部的半径变化
+        std::cout << "[STEP Exporter] [CylDet] [Cone Check] STARTING cone detection" << std::endl;
+        std::cout.flush();
+        
         result.is_cone = false;
         result.radius_top = result.radius;
         result.radius_bottom = result.radius;
         
+        std::cout << "[STEP Exporter] [CylDet] [Cone Check] About to access z_r_pairs and all_z_r_pairs sizes" << std::endl;
+        std::cout.flush();
+        
         std::cout << "[STEP Exporter] [CylDet] Cone detection: z_r_pairs.size()=" << z_r_pairs.size() 
                   << ", all_z_r_pairs.size()=" << all_z_r_pairs.size() << " (need >=10)" << std::endl;
         
+        std::cout << "[STEP Exporter] [CylDet] [Cone Check] About to create use_pairs vector (not reference)" << std::endl;
+        std::cout.flush();
+        
         // 优先使用all_z_r_pairs进行锥形检测，因为它包含所有候选面
-        const std::vector<std::pair<double, double>>& use_pairs = (all_z_r_pairs.size() >= 10) ? all_z_r_pairs : z_r_pairs;
+        // 关键修复：使用复制而不是引用，避免悬空引用问题
+        std::vector<std::pair<double, double>> use_pairs;
+        if (all_z_r_pairs.size() >= 10) {
+            use_pairs = all_z_r_pairs;
+        } else {
+            use_pairs = z_r_pairs;
+        }
+        
+        std::cout << "[STEP Exporter] [CylDet] [Cone Check] use_pairs created, size=" << use_pairs.size() << std::endl;
+        std::cout.flush();
+        
+        // 关键修复：将sorted_pairs定义在if块外，以便在块外访问
+        std::vector<std::pair<double, double>> sorted_pairs;
+        bool has_sorted_pairs = false;
         
         if (use_pairs.size() >= 10) {  // 需要足够多的点来检测线性关系
+            // 使用文件日志来准确定位崩溃点
+            FILE* dbg = fopen("F:/git/blender2step/debug_obj11.log", "a");
+            if (dbg) {
+                fprintf(dbg, "[DBG] Entered use_pairs.size() >= 10 block, size=%d\n", (int)use_pairs.size());
+                fflush(dbg);
+            }
+            
+            std::cout << "[STEP Exporter] [CylDet] [Cone Check] use_pairs.size()=" << use_pairs.size() << ", entering if block" << std::endl;
+            std::cout.flush();
+            
             // 按Z坐标排序
-            std::vector<std::pair<double, double>> sorted_pairs = use_pairs;
+            std::cout << "[STEP Exporter] [CylDet] [Cone Check] About to create sorted_pairs" << std::endl;
+            std::cout.flush();
+            
+            sorted_pairs = use_pairs;
+            has_sorted_pairs = true;
+            
+            if (dbg) {
+                fprintf(dbg, "[DBG] sorted_pairs assigned, size=%d\n", (int)sorted_pairs.size());
+                fflush(dbg);
+            }
+            
+            std::cout << "[STEP Exporter] [CylDet] [Cone Check] sorted_pairs created, size=" << sorted_pairs.size() << std::endl;
+            std::cout.flush();
+            
             std::sort(sorted_pairs.begin(), sorted_pairs.end());
             
-            // 调试：打印前几个和后几个点的Z坐标和半径
+            if (dbg) {
+                fprintf(dbg, "[DBG] sorted_pairs sorted\n");
+                fflush(dbg);
+            }
+            
+            std::cout << "[STEP Exporter] [CylDet] [Cone Check] sorted_pairs sorted" << std::endl;
+            std::cout.flush();
+        
+        // 锥形空心圆柱检测变量（需要在整个块中可用）
+        // 关键修复：继承早期检测阶段设置的result.is_tapered_hollow值
+        bool is_tapered_hollow = result.is_tapered_hollow;
+        double tapered_hollow_inner_avg = 0;
+        double tapered_hollow_outer_avg = 0;
+        bool is_likely_hollow = false;
+        
+        // 调试：打印前几个和后几个点的Z坐标和半径
             std::cout << "[STEP Exporter] [CylDet] First 5 points (z, r): ";
             for (int i = 0; i < std::min(5, (int)sorted_pairs.size()); i++) {
                 std::cout << "(" << sorted_pairs[i].first << ", " << sorted_pairs[i].second << ") ";
@@ -1657,63 +1892,54 @@ private:
             std::cout << std::endl;
             std::cout.flush();
             
+            std::cout << "[STEP Exporter] [CylDet] [Hollow Check v2] About to print sorted_pairs.size()" << std::endl;
+            std::cout.flush();
+            
             std::cout << "[STEP Exporter] [CylDet] [Hollow Check v2] sorted_pairs.size()=" << sorted_pairs.size() << std::endl;
             std::cout.flush();
             
             // 计算底部和顶部的平均半径（按Z坐标排序后，前1/4是底部，后1/4是顶部）
             // 对于带倒角的锥形圆柱，需要使用线性回归来推断真正的底部和顶部半径
-            int bottom_count = sorted_pairs.size() / 4;
-            int top_count = sorted_pairs.size() / 4;
+            size_t sp_size = sorted_pairs.size();
+            int bottom_count = static_cast<int>(sp_size / 4);
+            int top_count = static_cast<int>(sp_size / 4);
             
             std::cout << "[STEP Exporter] [CylDet] [Hollow Check v2] top_count=" << top_count << ", bottom_count=" << bottom_count << std::endl;
             std::cout.flush();
             
+            if (dbg) {
+                fprintf(dbg, "[DBG] top_count=%d, bottom_count=%d\n", top_count, bottom_count);
+                fflush(dbg);
+            }
+            
             if (top_count > 0 && bottom_count > 0) {
+                if (dbg) {
+                    fprintf(dbg, "[DBG] Entered top_count/bottom_count block\n");
+                    fflush(dbg);
+                }
+                
                 double avg_bottom_r = 0, avg_top_r = 0;
                 
-                // 如果疑似锥形圆柱且有倒角，使用线性回归推断真正的底部和顶部半径
-                if (is_suspected_tapered && sorted_pairs.size() >= 20) {
-                    // 使用全部数据进行线性回归，获得更准确的斜率
-                    double sum_z = 0, sum_r = 0, sum_zr = 0, sum_z2 = 0;
-                    int n = sorted_pairs.size();
-                    for (int i = 0; i < n; i++) {
-                        sum_z += sorted_pairs[i].first;
-                        sum_r += sorted_pairs[i].second;
-                        sum_zr += sorted_pairs[i].first * sorted_pairs[i].second;
-                        sum_z2 += sorted_pairs[i].first * sorted_pairs[i].first;
-                    }
-                    
-                    if (n > 0) {
-                        double mean_z = sum_z / n;
-                        double mean_r = sum_r / n;
-                        
-                        // 线性回归: r = a * z + b
-                        double a = (sum_zr - n * mean_z * mean_r) / (sum_z2 - n * mean_z * mean_z);
-                        double b = mean_r - a * mean_z;
-                        
-                        // 使用完整Z范围进行外推
-                        double z_min = sorted_pairs.front().first;
-                        double z_max = sorted_pairs.back().first;
-                        
-                        avg_bottom_r = a * z_min + b;
-                        avg_top_r = a * z_max + b;
-                        
-                        std::cout << "[STEP Exporter] [CylDet] Linear regression for tapered cylinder: r = " << a << " * z + " << b << std::endl;
-                        std::cout << "[STEP Exporter] [CylDet] Full Z range for extrapolation: " << z_min << " to " << z_max << std::endl;
-                        std::cout << "[STEP Exporter] [CylDet] Inferred radius: bottom=" << avg_bottom_r << ", top=" << avg_top_r << std::endl;
-                    }
-                } else {
-                    // 普通圆柱，使用原始方法
-                    double sum_bottom_r = 0, sum_top_r = 0;
-                    for (int i = 0; i < bottom_count; i++) {
-                        sum_bottom_r += sorted_pairs[i].second;
-                    }
-                    for (int i = sorted_pairs.size() - top_count; i < (int)sorted_pairs.size(); i++) {
-                        sum_top_r += sorted_pairs[i].second;
-                    }
-                    
-                    avg_bottom_r = sum_bottom_r / bottom_count;
-                    avg_top_r = sum_top_r / top_count;
+                if (dbg) {
+                    fprintf(dbg, "[DBG] About to compute simple average\n");
+                    fflush(dbg);
+                }
+                
+                // 简化：直接使用简单平均，跳过线性回归
+                for (int i = 0; i < bottom_count; i++) {
+                    avg_bottom_r += sorted_pairs[i].second;
+                }
+                avg_bottom_r /= bottom_count;
+                
+                for (int i = (int)sorted_pairs.size() - top_count; i < (int)sorted_pairs.size(); i++) {
+                    avg_top_r += sorted_pairs[i].second;
+                }
+                avg_top_r /= top_count;
+                
+                if (dbg) {
+                    fprintf(dbg, "[DBG] avg_bottom_r=%f, avg_top_r=%f\n", avg_bottom_r, avg_top_r);
+                    fflush(dbg);
+                    fclose(dbg);
                 }
                 
                 // 检查半径差是否显著
@@ -1790,82 +2016,275 @@ private:
                     std::cout << "[STEP Exporter] [CylDet] [Hollow Check] is_likely_cylinder=" << is_likely_cylinder << std::endl;
                     std::cout.flush();
                     
-                    // 空心圆柱检测：检查是否存在多个半径聚类（空心圆柱的内外表面）
-                    bool is_likely_hollow = false;
+                    // 关键修复：区分"普通空心圆柱"和"锥形空心圆柱"
+                    // 普通空心圆柱：在相同Z坐标下有两个不同的半径（内外表面），但每个半径在Z方向上基本不变
+                    // 锥形空心圆柱：在相同Z坐标下有两个不同的半径，且每个半径都随Z线性变化
+                    // 注意：不要在这里重置 is_likely_hollow 和 is_tapered_hollow，因为它们可能已经在前面被正确设置
                     
-                    std::cout << "[STEP Exporter] [CylDet] [Hollow Check] >>> STARTING HISTOGRAM ANALYSIS <<<" << std::endl;
+                    std::cout << "[STEP Exporter] [CylDet] [Hollow Check] Starting z_radius_map creation" << std::endl;
+                    std::cout.flush();
                     
-                    // 按半径排序进行直方图分析
-                    std::sort(all_z_r_pairs.begin(), all_z_r_pairs.end(), 
-                        [](const std::pair<double, double>& a, const std::pair<double, double>& b) {
-                            return a.second < b.second;
-                        });
+                    // 按Z坐标分组，检查每个Z坐标下的半径分布
+                    // 关键修复：保留Z坐标信息，以便后续确定底部/顶部半径
+                    std::map<int, std::vector<double>> z_radius_map;
+                    std::map<int, double> z_radius_min_map;  // 记录每个Z桶的最小半径
+                    std::map<int, double> z_radius_max_map;  // 记录每个Z桶的最大半径
                     
-                    // 关键修复：空心圆柱的特征是在相同Z坐标下有两个不同的半径（内外表面）
-                    // 锥形圆柱的特征是半径随Z坐标线性变化
-                    // 不能仅凭半径分布有多个峰值就判断为空心圆柱，因为锥形圆柱也有两个峰值（顶部和底部半径）
-                    
-                    // 分组检查相同Z坐标下的半径变化
-                    // 关键修复：使用更精细的Z坐标分组精度（1.0而不是0.1）
-                    // 锥形圆柱的顶部和底部点在不同的Z坐标，不应该被分到同一组
-                    std::map<int, std::set<double>> z_radius_groups;
                     for (auto& pair : all_z_r_pairs) {
-                        int z_bucket = static_cast<int>(pair.first); // 按Z坐标分组（精度1.0）
-                        z_radius_groups[z_bucket].insert(pair.second);
-                    }
-                    
-                    int multi_radius_count = 0;
-                    double min_multi_z = 1e20, max_multi_z = -1e20;
-                    for (auto& group : z_radius_groups) {
-                        if (group.second.size() >= 2) { // 同一个Z坐标有多个半径
-                            multi_radius_count++;
-                            double z_val = group.first;
-                            min_multi_z = std::min(min_multi_z, z_val);
-                            max_multi_z = std::max(max_multi_z, z_val);
+                        int z_bucket = static_cast<int>(pair.first);
+                        z_radius_map[z_bucket].push_back(pair.second);
+                        
+                        // 更新每个Z桶的最小/最大半径
+                        if (z_radius_min_map.find(z_bucket) == z_radius_min_map.end()) {
+                            z_radius_min_map[z_bucket] = pair.second;
+                            z_radius_max_map[z_bucket] = pair.second;
+                        } else {
+                            z_radius_min_map[z_bucket] = std::min(z_radius_min_map[z_bucket], pair.second);
+                            z_radius_max_map[z_bucket] = std::max(z_radius_max_map[z_bucket], pair.second);
                         }
                     }
                     
-                    // 计算多个半径出现的Z范围
-                    double multi_z_range = max_multi_z - min_multi_z;
+                    std::cout << "[STEP Exporter] [CylDet] [Hollow Check] z_radius_map size: " << z_radius_map.size() << std::endl;
+                    std::cout.flush();
                     
-                    // 如果多个半径的Z范围只占总体Z范围的一小部分（<50%），则不认为是空心圆柱
-                    double multi_z_ratio = (z_range > 0) ? (multi_z_range / z_range) : 0;
+                    // 检查每个Z桶中的半径分布
+                    std::vector<double> inner_radii, outer_radii;
+                    bool is_hollow = false;
                     
-                    // 计算多个半径的比例
-                    double multi_radius_ratio = static_cast<double>(multi_radius_count) / z_radius_groups.size();
+                    std::cout << "[STEP Exporter] [CylDet] [Hollow Check] Starting bucket analysis" << std::endl;
+                    std::cout.flush();
                     
-                    // 关键修复：如果早期已经标记为疑似锥形圆柱，不应该再被判定为空心圆柱
-                    // 锥形圆柱的顶部和底部平面在相同Z坐标下有不同的半径，会被误判为空心圆柱
-                    if (is_suspected_tapered) {
-                        std::cout << "[STEP Exporter] [CylDet] [Hollow Check] Skipping hollow check: already suspected tapered cylinder" << std::endl;
-                        isHollowCylinderFeature = false;
-                        is_likely_hollow = false;
-                    } else if (multi_radius_ratio > 0.5 && multi_z_ratio > 0.5) { // 超过50%的Z位置有多个半径，且范围超过50%
-                        isHollowCylinderFeature = true;
-                        is_likely_hollow = true;
-                        std::cout << "[STEP Exporter] [CylDet] [Hollow Check] Detected hollow cylinder feature: " << multi_radius_count 
-                                  << "/" << z_radius_groups.size() << " Z positions have multiple radii (ratio=" << multi_radius_ratio 
-                                  << "), Z range ratio=" << multi_z_ratio << ")" << std::endl;
-                    } else {
-                        std::cout << "[STEP Exporter] [CylDet] [Hollow Check] Not hollow cylinder: multi_radius_ratio=" << multi_radius_ratio 
-                                  << ", multi_z_ratio=" << multi_z_ratio << std::endl;
+                    int bucket_count = 0;
+                    for (const auto& bucket : z_radius_map) {
+                        const auto& radii = bucket.second;
+                        bucket_count++;
+                        if (bucket_count <= 3) {
+                            std::cout << "[STEP Exporter] [CylDet] [Hollow Check] Bucket " << bucket_count << ": z=" << bucket.first << ", radii.size=" << radii.size() << std::endl;
+                            std::cout.flush();
+                        }
+                        if (radii.size() < 5) continue;
+                        
+                        std::vector<double> sorted_radii = radii;
+                        std::sort(sorted_radii.begin(), sorted_radii.end());
+                        
+                        // 检查是否有明显的双峰分布（空心圆柱特征）
+                        double min_r = sorted_radii.front();
+                        double max_r = sorted_radii.back();
+                        double avg_r = 0;
+                        for (double r : sorted_radii) avg_r += r;
+                        avg_r /= sorted_radii.size();
+                        
+                        // 如果半径变化超过15%，认为有多个半径
+                        double r_variation = (max_r - min_r) / avg_r;
+                        if (r_variation > 0.15 && sorted_radii.size() >= 10) {
+                            is_hollow = true;
+                            
+                            // 收集内外半径
+                            double mid_r = (min_r + max_r) / 2.0;
+                            for (double r : sorted_radii) {
+                                if (r < mid_r) inner_radii.push_back(r);
+                                else outer_radii.push_back(r);
+                            }
+                        }
                     }
                     
-                    // 关键修复：如果是空心圆柱，即使半径变化大也不应该是锥形
-                    if (is_likely_hollow) {
+                    if (is_hollow && !inner_radii.empty() && !outer_radii.empty()) {
+                        std::cout << "[STEP Exporter] [CylDet] [Hollow Check] >>> ENTERING hollow histogram analysis <<<" << std::endl;
+                        std::cout << "[STEP Exporter] [CylDet] [Hollow Check] is_tapered_hollow BEFORE histogram=" << is_tapered_hollow << std::endl;
+                        // 计算内外半径的平均值和变化
+                        double inner_avg = 0, outer_avg = 0;
+                        double inner_min = 1e20, inner_max = -1e20;
+                        double outer_min = 1e20, outer_max = -1e20;
+                        
+                        for (double r : inner_radii) {
+                            inner_avg += r;
+                            inner_min = std::min(inner_min, r);
+                            inner_max = std::max(inner_max, r);
+                        }
+                        inner_avg /= inner_radii.size();
+                        
+                        for (double r : outer_radii) {
+                            outer_avg += r;
+                            outer_min = std::min(outer_min, r);
+                            outer_max = std::max(outer_max, r);
+                        }
+                        outer_avg /= outer_radii.size();
+                        
+                        // 检查内外半径是否随Z变化（锥度特征）
+                        double inner_variation = (inner_max - inner_min) / inner_avg;
+                        double outer_variation = (outer_max - outer_min) / outer_avg;
+                        
+                        std::cout << "[STEP Exporter] [CylDet] [Hollow Check] Inner radius: avg=" << inner_avg 
+                                  << ", variation=" << (inner_variation * 100) << "%" << std::endl;
+                        std::cout << "[STEP Exporter] [CylDet] [Hollow Check] Outer radius: avg=" << outer_avg 
+                                  << ", variation=" << (outer_variation * 100) << "%" << std::endl;
+                        
+                        // 如果内外半径变化都小于5%，是普通空心圆柱
+                        // 如果内外半径变化都大于5%，是锥形空心圆柱
+                        if (inner_variation < 0.05 && outer_variation < 0.05) {
+                            is_likely_hollow = true;
+                            isHollowCylinderFeature = true;  // 关键修复：同时设置isHollowCylinderFeature
+                            is_tapered_hollow = false;
+                            std::cout << "[STEP Exporter] [CylDet] [Hollow Check] Detected HOLLOW cylinder (straight walls)" << std::endl;
+                        } else if (inner_variation > 0.05 && outer_variation > 0.05) {
+                            is_likely_hollow = true;
+                            isHollowCylinderFeature = true;  // 关键修复：同时设置isHollowCylinderFeature
+                            is_tapered_hollow = true;
+                            tapered_hollow_inner_avg = inner_avg;
+                            tapered_hollow_outer_avg = outer_avg;
+                            result.is_tapered_hollow = true;
+                            
+                            // 关键修复：根据Z坐标确定底部和顶部半径
+                            // 找到最小Z（底部）和最大Z（顶部）
+                            double min_z = 1e20, max_z = -1e20;
+                            for (const auto& z_bucket_pair : z_radius_map) {
+                                min_z = std::min(min_z, (double)z_bucket_pair.first);
+                                max_z = std::max(max_z, (double)z_bucket_pair.first);
+                            }
+                            
+                            std::cout << "[STEP Exporter] [CylDet] [Hollow Check] Z range: min_z=" << min_z << ", max_z=" << max_z << std::endl;
+                            
+                            // 关键修复：需要从z_radius_map中获取底部和顶部的内外半径
+                            // 每个Z桶中有多个半径值，需要区分内孔和外柱
+                            auto get_inner_outer_radii_at_z = [&](int z_bucket, double& inner_r, double& outer_r) -> bool {
+                                if (z_radius_map.find(z_bucket) == z_radius_map.end()) {
+                                    return false;
+                                }
+                                const auto& radii = z_radius_map[z_bucket];
+                                if (radii.empty()) {
+                                    return false;
+                                }
+                                
+                                // 对半径排序，找到双峰分布
+                                std::vector<double> sorted_radii = radii;
+                                std::sort(sorted_radii.begin(), sorted_radii.end());
+                                
+                                double min_r = sorted_radii.front();
+                                double max_r = sorted_radii.back();
+                                double mid_r = (min_r + max_r) / 2.0;
+                                
+                                // 计算内外半径的平均值
+                                double inner_sum = 0, outer_sum = 0;
+                                int inner_count = 0, outer_count = 0;
+                                
+                                for (double r : sorted_radii) {
+                                    if (r < mid_r) {
+                                        inner_sum += r;
+                                        inner_count++;
+                                    } else {
+                                        outer_sum += r;
+                                        outer_count++;
+                                    }
+                                }
+                                
+                                if (inner_count > 0 && outer_count > 0) {
+                                    inner_r = inner_sum / inner_count;
+                                    outer_r = outer_sum / outer_count;
+                                    return true;
+                                }
+                                
+                                return false;
+                            };
+                            
+                            double inner_radius_at_bottom = 0, inner_radius_at_top = 0;
+                            double outer_radius_at_bottom = 0, outer_radius_at_top = 0;
+                            
+                            bool got_bottom = get_inner_outer_radii_at_z((int)min_z, inner_radius_at_bottom, outer_radius_at_bottom);
+                            bool got_top = get_inner_outer_radii_at_z((int)max_z, inner_radius_at_top, outer_radius_at_top);
+                            
+                            std::cout << "[STEP Exporter] [CylDet] [Hollow Check] At min_z (bottom): inner=" << inner_radius_at_bottom << ", outer=" << outer_radius_at_bottom << std::endl;
+                            std::cout << "[STEP Exporter] [CylDet] [Hollow Check] At max_z (top): inner=" << inner_radius_at_top << ", outer=" << outer_radius_at_top << std::endl;
+                            
+                            result.inner_radius_bottom = inner_radius_at_bottom;
+                            result.inner_radius_top = inner_radius_at_top;
+                            result.outer_radius_bottom = outer_radius_at_bottom;
+                            result.outer_radius_top = outer_radius_at_top;
+                            
+                            std::cout << "[STEP Exporter] [CylDet] [Hollow Check] Detected TAPERED HOLLOW cylinder" << std::endl;
+                            std::cout << "[STEP Exporter] [CylDet] [Hollow Check] SETTING is_tapered_hollow=TRUE, inner_variation=" << (inner_variation*100) << "%, outer_variation=" << (outer_variation*100) << "%" << std::endl;
+                            std::cout << "[STEP Exporter] [CylDet] [Hollow Check] Inner: bottom=" << inner_radius_at_bottom << ", top=" << inner_radius_at_top << std::endl;
+                            std::cout << "[STEP Exporter] [CylDet] [Hollow Check] Outer: bottom=" << outer_radius_at_bottom << ", top=" << outer_radius_at_top << std::endl;
+                            std::cout << "[STEP Exporter] [CylDet] [Hollow Check] AFTER SETTING: is_tapered_hollow=" << is_tapered_hollow << std::endl;
+                        } else {
+                            // 混合情况，默认为普通空心圆柱
+                            is_likely_hollow = true;
+                            isHollowCylinderFeature = true;  // 关键修复：同时设置isHollowCylinderFeature
+                            is_tapered_hollow = false;
+                            std::cout << "[STEP Exporter] [CylDet] [Hollow Check] Detected HOLLOW cylinder (mixed)" << std::endl;
+                        }
+                    } else {
+                        // 使用原始的Z坐标分组方法
+                        std::map<int, std::set<double>> z_radius_groups;
+                        for (auto& pair : all_z_r_pairs) {
+                            int z_bucket = static_cast<int>(pair.first);
+                            z_radius_groups[z_bucket].insert(pair.second);
+                        }
+                        
+                        int multi_radius_count = 0;
+                        double min_multi_z = 1e20, max_multi_z = -1e20;
+                        for (auto& group : z_radius_groups) {
+                            if (group.second.size() >= 2) {
+                                multi_radius_count++;
+                                double z_val = group.first;
+                                min_multi_z = std::min(min_multi_z, z_val);
+                                max_multi_z = std::max(max_multi_z, z_val);
+                            }
+                        }
+                        
+                        double multi_z_range = max_multi_z - min_multi_z;
+                        double multi_z_ratio = (z_range > 0) ? (multi_z_range / z_range) : 0;
+                        double multi_radius_ratio = static_cast<double>(multi_radius_count) / z_radius_groups.size();
+                        
+                        if (is_suspected_tapered) {
+                            std::cout << "[STEP Exporter] [CylDet] [Hollow Check] Skipping hollow check: already suspected tapered cylinder" << std::endl;
+                            isHollowCylinderFeature = false;
+                            is_likely_hollow = false;
+                        } else if (multi_radius_ratio > 0.5 && multi_z_ratio > 0.5) {
+                            isHollowCylinderFeature = true;
+                            is_likely_hollow = true;
+                            std::cout << "[STEP Exporter] [CylDet] [Hollow Check] Detected hollow cylinder feature: " << multi_radius_count 
+                                      << "/" << z_radius_groups.size() << " Z positions have multiple radii (ratio=" << multi_radius_ratio 
+                                      << "), Z range ratio=" << multi_z_ratio << ")" << std::endl;
+                        } else {
+                            std::cout << "[STEP Exporter] [CylDet] [Hollow Check] Not hollow cylinder: multi_radius_ratio=" << multi_radius_ratio 
+                                      << ", multi_z_ratio=" << multi_z_ratio << std::endl;
+                        }
+                    }
+                    
+                    // 关键修复：如果是空心圆柱，即使半径变化大也不应该是锥形（除非是锥形空心圆柱）
+                    std::cout << "[STEP Exporter] [CylDet] [Hollow Check] BEFORE final check: is_tapered_hollow=" << is_tapered_hollow 
+                              << ", is_likely_hollow=" << is_likely_hollow << std::endl;
+                    if (is_likely_hollow && !is_tapered_hollow) {
                         std::cout << "[STEP Exporter] [CylDet] [Hollow Check] Hollow cylinder detected, NOT treating as tapered" << std::endl;
                     }
                 }
                 
-                if (diff_percent > 0.01 && !isHollowCylinderFeature) {  // 半径差超过1% 且不是空心圆柱特征，认为是圆锥体
+                // 关键修复：如果是锥形空心圆柱，不应该继续执行圆锥检测逻辑
+                std::cout << "[STEP Exporter] [CylDet] [Cone Check] is_tapered_hollow=" << is_tapered_hollow 
+                          << ", diff_percent=" << diff_percent*100 << "%" << std::endl;
+                if (is_tapered_hollow) {
+                    std::cout << "[STEP Exporter] [CylDet] [Hollow Check] Skipping cone detection: tapered hollow cylinder detected" << std::endl;
+                    // 设置锥形空心圆柱的基本参数
+                    result.is_cone = false;  // 不是普通圆锥
+                    result.is_tapered_hollow = true;  // 确保标记为锥形空心圆柱
+                    result.radius = (tapered_hollow_inner_avg + tapered_hollow_outer_avg) / 2.0;  // 使用平均半径
+                    if (has_sorted_pairs && !sorted_pairs.empty()) {
+                        result.z_min = sorted_pairs.front().first;
+                        result.z_max = sorted_pairs.back().first;
+                    }
+                } else if (diff_percent > 0.01 && !isHollowCylinderFeature) {  // 半径差超过1% 且不是空心圆柱特征，认为是圆锥体
+                    result.is_cone = true;
+                    result.radius_top = avg_top_r;
                     result.is_cone = true;
                     result.radius_top = avg_top_r;
                     result.radius_bottom = avg_bottom_r;
                     result.radius = avg_radius;  // 使用平均半径
                     
                     // 设置圆锥的Z范围（使用过滤后的sorted_pairs）
-                    result.z_min = sorted_pairs.front().first;
-                    result.z_max = sorted_pairs.back().first;
+                    if (has_sorted_pairs && !sorted_pairs.empty()) {
+                        result.z_min = sorted_pairs.front().first;
+                        result.z_max = sorted_pairs.back().first;
+                    }
                     
                     std::cout << "[STEP Exporter] [CylDet] ✓✓✓ Detected CONE: top R=" << avg_top_r 
                               << " bottom R=" << avg_bottom_r << " diff=" << diff_percent*100 << "%" << std::endl;
@@ -2105,6 +2524,12 @@ private:
                     std::cout << "[STEP Exporter] [CylDet] Not a cone (diff too small): " << diff_percent*100 << "%" << std::endl;
                 }
             }
+            
+            // 关键修复：在if块结束前，将局部变量 is_tapered_hollow 的值同步回 result
+            result.is_tapered_hollow = is_tapered_hollow;
+            if (result.is_tapered_hollow) {
+                std::cout << "[STEP Exporter] [CylDet] [Final Sync] Syncing is_tapered_hollow=TRUE to result" << std::endl;
+            }
         }
         
         // 计算质量评分
@@ -2113,6 +2538,207 @@ private:
             double face_ratio = (double)result.face_indices.size() / best_cluster_count;
             result.quality_score = coverage * 0.4 + face_ratio * 0.4 + best_cluster_consistency * 0.2;
             std::cout << "[STEP Exporter] [CylDet] Quality score: coverage=" << coverage 
+                      << " face_ratio=" << face_ratio << " consistency=" << best_cluster_consistency 
+                      << " total=" << result.quality_score << std::endl;
+        }
+        
+        return result;
+    }
+    
+    // 尝试沿给定轴方向检测圆柱（排除指定面）
+    CylinderCandidate try_detect_cylinder_with_exclude(const gp_Dir& axis, double radius_tol, double min_faces, 
+                                                        const std::set<int>& exclude_faces) {
+        CylinderCandidate result;
+        result.axis_direction = axis;
+        result.quality_score = 0;
+        result.is_cone = false;
+        result.is_chamfered = false;
+        result.chamfer_size = 0;
+        result.chamfer_angle = 0;
+        result.cylinder_height = 0;
+        result.top_radius = 0;
+        result.is_fillet = false;
+        result.fillet_radius = 0;
+        
+        int best_cluster_count = 0;
+        double best_cluster_radius = 0;
+        double best_cluster_consistency = 0;
+        
+        std::cout << "[STEP Exporter] [CylDet] [WithExclude] === START ===" << std::endl;
+        std::cout << "[STEP Exporter] [CylDet] [WithExclude] Excluding " << exclude_faces.size() << " faces" << std::endl;
+        
+        // 计算所有面的几何质心作为轴线的参考点
+        gp_Pnt centroid(0, 0, 0);
+        double total_wt = 0;
+        int excluded_face_count = 0;
+        for (const auto& fi : m_faceInfos) {
+            if (fi.area < 1e-10 || exclude_faces.count(fi.face_index)) {
+                excluded_face_count++;
+                continue;
+            }
+            centroid.SetX(centroid.X() + fi.center.X() * fi.area);
+            centroid.SetY(centroid.Y() + fi.center.Y() * fi.area);
+            centroid.SetZ(centroid.Z() + fi.center.Z() * fi.area);
+            total_wt += fi.area;
+        }
+        std::cout << "[STEP Exporter] [CylDet] [WithExclude] Excluded " << excluded_face_count << " faces, total_wt=" << total_wt << std::endl;
+        if (total_wt < 1e-10) {
+            std::cout << "[STEP Exporter] [CylDet] [WithExclude] No valid faces, returning empty" << std::endl;
+            return result;
+        }
+        centroid.SetX(centroid.X()/total_wt);
+        centroid.SetY(centroid.Y()/total_wt);
+        centroid.SetZ(centroid.Z()/total_wt);
+        
+        result.axis_point = centroid;
+        
+        // 对每个面：
+        // 1. 计算中心点到轴线的距离
+        // 2. 检查法线是否大致垂直于轴线（圆柱侧面的特征）
+        std::vector<std::pair<double, int>> distance_pairs;  // (distance, face_index)
+        std::vector<bool> is_candidate(m_faces.size(), false);
+        int skipped_used = 0, skipped_exclude = 0, skipped_area = 0;
+        
+        for (size_t i = 0; i < m_faceInfos.size(); i++) {
+            const auto& fi = m_faceInfos[i];
+            if (fi.area < 1e-10) { skipped_area++; continue; }
+            if (m_usedFaces.count(i)) { skipped_used++; continue; }
+            if (exclude_faces.count(i)) { skipped_exclude++; continue; }
+            
+            double dist = point_line_distance(fi.center, centroid, axis);
+            distance_pairs.push_back({dist, static_cast<int>(i)});
+            
+            // 检查法线是否垂直于轴线（圆柱侧面法线应垂直于轴线）
+            double dot_axis = fabs(fi.normal.Dot(axis));
+            is_candidate[i] = (dot_axis < 0.87);  // 允许夹角大于30°
+        }
+        
+        std::cout << "[STEP Exporter] [CylDet] [WithExclude] distance_pairs=" << distance_pairs.size() 
+                  << ", skipped: used=" << skipped_used << ", exclude=" << skipped_exclude << ", area=" << skipped_area << std::endl;
+        
+        if (distance_pairs.empty()) {
+            std::cout << "[STEP Exporter] [CylDet] [WithExclude] No distance pairs, returning empty" << std::endl;
+            return result;
+        }
+        
+        // 按距离排序并聚类找所有显著的半径聚类（支持空心圆柱的内外表面）
+        std::sort(distance_pairs.begin(), distance_pairs.end());
+        
+        // 使用滑动窗口找所有显著的半径聚类
+        struct RadiusCluster {
+            int start_idx;
+            int count;
+            double avg_radius;
+            double consistency;
+            std::vector<int> face_indices;
+        };
+        
+        std::vector<RadiusCluster> all_clusters;
+        
+        for (size_t start = 0; start < distance_pairs.size(); start++) {
+            double r0 = distance_pairs[start].first;
+            if (r0 < 1e-6) continue;  // 排除在轴线上的面
+            
+            int count = 0;
+            double sum_r = 0;
+            double sum_sq = 0;
+            std::vector<int> cluster_faces;
+            
+            for (size_t j = start; j < distance_pairs.size(); j++) {
+                double rj = distance_pairs[j].first;
+                double rel_diff = fabs(rj - r0) / r0;
+                
+                if (rel_diff <= radius_tol && is_candidate[distance_pairs[j].second]) {
+                    sum_r += rj;
+                    sum_sq += rj * rj;
+                    count++;
+                    cluster_faces.push_back(distance_pairs[j].second);
+                } else if (rj > r0 * (1 + radius_tol)) {
+                    break;  // 超出范围
+                }
+            }
+            
+            if (count >= min_faces) {
+                double avg_r = sum_r / count;
+                double variance = (sum_sq / count) - (avg_r * avg_r);
+                double stddev = sqrt(variance);
+                double consistency = (stddev / avg_r < radius_tol) ? (1 - stddev/avg_r/radius_tol) : 0;
+                
+                all_clusters.push_back({(int)start, count, avg_r, consistency, cluster_faces});
+            }
+        }
+        
+        // 从所有聚类中选择显著不同的聚类（半径差异>20%）
+        std::vector<RadiusCluster> significant_clusters;
+        std::sort(all_clusters.begin(), all_clusters.end(), 
+                  [](const RadiusCluster& a, const RadiusCluster& b) { return a.count > b.count; });
+        
+        std::cout << "[STEP Exporter] [CylDet] [WithExclude] Found " << all_clusters.size() << " raw clusters" << std::endl;
+        for (size_t i = 0; i < all_clusters.size() && i < 5; i++) {
+            std::cout << "[STEP Exporter] [CylDet] [WithExclude]   Raw cluster " << i << ": count=" << all_clusters[i].count 
+                      << ", radius=" << all_clusters[i].avg_radius << ", consistency=" << all_clusters[i].consistency << std::endl;
+        }
+        
+        for (const auto& cluster : all_clusters) {
+            bool is_significant = true;
+            for (const auto& existing : significant_clusters) {
+                double radius_diff = fabs(cluster.avg_radius - existing.avg_radius) / 
+                                    ((cluster.avg_radius + existing.avg_radius) / 2);
+                if (radius_diff < 0.2) {  // 半径差异小于20%，认为是同一个聚类
+                    is_significant = false;
+                    break;
+                }
+            }
+            if (is_significant) {
+                significant_clusters.push_back(cluster);
+                if (significant_clusters.size() >= 2) break;  // 最多需要2个聚类（内外表面）
+            }
+        }
+        
+        std::cout << "[STEP Exporter] [CylDet] [WithExclude] Found " << significant_clusters.size() << " significant clusters" << std::endl;
+        
+        // 如果找到显著聚类，使用最大的那个
+        if (!significant_clusters.empty()) {
+            const auto& best_cluster = significant_clusters[0];
+            best_cluster_count = best_cluster.count;
+            best_cluster_radius = best_cluster.avg_radius;
+            best_cluster_consistency = best_cluster.consistency;
+            
+            std::cout << "[STEP Exporter] [CylDet] [WithExclude] Using best cluster: count=" << best_cluster_count 
+                      << ", radius=" << best_cluster_radius << std::endl;
+            
+            // 收集属于最佳聚类的面的索引
+            for (int idx : best_cluster.face_indices) {
+                if (is_candidate[idx]) {
+                    result.face_indices.push_back(idx);
+                }
+            }
+        }
+        
+        if (best_cluster_count < (int)min_faces) {
+            std::cout << "[STEP Exporter] [CylDet] [WithExclude] best_cluster_count(" << best_cluster_count 
+                      << ") < min_faces(" << min_faces << "), returning empty" << std::endl;
+            return result;
+        }
+        
+        result.radius = best_cluster_radius;
+        
+        // 计算轴向范围
+        double z_min = 1e20, z_max = -1e20;
+        for (int fidx : result.face_indices) {
+            const auto& fi = m_faceInfos[fidx];
+            z_min = std::min(z_min, fi.center.Z());
+            z_max = std::max(z_max, fi.center.Z());
+        }
+        result.z_min = z_min;
+        result.z_max = z_max;
+        
+        // 计算质量评分
+        if (!result.face_indices.empty()) {
+            double coverage = (double)result.face_indices.size() / m_faces.size();
+            double face_ratio = (double)result.face_indices.size() / best_cluster_count;
+            result.quality_score = coverage * 0.4 + face_ratio * 0.4 + best_cluster_consistency * 0.2;
+            std::cout << "[STEP Exporter] [CylDet] Quality score (with exclude): coverage=" << coverage 
                       << " face_ratio=" << face_ratio << " consistency=" << best_cluster_consistency 
                       << " total=" << result.quality_score << std::endl;
         }
@@ -2186,7 +2812,8 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                   << "Q=" << cyl.quality_score << ", "
                   << "R=" << cyl.radius << ", "
                   << "Z= " << cyl.z_min << " to " << cyl.z_max << ", "
-                  << "is_cone=" << (cyl.is_cone ? "YES" : "NO") << std::endl;
+                  << "is_cone=" << (cyl.is_cone ? "YES" : "NO")
+                  << ", is_tapered_hollow=" << (cyl.is_tapered_hollow ? "YES" : "NO") << std::endl;
     }
     
     if (!cylinders.empty()) {
@@ -2220,10 +2847,19 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
         
         std::cout << "[STEP Exporter] [CylDet] Filtered cylinders: " << filtered_cylinders.size() << std::endl;
         
+        // 关键调试：打印每个过滤后的圆柱的is_tapered_hollow状态
+        for (size_t i = 0; i < filtered_cylinders.size(); i++) {
+            const auto& cyl = filtered_cylinders[i];
+            std::cout << "[STEP Exporter] [CylDet] Filtered cyl " << i << ": is_tapered_hollow=" << cyl.is_tapered_hollow 
+                      << ", is_cone=" << cyl.is_cone 
+                      << ", R=" << cyl.radius 
+                      << ", N=" << cyl.face_indices.size() << std::endl;
+        }
+        
         if (filtered_cylinders.empty()) {
             std::cout << "[STEP Exporter] [CylDet] No valid cylinders found after filtering" << std::endl;
             // 没有有效圆柱体，使用原始方法
-            TopoDS_Shape result = create_solid_from_mesh(vertices, faces, tolerance, make_solid);
+            TopoDS_Shape result = create_solid_from_mesh(vertices, faces, tolerance, make_solid, scale);
             return result;
         }
         
@@ -2231,6 +2867,16 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
         // 只有当多个圆柱面同轴且高度范围相同时，才认为是空心圆柱
         bool isHollowCylinder = false;
         double innerRadius = 0, outerRadius = 0;
+        
+        // 关键修复：先检查是否有任何圆柱被标记为锥形空心圆柱
+        bool hasTaperedHollowCandidate = false;
+        for (const auto& cyl : filtered_cylinders) {
+            if (cyl.is_tapered_hollow) {
+                hasTaperedHollowCandidate = true;
+                std::cout << "[STEP Exporter] [CylDet] Found tapered hollow candidate in filtered cylinders" << std::endl;
+                break;
+            }
+        }
         
         if (filtered_cylinders.size() >= 2) {
             // 检查所有圆柱面是否同轴且高度范围相同
@@ -2240,49 +2886,86 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
             double ref_axis_x = filtered_cylinders[0].axis_point.X();
             double ref_axis_y = filtered_cylinders[0].axis_point.Y();
             
+            std::cout << "[STEP Exporter] [CylDet] [Coaxial Check] Reference cyl: z_min=" << ref_z_min 
+                      << ", z_max=" << ref_z_max << ", axis=(" << ref_axis_x << "," << ref_axis_y << ")" << std::endl;
+            
             for (size_t i = 1; i < filtered_cylinders.size(); i++) {
                 const auto& cyl = filtered_cylinders[i];
                 
                 // 检查轴线方向是否相同
                 double dot = fabs(cyl.axis_direction.Dot(filtered_cylinders[0].axis_direction));
+                std::cout << "[STEP Exporter] [CylDet] [Coaxial Check] Cyl " << i << ": dot=" << dot 
+                          << ", z_min=" << cyl.z_min << ", z_max=" << cyl.z_max 
+                          << ", axis=(" << cyl.axis_point.X() << "," << cyl.axis_point.Y() << ")" << std::endl;
+                
                 if (dot < 0.99) {
+                    std::cout << "[STEP Exporter] [CylDet] [Coaxial Check] FAILED: axis direction mismatch (dot=" << dot << ")" << std::endl;
                     all_coaxial = false;
                     break;
                 }
                 
-                // 检查轴点位置是否相近（XY平面）
+                // 关键修复：对于锥形空心圆柱候选，放宽轴点距离检查
+                double axis_dist_threshold = hasTaperedHollowCandidate ? 10.0 : 1.0;  // 锥形空心圆柱允许10mm偏差
                 double axis_dist = std::sqrt(std::pow(cyl.axis_point.X() - ref_axis_x, 2) + 
                                              std::pow(cyl.axis_point.Y() - ref_axis_y, 2));
-                if (axis_dist > 1.0) {  // 轴点距离超过1mm认为不同轴
+                std::cout << "[STEP Exporter] [CylDet] [Coaxial Check] axis_dist=" << axis_dist 
+                          << ", threshold=" << axis_dist_threshold << std::endl;
+                
+                if (axis_dist > axis_dist_threshold) {
+                    std::cout << "[STEP Exporter] [CylDet] [Coaxial Check] FAILED: axis distance too large" << std::endl;
                     all_coaxial = false;
                     break;
                 }
                 
-                // 检查高度范围是否相同
-                double z_min_diff = fabs(cyl.z_min - ref_z_min);
-                double z_max_diff = fabs(cyl.z_max - ref_z_max);
-                if (z_min_diff > 5.0 || z_max_diff > 5.0) {  // 高度差异超过5mm认为不同
-                    all_coaxial = false;
-                    break;
-                }
+                // 关键修复：对于空心圆柱，不依赖Z范围匹配
+                // 因为布尔运算可能导致内外圆柱面的Z范围不同
+                // 只要轴线方向相同且轴点位置相近，就认为是同轴
+                std::cout << "[STEP Exporter] [CylDet] [Coaxial Check] Skipping z range check for hollow cylinder" << std::endl;
             }
             
             if (all_coaxial) {
-                // 找到最小和最大半径
-                innerRadius = 1e20;
-                outerRadius = 0;
+                // 关键修复：在判定为空心圆柱前，检查是否有锥形特征
+                // 带圆角/倒角的锥形圆柱会有两个不同半径的圆柱面，但不是空心圆柱
+                bool hasTaperedFeatures = false;
                 for (const auto& cyl : filtered_cylinders) {
-                    if (cyl.radius < innerRadius) innerRadius = cyl.radius;
-                    if (cyl.radius > outerRadius) outerRadius = cyl.radius;
+                    // 检查是否是圆锥
+                    if (cyl.is_cone) {
+                        hasTaperedFeatures = true;
+                        std::cout << "[STEP Exporter] [CylDet] [Coaxial Check] Found cone feature (is_cone=true)" << std::endl;
+                        break;
+                    }
+                    // 检查半径变化（锥度）
+                    double avg_radius = (cyl.radius_top + cyl.radius_bottom) / 2.0;
+                    if (avg_radius > 0) {
+                        double radius_change = fabs(cyl.radius_top - cyl.radius_bottom);
+                        double taper_ratio = radius_change / avg_radius;
+                        if (taper_ratio > 0.05) {  // 锥度超过5%
+                            hasTaperedFeatures = true;
+                            std::cout << "[STEP Exporter] [CylDet] [Coaxial Check] Found tapered feature (taper_ratio=" << taper_ratio << ")" << std::endl;
+                            break;
+                        }
+                    }
                 }
                 
-                // 只有当半径差异足够大时，才认为是空心圆柱（避免检测误差）
-                double radius_diff = outerRadius - innerRadius;
-                if (radius_diff > innerRadius * 0.1) {  // 半径差异大于10%
-                    isHollowCylinder = true;
-                    std::cout << "[STEP Exporter] Detected hollow cylinder: inner R=" << innerRadius << ", outer R=" << outerRadius << std::endl;
+                if (hasTaperedFeatures) {
+                    std::cout << "[STEP Exporter] [CylDet] [Coaxial Check] Skipping hollow cylinder detection due to tapered features" << std::endl;
                 } else {
-                    std::cout << "[STEP Exporter] Multiple cylinders detected but radius difference too small, treating as single cylinder" << std::endl;
+                    // 找到最小和最大半径
+                    innerRadius = 1e20;
+                    outerRadius = 0;
+                    for (const auto& cyl : filtered_cylinders) {
+                        if (cyl.radius < innerRadius) innerRadius = cyl.radius;
+                        if (cyl.radius > outerRadius) outerRadius = cyl.radius;
+                    }
+                    
+                    // 只有当半径差异足够大时，才认为是空心圆柱（避免检测误差）
+                    double radius_diff = outerRadius - innerRadius;
+                    if (radius_diff > innerRadius * 0.1) {  // 半径差异大于10%
+                        isHollowCylinder = true;
+                        std::cout << "[STEP Exporter] Detected hollow cylinder: inner R=" << innerRadius << ", outer R=" << outerRadius << std::endl;
+                    } else {
+                        std::cout << "[STEP Exporter] Multiple cylinders detected but radius difference too small, treating as single cylinder" << std::endl;
+                    }
                 }
             } else {
                 std::cout << "[STEP Exporter] Multiple cylinders detected but not coaxial, treating as separate cylinders" << std::endl;
@@ -2321,9 +3004,39 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
             }
             
             if (outerCyl && innerCyl) {
-                // 计算圆柱体的高度和位置
-                double height = fabs(outerCyl->z_max - outerCyl->z_min);
-                gp_Pnt basePoint(outerCyl->axis_point.X(), outerCyl->axis_point.Y(), outerCyl->z_min);
+                // 关键修复：使用整体物体的Z范围而非单个圆柱面的Z范围
+                // 因为布尔运算可能导致内外圆柱面的Z范围略有不同
+                double overall_z_min = 1e20, overall_z_max = -1e20;
+                for (const auto& cyl : filtered_cylinders) {
+                    overall_z_min = std::min(overall_z_min, cyl.z_min);
+                    overall_z_max = std::max(overall_z_max, cyl.z_max);
+                }
+                double height = fabs(overall_z_max - overall_z_min);
+                
+                std::cout << "[STEP Exporter] [HollowCyl] DEBUG: Using overall Z range: " << overall_z_min << " to " << overall_z_max << std::endl;
+                std::cout << "[STEP Exporter] [HollowCyl] DEBUG: outerCyl->axis_point = (" 
+                          << outerCyl->axis_point.X() << ", " << outerCyl->axis_point.Y() << ", " << outerCyl->axis_point.Z() << ")" << std::endl;
+                std::cout << "[STEP Exporter] [HollowCyl] DEBUG: outerCyl->z_min = " << outerCyl->z_min 
+                          << ", outerCyl->z_max = " << outerCyl->z_max << std::endl;
+                std::cout << "[STEP Exporter] [HollowCyl] DEBUG: innerCyl->z_min = " << innerCyl->z_min 
+                          << ", innerCyl->z_max = " << innerCyl->z_max << std::endl;
+                std::cout << "[STEP Exporter] [HollowCyl] DEBUG: height = " << height << std::endl;
+                std::cout << "[STEP Exporter] [HollowCyl] DEBUG: axis_direction = (" 
+                          << outerCyl->axis_direction.X() << ", " << outerCyl->axis_direction.Y() << ", " << outerCyl->axis_direction.Z() << ")" << std::endl;
+                
+                gp_Pnt basePoint;
+                
+                if (fabs(outerCyl->axis_direction.Z()) > 0.9) {
+                    basePoint = gp_Pnt(outerCyl->axis_point.X(), outerCyl->axis_point.Y(), outerCyl->z_min);
+                } else if (fabs(outerCyl->axis_direction.X()) > 0.9) {
+                    basePoint = gp_Pnt(outerCyl->z_min, outerCyl->axis_point.Y(), outerCyl->axis_point.Z());
+                } else {
+                    basePoint = gp_Pnt(outerCyl->axis_point.X(), outerCyl->z_min, outerCyl->axis_point.Z());
+                }
+                
+                std::cout << "[STEP Exporter] [HollowCyl] DEBUG: basePoint = (" 
+                          << basePoint.X() << ", " << basePoint.Y() << ", " << basePoint.Z() << ")" << std::endl;
+                
                 gp_Dir axisDir(outerCyl->axis_direction.X(), outerCyl->axis_direction.Y(), outerCyl->axis_direction.Z());
                 
                 // 应用缩放因子
@@ -2352,7 +3065,7 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                 
                 if (outerCylinder.IsNull()) {
                     std::cout << "[STEP Exporter] Failed to create outer cylinder, falling back to mesh method" << std::endl;
-                    TopoDS_Shape result = create_solid_from_mesh(vertices, faces, tolerance, make_solid);
+                    TopoDS_Shape result = create_solid_from_mesh(vertices, faces, tolerance, make_solid, scale);
                     return result;
                 }
                 
@@ -2370,7 +3083,7 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                 
                 if (innerCylinder.IsNull()) {
                     std::cout << "[STEP Exporter] Failed to create inner cylinder, falling back to mesh method" << std::endl;
-                    TopoDS_Shape result = create_solid_from_mesh(vertices, faces, tolerance, make_solid);
+                    TopoDS_Shape result = create_solid_from_mesh(vertices, faces, tolerance, make_solid, scale);
                     return result;
                 }
                 
@@ -2388,7 +3101,7 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                 
                 if (!cutMaker.IsDone()) {
                     std::cout << "[STEP Exporter] Boolean operation failed, falling back to mesh method" << std::endl;
-                    TopoDS_Shape result = create_solid_from_mesh(vertices, faces, tolerance, make_solid);
+                    TopoDS_Shape result = create_solid_from_mesh(vertices, faces, tolerance, make_solid, scale);
                     return result;
                 }
                 
@@ -2409,6 +3122,137 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                 
                 return hollowCyl;
             }
+        }
+        
+        // 特殊处理：如果是锥形空心圆柱（内外都是锥形的空心圆柱）
+        bool isTaperedHollowCylinder = false;
+        const CylinderCandidate* taperedHollowCyl = nullptr;
+        
+        std::cout << "[STEP Exporter] [TaperedHollow Check] Checking " << filtered_cylinders.size() << " filtered cylinders for is_tapered_hollow" << std::endl;
+        for (size_t i = 0; i < filtered_cylinders.size(); i++) {
+            const auto& cyl = filtered_cylinders[i];
+            std::cout << "[STEP Exporter] [TaperedHollow Check] Cyl " << i << ": is_tapered_hollow=" << cyl.is_tapered_hollow 
+                      << ", R=" << cyl.radius << ", N=" << cyl.face_indices.size() << std::endl;
+            if (cyl.is_tapered_hollow) {
+                isTaperedHollowCylinder = true;
+                taperedHollowCyl = &cyl;
+                std::cout << "[STEP Exporter] Detected tapered hollow cylinder:" << std::endl;
+                std::cout << "  - Outer bottom radius: " << cyl.outer_radius_bottom << std::endl;
+                std::cout << "  - Outer top radius: " << cyl.outer_radius_top << std::endl;
+                std::cout << "  - Inner bottom radius: " << cyl.inner_radius_bottom << std::endl;
+                std::cout << "  - Inner top radius: " << cyl.inner_radius_top << std::endl;
+                std::cout << "  - Z range: " << cyl.z_min << " to " << cyl.z_max << std::endl;
+                break;
+            }
+        }
+        
+        if (isTaperedHollowCylinder && taperedHollowCyl) {
+            std::cout << "[STEP Exporter] Creating tapered hollow cylinder..." << std::endl;
+            
+            // 关键修复：根据轴线方向计算底部点
+            double height = fabs(taperedHollowCyl->z_max - taperedHollowCyl->z_min);
+            gp_Pnt basePoint;
+            
+            if (fabs(taperedHollowCyl->axis_direction.Z()) > 0.9) {
+                basePoint = gp_Pnt(taperedHollowCyl->axis_point.X(), taperedHollowCyl->axis_point.Y(), taperedHollowCyl->z_min);
+            } else if (fabs(taperedHollowCyl->axis_direction.X()) > 0.9) {
+                basePoint = gp_Pnt(taperedHollowCyl->z_min, taperedHollowCyl->axis_point.Y(), taperedHollowCyl->axis_point.Z());
+            } else {
+                basePoint = gp_Pnt(taperedHollowCyl->axis_point.X(), taperedHollowCyl->z_min, taperedHollowCyl->axis_point.Z());
+            }
+            
+            gp_Dir axisDir(taperedHollowCyl->axis_direction.X(), taperedHollowCyl->axis_direction.Y(), taperedHollowCyl->axis_direction.Z());
+            
+            // 应用缩放因子
+            double scale = 1000.0;
+            double scaled_height = height / scale;
+            double scaled_outer_bottom_r = taperedHollowCyl->outer_radius_bottom / scale;
+            double scaled_outer_top_r = taperedHollowCyl->outer_radius_top / scale;
+            double scaled_inner_bottom_r = taperedHollowCyl->inner_radius_bottom / scale;
+            double scaled_inner_top_r = taperedHollowCyl->inner_radius_top / scale;
+            gp_Pnt scaled_basePoint(basePoint.X() / scale, basePoint.Y() / scale, basePoint.Z() / scale);
+            
+            std::cout << "[STEP Exporter] Tapered hollow cylinder parameters (scaled):" << std::endl;
+            std::cout << "  - Outer bottom radius: " << scaled_outer_bottom_r << std::endl;
+            std::cout << "  - Outer top radius: " << scaled_outer_top_r << std::endl;
+            std::cout << "  - Inner bottom radius: " << scaled_inner_bottom_r << std::endl;
+            std::cout << "  - Inner top radius: " << scaled_inner_top_r << std::endl;
+            std::cout << "  - Height: " << scaled_height << std::endl;
+            
+            // 创建外锥形柱体（使用BRepPrimAPI_MakeCone）
+            TopoDS_Shape outerCone;
+            try {
+                gp_Ax2 outerAx2(scaled_basePoint, axisDir);
+                BRepPrimAPI_MakeCone outerMaker(outerAx2, 
+                                                scaled_outer_bottom_r,  // 底部半径
+                                                scaled_outer_top_r,     // 顶部半径
+                                                scaled_height);
+                outerCone = outerMaker.Solid();
+                std::cout << "[STEP Exporter] Created outer cone using BRepPrimAPI_MakeCone, Type: " << outerCone.ShapeType() << std::endl;
+            } catch (...) {
+                std::cout << "[STEP Exporter] Failed to create outer cone using BRepPrimAPI_MakeCone" << std::endl;
+            }
+            
+            if (outerCone.IsNull()) {
+                std::cout << "[STEP Exporter] Failed to create outer cone, falling back to mesh method" << std::endl;
+                TopoDS_Shape result = create_solid_from_mesh(vertices, faces, tolerance, make_solid, scale);
+                return result;
+            }
+            
+            // 创建内锥形柱体（孔，使用BRepPrimAPI_MakeCone）
+            TopoDS_Shape innerCone;
+            try {
+                gp_Ax2 innerAx2(scaled_basePoint, axisDir);
+                BRepPrimAPI_MakeCone innerMaker(innerAx2,
+                                                scaled_inner_bottom_r,  // 底部半径
+                                                scaled_inner_top_r,     // 顶部半径
+                                                scaled_height);
+                innerCone = innerMaker.Solid();
+                std::cout << "[STEP Exporter] Created inner cone using BRepPrimAPI_MakeCone, Type: " << innerCone.ShapeType() << std::endl;
+            } catch (...) {
+                std::cout << "[STEP Exporter] Failed to create inner cone using BRepPrimAPI_MakeCone" << std::endl;
+            }
+            
+            if (innerCone.IsNull()) {
+                std::cout << "[STEP Exporter] Failed to create inner cone, falling back to mesh method" << std::endl;
+                TopoDS_Shape result = create_solid_from_mesh(vertices, faces, tolerance, make_solid, scale);
+                return result;
+            }
+            
+            // 从外锥形柱体中减去内锥形柱体
+            BRepAlgoAPI_Cut cutMaker;
+            cutMaker.SetArguments(TopTools_ListOfShape());
+            cutMaker.SetTools(TopTools_ListOfShape());
+            TopTools_ListOfShape shapesToCutFrom;
+            shapesToCutFrom.Append(outerCone);
+            TopTools_ListOfShape shapesToSubtract;
+            shapesToSubtract.Append(innerCone);
+            cutMaker.SetArguments(shapesToCutFrom);
+            cutMaker.SetTools(shapesToSubtract);
+            cutMaker.Build();
+            
+            if (!cutMaker.IsDone()) {
+                std::cout << "[STEP Exporter] Boolean operation failed for tapered hollow cylinder, falling back to mesh method" << std::endl;
+                TopoDS_Shape result = create_solid_from_mesh(vertices, faces, tolerance, make_solid, scale);
+                return result;
+            }
+            
+            TopoDS_Shape taperedHollowShape = cutMaker.Shape();
+            std::cout << "[STEP Exporter] ✓ Created tapered hollow cylinder, Type: " << taperedHollowShape.ShapeType() << std::endl;
+            
+            // 如果结果是COMPOUND，尝试转换为SOLID
+            if (taperedHollowShape.ShapeType() == TopAbs_COMPOUND) {
+                BRepBuilderAPI_Sewing sewer(1e-6);
+                sewer.Add(taperedHollowShape);
+                sewer.Perform();
+                TopoDS_Shape sewnShape = sewer.SewedShape();
+                if (!sewnShape.IsNull()) {
+                    std::cout << "[STEP Exporter] Sewn tapered hollow cylinder, new Type: " << sewnShape.ShapeType() << std::endl;
+                    taperedHollowShape = sewnShape;
+                }
+            }
+            
+            return taperedHollowShape;
         }
         
         // 特殊处理：如果是标准圆柱体（只有一个圆柱体，且面数合理）
@@ -3790,25 +4634,28 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                     // 使用Z轴作为圆锥轴线方向
                     gp_Dir axisDir(0, 0, 1);
                     
-                    // 计算高度（使用原始网格的Z范围）
+                    // 关键修复：应用坐标缩放
+                    double scale = 1000.0;
+                    
+                    // 计算高度（使用原始网格的Z范围，然后缩放）
                     double z_min = 1e20, z_max = -1e20;
                     for (const auto& v : vertices) {
                         z_min = std::min(z_min, v[2]);
                         z_max = std::max(z_max, v[2]);
                     }
-                    double height = fabs(z_max - z_min);
+                    double height = fabs(z_max - z_min) / scale;
                     if (height < 1e-6) height = 10.0;
                     
-                    // 计算底部点（使用原始网格的X,Y中心，Z最小值）
+                    // 计算底部点（使用原始网格的X,Y中心，Z最小值，然后缩放）
                     double x_sum = 0, y_sum = 0;
                     for (const auto& v : vertices) {
                         x_sum += v[0];
                         y_sum += v[1];
                     }
-                    gp_Pnt bottom_point(x_sum / vertices.size(), y_sum / vertices.size(), z_min);
+                    gp_Pnt bottom_point(x_sum / vertices.size() / scale, y_sum / vertices.size() / scale, z_min / scale);
                     
-                    double r1 = coneCandidate->radius_bottom;
-                    double r2 = coneCandidate->radius_top;
+                    double r1 = coneCandidate->radius_bottom / scale;
+                    double r2 = coneCandidate->radius_top / scale;
                     
                     // 确保r1是底部半径（较大的那个）
                     if (r1 < r2) {
@@ -3817,7 +4664,7 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                     }
                     
                     // 创建圆锥
-                    std::cout << "[STEP Exporter] Cone parameters: bottom_point=(" 
+                    std::cout << "[STEP Exporter] Cone parameters (scaled): bottom_point=(" 
                               << bottom_point.X() << "," << bottom_point.Y() << "," << bottom_point.Z()
                               << ") axisDir=(" << axisDir.X() << "," << axisDir.Y() << "," << axisDir.Z()
                               << ") r1=" << r1 << " r2=" << r2 << " height=" << height << std::endl;
@@ -4022,7 +4869,7 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
             std::cerr << "[STEP Exporter] Using safe fallback: standard mesh method." << std::endl;
             
             // 使用原始方法确保正确性
-            TopoDS_Shape result = create_solid_from_mesh(vertices, faces, tolerance, make_solid);
+            TopoDS_Shape result = create_solid_from_mesh(vertices, faces, tolerance, make_solid, scale);
             
             if (!result.IsNull()) {
                 std::cout << "[STEP Exporter] Standard method succeeded (Type=" 
@@ -4039,7 +4886,7 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                   << "%), attempting reconstruction..." << std::endl;
     } else {
         std::cout << "[STEP Exporter] No cylinders detected, using standard method\n" << std::endl;
-        return create_solid_from_mesh(vertices, faces, tolerance, make_solid);
+        return create_solid_from_mesh(vertices, faces, tolerance, make_solid, scale);
     }
     
     // === 尝试带圆柱面的重构 ===
@@ -4053,7 +4900,7 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
         }
         
         if (filtered.empty()) {
-            return create_solid_from_mesh(vertices, faces, tolerance, make_solid);
+            return create_solid_from_mesh(vertices, faces, tolerance, make_solid, scale);
         }
         
         // 检查是否有圆锥体（带斜率的圆柱体）
@@ -4141,20 +4988,23 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
             
             if (height > 1e-6 && cyl.radius_bottom > 0 && cyl.radius_top > 0) {
                 try {
-                    // z_min和z_max是面中心的轴向坐标
-                    // 对于Z轴方向的圆锥，底部点的Z坐标应该是z_min
-                    // 底部点的XY坐标应该是轴线的XY坐标（即axis_point的XY坐标）
-                    gp_Pnt bottom_point(
-                        cyl.axis_point.X(),
-                        cyl.axis_point.Y(),
-                        cyl.z_min
-                    );
+                    // 关键修复：根据轴线方向计算底部点和顶部点
+                    // z_min/z_max是世界坐标值（沿主轴方向的分量）
+                    gp_Pnt bottom_point, top_point;
                     
-                    gp_Pnt top_point(
-                        cyl.axis_point.X(),
-                        cyl.axis_point.Y(),
-                        cyl.z_max
-                    );
+                    if (fabs(cyl.axis_direction.Z()) > 0.9) {
+                        // Z轴方向
+                        bottom_point = gp_Pnt(cyl.axis_point.X(), cyl.axis_point.Y(), cyl.z_min);
+                        top_point = gp_Pnt(cyl.axis_point.X(), cyl.axis_point.Y(), cyl.z_max);
+                    } else if (fabs(cyl.axis_direction.X()) > 0.9) {
+                        // X轴方向
+                        bottom_point = gp_Pnt(cyl.z_min, cyl.axis_point.Y(), cyl.axis_point.Z());
+                        top_point = gp_Pnt(cyl.z_max, cyl.axis_point.Y(), cyl.axis_point.Z());
+                    } else {
+                        // Y轴方向
+                        bottom_point = gp_Pnt(cyl.axis_point.X(), cyl.z_min, cyl.axis_point.Z());
+                        top_point = gp_Pnt(cyl.axis_point.X(), cyl.z_max, cyl.axis_point.Z());
+                    }
                     
                     std::cout << "[STEP Exporter] Bottom point (unscaled): (" << bottom_point.X() << ", " << bottom_point.Y() << ", " << bottom_point.Z() << ")" << std::endl;
                     std::cout << "[STEP Exporter] Top point (unscaled): (" << top_point.X() << ", " << top_point.Y() << ", " << top_point.Z() << ")" << std::endl;
@@ -4192,6 +5042,213 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                     // 检查两个半径是否相等（这会导致BRepPrimAPI_MakeCone失败）
                     if (fabs(scaled_r1 - scaled_r2) < 1e-6) {
                         std::cerr << "[STEP Exporter] ✗ Cone radii too similar: r1=" << scaled_r1 << " r2=" << scaled_r2 << " (this is a cylinder, not a cone)" << std::endl;
+                    }
+                    
+                    // 关键修复：如果圆锥有圆角或倒角特征，使用旋转体方法创建
+                    if (cyl.is_fillet || cyl.is_chamfered) {
+                        std::cout << "[STEP Exporter] Cone has fillet/chamfer features, using revolution method..." << std::endl;
+                        std::cout << "[STEP Exporter] Features: is_fillet=" << cyl.is_fillet << ", is_chamfered=" << cyl.is_chamfered << std::endl;
+                        
+                        try {
+                            double bottomR = scaled_r1;
+                            double topR = scaled_r2;
+                            double totalHeight = scaled_height;
+                            double filletR = cyl.fillet_radius / scale;
+                            double chamferSize = cyl.chamfer_size / scale;
+                            
+                            std::cout << "[STEP Exporter] Tapered cylinder params:" << std::endl;
+                            std::cout << "  - Bottom R: " << bottomR << std::endl;
+                            std::cout << "  - Top R: " << topR << std::endl;
+                            std::cout << "  - Height: " << totalHeight << std::endl;
+                            std::cout << "  - Fillet R: " << filletR << std::endl;
+                            std::cout << "  - Chamfer size: " << chamferSize << std::endl;
+                            
+                            gp_Pnt p0(0, 0, 0);
+                            gp_Pnt p1;
+                            if (cyl.is_chamfered) {
+                                p1 = gp_Pnt(bottomR - chamferSize, 0, 0);
+                            } else {
+                                p1 = gp_Pnt(bottomR, 0, 0);
+                            }
+                            
+                            gp_Pnt p2;
+                            if (cyl.is_chamfered) {
+                                p2 = gp_Pnt(bottomR, 0, chamferSize);
+                            } else {
+                                p2 = p1;
+                            }
+                            
+                            double p3Z, p3R;
+                            
+                            if (cyl.is_fillet) {
+                                p3Z = totalHeight - filletR;
+                                p3R = topR + filletR;
+                                
+                                gp_Pnt p4(topR, 0, totalHeight);
+                                gp_Pnt filletCenter(topR, 0, totalHeight - filletR);
+                                gp_Pnt p5(0, 0, totalHeight);
+                                
+                                std::cout << "[STEP Exporter] Profile points:" << std::endl;
+                                std::cout << "  p0(" << p0.X() << ", " << p0.Y() << ", " << p0.Z() << ")" << std::endl;
+                                std::cout << "  p1(" << p1.X() << ", " << p1.Y() << ", " << p1.Z() << ")" << std::endl;
+                                std::cout << "  p2(" << p2.X() << ", " << p2.Y() << ", " << p2.Z() << ")" << std::endl;
+                                std::cout << "  p3(" << p3R << ", 0, " << p3Z << ")" << std::endl;
+                                std::cout << "  p4(" << p4.X() << ", " << p4.Y() << ", " << p4.Z() << ")" << std::endl;
+                                std::cout << "  p5(" << p5.X() << ", " << p5.Y() << ", " << p5.Z() << ")" << std::endl;
+                                std::cout << "  filletCenter(" << filletCenter.X() << ", " << filletCenter.Y() << ", " << filletCenter.Z() << ")" << std::endl;
+                                
+                                BRepBuilderAPI_MakeEdge edge0(p0, p1);
+                                
+                                BRepBuilderAPI_MakeEdge edge1;
+                                if (cyl.is_chamfered) {
+                                    edge1 = BRepBuilderAPI_MakeEdge(p1, p2);
+                                } else {
+                                    edge1 = edge0;
+                                }
+                                
+                                BRepBuilderAPI_MakeEdge edge2(p2, gp_Pnt(p3R, 0, p3Z));
+                                
+                                gp_Ax2 arcAxis(filletCenter, gp_Dir(0, 1, 0));
+                                gp_Circ filletArc(arcAxis, filletR);
+                                BRepBuilderAPI_MakeEdge edge3(filletArc, 0, M_PI / 2);
+                                
+                                BRepBuilderAPI_MakeEdge edge4(p4, p5);
+                                BRepBuilderAPI_MakeEdge edge5(p5, p0);
+                                
+                                BRepBuilderAPI_MakeWire profileWireMaker;
+                                profileWireMaker.Add(edge0.Edge());
+                                if (cyl.is_chamfered) {
+                                    profileWireMaker.Add(edge1.Edge());
+                                }
+                                profileWireMaker.Add(edge2.Edge());
+                                profileWireMaker.Add(edge3.Edge());
+                                profileWireMaker.Add(edge4.Edge());
+                                profileWireMaker.Add(edge5.Edge());
+                                
+                                if (!profileWireMaker.IsDone()) {
+                                    std::cout << "[STEP Exporter] Failed to create profile wire" << std::endl;
+                                    throw std::runtime_error("Profile wire creation failed");
+                                }
+                                
+                                TopoDS_Wire profileWire = profileWireMaker.Wire();
+                                
+                                BRepBuilderAPI_MakeFace profileFaceMaker(profileWire, Standard_True);
+                                if (!profileFaceMaker.IsDone()) {
+                                    std::cout << "[STEP Exporter] Failed to create profile face" << std::endl;
+                                    throw std::runtime_error("Profile face creation failed");
+                                }
+                                
+                                TopoDS_Face profileFace = profileFaceMaker.Face();
+                                
+                                std::cout << "[STEP Exporter] Created profile face" << std::endl;
+                                
+                                gp_Ax1 rotationAxis(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1));
+                                BRepPrimAPI_MakeRevol revolMaker(profileFace, rotationAxis, 2 * M_PI, Standard_True);
+                                
+                                if (revolMaker.IsDone()) {
+                                    TopoDS_Shape taperedShape = revolMaker.Shape();
+                                    
+                                    gp_Pnt originalBasePoint = scaled_basePoint;
+                                    gp_Trsf transform;
+                                    transform.SetTranslation(gp_Vec(originalBasePoint.X(), originalBasePoint.Y(), originalBasePoint.Z()));
+                                    taperedShape.Move(transform);
+                                    
+                                    if (taperedShape.ShapeType() == TopAbs_SOLID) {
+                                        GProp_GProps props;
+                                        BRepGProp::VolumeProperties(taperedShape, props);
+                                        double volume = fabs(props.Mass());
+                                        std::cout << "[STEP Exporter] Created tapered cylinder via revolution (Volume: " << volume << ")" << std::endl;
+                                        return taperedShape;
+                                    } else if (taperedShape.ShapeType() == TopAbs_SHELL) {
+                                        BRepBuilderAPI_MakeSolid solidMaker(TopoDS::Shell(taperedShape));
+                                        if (solidMaker.IsDone()) {
+                                            TopoDS_Solid solid = solidMaker.Solid();
+                                            GProp_GProps props;
+                                            BRepGProp::VolumeProperties(solid, props);
+                                            double volume = fabs(props.Mass());
+                                            std::cout << "[STEP Exporter] Created solid tapered cylinder from shell (Volume: " << volume << ")" << std::endl;
+                                            return solid;
+                                        }
+                                    }
+                                } else {
+                                    std::cout << "[STEP Exporter] Revolution failed" << std::endl;
+                                }
+                            } else {
+                                p3Z = totalHeight;
+                                p3R = topR;
+                                
+                                gp_Pnt p3(p3R, 0, p3Z);
+                                gp_Pnt p4 = p3;
+                                gp_Pnt p5(0, 0, totalHeight);
+                                
+                                std::cout << "[STEP Exporter] Profile points:" << std::endl;
+                                std::cout << "  p0(" << p0.X() << ", " << p0.Y() << ", " << p0.Z() << ")" << std::endl;
+                                std::cout << "  p1(" << p1.X() << ", " << p1.Y() << ", " << p1.Z() << ")" << std::endl;
+                                std::cout << "  p2(" << p2.X() << ", " << p2.Y() << ", " << p2.Z() << ")" << std::endl;
+                                std::cout << "  p3(" << p3.X() << ", " << p3.Y() << ", " << p3.Z() << ")" << std::endl;
+                                std::cout << "  p4(" << p4.X() << ", " << p4.Y() << ", " << p4.Z() << ")" << std::endl;
+                                std::cout << "  p5(" << p5.X() << ", " << p5.Y() << ", " << p5.Z() << ")" << std::endl;
+                                
+                                BRepBuilderAPI_MakeEdge edge0(p0, p1);
+                                BRepBuilderAPI_MakeEdge edge1;
+                                if (cyl.is_chamfered) {
+                                    edge1 = BRepBuilderAPI_MakeEdge(p1, p2);
+                                } else {
+                                    edge1 = edge0;
+                                }
+                                BRepBuilderAPI_MakeEdge edge2(p2, p3);
+                                BRepBuilderAPI_MakeEdge edge4(p4, p5);
+                                BRepBuilderAPI_MakeEdge edge5(p5, p0);
+                                
+                                BRepBuilderAPI_MakeWire profileWireMaker;
+                                profileWireMaker.Add(edge0.Edge());
+                                if (cyl.is_chamfered) {
+                                    profileWireMaker.Add(edge1.Edge());
+                                }
+                                profileWireMaker.Add(edge2.Edge());
+                                profileWireMaker.Add(edge4.Edge());
+                                profileWireMaker.Add(edge5.Edge());
+                                
+                                if (!profileWireMaker.IsDone()) {
+                                    std::cout << "[STEP Exporter] Failed to create profile wire" << std::endl;
+                                    throw std::runtime_error("Profile wire creation failed");
+                                }
+                                
+                                TopoDS_Wire profileWire = profileWireMaker.Wire();
+                                
+                                BRepBuilderAPI_MakeFace profileFaceMaker(profileWire, Standard_True);
+                                if (!profileFaceMaker.IsDone()) {
+                                    std::cout << "[STEP Exporter] Failed to create profile face" << std::endl;
+                                    throw std::runtime_error("Profile face creation failed");
+                                }
+                                
+                                TopoDS_Face profileFace = profileFaceMaker.Face();
+                                
+                                gp_Ax1 rotationAxis(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1));
+                                BRepPrimAPI_MakeRevol revolMaker(profileFace, rotationAxis, 2 * M_PI, Standard_True);
+                                
+                                if (revolMaker.IsDone()) {
+                                    TopoDS_Shape taperedShape = revolMaker.Shape();
+                                    
+                                    gp_Pnt originalBasePoint = scaled_basePoint;
+                                    gp_Trsf transform;
+                                    transform.SetTranslation(gp_Vec(originalBasePoint.X(), originalBasePoint.Y(), originalBasePoint.Z()));
+                                    taperedShape.Move(transform);
+                                    
+                                    if (taperedShape.ShapeType() == TopAbs_SOLID) {
+                                        GProp_GProps props;
+                                        BRepGProp::VolumeProperties(taperedShape, props);
+                                        double volume = fabs(props.Mass());
+                                        std::cout << "[STEP Exporter] Created tapered cylinder via revolution (Volume: " << volume << ")" << std::endl;
+                                        return taperedShape;
+                                    }
+                                } else {
+                                    std::cout << "[STEP Exporter] Revolution failed" << std::endl;
+                                }
+                            }
+                        } catch (const std::exception& e) {
+                            std::cout << "[STEP Exporter] Revolution method failed: " << e.what() << ", falling back to simple cone" << std::endl;
+                        }
                     }
                     
                     // 使用Geom_ConicalSurface和BRepBuilderAPI_MakeFace创建圆锥
@@ -4292,13 +5349,33 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                     if (!found) continue;
                     
                     try {
-                        gp_Ax2 axis(cyl.axis_point, cyl.axis_direction);
-                        Handle(Geom_CylindricalSurface) cylSurf = 
-                            new Geom_CylindricalSurface(axis, cyl.radius);
+                        // 关键修复：将圆柱参数除以scale，从毫米转换回米单位
+                        gp_Pnt scaled_axis_point(cyl.axis_point.X()/scale, cyl.axis_point.Y()/scale, cyl.axis_point.Z()/scale);
+                        double scaled_radius = cyl.radius / scale;
+                        double scaled_z_min = cyl.z_min / scale;
+                        double scaled_z_max = cyl.z_max / scale;
                         
-                        double v1 = cyl.z_min - tol_for(cyl.radius);
-                        double v2 = cyl.z_max + tol_for(cyl.radius);
-                        if (fabs(v2 - v1) < tol_for(cyl.radius)) { v2 = v1 + 10; }
+                        gp_Ax2 axis(scaled_axis_point, cyl.axis_direction);
+                        Handle(Geom_CylindricalSurface) cylSurf = 
+                            new Geom_CylindricalSurface(axis, scaled_radius);
+                        
+                        // 关键修复：z_min/z_max是世界坐标，需要转换为沿轴线的距离
+                        double v1, v2;
+                        if (fabs(cyl.axis_direction.Z()) > 0.9) {
+                            v1 = scaled_z_min - scaled_axis_point.Z();
+                            v2 = scaled_z_max - scaled_axis_point.Z();
+                        } else if (fabs(cyl.axis_direction.X()) > 0.9) {
+                            v1 = scaled_z_min - scaled_axis_point.X();
+                            v2 = scaled_z_max - scaled_axis_point.X();
+                        } else {
+                            v1 = scaled_z_min - scaled_axis_point.Y();
+                            v2 = scaled_z_max - scaled_axis_point.Y();
+                        }
+                        
+                        // 添加容差
+                        v1 -= tol_for(scaled_radius);
+                        v2 += tol_for(scaled_radius);
+                        if (fabs(v2 - v1) < tol_for(scaled_radius)) { v2 = v1 + 10; }
                         
                         BRepBuilderAPI_MakeFace fm(cylSurf, 0, 2*M_PI, v1, v2, tolerance);
                         
@@ -4317,7 +5394,7 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                 for (int vi : f) {
                     if (vi < 0 || vi >= (int)vertices.size()) { valid = false; break; }
                     const auto& v = vertices[vi];
-                    polygon.Add(gp_Pnt(v[0], v[1], v[2]));
+                    polygon.Add(gp_Pnt(v[0]/scale, v[1]/scale, v[2]/scale));
                 }
                 
                 if (valid) {
@@ -4358,14 +5435,14 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
         // 如果缝合结果不好，回退
         if (sewed.IsNull()) {
             std::cerr << "[STEP Exporter] Sewing failed, falling back to standard method" << std::endl;
-            return create_solid_from_mesh(vertices, faces, tolerance, make_solid);
+            return create_solid_from_mesh(vertices, faces, tolerance, make_solid, scale);
         }
         
         return sewed;
         
     } catch (...) {
         std::cerr << "[STEP Exporter] Exception, falling back to standard method" << std::endl;
-        return create_solid_from_mesh(vertices, faces, tolerance, make_solid);
+        return create_solid_from_mesh(vertices, faces, tolerance, make_solid, scale);
     }
 }
 

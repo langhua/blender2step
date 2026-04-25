@@ -452,6 +452,121 @@ def create_tapered_cylinder_with_fillet_and_chamfer(name, center, bottom_radius,
         return None
 
 
+def create_tapered_hollow_cylinder(name, center, outer_bottom_radius, outer_top_radius, inner_bottom_radius, inner_top_radius, height, segments=64):
+    """
+    创建锥形螺柱（外柱面上小下大，内柱面上大下小）
+    
+    Args:
+        name: 圆柱体名称
+        center: 圆柱体中心位置 (x, y, z)
+        outer_bottom_radius: 外柱底部半径
+        outer_top_radius: 外柱顶部半径
+        inner_bottom_radius: 内孔底部半径
+        inner_top_radius: 内孔顶部半径
+        height: 圆柱体高度
+        segments: 圆周分段数
+    
+    Returns:
+        锥形螺柱网格对象
+    """
+    import math
+    
+    try:
+        # 1. 创建外锥形柱体（在原点）
+        bpy.ops.mesh.primitive_cylinder_add(
+            radius=outer_bottom_radius,
+            depth=height,
+            location=[0, 0, 0],
+            vertices=segments
+        )
+        
+        outer_obj = bpy.context.active_object
+        outer_obj.name = f"{name}_outer"
+        
+        # 进入编辑模式，缩放顶部
+        bpy.ops.object.mode_set(mode='EDIT')
+        bpy.ops.mesh.select_all(action='DESELECT')
+        bpy.ops.object.mode_set(mode='OBJECT')
+        
+        # 选择顶部顶点
+        for vertex in outer_obj.data.vertices:
+            if abs(vertex.co.z - height/2) < 0.001:
+                vertex.select = True
+        
+        bpy.ops.object.mode_set(mode='EDIT')
+        outer_scale = outer_top_radius / outer_bottom_radius
+        bpy.ops.transform.resize(value=(outer_scale, outer_scale, 1.0))
+        bpy.ops.object.mode_set(mode='OBJECT')
+        
+        # 2. 创建内锥形柱体（孔）
+        bpy.ops.mesh.primitive_cylinder_add(
+            radius=inner_bottom_radius,
+            depth=height + 2,  # 稍微长一点，确保完全穿透
+            location=[0, 0, 0],
+            vertices=segments
+        )
+        
+        inner_obj = bpy.context.active_object
+        inner_obj.name = f"{name}_inner"
+        
+        # 进入编辑模式，缩放顶部
+        bpy.ops.object.mode_set(mode='EDIT')
+        bpy.ops.mesh.select_all(action='DESELECT')
+        bpy.ops.object.mode_set(mode='OBJECT')
+        
+        # 选择顶部顶点
+        for vertex in inner_obj.data.vertices:
+            if abs(vertex.co.z - (height+2)/2) < 0.001:
+                vertex.select = True
+        
+        bpy.ops.object.mode_set(mode='EDIT')
+        inner_scale = inner_top_radius / inner_bottom_radius
+        bpy.ops.transform.resize(value=(inner_scale, inner_scale, 1.0))
+        bpy.ops.object.mode_set(mode='OBJECT')
+        
+        # 3. 使用布尔差集运算创建孔
+        # 选择外圆柱体
+        bpy.ops.object.select_all(action='DESELECT')
+        outer_obj.select_set(True)
+        bpy.context.view_layer.objects.active = outer_obj
+        
+        # 添加布尔修改器
+        bool_mod = outer_obj.modifiers.new(name="Hole", type='BOOLEAN')
+        bool_mod.operation = 'DIFFERENCE'
+        bool_mod.object = inner_obj
+        
+        # 应用布尔修改器
+        bpy.ops.object.modifier_apply(modifier=bool_mod.name)
+        
+        # 删除内圆柱体
+        bpy.data.objects.remove(inner_obj, do_unlink=True)
+        
+        # 重命名外圆柱体
+        outer_obj.name = name
+        
+        # 移动到指定位置
+        outer_obj.location = center
+        
+        # 添加材质
+        if not outer_obj.data.materials:
+            mat = bpy.data.materials.new(name=f"{name}_Material")
+            mat.use_nodes = True
+            principled = mat.node_tree.nodes.get('Principled BSDF')
+            if principled:
+                principled.inputs['Base Color'].default_value = (0.8, 0.8, 0.8, 1.0)
+            outer_obj.data.materials.append(mat)
+        
+        outer_obj.update_tag()
+        bpy.context.view_layer.update()
+        
+        return outer_obj
+    except Exception as e:
+        print(f"创建锥形螺柱失败：{e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+
 def create_hollow_cylinder(name, center, outer_radius, inner_radius, height, segments=64):
     """
     创建带中心孔的圆柱体（螺孔圆柱）
@@ -672,6 +787,26 @@ def create_mechanical_demo_scene():
     else:
         print("   ✗ 创建螺孔圆柱失败")
     
+    print("\n[5e/6] 创建锥形螺柱（外柱面上小下大，内柱面上大下小）...")
+    tapered_hollow = create_tapered_hollow_cylinder(
+        "Cylinder_Tapered_Hollow",
+        [120, 80, 0],
+        25,  # 外柱底部半径
+        20,  # 外柱顶部半径（上小下大）
+        8,   # 内孔底部半径
+        12,  # 内孔顶部半径（上大下小）
+        60,  # 高度
+        segments=64
+    )
+    if tapered_hollow:
+        print("   ✓ 锥形螺柱体")
+        print("     → 外柱：底部25mm, 顶部20mm（上小下大）")
+        print("     → 内孔：底部8mm, 顶部12mm（上大下小）")
+        print("     → 高度：60mm")
+        print("     → 导出应为带锥形孔的圆锥体")
+    else:
+        print("   ✗ 创建锥形螺柱失败")
+    
     print("\n[6/6] 创建带 2°斜率的参考圆柱...")
     slope_rad = math.radians(2)
     top_radius = bottom_radius - height * math.tan(slope_rad)
@@ -689,7 +824,7 @@ def create_mechanical_demo_scene():
     
     print("\n" + "="*60)
     print("✓ 机械零件创建完成！（Mesh 版本）")
-    print("  共 10 个物体，全部为 MESH 类型:")
+    print("  共 11 个物体，全部为 MESH 类型:")
     print("  1. 实心圆柱体 - 导出为解析圆柱面")
     print("  2. 3°斜率圆柱 - 导出为解析圆锥面")
     print("  3. 4°斜率圆柱 - 导出为解析圆锥面")
@@ -697,9 +832,10 @@ def create_mechanical_demo_scene():
     print("  5. 45°倒角圆柱 - 导出为 CONICAL_SURFACE")
     print("  6. 圆角圆柱 - 导出为 TOROIDAL_SURFACE")
     print("  7. 小圆角圆柱 - 导出为 TOROIDAL_SURFACE")
-    print("  8. 斜率 + 圆角 + 倒角圆柱 - 导出为复杂解析曲面")
-    print("  9. 螺孔圆柱 - 导出为带孔圆柱体")
-    print("  10. 2°斜率圆柱（参考）- 导出为解析圆锥面")
+    print("  8. 带斜率、圆角和倒角的圆柱 - 导出为复杂解析曲面")
+    print("  9. 螺孔圆柱 - 导出为带孔的圆柱体")
+    print("  10. 锥形螺柱 - 导出为带锥形孔的圆锥体")
+    print("  11. 2°斜率参考圆柱 - 导出为解析圆锥面")
     print("="*60)
     print("\n下一步：File → Export → STEP (Enhanced)")
     print("在 FreeCAD 中验证：")

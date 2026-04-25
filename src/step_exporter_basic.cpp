@@ -30,7 +30,8 @@ TopoDS_Shape fix_shape(const TopoDS_Shape& shape, double tolerance) {
 
 // 从网格创建形状（原始版本）
 TopoDS_Shape create_shape_from_mesh(const std::vector<std::vector<double>>& vertices,
-                                   const std::vector<std::vector<int>>& faces) {
+                                   const std::vector<std::vector<int>>& faces,
+                                   double scale) {
     if (vertices.empty() || faces.empty()) {
         std::cerr << "[DEBUG] vertices or faces is empty" << std::endl;
         return TopoDS_Shape();
@@ -60,7 +61,7 @@ TopoDS_Shape create_shape_from_mesh(const std::vector<std::vector<double>>& vert
                 }
                 const auto& v = vertices[vertex_idx];
                 if (v.size() >= 3) {
-                    polygon.Add(gp_Pnt(v[0], v[1], v[2]));
+                    polygon.Add(gp_Pnt(v[0]/scale, v[1]/scale, v[2]/scale));
                 } else {
                     all_vertices_valid = false;
                     break;
@@ -107,7 +108,8 @@ TopoDS_Shape create_shape_from_mesh(const std::vector<std::vector<double>>& vert
 TopoDS_Shape create_solid_from_mesh(const std::vector<std::vector<double>>& vertices,
                                      const std::vector<std::vector<int>>& faces,
                                      double tolerance,
-                                     bool make_solid) {
+                                     bool make_solid,
+                                     double scale) {
     if (vertices.empty() || faces.empty()) {
         std::cerr << "[DEBUG] vertices or faces is empty" << std::endl;
         return TopoDS_Shape();
@@ -115,6 +117,7 @@ TopoDS_Shape create_solid_from_mesh(const std::vector<std::vector<double>>& vert
 
     std::cout << "[STEP Exporter] Creating " << (make_solid ? "SOLID" : "SHELL") 
               << " from mesh: " << vertices.size() << " vertices, " << faces.size() << " faces" << std::endl;
+    std::cout << "[STEP Exporter] Scale factor: " << scale << std::endl;
 
     try {
         // 计算网格的包围盒以调整容差
@@ -238,7 +241,9 @@ TopoDS_Shape create_solid_from_mesh(const std::vector<std::vector<double>>& vert
                 }
                 const auto& v = vertices[vertex_idx];
                 if (v.size() >= 3) {
-                    polygon.Add(gp_Pnt(v[0], v[1], v[2]));
+                    // 关键修复：将顶点坐标除以scale，从毫米转换回米单位
+                    // 与解析方法保持一致
+                    polygon.Add(gp_Pnt(v[0] / scale, v[1] / scale, v[2] / scale));
                 } else {
                     all_vertices_valid = false;
                     break;

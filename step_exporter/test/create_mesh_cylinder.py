@@ -661,13 +661,13 @@ def create_mechanical_demo_scene():
     """
     
     print("\n" + "="*60)
-    print("机械设计物体生成器 v4.0 (Mesh版本)")
+    print("Mechanical Object Generator v4.0 (Mesh Version)")
     print("="*60)
-    print("特点:")
-    print("  • 使用Mesh API创建圆柱体")
-    print("  • 导出到STEP时美化为曲线型圆柱体")
-    print("  • 无布尔运算，导出为纯解析几何体")
-    print("  • FreeCAD中可识别为圆柱、棱柱等标准体素\n")
+    print("Features:")
+    print("  - Use Mesh API to create cylinders")
+    print("  - Export to STEP with curve beautification")
+    print("  - No boolean operations, pure analytical geometry")
+    print("  - Recognizable as standard primitives in FreeCAD\n")
     
     print("[1/6] 清理场景...")
     clear_scene()
@@ -679,8 +679,8 @@ def create_mechanical_demo_scene():
         25, 60,
         segments=32
     )
-    print("   ✓ 实心圆柱体 R25×H60 (Mesh)")
-    print("     → FreeCAD中应显示为完美解析圆柱面")
+    print("   [OK] Solid cylinder R25xH60 (Mesh)")
+    print("     -> Should show as perfect analytical cylinder in FreeCAD")
     
     print("\n[3/6] 创建带斜率的圆柱体...")
     # 创建3°、4°、5°斜率圆柱
@@ -705,8 +705,8 @@ def create_mechanical_demo_scene():
             height,
             segments=32
         )
-        print(f"   ✓ 带{slope_degree}°斜率的圆柱体")
-        print(f"     → 底部半径: {bottom_radius}mm, 顶部半径: {top_radius:.2f}mm")
+        print(f"   [OK] Tapered cylinder with {slope_degree} degree slope")
+        print(f"     -> Bottom radius: {bottom_radius}mm, Top radius: {top_radius:.2f}mm")
     
     print("\n[4/6] 创建45°倒角圆柱...")
     chamfer_cylinder = create_chamfered_cylinder(
@@ -716,11 +716,11 @@ def create_mechanical_demo_scene():
         segments=64
     )
     if chamfer_cylinder:
-        print("   ✓ 45°倒角圆柱体")
-        print("     → 半径: 25mm, 高度: 60mm, 倒角: 3mm")
-        print("     → 导出应为CONICAL_SURFACE")
+        print("   [OK] 45-degree chamfered cylinder")
+        print("     -> Radius: 25mm, Height: 60mm, Chamfer: 3mm")
+        print("     -> Should export as CONICAL_SURFACE")
     else:
-        print("   ✗ 创建45°倒角圆柱失败")
+        print("   [FAIL] Failed to create 45-degree chamfered cylinder")
     
     print("\n[5/6] 创建圆角圆柱...")
     fillet_cylinder = create_fillet_cylinder(
@@ -730,12 +730,12 @@ def create_mechanical_demo_scene():
         segments=64
     )
     if fillet_cylinder:
-        print("   ✓ 圆角圆柱体")
-        print("     → 半径：25mm, 高度：60mm, 圆角半径：6mm")
-        print("     → 导出应为 TOROIDAL_SURFACE")
-        print("     → 解析器自动补偿 1.88 系数")
+        print("   [OK] Fillet cylinder")
+        print("     -> Radius: 25mm, Height: 60mm, Fillet radius: 6mm")
+        print("     -> Should export as TOROIDAL_SURFACE")
+        print("     -> Parser auto-compensates 1.88 factor")
     else:
-        print("   ✗ 创建圆角圆柱失败")
+        print("   [FAIL] Failed to create fillet cylinder")
     
     # 添加一个不同半径的测试圆柱
     print("\n[5b/6] 创建小半径圆角圆柱（验证系数）...")
@@ -746,11 +746,11 @@ def create_mechanical_demo_scene():
         segments=64
     )
     if small_fillet_cylinder:
-        print("   ✓ 小圆角圆柱体")
-        print("     → 半径：15mm, 高度：40mm, 圆角半径：3mm")
-        print("     → 解析器自动补偿 1.88 系数")
+        print("   [OK] Small fillet cylinder")
+        print("     -> Radius: 15mm, Height: 40mm, Fillet radius: 3mm")
+        print("     -> Parser auto-compensates 1.88 factor")
     else:
-        print("   ✗ 创建小圆角圆柱失败")
+        print("   [FAIL] Failed to create small fillet cylinder")
     
     print("\n[5c/6] 创建带圆角和倒角的斜率圆柱...")
     tapered_complex = create_tapered_cylinder_with_fillet_and_chamfer(
@@ -764,12 +764,12 @@ def create_mechanical_demo_scene():
         segments=64
     )
     if tapered_complex:
-        print("   ✓ 带斜率、圆角和倒角的圆柱体")
-        print("     → 底部半径：25mm, 顶部半径：18mm, 高度：80mm")
-        print("     → 顶部圆角半径：5mm, 底部倒角：3mm")
-        print("     → 导出应为复杂解析曲面")
+        print("   [OK] Tapered cylinder with fillet and chamfer")
+        print("     -> Bottom radius: 25mm, Top radius: 18mm, Height: 80mm")
+        print("     -> Top fillet radius: 5mm, Bottom chamfer: 3mm")
+        print("     -> Should export as complex analytical surface")
     else:
-        print("   ✗ 创建带圆角和倒角的斜率圆柱失败")
+        print("   [FAIL] Failed to create tapered cylinder with fillet and chamfer")
     
     print("\n[5d/6] 创建螺孔圆柱...")
     hollow_cylinder = create_hollow_cylinder(
@@ -781,11 +781,11 @@ def create_mechanical_demo_scene():
         segments=64
     )
     if hollow_cylinder:
-        print("   ✓ 螺孔圆柱体")
-        print("     → 外半径：25mm, 内半径：10mm, 高度：60mm")
-        print("     → 导出应为带孔的圆柱体")
+        print("   [OK] Hollow cylinder")
+        print("     -> Outer radius: 25mm, Inner radius: 10mm, Height: 60mm")
+        print("     -> Should export as cylinder with hole")
     else:
-        print("   ✗ 创建螺孔圆柱失败")
+        print("   [FAIL] Failed to create hollow cylinder")
     
     print("\n[5e/6] 创建锥形螺柱（外柱面上小下大，内柱面上大下小）...")
     tapered_hollow = create_tapered_hollow_cylinder(
@@ -799,13 +799,13 @@ def create_mechanical_demo_scene():
         segments=64
     )
     if tapered_hollow:
-        print("   ✓ 锥形螺柱体")
-        print("     → 外柱：底部25mm, 顶部20mm（上小下大）")
-        print("     → 内孔：底部8mm, 顶部12mm（上大下小）")
-        print("     → 高度：60mm")
-        print("     → 导出应为带锥形孔的圆锥体")
+        print("   [OK] Tapered hollow cylinder")
+        print("     -> Outer: bottom 25mm, top 20mm (smaller top, larger bottom)")
+        print("     -> Inner: bottom 8mm, top 12mm (larger top, smaller bottom)")
+        print("     -> Height: 60mm")
+        print("     -> Should export as cone with tapered hole")
     else:
-        print("   ✗ 创建锥形螺柱失败")
+        print("   [FAIL] Failed to create tapered hollow cylinder")
     
     print("\n[6/6] 创建带 2°斜率的参考圆柱...")
     slope_rad = math.radians(2)
@@ -819,36 +819,36 @@ def create_mechanical_demo_scene():
         height,
         segments=32
     )
-    print(f"   ✓ 带2°斜率的圆柱体（参考）")
-    print(f"     → 底部半径: {bottom_radius}mm, 顶部半径: {top_radius:.2f}mm")
+    print(f"   [OK] Tapered cylinder with 2 degree slope (reference)")
+    print(f"     -> Bottom radius: {bottom_radius}mm, Top radius: {top_radius:.2f}mm")
     
     print("\n" + "="*60)
-    print("✓ 机械零件创建完成！（Mesh 版本）")
-    print("  共 11 个物体，全部为 MESH 类型:")
-    print("  1. 实心圆柱体 - 导出为解析圆柱面")
-    print("  2. 3°斜率圆柱 - 导出为解析圆锥面")
-    print("  3. 4°斜率圆柱 - 导出为解析圆锥面")
-    print("  4. 5°斜率圆柱 - 导出为解析圆锥面")
-    print("  5. 45°倒角圆柱 - 导出为 CONICAL_SURFACE")
-    print("  6. 圆角圆柱 - 导出为 TOROIDAL_SURFACE")
-    print("  7. 小圆角圆柱 - 导出为 TOROIDAL_SURFACE")
-    print("  8. 带斜率、圆角和倒角的圆柱 - 导出为复杂解析曲面")
-    print("  9. 螺孔圆柱 - 导出为带孔的圆柱体")
-    print("  10. 锥形螺柱 - 导出为带锥形孔的圆锥体")
-    print("  11. 2°斜率参考圆柱 - 导出为解析圆锥面")
+    print("[OK] Mechanical parts created! (Mesh version)")
+    print("  Total 11 objects, all MESH type:")
+    print("  1. Solid cylinder - exports as analytical cylinder")
+    print("  2. 3-degree tapered cylinder - exports as analytical cone")
+    print("  3. 4-degree tapered cylinder - exports as analytical cone")
+    print("  4. 5-degree tapered cylinder - exports as analytical cone")
+    print("  5. 45-degree chamfered cylinder - exports as CONICAL_SURFACE")
+    print("  6. Fillet cylinder - exports as TOROIDAL_SURFACE")
+    print("  7. Small fillet cylinder - exports as TOROIDAL_SURFACE")
+    print("  8. Tapered cylinder with fillet and chamfer - exports as complex analytical surface")
+    print("  9. Hollow cylinder - exports as cylinder with hole")
+    print("  10. Tapered hollow cylinder - exports as cone with tapered hole")
+    print("  11. 2-degree tapered reference cylinder - exports as analytical cone")
     print("="*60)
-    print("\n下一步：File → Export → STEP (Enhanced)")
-    print("在 FreeCAD 中验证：")
-    print("  - 圆柱面应平滑无分段")
-    print("  - 可测量准确直径/半径")
-    print("  - 物体类型应显示为 'Cylinder' 等")
-    print("  - 视图 → 绘图式样 → 着色，可隐藏接缝边")
+    print("\nNext: File -> Export -> STEP (Enhanced)")
+    print("Verify in FreeCAD:")
+    print("  - Cylinder surfaces should be smooth without segments")
+    print("  - Accurate diameter/radius measurements")
+    print("  - Object type should show as 'Cylinder' etc.")
+    print("  - View -> Draw Style -> Shaded, can hide seam edges")
 
 
 if __name__ == "__main__":
     try:
         create_mechanical_demo_scene()
     except Exception as e:
-        print(f"\n✗ 执行出错: {e}")
+        print(f"\nError executing: {e}")
         import traceback
         traceback.print_exc()

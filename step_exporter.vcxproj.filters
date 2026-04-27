@@ -1,10 +1,67 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
-    <ClCompile Include="F:\git\blender2step\src\step_exporter.cpp">
+    <ClCompile Include="F:\git\blender2step\src\step_exporter_fix_shape.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="F:\git\blender2step\src\step_exporter_create_shape_from_mesh.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="F:\git\blender2step\src\step_exporter_create_solid_from_mesh.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="F:\git\blender2step\src\step_exporter_curve.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="F:\git\blender2step\src\step_exporter_curve_dict.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="F:\git\blender2step\src\step_exporter_curve_poly.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="F:\git\blender2step\src\step_exporter_curve_bezier.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="F:\git\blender2step\src\step_exporter_curve_nurbs.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="F:\git\blender2step\src\step_exporter_curve_common.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="F:\git\blender2step\src\step_exporter_shape_fix.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="F:\git\blender2step\src\step_exporter_export_scene.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="F:\git\blender2step\src\step_exporter_export_enhanced_parse.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="F:\git\blender2step\src\step_exporter_export_enhanced_progress.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="F:\git\blender2step\src\step_exporter_export_enhanced_writer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="F:\git\blender2step\src\step_exporter_export_enhanced_objects.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="F:\git\blender2step\src\step_exporter_export_enhanced_transfer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="F:\git\blender2step\src\step_exporter_export_enhanced.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="F:\git\blender2step\src\step_exporter_incremental.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="F:\git\blender2step\src\step_exporter_module.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="F:\git\blender2step\src\step_converter.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="F:\git\blender2step\src\step_exporter_cylinder_reconstruct.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>

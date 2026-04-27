@@ -1,86 +1,71 @@
-"""
-分析STEP文件中每个对象的尺寸
-"""
-import re
 import sys
+sys.path.insert(0, r'F:\git\blender2step\step_exporter\test')
 
-def parse_step_file(step_file):
-    """解析STEP文件，提取每个对象的几何信息"""
-    with open(step_file, 'r', encoding='utf-8') as f:
-        content = f.read()
-    
-    # 查找所有ADVANCED_BREP_SHAPE_REPRESENTATION
-    # 格式: #10 = ADVANCED_BREP_SHAPE_REPRESENTATION('',(#11,#15),#113);
-    rep_pattern = r'#(\d+)\s*=\s*ADVANCED_BREP_SHAPE_REPRESENTATION\([^,]*,\(([^)]+)\),[^)]+\)'
-    representations = re.findall(rep_pattern, content)
-    
-    objects = []
-    for rep_id, entities_str in representations:
-        # 提取实体ID列表
-        entity_ids = re.findall(r'#(\d+)', entities_str)
-        
-        # 找到MANIFOLD_SOLID_BREP的ID（通常是第二个实体）
-        solid_id = None
-        for eid in entity_ids:
-            if re.search(r'#' + eid + r'\s*=\s*MANIFOLD_SOLID_BREP', content):
-                solid_id = eid
-                break
-        
-        if not solid_id:
-            continue
-        
-        # 查找CLOSED_SHELL
-        shell_match = re.search(r'#' + solid_id + r'\s*=\s*MANIFOLD_SOLID_BREP\([^,]*,#(\d+)\)', content)
-        if not shell_match:
-            continue
-        
-        shell_id = shell_match.group(1)
-        shell_content_match = re.search(r'#' + shell_id + r'\s*=\s*CLOSED_SHELL\([^,]*,\(([^)]+)\)', content)
-        if not shell_content_match:
-            continue
-        
-        faces_str = shell_content_match.group(1)
-        face_ids = re.findall(r'#(\d+)', faces_str)
-        
-        # 分析每个面的类型
-        face_types = []
-        for face_id in face_ids:
-            # 查找ADVANCED_FACE引用的surface ID
-            face_match = re.search(r'#' + face_id + r'\s*=\s*ADVANCED_FACE\([^,]*,[^,]*,#(\d+)', content)
-            if face_match:
-                surface_id = face_match.group(1)
-                # 查找表面类型
-                surface_match = re.search(r'#' + surface_id + r'\s*=\s*(\w+)_SURFACE', content)
-                if surface_match:
-                    face_types.append(surface_match.group(1))
-                else:
-                    face_types.append("UNKNOWN")
-        
-        objects.append({
-            'rep_id': rep_id,
-            'face_count': len(face_ids),
-            'face_types': face_types
-        })
-    
-    return objects
+from OCC.Core.STEPControl import STEPControl_Reader
+from OCC.Core.TopExp import TopExp_Explorer
+from OCC.Core.TopAbs import TopAbs_SOLID, TopAbs_SHELL, TopAbs_FACE
+from OCC.Core.BRep import BRep_Tool
+from OCC.Core.Geom import Geom_CylindricalSurface, Geom_ConicalSurface, Geom_ToroidalSurface, Geom_SurfaceOfRevolution
+from OCC.Core.BRepAdaptor import BRepAdaptor_Surface
+from OCC.Core.gp import gp_Ax2, gp_Circ
 
-def main():
-    if len(sys.argv) < 2:
-        print("用法: python analyze_step.py <step_file>")
-        sys.exit(1)
+def analyze_step_file(filepath):
+    """分析STEP文件中的几何体"""
+    print(f"\n{'='*60}")
+    print(f"Analyzing: {filepath}")
+    print(f"{'='*60}")
     
-    step_file = sys.argv[1]
-    objects = parse_step_file(step_file)
+    reader = STEPControl_Reader()
+    status = reader.ReadFile(filepath)
     
-    print(f"STEP文件: {step_file}")
-    print(f"对象数量: {len(objects)}")
-    print()
+    if status != 1:
+        print(f"ERROR: Failed to read {filepath}")
+        return
     
-    for i, obj in enumerate(objects):
-        print(f"对象 {i+1}:")
-        print(f"  面数量: {obj['face_count']}")
-        print(f"  面类型: {', '.join(obj['face_types'])}")
-        print()
+    reader.TransferRoots()
+    shape = reader.OneShape()
+    
+    # 遍历所有实体
+    exp = TopExp_Explorer(shape, TopAbs_SOLID)
+    solid_count = 0
+    
+    while exp.More():
+        solid_count += 1
+        solid = exp.Current()
+        
+        # 获取实体名称(如果有)
+        print(f"\nSolid {solid_count}:")
+        
+        # 分析面
+        face_exp = TopExp_Explorer(solid, TopAbs_FACE)
+        face_count = 0
+        surface_types = {}
+        
+        while face_exp.More():
+            face_count += 1
+            face = face_exp.Current()
+            surface = BRepAdaptor_Surface(face).Surface()
+            
+            # 判断曲面类型
+            if surface.IsKind(STANDARD_TYPE(Geom_CylindricalSurface)):
+                surface_types['cylinder'] = surface_types.get('cylinder', 0) + 1
+            elif surface.IsKind(STANDARD_TYPE(Geom_ConicalSurface)):
+                surface_types['cone'] = surface_types.get('cone', 0) + 1
+            elif surface.IsKind(STANDARD_TYPE(Geom_ToroidalSurface)):
+                surface_types['torus'] = surface_types.get('torus', 0) + 1
+            elif surface.IsKind(STANDARD_TYPE(Geom_SurfaceOfRevolution)):
+                surface_types['revolution'] = surface_types.get('revolution', 0) + 1
+            else:
+                surface_types['other'] = surface_types.get('other', 0) + 1
+            
+            face_exp.Next()
+        
+        print(f"  Faces: {face_count}")
+        print(f"  Surface types: {surface_types}")
+        
+        exp.Next()
+    
+    print(f"\nTotal solids: {solid_count}")
 
-if __name__ == "__main__":
-    main()
+if __name__ == '__main__':
+    analyze_step_file(r'F:\git\blender2step\step_exporter\test28.step')

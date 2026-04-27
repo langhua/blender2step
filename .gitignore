@@ -25,3 +25,6 @@ build_*.txt
 x64/
 *.code-workspace
 test*.txt
+**/*.tlog
+**/*_log.txt
+step_exporter.dir/

@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <PropertyGroup>
     <PreferredToolArchitecture>x64</PreferredToolArchitecture>
@@ -357,7 +357,11 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
     <ClCompile Include="F:\git\blender2step\src\step_exporter_incremental.cpp" />
     <ClCompile Include="F:\git\blender2step\src\step_exporter_module.cpp" />
     <ClCompile Include="F:\git\blender2step\src\step_converter.cpp" />
+    <ClCompile Include="F:\git\blender2step\src\cylinder\cylinder_geometry.cpp" />
     <ClCompile Include="F:\git\blender2step\src\step_exporter_cylinder_reconstruct.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="F:\git\blender2step\src\cylinder\cylinder_types.h" />
   </ItemGroup>
   <ItemGroup />
   <ItemGroup>

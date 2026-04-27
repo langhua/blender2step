@@ -1,49 +1,7 @@
-// STEP Exporter Cylindrical Face Reconstruction v2
-// 正确识别网格中的圆柱面：基于"点到轴线的等距性"
-//
-// 模块结构说明：
-// - src/cylinder/cylinder_types.h      : 公共数据结构定义 (FaceInfo, CylinderCandidate)
-// - src/cylinder/cylinder_geometry.cpp : 几何工具函数 (法线计算、点到线距离等)
-// - src/step_exporter_cylinder_reconstruct.cpp : 主检测器和形状构建逻辑 (本文件)
-//
-// 未来计划：
-// - 将CylinderDetectorV2类迁移到 cylinder_detector.cpp
-// - 将create_solid_from_mesh_with_cylinders迁移到 cylinder_shape_builder.cpp
-// - 将工具函数迁移到 cylinder_utils.cpp
-
+// Cylinder Detector - Main detection logic for cylindrical faces
 #include "../include/step_exporter_internal.h"
-#include "cylinder/cylinder_types.h"
+#include "cylinder_types.h"
 #include <iomanip>
-
-#include <Geom_CylindricalSurface.hxx>
-#include <Geom_Plane.hxx>
-#include <Geom_ToroidalSurface.hxx>
-#include <BRepBuilderAPI_MakeFace.hxx>
-#include <BRepBuilderAPI_MakeEdge.hxx>
-#include <BRepBuilderAPI_MakeWire.hxx>
-#include <BRepBuilderAPI_MakePolygon.hxx>
-#include <BRepBuilderAPI_MakeSolid.hxx>
-#include <BRepBuilderAPI_Sewing.hxx>
-#include <BRepPrimAPI_MakeCylinder.hxx>
-#include <BRepPrimAPI_MakeCone.hxx>
-#include <BRepPrimAPI_MakeTorus.hxx>
-#include <BRepPrimAPI_MakeRevol.hxx>
-#include <BRepFilletAPI_MakeFillet.hxx>
-#include <Geom_ConicalSurface.hxx>
-#include <Geom_SurfaceOfRevolution.hxx>
-#include <BRepBuilderAPI_MakeShell.hxx>
-#include <BRepAlgoAPI_Fuse.hxx>
-#include <BRepAlgoAPI_Cut.hxx>
-#include <TopExp_Explorer.hxx>
-#include <gp_Circ.hxx>
-#include <gp_Ax2.hxx>
-#include <gp_Ax3.hxx>
-#include <Precision.hxx>
-#include <BRepBndLib.hxx>
-#include <Bnd_Box.hxx>
-#include <BRepTools.hxx>
-#include <TopoDS_Edge.hxx>
-
 #include <cmath>
 #include <algorithm>
 #include <map>
@@ -51,16 +9,9 @@
 #include <set>
 #include <iostream>
 
-
-// ==================== 几何工具 ====================
-// 注意：FaceInfo 和 CylinderCandidate 结构体已移至 cylinder/cylinder_types.h
-// 注意：几何工具函数已移至 cylinder/cylinder_geometry.cpp
-
-// 辅助函数前向声明
+// Forward declarations
 double tol_for(double value);
 double compute_bounding_diagonal(const std::vector<std::vector<double>>& vertices);
-
-// 几何工具函数声明（定义在 cylinder_geometry.cpp 中）
 gp_Vec compute_triangle_normal(const gp_Pnt& p1, const gp_Pnt& p2, const gp_Pnt& p3);
 double compute_triangle_area(const gp_Pnt& p1, const gp_Pnt& p2, const gp_Pnt& p3);
 gp_Pnt compute_triangle_center(const gp_Pnt& p1, const gp_Pnt& p2, const gp_Pnt& p3);
@@ -70,7 +21,6 @@ gp_Pnt calculate_normal_intersection(
     const gp_Vec& normal1, const gp_Pnt& center1,
     const gp_Vec& normal2, const gp_Pnt& center2,
     const gp_Pnt& axis_point, const gp_Dir& axis_dir);
-
 
 // ==================== 圆柱面检测器 v2 ====================
 

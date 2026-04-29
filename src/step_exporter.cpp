@@ -3237,7 +3237,7 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
             }
 
             if (!vertices.empty() && !faces.empty()) {
-                // 使用新的实体创建函数
+                // 使用带圆柱体重构的函数
                 // 确保缝合容差不小于最小值
                 double actual_tolerance = sew_tolerance;
                 std::cout << "[STEP Exporter] DEBUG: Before tolerance check, sew_tolerance=" << sew_tolerance << ", actual_tolerance=" << actual_tolerance << std::endl;
@@ -3246,8 +3246,8 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
                     actual_tolerance = 1.0e-6;
                     std::cout << "[STEP Exporter] DEBUG: After assignment, actual_tolerance=" << actual_tolerance << std::endl;
                 }
-                std::cout << "[STEP Exporter] DEBUG: Calling create_solid_from_mesh with tolerance=" << actual_tolerance << std::endl;
-                TopoDS_Shape shape = create_solid_from_mesh(vertices, faces, actual_tolerance, create_solid, scale);
+                std::cout << "[STEP Exporter] DEBUG: Calling create_solid_from_mesh_with_cylinders with tolerance=" << actual_tolerance << std::endl;
+                TopoDS_Shape shape = create_solid_from_mesh_with_cylinders(vertices, faces, actual_tolerance, create_solid, false, scale);
 
                 if (!shape.IsNull()) {
                     if (fix_geometry) {

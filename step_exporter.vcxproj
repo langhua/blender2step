@@ -358,10 +358,12 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
     <ClCompile Include="F:\git\blender2step\src\step_exporter_module.cpp" />
     <ClCompile Include="F:\git\blender2step\src\step_converter.cpp" />
     <ClCompile Include="F:\git\blender2step\src\cylinder\cylinder_geometry.cpp" />
+    <ClCompile Include="F:\git\blender2step\src\cylinder\cylinder_detector.cpp" />
     <ClCompile Include="F:\git\blender2step\src\step_exporter_cylinder_reconstruct.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="F:\git\blender2step\src\cylinder\cylinder_types.h" />
+    <ClInclude Include="F:\git\blender2step\src\cylinder\cylinder_detector.h" />
   </ItemGroup>
   <ItemGroup />
   <ItemGroup>

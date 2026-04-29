@@ -100,7 +100,10 @@ add_library(step_exporter SHARED
     src/step_converter.cpp
     # Cylinder detection and reconstruction
     src/cylinder/cylinder_types.h
+    src/cylinder/cylinder_detector.h
+    src/cylinder/cylinder_detector.cpp
     src/cylinder/cylinder_geometry.cpp
+    src/cylinder/cylinder_utils.cpp
     src/step_exporter_cylinder_reconstruct.cpp
 )
 

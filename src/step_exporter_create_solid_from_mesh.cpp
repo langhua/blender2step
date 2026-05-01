@@ -19,23 +19,23 @@ TopoDS_Shape create_solid_from_mesh(const std::vector<std::vector<double>>& vert
         // 计算网格的包围盒以调整容差
         double meshBBoxSize = 0.0;
         if (!vertices.empty()) {
-            double xmin = vertices[0][0], ymin = vertices[0][1], zmin = vertices[0][2];
+            double xmin = vertices[0][0]/scale, ymin = vertices[0][1]/scale, zmin = vertices[0][2]/scale;
             double xmax = xmin, ymax = ymin, zmax = zmin;
             
             for (const auto& v : vertices) {
                 if (v.size() >= 3) {
-                    xmin = std::min(xmin, v[0]);
-                    ymin = std::min(ymin, v[1]);
-                    zmin = std::min(zmin, v[2]);
-                    xmax = std::max(xmax, v[0]);
-                    ymax = std::max(ymax, v[1]);
-                    zmax = std::max(zmax, v[2]);
+                    xmin = std::min(xmin, v[0]/scale);
+                    ymin = std::min(ymin, v[1]/scale);
+                    zmin = std::min(zmin, v[2]/scale);
+                    xmax = std::max(xmax, v[0]/scale);
+                    ymax = std::max(ymax, v[1]/scale);
+                    zmax = std::max(zmax, v[2]/scale);
                 }
             }
             
             meshBBoxSize = sqrt(pow(xmax - xmin, 2) + pow(ymax - ymin, 2) + pow(zmax - zmin, 2));
-            std::cout << "[STEP Exporter] Mesh bounding box size: " << meshBBoxSize << std::endl;
-            std::cout << "[STEP Exporter] DEBUG: Bounding box ranges: x[" << xmin << "," << xmax << "] y[" << ymin << "," << ymax << "] z[" << zmin << "," << zmax << "]" << std::endl;
+            std::cout << "[STEP Exporter] Mesh bounding box size (scaled): " << meshBBoxSize << std::endl;
+            std::cout << "[STEP Exporter] DEBUG: Bounding box ranges (scaled): x[" << xmin << "," << xmax << "] y[" << ymin << "," << ymax << "] z[" << zmin << "," << zmax << "]" << std::endl;
         }
         
         // 根据包围盒大小调整容差
@@ -95,12 +95,12 @@ TopoDS_Shape create_solid_from_mesh(const std::vector<std::vector<double>>& vert
         
         std::cout << "[STEP Exporter] DEBUG: faces.size() = " << faces.size() << std::endl;
         if (faces.size() < 500) {
-            toleranceMultiplier = 50.0; // 简单网格，使用较大容差修复非流形边
+            toleranceMultiplier = 10.0; // 简单网格，使用合理容差
 
             allowNonManifold = false;
             std::cout << "[STEP Exporter] DEBUG: Branch 1 (faces < 500)" << std::endl;
         } else if (faces.size() < 2000) {
-            toleranceMultiplier = 15.0; // 中等复杂度网格（如猴头），强制流形几何
+            toleranceMultiplier = 10.0; // 中等复杂度网格（如猴头），强制流形几何
 
             allowNonManifold = false;
             std::cout << "[STEP Exporter] DEBUG: Branch 2 (500 <= faces < 2000)" << std::endl;

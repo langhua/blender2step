@@ -102,6 +102,12 @@ add_library(step_exporter SHARED
     src/cylinder/cylinder_types.h
     src/cylinder/cylinder_detector.h
     src/cylinder/cylinder_detector.cpp
+    src/cylinder/cylinder_face_analyzer.h
+    src/cylinder/cylinder_face_analyzer.cpp
+    src/cylinder/cylinder_cluster_detector.h
+    src/cylinder/cylinder_cluster_detector.cpp
+    src/cylinder/cylinder_deduplicator.h
+    src/cylinder/cylinder_deduplicator.cpp
     src/cylinder/cylinder_geometry.cpp
     src/cylinder/cylinder_utils.cpp
     src/step_exporter_cylinder_reconstruct.cpp

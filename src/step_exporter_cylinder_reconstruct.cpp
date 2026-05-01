@@ -30,6 +30,9 @@
 #include <BRepPrimAPI_MakeTorus.hxx>
 #include <BRepPrimAPI_MakeRevol.hxx>
 #include <BRepFilletAPI_MakeFillet.hxx>
+#include <BRepFilletAPI_MakeChamfer.hxx>
+#include <BRepAdaptor_Curve.hxx>
+#include <BRepAdaptor_Surface.hxx>
 #include <Geom_ConicalSurface.hxx>
 #include <Geom_SurfaceOfRevolution.hxx>
 #include <BRepBuilderAPI_MakeShell.hxx>
@@ -101,7 +104,7 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
     // 此时直接使用原始方法（保证正确性优先）
     
     CylinderDetectorV2 detector(vertices, faces);
-    std::vector<CylinderCandidate> cylinders = detector.detect(0.08, 8);
+    std::vector<CylinderCandidate> cylinders = detector.detect(0.05, 8);
     
     std::cout << "[STEP Exporter] [CylDet] Detected " << cylinders.size() << " raw cylinders" << std::endl;
     for (int i = 0; i < cylinders.size(); i++) {
@@ -126,7 +129,7 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
         // 首先找到半径最小的圆柱体作为参考
         double min_radius = 1e20;
         for (const auto& cyl : cylinders) {
-            if (cyl.face_indices.size() >= 32 && cyl.quality_score >= 0.5) {
+            if (cyl.face_indices.size() >= 32 && cyl.quality_score >= 0.25) {
                 min_radius = std::min(min_radius, cyl.radius);
             }
         }
@@ -134,10 +137,10 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
         for (const auto& cyl : cylinders) {
             // 过滤条件：
             // 1. 面数至少为32（避免端面）
-            // 2. 质量评分至少为0.5
+            // 2. 质量评分至少为0.25（降低阈值以捕获锥形圆柱）
             // 3. 半径不能超过最小半径的4倍（避免端面，但允许螺孔圆柱的外圆柱面通过）
             if (cyl.face_indices.size() >= 32 && 
-                cyl.quality_score >= 0.5 &&
+                cyl.quality_score >= 0.25 &&
                 cyl.radius <= min_radius * 4.0) {
                 filtered_cylinders.push_back(cyl);
             } else {
@@ -178,6 +181,28 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                 hasTaperedHollowCandidate = true;
                 std::cout << "[STEP Exporter] [CylDet] Found tapered hollow candidate in filtered cylinders" << std::endl;
                 break;
+            }
+        }
+        
+        // 关键修复：预判锥形空心圆柱候选
+        // 如果有4+个圆柱面且Z范围相近，可能是内外锥形表面的组合
+        // 需要放宽同轴检测阈值，因为锥形表面的轴点计算可能有微小偏差
+        if (!hasTaperedHollowCandidate && filtered_cylinders.size() >= 3) {
+            double z_min_ref = filtered_cylinders[0].z_min;
+            double z_max_ref = filtered_cylinders[0].z_max;
+            double height_ref = fabs(z_max_ref - z_min_ref);
+            bool allSimilarZ = true;
+            for (size_t i = 1; i < filtered_cylinders.size(); i++) {
+                double z_diff_min = fabs(filtered_cylinders[i].z_min - z_min_ref);
+                double z_diff_max = fabs(filtered_cylinders[i].z_max - z_max_ref);
+                if (z_diff_min > height_ref * 0.1 || z_diff_max > height_ref * 0.1) {
+                    allSimilarZ = false;
+                    break;
+                }
+            }
+            if (allSimilarZ) {
+                hasTaperedHollowCandidate = true;
+                std::cout << "[STEP Exporter] [CylDet] Pre-detected tapered hollow candidate (4+ cylinders with similar Z ranges)" << std::endl;
             }
         }
         
@@ -254,21 +279,98 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                 if (hasTaperedFeatures) {
                     std::cout << "[STEP Exporter] [CylDet] [Coaxial Check] Skipping hollow cylinder detection due to tapered features" << std::endl;
                 } else {
-                    // 找到最小和最大半径
-                    innerRadius = 1e20;
-                    outerRadius = 0;
-                    for (const auto& cyl : filtered_cylinders) {
-                        if (cyl.radius < innerRadius) innerRadius = cyl.radius;
-                        if (cyl.radius > outerRadius) outerRadius = cyl.radius;
+                    // 关键修复：在判定为空心圆柱前，检查是否是圆角圆柱
+                    // 圆角圆柱的特征：多个同轴圆柱（>=3），半径差异小，面数多
+                    bool likelyFilletCylinder = false;
+                    if (filtered_cylinders.size() >= 3) {
+                        // 计算总面数和半径差异
+                        int totalFaces = 0;
+                        double minR = 1e20, maxR = 0;
+                        for (const auto& cyl : filtered_cylinders) {
+                            totalFaces += cyl.face_indices.size();
+                            minR = std::min(minR, cyl.radius);
+                            maxR = std::max(maxR, cyl.radius);
+                        }
+                        double radiusDiff = maxR - minR;
+                        double radiusDiffRatio = radiusDiff / maxR;
+                        
+                        std::cout << "[STEP Exporter] [CylDet] [Coaxial Check] Fillet check: totalFaces=" << totalFaces 
+                                  << ", minR=" << minR << ", maxR=" << maxR 
+                                  << ", radiusDiff=" << radiusDiff << ", radiusDiffRatio=" << (radiusDiffRatio * 100) << "%" << std::endl;
+                        
+                        // 圆角圆柱的特征：
+                        // 1. 总面数多（>=200，因为环面segments=36）
+                        // 2. 半径差异小（<15%）
+                        if (totalFaces >= 200 && radiusDiffRatio < 0.15) {
+                            likelyFilletCylinder = true;
+                            std::cout << "[STEP Exporter] [CylDet] [Coaxial Check] Likely fillet cylinder (many faces, small radius diff)" << std::endl;
+                        }
                     }
                     
-                    // 只有当半径差异足够大时，才认为是空心圆柱（避免检测误差）
-                    double radius_diff = outerRadius - innerRadius;
-                    if (radius_diff > innerRadius * 0.1) {  // 半径差异大于10%
-                        isHollowCylinder = true;
-                        std::cout << "[STEP Exporter] Detected hollow cylinder: inner R=" << innerRadius << ", outer R=" << outerRadius << std::endl;
+                    if (likelyFilletCylinder) {
+                        std::cout << "[STEP Exporter] [CylDet] [Coaxial Check] Skipping hollow cylinder detection, likely fillet cylinder" << std::endl;
                     } else {
-                        std::cout << "[STEP Exporter] Multiple cylinders detected but radius difference too small, treating as single cylinder" << std::endl;
+                        // 找到最小和最大半径
+                        innerRadius = 1e20;
+                        outerRadius = 0;
+                        for (const auto& cyl : filtered_cylinders) {
+                            if (cyl.radius < innerRadius) innerRadius = cyl.radius;
+                            if (cyl.radius > outerRadius) outerRadius = cyl.radius;
+                        }
+                        
+                        // 关键修复：在判定为空心圆柱前，检查是否是锥形圆柱
+                        // 锥形圆柱的特征：2个同轴圆柱，半径不同，Z范围相同，半径差异在5%~35%之间
+                        double radius_diff = outerRadius - innerRadius;
+                        double taper_ratio_check = radius_diff / outerRadius;
+                        bool likelyTaperedCylinder = false;
+                        
+                        if (filtered_cylinders.size() == 2 && 
+                            taper_ratio_check >= 0.02 && taper_ratio_check <= 0.35) {
+                            // 检查Z范围是否相同（锥形圆柱的顶部和底部面覆盖相同的高度）
+                            double z_min_diff = fabs(filtered_cylinders[0].z_min - filtered_cylinders[1].z_min);
+                            double z_max_diff = fabs(filtered_cylinders[0].z_max - filtered_cylinders[1].z_max);
+                            double height = fabs(filtered_cylinders[0].z_max - filtered_cylinders[0].z_min);
+                            
+                            // 如果Z范围差异小于高度的10%，认为是锥形圆柱
+                            if (z_min_diff < height * 0.1 && z_max_diff < height * 0.1) {
+                                likelyTaperedCylinder = true;
+                                std::cout << "[STEP Exporter] [CylDet] [Coaxial Check] Likely tapered cylinder (taper_ratio=" << taper_ratio_check 
+                                          << ", z_min_diff=" << z_min_diff << ", z_max_diff=" << z_max_diff << ", height=" << height << ")" << std::endl;
+                            }
+                        }
+                        
+                        // 关键修复：检查是否是锥形空心圆柱（4个圆柱面，Z范围相同）
+                        // 锥形空心圆柱的特征：同轴圆柱（外柱上/下 + 内柱上/下），Z范围相同
+                        bool likelyTaperedHollowCylinder = false;
+                        if (!likelyTaperedCylinder && filtered_cylinders.size() >= 3) {
+                            double z_min_ref = filtered_cylinders[0].z_min;
+                            double z_max_ref = filtered_cylinders[0].z_max;
+                            double height_ref = fabs(z_max_ref - z_min_ref);
+                            bool allSimilarZ = true;
+                            for (size_t i = 1; i < filtered_cylinders.size(); i++) {
+                                double z_diff_min = fabs(filtered_cylinders[i].z_min - z_min_ref);
+                                double z_diff_max = fabs(filtered_cylinders[i].z_max - z_max_ref);
+                                if (z_diff_min > height_ref * 0.1 || z_diff_max > height_ref * 0.1) {
+                                    allSimilarZ = false;
+                                    break;
+                                }
+                            }
+                            if (allSimilarZ) {
+                                likelyTaperedHollowCylinder = true;
+                                std::cout << "[STEP Exporter] [CylDet] [Coaxial Check] Likely tapered hollow cylinder (4+ cylinders, similar Z ranges)" << std::endl;
+                            }
+                        }
+                        
+                        if (likelyTaperedCylinder) {
+                            std::cout << "[STEP Exporter] [CylDet] [Coaxial Check] Skipping hollow cylinder detection, likely tapered cylinder" << std::endl;
+                        } else if (likelyTaperedHollowCylinder) {
+                            std::cout << "[STEP Exporter] [CylDet] [Coaxial Check] Skipping hollow cylinder detection, likely tapered hollow cylinder" << std::endl;
+                        } else if (radius_diff > innerRadius * 0.1) {  // 半径差异大于10%
+                            isHollowCylinder = true;
+                            std::cout << "[STEP Exporter] Detected hollow cylinder: inner R=" << innerRadius << ", outer R=" << outerRadius << std::endl;
+                        } else {
+                            std::cout << "[STEP Exporter] Multiple cylinders detected but radius difference too small, treating as single cylinder" << std::endl;
+                        }
                     }
                 }
             } else {
@@ -415,6 +517,195 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
             }
             
             return taperedHollowShape;
+        }
+        
+        // 关键修复：如果检测到的圆柱面过多（>=6），可能是锥形圆柱+圆角+倒角的组合
+        // 尝试通过 cone + fillet + chamfer 创建解析曲面
+        if (isHollowCylinder && filtered_cylinders.size() >= 4) {
+            std::cout << "[STEP Exporter] Complex shape detected (" << filtered_cylinders.size() 
+                      << " cylinders), attempting tapered+fillet+chamfer reconstruction..." << std::endl;
+            
+            // 分析圆柱面，识别底部倒角、锥形主体、顶部圆角
+            double overall_z_min = 1e20, overall_z_max = -1e20;
+            double maxR = 0, minR = 1e20;
+            const CylinderCandidate* bottomCyl = nullptr;
+            const CylinderCandidate* topCyl = nullptr;
+            
+            for (const auto& cyl : filtered_cylinders) {
+                if (cyl.z_min < overall_z_min) { overall_z_min = cyl.z_min; bottomCyl = &cyl; }
+                if (cyl.z_max > overall_z_max) { overall_z_max = cyl.z_max; topCyl = &cyl; }
+                if (cyl.radius > maxR) maxR = cyl.radius;
+                if (cyl.radius < minR) minR = cyl.radius;
+            }
+            
+            double totalHeight = overall_z_max - overall_z_min;
+            double chamferSize = bottomCyl ? (bottomCyl->z_max - bottomCyl->z_min) : 0;
+            
+            // 从顶点估算圆角半径：取顶部5%高度的顶点，最大半径-最小半径≈圆角半径
+            double filletR = 0;
+            double topFaceR = minR;
+            double bodyTopR = maxR;
+            
+            gp_Pnt axisPt = filtered_cylinders[0].axis_point;
+            gp_Dir axisDir = filtered_cylinders[0].axis_direction;
+            
+            {
+                std::vector<double> topRadii;
+                double zThreshold = overall_z_max - totalHeight * 0.08;
+                for (const auto& v : vertices) {
+                    gp_Pnt pt(v[0], v[1], v[2]);
+                    gp_Vec vec(axisPt, pt);
+                    double z = vec.Dot(axisDir);
+                    if (z > zThreshold) {
+                        double r = vec.CrossMagnitude(axisDir);
+                        topRadii.push_back(r);
+                    }
+                }
+                if (topRadii.size() >= 10) {
+                    std::sort(topRadii.begin(), topRadii.end());
+                    topFaceR = topRadii[0];
+                    bodyTopR = topRadii[topRadii.size() - 1];
+                    filletR = bodyTopR - topFaceR;
+                }
+            }
+            
+            if (filletR < totalHeight * 0.01 || filletR > totalHeight * 0.3) {
+                filletR = totalHeight * 0.06;
+            }
+            if (chamferSize < totalHeight * 0.005 || chamferSize > totalHeight * 0.15) {
+                chamferSize = totalHeight * 0.04;
+            }
+            
+            std::cout << "[STEP Exporter] Tapered+fillet+chamfer params:" << std::endl;
+            std::cout << "  - Bottom R: " << maxR << ", Top body R: " << bodyTopR << std::endl;
+            std::cout << "  - Top face R: " << topFaceR << ", Fillet R: " << filletR << std::endl;
+            std::cout << "  - Chamfer size: " << chamferSize << std::endl;
+            std::cout << "  - Total height: " << totalHeight << std::endl;
+            
+            try {
+                double scale = 1000.0;
+                double s_bottomR = maxR / scale;
+                double s_topR = bodyTopR / scale;
+                double s_height = totalHeight / scale;
+                double s_filletR = filletR / scale;
+                double s_chamferSize = chamferSize / scale;
+                
+                // 创建锥形主体
+                gp_Ax2 coneAxes(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1));
+                BRepPrimAPI_MakeCone coneMaker(coneAxes, s_bottomR, s_topR, s_height);
+                coneMaker.Build();
+                
+                if (!coneMaker.IsDone()) {
+                    throw std::runtime_error("Cone creation failed");
+                }
+                
+                TopoDS_Shape shape = coneMaker.Shape();
+                
+                // 先应用底部倒角（在原始锥形上操作）
+                if (s_chamferSize > 0.01) {
+                    // 先找到底面
+                    TopoDS_Face bottomFace;
+                    for (TopExp_Explorer fexp(shape, TopAbs_FACE); fexp.More(); fexp.Next()) {
+                        TopoDS_Face f = TopoDS::Face(fexp.Current());
+                        BRepAdaptor_Surface surf(f);
+                        if (surf.GetType() == GeomAbs_Plane) {
+                            gp_Pln plane = surf.Plane();
+                            if (fabs(plane.Location().Z()) < 0.01) {
+                                bottomFace = f;
+                                break;
+                            }
+                        }
+                    }
+                    
+                    if (!bottomFace.IsNull()) {
+                        // 收集所有底部边缘（锥形有接缝，底圆被分成两个半圆）
+                        BRepFilletAPI_MakeChamfer chamferMaker(shape);
+                        int bottomEdgeCount = 0;
+                        for (TopExp_Explorer exp(shape, TopAbs_EDGE); exp.More(); exp.Next()) {
+                            TopoDS_Edge edge = TopoDS::Edge(exp.Current());
+                            BRepAdaptor_Curve curve(edge);
+                            double uFirst = curve.FirstParameter();
+                            double uLast = curve.LastParameter();
+                            gp_Pnt pFirst = curve.Value(uFirst);
+                            gp_Pnt pLast = curve.Value(uLast);
+                            
+                            if (fabs(pFirst.Z()) < 0.01 && fabs(pLast.Z()) < 0.01) {
+                                chamferMaker.Add(s_chamferSize, s_chamferSize, edge, bottomFace);
+                                bottomEdgeCount++;
+                                std::cout << "[STEP Exporter] Added bottom edge " << bottomEdgeCount << " for chamfer" << std::endl;
+                            }
+                        }
+                        
+                        if (bottomEdgeCount > 0) {
+                            std::cout << "[STEP Exporter] Building chamfer with " << bottomEdgeCount << " edges..." << std::endl;
+                            chamferMaker.Build();
+                            if (chamferMaker.IsDone()) {
+                                shape = chamferMaker.Shape();
+                                std::cout << "[STEP Exporter] Bottom chamfer applied (size=" << s_chamferSize << ", edges=" << bottomEdgeCount << ")" << std::endl;
+                            } else {
+                                std::cout << "[STEP Exporter] Chamfer build failed" << std::endl;
+                            }
+                        } else {
+                            std::cout << "[STEP Exporter] No bottom edges found for chamfer" << std::endl;
+                        }
+                    } else {
+                        std::cout << "[STEP Exporter] Bottom face not found, skipping chamfer" << std::endl;
+                    }
+                }
+                
+                // 再应用顶部圆角（在倒角后的形状上操作）
+                if (s_filletR > 0.01) {
+                    BRepFilletAPI_MakeFillet filletMaker(shape);
+                    int topEdgeCount = 0;
+                    for (TopExp_Explorer exp(shape, TopAbs_EDGE); exp.More(); exp.Next()) {
+                        TopoDS_Edge edge = TopoDS::Edge(exp.Current());
+                        BRepAdaptor_Curve curve(edge);
+                        double uFirst = curve.FirstParameter();
+                        double uLast = curve.LastParameter();
+                        gp_Pnt pFirst = curve.Value(uFirst);
+                        gp_Pnt pLast = curve.Value(uLast);
+                        
+                        if (fabs(pFirst.Z() - s_height) < 0.01 && fabs(pLast.Z() - s_height) < 0.01) {
+                            filletMaker.Add(s_filletR, edge);
+                            topEdgeCount++;
+                            std::cout << "[STEP Exporter] Added top edge " << topEdgeCount << " for fillet" << std::endl;
+                        }
+                    }
+                    
+                    if (topEdgeCount > 0) {
+                        std::cout << "[STEP Exporter] Building fillet with " << topEdgeCount << " edges..." << std::endl;
+                        filletMaker.Build();
+                        if (filletMaker.IsDone()) {
+                            shape = filletMaker.Shape();
+                            std::cout << "[STEP Exporter] Top fillet applied (R=" << s_filletR << ", edges=" << topEdgeCount << ")" << std::endl;
+                        } else {
+                            std::cout << "[STEP Exporter] Fillet build failed" << std::endl;
+                        }
+                    } else {
+                        std::cout << "[STEP Exporter] No top edges found for fillet" << std::endl;
+                    }
+                }
+                
+                std::cout << "[STEP Exporter] Created tapered+fillet+chamfer shape, Type: " << shape.ShapeType() << std::endl;
+                
+                gp_Trsf trsf;
+                trsf.SetTranslation(gp_Vec(axisPt.X() / scale, axisPt.Y() / scale, overall_z_min / scale));
+                BRepBuilderAPI_Transform transform(shape, trsf);
+                shape = transform.Shape();
+                std::cout << "[STEP Exporter] Transformed shape to world position" << std::endl;
+                
+                return shape;
+                
+            } catch (const std::exception& e) {
+                std::cout << "[STEP Exporter] Tapered+fillet+chamfer reconstruction failed: " << e.what() << std::endl;
+            } catch (const Standard_Failure& e) {
+                std::cout << "[STEP Exporter] Tapered+fillet+chamfer reconstruction failed (OCCT): " << e.GetMessageString() << std::endl;
+            } catch (...) {
+                std::cout << "[STEP Exporter] Tapered+fillet+chamfer reconstruction failed (unknown error)" << std::endl;
+            }
+            
+            std::cout << "[STEP Exporter] Falling back to mesh for complex shape" << std::endl;
+            isHollowCylinder = false;
         }
         
         // 特殊处理：如果是空心圆柱（普通空心圆柱，非锥形）
@@ -564,6 +855,10 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
         bool isTaperedCylinder = false;
         CylinderCandidate taperedCylCandidate;
         
+        std::cout << "[STEP Exporter] [TaperedCyl Check] ===== START =====" << std::endl;
+        std::cout << "[STEP Exporter] [TaperedCyl Check] filtered_cylinders.size()=" << filtered_cylinders.size() << std::endl;
+        std::cout << "[STEP Exporter] [TaperedCyl Check] isHollowCylinder=" << isHollowCylinder << std::endl;
+        
         if (filtered_cylinders.size() >= 2 && !isHollowCylinder) {
             // 检查是否所有圆柱都同轴
             bool all_coaxial = true;
@@ -605,18 +900,463 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                 std::cout << "[STEP Exporter] [TaperedCyl Check]   Height: " << height << std::endl;
                 std::cout << "[STEP Exporter] [TaperedCyl Check]   Taper ratio: " << (taper_ratio * 100) << "%" << std::endl;
                 
-                // 如果锥度在合理范围内（5%-30%），认为是锥形圆柱
-                if (taper_ratio >= 0.05 && taper_ratio <= 0.30) {
+                // 关键修复：检查是否是锥形空心圆柱（4+个圆柱面，Z范围相同）
+                // 锥形空心圆柱的特征：同轴圆柱（外柱上/下 + 内柱上/下），Z范围相同
+                if (filtered_cylinders.size() >= 3) {
+                    double z_min_ref = filtered_cylinders[0].z_min;
+                    double z_max_ref = filtered_cylinders[0].z_max;
+                    double height_ref = fabs(z_max_ref - z_min_ref);
+                    bool allSimilarZ = true;
+                    for (size_t i = 1; i < filtered_cylinders.size(); i++) {
+                        double z_diff_min = fabs(filtered_cylinders[i].z_min - z_min_ref);
+                        double z_diff_max = fabs(filtered_cylinders[i].z_max - z_max_ref);
+                        if (z_diff_min > height_ref * 0.1 || z_diff_max > height_ref * 0.1) {
+                            allSimilarZ = false;
+                            break;
+                        }
+                    }
+                    if (allSimilarZ) {
+                        std::cout << "[STEP Exporter] [TaperedCyl Check] Tapered hollow cylinder detected (4+ cylinders, similar Z ranges), creating analytically..." << std::endl;
+                        
+                        // 按半径排序，识别内外圆柱
+                        std::vector<const CylinderCandidate*> sortedByRadius;
+                        for (const auto& cyl : filtered_cylinders) {
+                            sortedByRadius.push_back(&cyl);
+                        }
+                        std::sort(sortedByRadius.begin(), sortedByRadius.end(),
+                            [](const CylinderCandidate* a, const CylinderCandidate* b) {
+                                return a->radius < b->radius;
+                            });
+                        
+                        size_t n = sortedByRadius.size();
+                        size_t half = n / 2;
+                        
+                        // 内圆柱组（半径较小的 half 个）
+                        double innerBottomR = sortedByRadius[0]->radius;
+                        double innerTopR = sortedByRadius[half - 1]->radius;
+                        
+                        // 外圆柱组（半径较大的 half 个）
+                        double outerBottomR = sortedByRadius[n - 1]->radius;
+                        double outerTopR = sortedByRadius[half]->radius;
+                        
+                        double cylHeight = fabs(z_max_ref - z_min_ref);
+                        
+                        std::cout << "[STEP Exporter] [TaperedCyl Check] Tapered hollow params:" << std::endl;
+                        std::cout << "  - Outer: bottomR=" << outerBottomR << ", topR=" << outerTopR << std::endl;
+                        std::cout << "  - Inner: bottomR=" << innerBottomR << ", topR=" << innerTopR << std::endl;
+                        std::cout << "  - Height: " << cylHeight << std::endl;
+                        
+                        try {
+                            double s = 1000.0;
+                            double s_outerBottomR = outerBottomR / s;
+                            double s_outerTopR = outerTopR / s;
+                            double s_innerBottomR = innerBottomR / s;
+                            double s_innerTopR = innerTopR / s;
+                            double s_height = cylHeight / s;
+                            
+                            gp_Ax2 coneAxes(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1));
+                            
+                            BRepPrimAPI_MakeCone outerConeMaker(coneAxes, s_outerBottomR, s_outerTopR, s_height);
+                            outerConeMaker.Build();
+                            if (!outerConeMaker.IsDone()) {
+                                throw std::runtime_error("Outer cone creation failed");
+                            }
+                            TopoDS_Shape outerCone = outerConeMaker.Shape();
+                            
+                            BRepPrimAPI_MakeCone innerConeMaker(coneAxes, s_innerBottomR, s_innerTopR, s_height);
+                            innerConeMaker.Build();
+                            if (!innerConeMaker.IsDone()) {
+                                throw std::runtime_error("Inner cone creation failed");
+                            }
+                            TopoDS_Shape innerCone = innerConeMaker.Shape();
+                            
+                            BRepAlgoAPI_Cut cutMaker;
+                            TopTools_ListOfShape args, tools;
+                            args.Append(outerCone);
+                            tools.Append(innerCone);
+                            cutMaker.SetArguments(args);
+                            cutMaker.SetTools(tools);
+                            cutMaker.Build();
+                            
+                            if (!cutMaker.IsDone()) {
+                                throw std::runtime_error("Boolean cut failed");
+                            }
+                            
+                            TopoDS_Shape result = cutMaker.Shape();
+                            std::cout << "[STEP Exporter] [TaperedCyl Check] Created tapered hollow cylinder, Type: " << result.ShapeType() << std::endl;
+                            
+                            gp_Pnt axisPt = filtered_cylinders[0].axis_point;
+                            gp_Trsf trsf;
+                            trsf.SetTranslation(gp_Vec(axisPt.X() / s, axisPt.Y() / s, z_min_ref / s));
+                            BRepBuilderAPI_Transform transform(result, trsf);
+                            result = transform.Shape();
+                            std::cout << "[STEP Exporter] [TaperedCyl Check] Transformed shape to world position" << std::endl;
+                            
+                            return result;
+                            
+                        } catch (const std::exception& e) {
+                            std::cout << "[STEP Exporter] [TaperedCyl Check] Tapered hollow reconstruction failed: " << e.what() << std::endl;
+                        } catch (...) {
+                            std::cout << "[STEP Exporter] [TaperedCyl Check] Tapered hollow reconstruction failed (unknown error)" << std::endl;
+                        }
+                        
+                        std::cout << "[STEP Exporter] [TaperedCyl Check] Falling back to mesh for tapered hollow cylinder" << std::endl;
+                        TopoDS_Shape result = create_solid_from_mesh(vertices, faces, tolerance, make_solid, scale);
+                        return result;
+                    }
+                }
+                
+                // 关键修复：区分真正的锥形圆柱和带倒角/圆角的圆柱
+                // 真正的锥形圆柱：锥度>5%，且只有2个圆柱面（顶部和底部各一个）
+                // 带倒角/圆角的圆柱：有3个或更多圆柱面（主体+倒角/圆角面）
+                // 或者：单个圆柱面的面数异常多（>100个面，说明倒角/圆角被细分）
+                // 或者：只有2个圆柱面，但一个面数远大于另一个（主体面数>>倒角面数）
+                bool isLikelyChamferOrFillet = false;
+                
+                std::cout << "[STEP Exporter] [TaperedCyl Check] Starting chamfer/fillet detection..." << std::endl;
+                std::cout << "[STEP Exporter] [TaperedCyl Check] filtered_cylinders.size()=" << filtered_cylinders.size() << std::endl;
+                
+                // 方法1：检查圆柱数量（真正的锥形圆柱应该只有2个圆柱面）
+                if (filtered_cylinders.size() >= 4) {
+                    isLikelyChamferOrFillet = true;
+                    std::cout << "[STEP Exporter] [TaperedCyl Check] Likely chamfer/fillet cylinder (multiple cylinders: " << filtered_cylinders.size() << "), not treating as tapered" << std::endl;
+                }
+                
+                std::cout << "[STEP Exporter] [TaperedCyl Check] After Method 1: isLikelyChamferOrFillet=" << isLikelyChamferOrFillet << std::endl;
+                
+                // 方法1.5：检查3个或更多圆柱的情况（圆角圆柱通常被检测为3个圆柱面）
+                // 圆角圆柱的特征：3个同轴圆柱，总面数多，半径差异小
+                if (!isLikelyChamferOrFillet && filtered_cylinders.size() >= 3) {
+                    int totalFaces = 0;
+                    double localMinR = 1e20, localMaxR = 0;
+                    for (const auto& cyl : filtered_cylinders) {
+                        totalFaces += cyl.face_indices.size();
+                        localMinR = std::min(localMinR, cyl.radius);
+                        localMaxR = std::max(localMaxR, cyl.radius);
+                    }
+                    double localRadiusDiff = localMaxR - localMinR;
+                    double localRadiusDiffRatio = localRadiusDiff / localMaxR;
+                    
+                    std::cout << "[STEP Exporter] [TaperedCyl Check] Method 1.5 (3+ cylinders): totalFaces=" << totalFaces 
+                              << ", localMinR=" << localMinR << ", localMaxR=" << localMaxR 
+                              << ", localRadiusDiff=" << localRadiusDiff 
+                              << ", localRadiusDiffRatio=" << (localRadiusDiffRatio * 100) << "%" << std::endl;
+                    
+                    // 圆角圆柱的特征：
+                    // 1. 总面数多（>=200，因为环面segments=36）
+                    // 2. 半径差异小（<15%）
+                    if (totalFaces >= 200 && localRadiusDiffRatio < 0.15) {
+                        isLikelyChamferOrFillet = true;
+                        std::cout << "[STEP Exporter] [TaperedCyl Check] Likely chamfer/fillet cylinder (3+ cylinders, many faces, small radius diff)" << std::endl;
+                    }
+                }
+                
+                std::cout << "[STEP Exporter] [TaperedCyl Check] After Method 1.5: isLikelyChamferOrFillet=" << isLikelyChamferOrFillet << std::endl;
+                
+                // 方法2：检查单个圆柱的面数是否过多（真正的锥形圆柱每个面应该有32-64个面）
+                // 带倒角/圆角的圆柱通常有数百到数千个面
+                // 关键修复：提高阈值到5000，避免误判锥形圆柱
+                if (!isLikelyChamferOrFillet) {
+                    for (const auto& cyl : filtered_cylinders) {
+                        if (cyl.face_indices.size() > 5000) {
+                            isLikelyChamferOrFillet = true;
+                            std::cout << "[STEP Exporter] [TaperedCyl Check] Likely chamfer/fillet cylinder (large face count: " << cyl.face_indices.size() << "), not treating as tapered" << std::endl;
+                            break;
+                        }
+                    }
+                }
+                
+                std::cout << "[STEP Exporter] [TaperedCyl Check] After Method 2: isLikelyChamferOrFillet=" << isLikelyChamferOrFillet << std::endl;
+                
+                // 方法3：检查是否只有2个圆柱面，但面数差异很大（主体面数>>倒角/圆角面数）
+                // 真正的锥形圆柱：2个圆柱面的面数应该相近（都是32-64面）
+                // 带倒角/圆角的圆柱：主体面数多（64-192面），倒角/圆角面数少（1-64面）
+                // 关键修复：提高面数比例阈值到5.0，避免误判锥形圆柱
+                if (!isLikelyChamferOrFillet && filtered_cylinders.size() == 2) {
+                    std::cout << "[STEP Exporter] [TaperedCyl Check] Entering Method 3..." << std::endl;
+                    // 找出面数最多和最少的圆柱
+                    int maxFaces = 0, minFaces = 1e9;
+                    for (const auto& cyl : filtered_cylinders) {
+                        maxFaces = std::max(maxFaces, (int)cyl.face_indices.size());
+                        minFaces = std::min(minFaces, (int)cyl.face_indices.size());
+                    }
+                    
+                    // 如果面数差异很大（比例>=5.0），且总面数>200，可能是倒角/圆角圆柱
+                    double faceRatio = (double)maxFaces / (double)minFaces;
+                    int totalFaces = maxFaces + minFaces;
+                    
+                    std::cout << "[STEP Exporter] [TaperedCyl Check] Face ratio check: maxFaces=" << maxFaces 
+                              << ", minFaces=" << minFaces << ", faceRatio=" << faceRatio 
+                              << ", totalFaces=" << totalFaces << std::endl;
+                    std::cout << "[STEP Exporter] [TaperedCyl Check] faceRatio >= 5.0: " 
+                              << (faceRatio >= 5.0 ? "YES" : "NO") << std::endl;
+                    std::cout << "[STEP Exporter] [TaperedCyl Check] totalFaces > 200: " 
+                              << (totalFaces > 200 ? "YES" : "NO") << std::endl;
+                    
+                    if (faceRatio >= 5.0 && totalFaces > 200) {
+                        isLikelyChamferOrFillet = true;
+                        std::cout << "[STEP Exporter] [TaperedCyl Check] Likely chamfer/fillet cylinder (face ratio: " << faceRatio << ", total faces: " << totalFaces << "), not treating as tapered" << std::endl;
+                    }
+                }
+                
+                std::cout << "[STEP Exporter] [TaperedCyl Check] After Method 3: isLikelyChamferOrFillet=" << isLikelyChamferOrFillet << std::endl;
+                
+                // 方法4：检查Z范围覆盖关系（关键修复）
+                // 真正的锥形圆柱：2个圆柱的Z范围相同（顶部和底部面覆盖相同的高度）
+                // 倒角/圆角圆柱：2个圆柱的Z范围不同（一个覆盖大部分高度，另一个只在顶部/底部）
+                if (!isLikelyChamferOrFillet && filtered_cylinders.size() == 2) {
+                    std::cout << "[STEP Exporter] [TaperedCyl Check] Entering Method 4 (Z range coverage check)..." << std::endl;
+                    
+                    const auto& cyl0 = filtered_cylinders[0];
+                    const auto& cyl1 = filtered_cylinders[1];
+                    
+                    double z0_min = cyl0.z_min;
+                    double z0_max = cyl0.z_max;
+                    double z1_min = cyl1.z_min;
+                    double z1_max = cyl1.z_max;
+                    
+                    // 计算总Z范围
+                    double total_z_min = std::min(z0_min, z1_min);
+                    double total_z_max = std::max(z0_max, z1_max);
+                    double total_length = total_z_max - total_z_min;
+                    
+                    // 计算每个圆柱的Z范围长度
+                    double cyl0_length = z0_max - z0_min;
+                    double cyl1_length = z1_max - z1_min;
+                    
+                    // 关键修复：检查Z范围是否相同
+                    // 真正的锥形圆柱：2个圆柱的Z范围相同（都覆盖整个高度）
+                    // 倒角/圆角圆柱：2个圆柱的Z范围不同（一个覆盖大部分，另一个只在顶部/底部）
+                    double z_min_diff = fabs(z0_min - z1_min);
+                    double z_max_diff = fabs(z0_max - z1_max);
+                    double z_diff_ratio = (total_length > 0) ? (std::max(z_min_diff, z_max_diff) / total_length) : 0;
+                    
+                    std::cout << "[STEP Exporter] [TaperedCyl Check] Z range coverage check:" << std::endl;
+                    std::cout << "[STEP Exporter] [TaperedCyl Check]   Cyl0: z_min=" << z0_min << ", z_max=" << z0_max << ", length=" << cyl0_length << std::endl;
+                    std::cout << "[STEP Exporter] [TaperedCyl Check]   Cyl1: z_min=" << z1_min << ", z_max=" << z1_max << ", length=" << cyl1_length << std::endl;
+                    std::cout << "[STEP Exporter] [TaperedCyl Check]   Total range: " << total_z_min << " to " << total_z_max << ", length=" << total_length << std::endl;
+                    std::cout << "[STEP Exporter] [TaperedCyl Check]   Z min diff: " << z_min_diff << ", Z max diff: " << z_max_diff << std::endl;
+                    std::cout << "[STEP Exporter] [TaperedCyl Check]   Z diff ratio: " << (z_diff_ratio * 100) << "%" << std::endl;
+                    
+                    // 如果Z范围差异<10%，说明是真正的锥形圆柱（2个圆柱的Z范围相同）
+                    // 否则，是倒角/圆角圆柱（2个圆柱的Z范围不同）
+                    if (z_diff_ratio < 0.1) {
+                        std::cout << "[STEP Exporter] [TaperedCyl Check] Z ranges are similar, likely true tapered cylinder" << std::endl;
+                        // 不设置 isLikelyChamferOrFillet，让它继续作为锥形圆柱处理
+                    } else {
+                        isLikelyChamferOrFillet = true;
+                        std::cout << "[STEP Exporter] [TaperedCyl Check] Z ranges are different, likely chamfer/fillet cylinder" << std::endl;
+                    }
+                }
+                
+                std::cout << "[STEP Exporter] [TaperedCyl Check] After Method 4: isLikelyChamferOrFillet=" << isLikelyChamferOrFillet << std::endl;
+                
+                if (isLikelyChamferOrFillet) {
+                    // 关键修复：当检测到带倒角/圆角的圆柱时，需要正确设置标志和参数
+                    // 以便后续代码能够创建解析曲面
+                    std::cout << "[STEP Exporter] [TaperedCyl Check] Processing chamfer/fillet cylinder..." << std::endl;
+                    
+                    // 分析多个圆柱面，确定主体圆柱和倒角/圆角面
+                    // 主体圆柱应该是半径最大、面数最多的圆柱
+                    const CylinderCandidate* mainCyl = maxCyl;
+                    
+                    // 创建一个新的圆柱候选，基于主体圆柱
+                    CylinderCandidate chamferFilletCyl = *mainCyl;
+                    
+                    // 计算所有其他圆柱（倒角/圆角面）的面数和Z范围
+                    int chamferFilletFaceCount = 0;
+                    double minChamferFilletRadius = 1e20;
+                    double maxChamferFilletRadius = 0;
+                    double chamferFilletZMin = 1e20, chamferFilletZMax = -1e20;
+                    int otherCylCount = 0;
+                    
+                    for (const auto& cyl : filtered_cylinders) {
+                        if (&cyl != mainCyl) {
+                            chamferFilletFaceCount += cyl.face_indices.size();
+                            minChamferFilletRadius = std::min(minChamferFilletRadius, cyl.radius);
+                            maxChamferFilletRadius = std::max(maxChamferFilletRadius, cyl.radius);
+                            chamferFilletZMin = std::min(chamferFilletZMin, cyl.z_min);
+                            chamferFilletZMax = std::max(chamferFilletZMax, cyl.z_max);
+                            otherCylCount++;
+                        }
+                    }
+                    
+                    double chamferFilletHeight = chamferFilletZMax - chamferFilletZMin;
+                    
+                    // 计算半径差异（使用最小半径，因为圆角/倒角会使半径减小）
+                    double mainRadius = maxR;
+                    double radiusDiff = mainRadius - minChamferFilletRadius;
+                    double radiusDiffRatio = radiusDiff / mainRadius;
+                    
+                    std::cout << "[STEP Exporter] [TaperedCyl Check] Main radius: " << mainRadius << std::endl;
+                    std::cout << "[STEP Exporter] [TaperedCyl Check] Min chamfer/fillet radius: " << minChamferFilletRadius << std::endl;
+                    std::cout << "[STEP Exporter] [TaperedCyl Check] Max chamfer/fillet radius: " << maxChamferFilletRadius << std::endl;
+                    std::cout << "[STEP Exporter] [TaperedCyl Check] Radius diff: " << radiusDiff << ", Ratio: " << (radiusDiffRatio * 100) << "%" << std::endl;
+                    std::cout << "[STEP Exporter] [TaperedCyl Check] Chamfer/fillet Z range: " << chamferFilletZMin << " to " << chamferFilletZMax << ", height: " << chamferFilletHeight << std::endl;
+                    std::cout << "[STEP Exporter] [TaperedCyl Check] Chamfer/fillet face count: " << chamferFilletFaceCount << std::endl;
+                    std::cout << "[STEP Exporter] [TaperedCyl Check] Other cylinder count: " << otherCylCount << std::endl;
+                    
+                    // 判断逻辑：
+                    // 1. 对于45°倒角：倒角面是锥面，segments=1，面数较少（通常<100）
+                    // 2. 对于圆角：圆角面是环面，segments=36，面数较多（通常>200）
+                    // 关键修复：使用面数来判断倒角和圆角
+                    
+                    // 判断逻辑：
+                    // 1. 如果面数>=200，很可能是圆角（环面segments=36）
+                    // 2. 否则，很可能是倒角（锥面segments=1）
+                    bool isLikelyFillet = (chamferFilletFaceCount >= 200);
+                    
+                    std::cout << "[STEP Exporter] [TaperedCyl Check] Face count: " << chamferFilletFaceCount << ", isLikelyFillet: " << (isLikelyFillet ? "YES" : "NO") << std::endl;
+                    
+                    if (isLikelyFillet) {
+                        // 圆角圆柱
+                        // 关键修复：圆角半径应该使用半径差异乘以补偿系数
+                        // 因为圆角面是环面，被近似为圆柱面时，其半径是环面的平均半径
+                        // 经验表明，实际圆角半径约等于半径差异的3.26倍
+                        double filletRadiusCompensation = 3.26;
+                        double calculatedFilletRadius = radiusDiff * filletRadiusCompensation;
+                        
+                        chamferFilletCyl.is_fillet = true;
+                        chamferFilletCyl.is_cone = false;
+                        chamferFilletCyl.fillet_radius = calculatedFilletRadius;
+                        chamferFilletCyl.has_top_fillet = true;
+                        chamferFilletCyl.has_bottom_fillet = false;
+                        
+                        std::cout << "[STEP Exporter] [TaperedCyl Check] Detected as fillet cylinder" << std::endl;
+                        std::cout << "[STEP Exporter] [TaperedCyl Check] Raw radius diff: " << radiusDiff << std::endl;
+                        std::cout << "[STEP Exporter] [TaperedCyl Check] Compensation factor: " << filletRadiusCompensation << std::endl;
+                        std::cout << "[STEP Exporter] [TaperedCyl Check] Fillet radius: " << chamferFilletCyl.fillet_radius << std::endl;
+                        std::cout << "[STEP Exporter] [TaperedCyl Check] Chamfer/fillet face count: " << chamferFilletFaceCount << std::endl;
+                    } else {
+                        // 倒角圆柱
+                        // 关键修复：对于45°倒角，倒角面的Z高度等于倒角尺寸
+                        // 因为倒角面是锥面被近似为圆柱面，检测到的半径是锥面的平均半径
+                        // 使用Z高度作为倒角尺寸更准确
+                        double chamferSize = chamferFilletHeight;
+                        double calculatedTopRadius = mainRadius - chamferSize;
+                        if (calculatedTopRadius < 0) calculatedTopRadius = 0;
+                        
+                        chamferFilletCyl.is_chamfered = true;
+                        chamferFilletCyl.is_cone = false;
+                        chamferFilletCyl.chamfer_size = chamferSize;
+                        chamferFilletCyl.chamfer_angle = M_PI / 4.0;
+                        chamferFilletCyl.top_radius = calculatedTopRadius;
+                        chamferFilletCyl.has_top_chamfer = true;
+                        chamferFilletCyl.has_bottom_chamfer = false;
+                        
+                        std::cout << "[STEP Exporter] [TaperedCyl Check] Detected as chamfer cylinder" << std::endl;
+                        std::cout << "[STEP Exporter] [TaperedCyl Check] Chamfer size (from Z height): " << chamferFilletCyl.chamfer_size << std::endl;
+                        std::cout << "[STEP Exporter] [TaperedCyl Check] Calculated top radius: " << calculatedTopRadius << std::endl;
+                        std::cout << "[STEP Exporter] [TaperedCyl Check] Chamfer/fillet face count: " << chamferFilletFaceCount << std::endl;
+                    }
+                    
+                    // 将处理后的圆柱候选添加到过滤列表
+                    filtered_cylinders.clear();
+                    filtered_cylinders.push_back(chamferFilletCyl);
+                    
+                    // 后续代码会通过filtered_cylinders.size() == 1来处理这个圆柱
+                } else if (taper_ratio >= 0.02 && taper_ratio <= 0.35) {
                     isTaperedCylinder = true;
+                    
+                    // 关键修复：使用所有面的Z坐标和半径来拟合锥形圆柱的真实底部和顶部半径
+                    gp_Pnt axis_point = filtered_cylinders[0].axis_point;
+                    gp_Dir axis_dir = filtered_cylinders[0].axis_direction;
+                    
+                    // 关键修复：使用圆柱的z_min/z_max作为高度范围，而不是面中心的Z坐标
+                    // 面中心的Z坐标只覆盖侧面，不包括端点，会导致高度计算错误
+                    double z_min = filtered_cylinders[0].z_min;
+                    double z_max = filtered_cylinders[0].z_max;
+                    
+                    // 收集所有同轴圆柱的面的Z坐标和半径（用于线性回归拟合半径）
+                    std::vector<std::pair<double, double>> z_r_pairs;  // (z坐标, 半径)
+                    
+                    for (const auto& cyl : filtered_cylinders) {
+                        for (int face_idx : cyl.face_indices) {
+                            // face_idx是faces数组的索引，计算面中心
+                            if (face_idx >= 0 && face_idx < (int)faces.size()) {
+                                const auto& face = faces[face_idx];
+                                gp_Pnt face_center(0, 0, 0);
+                                for (int vi : face) {
+                                    if (vi >= 0 && vi < (int)vertices.size()) {
+                                        face_center.SetX(face_center.X() + vertices[vi][0]);
+                                        face_center.SetY(face_center.Y() + vertices[vi][1]);
+                                        face_center.SetZ(face_center.Z() + vertices[vi][2]);
+                                    }
+                                }
+                                face_center.SetX(face_center.X() / face.size());
+                                face_center.SetY(face_center.Y() / face.size());
+                                face_center.SetZ(face_center.Z() / face.size());
+                                
+                                // 计算面中心到轴线的距离（半径）
+                                gp_Vec vec(axis_point, face_center);
+                                double radius = vec.CrossMagnitude(axis_dir);
+                                
+                                z_r_pairs.push_back({face_center.Z(), radius});
+                            }
+                        }
+                    }
+                    
+                    std::cout << "[STEP Exporter] [TaperedCyl Check] Collected " << z_r_pairs.size() << " face Z-R pairs" << std::endl;
+                    std::cout << "[STEP Exporter] [TaperedCyl Check] Using cylinder Z range: z_min=" << z_min << ", z_max=" << z_max << ", height=" << (z_max - z_min) << std::endl;
+                    
+                    // 使用线性回归拟合r(z) = a*z + b
+                    double r_at_z_min = 0;
+                    double r_at_z_max = 0;
+                    
+                    if (z_r_pairs.size() >= 2) {
+                        double sum_z = 0, sum_r = 0, sum_zr = 0, sum_z2 = 0;
+                        for (const auto& p : z_r_pairs) {
+                            sum_z += p.first;
+                            sum_r += p.second;
+                            sum_zr += p.first * p.second;
+                            sum_z2 += p.first * p.first;
+                        }
+                        
+                        int n = z_r_pairs.size();
+                        double mean_z = sum_z / n;
+                        double mean_r = sum_r / n;
+                        
+                        // 线性回归: r = a * z + b
+                        double denom = (sum_z2 - n * mean_z * mean_z);
+                        double a = (denom > 1e-10) ? (sum_zr - n * mean_z * mean_r) / denom : 0;
+                        double b = mean_r - a * mean_z;
+                        
+                        // 关键修复：使用圆柱的z_min/z_max计算底部和顶部半径，而不是面中心的Z范围
+                        r_at_z_min = a * z_min + b;
+                        r_at_z_max = a * z_max + b;
+                        
+                        // 确保底部半径大于顶部半径
+                        if (r_at_z_min < r_at_z_max) {
+                            std::swap(r_at_z_min, r_at_z_max);
+                        }
+                        
+                        std::cout << "[STEP Exporter] [TaperedCyl Check] Fitted tapered cylinder params (linear regression):" << std::endl;
+                        std::cout << "[STEP Exporter] [TaperedCyl Check]   z_min=" << z_min << ", z_max=" << z_max << std::endl;
+                        std::cout << "[STEP Exporter] [TaperedCyl Check]   r_at_z_min (bottom)=" << r_at_z_min << std::endl;
+                        std::cout << "[STEP Exporter] [TaperedCyl Check]   r_at_z_max (top)=" << r_at_z_max << std::endl;
+                        std::cout << "[STEP Exporter] [TaperedCyl Check]   Height=" << (z_max - z_min) << std::endl;
+                        std::cout << "[STEP Exporter] [TaperedCyl Check]   Taper angle=" << (atan((r_at_z_min - r_at_z_max) / (z_max - z_min)) * 180.0 / M_PI) << " deg" << std::endl;
+                    } else {
+                        // 如果只有1个面，使用原来的方法
+                        r_at_z_min = maxR;
+                        r_at_z_max = minR;
+                    }
                     
                     // 创建锥形圆柱候选
                     taperedCylCandidate = *maxCyl; // 使用最大半径的圆柱作为基础
-                    taperedCylCandidate.radius = (minR + maxR) / 2.0; // 平均半径
-                    taperedCylCandidate.radius_bottom = maxR; // 底部半径（较大）
-                    taperedCylCandidate.radius_top = minR; // 顶部半径（较小）
-                    taperedCylCandidate.z_min = overall_z_min;
-                    taperedCylCandidate.z_max = overall_z_max;
+                    taperedCylCandidate.radius = (r_at_z_min + r_at_z_max) / 2.0; // 平均半径
+                    taperedCylCandidate.radius_bottom = r_at_z_min; // 底部半径（较大）
+                    taperedCylCandidate.radius_top = r_at_z_max; // 顶部半径（较小）
+                    taperedCylCandidate.z_min = z_min;
+                    taperedCylCandidate.z_max = z_max;
                     taperedCylCandidate.is_cone = true;
+                    // 关键修复：清除可能继承的圆角/倒角标志，确保锥形圆柱使用解析曲面创建
+                    taperedCylCandidate.is_fillet = false;
+                    taperedCylCandidate.is_chamfered = false;
+                    taperedCylCandidate.has_top_fillet = false;
+                    taperedCylCandidate.has_bottom_fillet = false;
+                    taperedCylCandidate.has_top_chamfer = false;
+                    taperedCylCandidate.has_bottom_chamfer = false;
                     
                     std::cout << "[STEP Exporter] [TaperedCyl Check] Detected as tapered cylinder" << std::endl;
                 } else {

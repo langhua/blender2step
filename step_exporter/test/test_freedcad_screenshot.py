@@ -18,19 +18,43 @@ try:
     import FreeCAD
     import FreeCADGui
     import Import
+    import Part
     
     # 创建新文档
     doc = FreeCAD.newDocument("Test")
     
-    # 导入STEP文件
-    Import.insert(step_file, doc.Name)
-    doc.recompute()
+    # 导入STEP文件 - 尝试使用Part模块
+    print('Importing STEP file using Part module...')
+    try:
+        shape = Part.Shape()
+        shape.read(step_file)
+        doc.addObject('Part::Feature', 'ImportedShape').Shape = shape
+        doc.recompute()
+        print('Successfully imported using Part module')
+    except Exception as e1:
+        print(f'Part module import failed: {e1}')
+        print('Trying Import module...')
+        try:
+            Import.insert(step_file, doc.Name)
+            doc.recompute()
+            print('Successfully imported using Import module')
+        except Exception as e2:
+            print(f'Import module also failed: {e2}')
+            raise
     
     objects = doc.Objects
     print(f'Found {len(objects)} objects')
+    for obj in objects:
+        print(f'  Object: {obj.Name}, Type: {obj.TypeId}')
+        if hasattr(obj, 'LinkedObject') and obj.LinkedObject:
+            print(f'    -> Linked to: {obj.LinkedObject.Name}')
     
-    # 获取视图
-    view = FreeCADGui.ActiveDocument.ActiveView
+    # 获取视图 - 处理FreeCADCmd模式
+    try:
+        view = FreeCADGui.ActiveDocument.ActiveView
+    except AttributeError:
+        print('FreeCADGui.ActiveDocument not available, trying alternative method...')
+        view = FreeCADGui.getDocument(doc.Name).ActiveView
     
     # 设置等轴测视图
     print('Setting axonometric view...')
@@ -45,25 +69,51 @@ try:
     
     # 设置显示模式为着色
     for obj in doc.Objects:
-        if hasattr(obj, 'ViewObject'):
-            # 尝试多种显示模式
+        if hasattr(obj, 'ViewObject') and obj.ViewObject:
+            # 处理Link对象
+            actual_obj = obj
+            if hasattr(obj, 'LinkedObject') and obj.LinkedObject:
+                actual_obj = obj.LinkedObject
+                print(f'  Using linked object: {actual_obj.Name}')
+            
+            # 获取可用的显示模式
             try:
-                obj.ViewObject.DisplayMode = "Shaded"
-            except:
-                try:
-                    obj.ViewObject.DisplayMode = "Flat Lines"
-                except:
-                    obj.ViewObject.DisplayMode = "Gouraud"
+                if hasattr(actual_obj, 'ViewObject') and actual_obj.ViewObject:
+                    modes = actual_obj.ViewObject.listDisplayModes()
+                    print(f'Available display modes for {actual_obj.Name}: {modes}')
+                    # 优先选择 Shaded 模式以显示光滑的解析曲面
+                    chosen_mode = None
+                    for mode in ['Shaded', 'Flat Lines', 'Gouraud', 'Shaded with edges', 'Hidden line', 'Wireframe']:
+                        if mode in modes:
+                            chosen_mode = mode
+                            break
+                    if chosen_mode is None and len(modes) > 0:
+                        chosen_mode = modes[0]
+                    
+                    if chosen_mode:
+                        actual_obj.ViewObject.DisplayMode = chosen_mode
+                        print(f'Set display mode to: {chosen_mode}')
+            except Exception as e:
+                print(f'Warning: Failed to set display mode for {actual_obj.Name}: {e}')
             
             # 设置材质颜色（浅蓝色）
-            obj.ViewObject.ShapeColor = (0.4, 0.6, 0.8)
-            # 设置透明度
-            obj.ViewObject.Transparency = 0
-            # 隐藏边线
-            obj.ViewObject.LineWidth = 0.0
-            obj.ViewObject.LineColor = (0.2, 0.2, 0.2)
+            try:
+                if hasattr(actual_obj, 'ViewObject') and actual_obj.ViewObject:
+                    actual_obj.ViewObject.ShapeColor = (0.4, 0.6, 0.8)
+                    actual_obj.ViewObject.Transparency = 0
+            except Exception as e:
+                print(f'Warning: Failed to set shape color for {actual_obj.Name}: {e}')
+            # 隐藏边线 - 关键修复：将LineWidth设为0并设置LineColor与ShapeColor相同
+            try:
+                obj.ViewObject.LineWidth = 0.0
+                obj.ViewObject.LineColor = (0.4, 0.6, 0.8)  # 与ShapeColor相同，使边线不可见
+            except Exception as e:
+                print(f'Warning: Failed to set line properties for {obj.Name}: {e}')
             # 启用光照
-            obj.ViewObject.Lighting = "One side"
+            try:
+                obj.ViewObject.Lighting = "One side"
+            except Exception as e:
+                print(f'Warning: Failed to set lighting for {obj.Name}: {e}')
     
     # 等待渲染完成
     print('Waiting for rendering...')

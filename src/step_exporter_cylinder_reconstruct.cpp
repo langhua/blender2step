@@ -75,7 +75,133 @@ gp_Pnt calculate_normal_intersection(
     const gp_Vec& normal2, const gp_Pnt& center2,
     const gp_Pnt& axis_point, const gp_Dir& axis_dir);
 
+static gp_Pnt compute_base_point_from_axis(const gp_Pnt& axis_point, const gp_Dir& axis_dir, double z_coord)
+{
+    if (fabs(axis_dir.Z()) > 0.9) {
+        return gp_Pnt(axis_point.X(), axis_point.Y(), z_coord);
+    } else if (fabs(axis_dir.X()) > 0.9) {
+        return gp_Pnt(z_coord, axis_point.Y(), axis_point.Z());
+    } else {
+        return gp_Pnt(axis_point.X(), z_coord, axis_point.Z());
+    }
+}
 
+static gp_Pnt apply_scale(const gp_Pnt& pt, double scale)
+{
+    return gp_Pnt(pt.X() / scale, pt.Y() / scale, pt.Z() / scale);
+}
+
+static double compute_axis_coordinate(const gp_Pnt& axis_point, const gp_Dir& axis_dir, const gp_Pnt& pt)
+{
+    gp_Vec vec(axis_point, pt);
+    return vec.Dot(axis_dir);
+}
+
+static TopoDS_Shape create_cylinder_solid(const gp_Pnt& basePoint, const gp_Dir& axisDir, double radius, double height)
+{
+    gp_Ax2 ax2(basePoint, axisDir);
+    BRepPrimAPI_MakeCylinder maker(ax2, radius, height);
+    return maker.Solid();
+}
+
+static TopoDS_Shape create_cone_solid(const gp_Pnt& basePoint, const gp_Dir& axisDir, double bottomR, double topR, double height)
+{
+    gp_Ax2 ax2(basePoint, axisDir);
+    BRepPrimAPI_MakeCone maker(ax2, bottomR, topR, height);
+    return maker.Solid();
+}
+
+static TopoDS_Shape create_hollow_shape_via_cut(const TopoDS_Shape& outerShape, const TopoDS_Shape& innerShape)
+{
+    BRepAlgoAPI_Cut cutMaker;
+    TopTools_ListOfShape args, tools;
+    args.Append(outerShape);
+    tools.Append(innerShape);
+    cutMaker.SetArguments(args);
+    cutMaker.SetTools(tools);
+    cutMaker.Build();
+    if (!cutMaker.IsDone()) {
+        return TopoDS_Shape();
+    }
+    return cutMaker.Shape();
+}
+
+static TopoDS_Shape try_convert_compound_to_solid(const TopoDS_Shape& shape)
+{
+    if (shape.ShapeType() != TopAbs_COMPOUND) {
+        return shape;
+    }
+    BRepBuilderAPI_Sewing sewer(1e-6);
+    sewer.Add(shape);
+    sewer.Perform();
+    TopoDS_Shape sewnShape = sewer.SewedShape();
+    if (!sewnShape.IsNull()) {
+        return sewnShape;
+    }
+    return shape;
+}
+
+static TopoDS_Solid try_make_solid_from_shell(const TopoDS_Shape& shape)
+{
+    if (shape.ShapeType() != TopAbs_SHELL) {
+        if (shape.ShapeType() == TopAbs_SOLID) {
+            return TopoDS::Solid(shape);
+        }
+        return TopoDS_Solid();
+    }
+    BRepBuilderAPI_MakeSolid solidMaker(TopoDS::Shell(shape));
+    if (solidMaker.IsDone()) {
+        return solidMaker.Solid();
+    }
+    return TopoDS_Solid();
+}
+
+static TopoDS_Face create_circular_face(const gp_Pnt& center, const gp_Dir& normal, double radius)
+{
+    gp_Circ circle(gp_Ax2(center, normal), radius);
+    BRepBuilderAPI_MakeEdge edge(circle);
+    BRepBuilderAPI_MakeWire wire(edge.Edge());
+    return BRepBuilderAPI_MakeFace(wire.Wire());
+}
+
+static TopoDS_Face create_cylindrical_face(const gp_Pnt& basePoint, const gp_Dir& axisDir, double radius, double height)
+{
+    gp_Ax3 cylAxis(basePoint, axisDir);
+    Handle(Geom_CylindricalSurface) cylSurface = new Geom_CylindricalSurface(cylAxis, radius);
+    return BRepBuilderAPI_MakeFace(cylSurface, 0.0, 2.0 * M_PI, 0.0, height, Precision::Confusion());
+}
+
+static TopoDS_Face create_conical_face(const gp_Pnt& basePoint, const gp_Dir& axisDir, double r1, double r2, double height)
+{
+    gp_Ax3 coneAxis(basePoint, axisDir);
+    double semi_angle = atan2(r1 - r2, height);
+    Handle(Geom_ConicalSurface) coneSurface = new Geom_ConicalSurface(coneAxis, semi_angle, r1);
+    return BRepBuilderAPI_MakeFace(coneSurface, 0.0, 2.0 * M_PI, 0.0, height, Precision::Confusion());
+}
+
+static TopoDS_Shape revolve_profile_wire(const TopoDS_Wire& profileWire, const gp_Pnt& worldPos)
+{
+    BRepBuilderAPI_MakeFace profileFaceMaker(profileWire, Standard_True);
+    if (!profileFaceMaker.IsDone()) {
+        return TopoDS_Shape();
+    }
+    TopoDS_Face profileFace = profileFaceMaker.Face();
+
+    gp_Ax1 rotationAxis(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1));
+    BRepPrimAPI_MakeRevol revolMaker(profileFace, rotationAxis, 2.0 * M_PI, Standard_True);
+
+    if (!revolMaker.IsDone()) {
+        return TopoDS_Shape();
+    }
+
+    TopoDS_Shape result = revolMaker.Shape();
+
+    gp_Trsf transform;
+    transform.SetTranslation(gp_Vec(worldPos.X(), worldPos.Y(), worldPos.Z()));
+    result.Move(transform);
+
+    return result;
+}
 
 
 // ==================== 创建带圆柱面的实体 ====================
@@ -483,37 +609,19 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                 return result;
             }
             
-            // 从外锥形柱体中减去内锥形柱体
-            BRepAlgoAPI_Cut cutMaker;
-            cutMaker.SetArguments(TopTools_ListOfShape());
-            cutMaker.SetTools(TopTools_ListOfShape());
-            TopTools_ListOfShape shapesToCutFrom;
-            shapesToCutFrom.Append(outerCone);
-            TopTools_ListOfShape shapesToSubtract;
-            shapesToSubtract.Append(innerCone);
-            cutMaker.SetArguments(shapesToCutFrom);
-            cutMaker.SetTools(shapesToSubtract);
-            cutMaker.Build();
-            
-            if (!cutMaker.IsDone()) {
+            TopoDS_Shape hollowShape = create_hollow_shape_via_cut(outerCone, innerCone);
+            if (hollowShape.IsNull()) {
                 std::cout << "[STEP Exporter] Boolean operation failed for tapered hollow cylinder, falling back to mesh method" << std::endl;
                 TopoDS_Shape result = create_solid_from_mesh(vertices, faces, tolerance, make_solid, scale);
                 return result;
             }
             
-            TopoDS_Shape taperedHollowShape = cutMaker.Shape();
+            TopoDS_Shape taperedHollowShape = hollowShape;
             std::cout << "[STEP Exporter] ✓ Created tapered hollow cylinder, Type: " << taperedHollowShape.ShapeType() << std::endl;
             
             // 如果结果是COMPOUND，尝试转换为SOLID
             if (taperedHollowShape.ShapeType() == TopAbs_COMPOUND) {
-                BRepBuilderAPI_Sewing sewer(1e-6);
-                sewer.Add(taperedHollowShape);
-                sewer.Perform();
-                TopoDS_Shape sewnShape = sewer.SewedShape();
-                if (!sewnShape.IsNull()) {
-                    std::cout << "[STEP Exporter] Sewn tapered hollow cylinder, new Type: " << sewnShape.ShapeType() << std::endl;
-                    taperedHollowShape = sewnShape;
-                }
+                taperedHollowShape = try_convert_compound_to_solid(taperedHollowShape);
             }
             
             return taperedHollowShape;
@@ -813,37 +921,17 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                     return result;
                 }
                 
-                // 从外圆柱体中减去内圆柱体
-                BRepAlgoAPI_Cut cutMaker;
-                cutMaker.SetArguments(TopTools_ListOfShape());
-                cutMaker.SetTools(TopTools_ListOfShape());
-                TopTools_ListOfShape shapesToCutFrom;
-                shapesToCutFrom.Append(outerCylinder);
-                TopTools_ListOfShape shapesToSubtract;
-                shapesToSubtract.Append(innerCylinder);
-                cutMaker.SetArguments(shapesToCutFrom);
-                cutMaker.SetTools(shapesToSubtract);
-                cutMaker.Build();
-                
-                if (!cutMaker.IsDone()) {
+                TopoDS_Shape hollowCyl = create_hollow_shape_via_cut(outerCylinder, innerCylinder);
+                if (hollowCyl.IsNull()) {
                     std::cout << "[STEP Exporter] Boolean operation failed, falling back to mesh method" << std::endl;
                     TopoDS_Shape result = create_solid_from_mesh(vertices, faces, tolerance, make_solid, scale);
                     return result;
                 }
-                
-                TopoDS_Shape hollowCyl = cutMaker.Shape();
                 std::cout << "[STEP Exporter] ✓ Created hollow cylinder (tube), Type: " << hollowCyl.ShapeType() << std::endl;
                 
                 // 如果结果是COMPOUND，尝试转换为SOLID
                 if (hollowCyl.ShapeType() == TopAbs_COMPOUND) {
-                    BRepBuilderAPI_Sewing sewer(1e-6);
-                    sewer.Add(hollowCyl);
-                    sewer.Perform();
-                    TopoDS_Shape sewnShape = sewer.SewedShape();
-                    if (!sewnShape.IsNull()) {
-                        std::cout << "[STEP Exporter] Sewn hollow cylinder, new Type: " << sewnShape.ShapeType() << std::endl;
-                        hollowCyl = sewnShape;
-                    }
+                    hollowCyl = try_convert_compound_to_solid(hollowCyl);
                 }
                 
                 return hollowCyl;
@@ -970,19 +1058,10 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                             }
                             TopoDS_Shape innerCone = innerConeMaker.Shape();
                             
-                            BRepAlgoAPI_Cut cutMaker;
-                            TopTools_ListOfShape args, tools;
-                            args.Append(outerCone);
-                            tools.Append(innerCone);
-                            cutMaker.SetArguments(args);
-                            cutMaker.SetTools(tools);
-                            cutMaker.Build();
-                            
-                            if (!cutMaker.IsDone()) {
+                            TopoDS_Shape result = create_hollow_shape_via_cut(outerCone, innerCone);
+                            if (result.IsNull()) {
                                 throw std::runtime_error("Boolean cut failed");
                             }
-                            
-                            TopoDS_Shape result = cutMaker.Shape();
                             std::cout << "[STEP Exporter] [TaperedCyl Check] Created tapered hollow cylinder, Type: " << result.ShapeType() << std::endl;
                             
                             gp_Pnt axisPt = filtered_cylinders[0].axis_point;
@@ -1764,31 +1843,11 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                         
                         TopoDS_Wire profileWire = profileWireMaker.Wire();
                         
-                        // 创建面
-                        BRepBuilderAPI_MakeFace profileFaceMaker(profileWire, Standard_True);
-                        
-                        if (!profileFaceMaker.IsDone()) {
-                            std::cout << "[STEP Exporter] ⚠ Failed to create profile face, falling back to mesh method" << std::endl;
-                            throw Standard_Failure("Failed to create profile face");
-                        }
-                        
-                        TopoDS_Face profileFace = profileFaceMaker.Face();
-                        
-                        // 绕Z轴旋转360度创建实体
-                        gp_Ax1 rotationAxis(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1));
-                        BRepPrimAPI_MakeRevol revolMaker(profileFace, rotationAxis, 2 * M_PI, Standard_True);
-                        
-                        if (!revolMaker.IsDone()) {
+                        TopoDS_Shape chamferCylinder = revolve_profile_wire(profileWire, basePoint);
+                        if (chamferCylinder.IsNull()) {
                             std::cout << "[STEP Exporter] ⚠ Failed to create revolution, falling back to mesh method" << std::endl;
                             throw Standard_Failure("Failed to create revolution");
                         }
-                        
-                        TopoDS_Shape chamferCylinder = revolMaker.Shape();
-                        
-                        // 将旋转后的实体移动到正确位置
-                        gp_Trsf transform;
-                        transform.SetTranslation(gp_Vec(basePoint.X(), basePoint.Y(), basePoint.Z()));
-                        chamferCylinder.Move(transform);
                         
                         std::cout << "[STEP Exporter] Debug: Revolution shape type: " 
                                   << (chamferCylinder.ShapeType() == TopAbs_SOLID ? "SOLID" : 
@@ -1824,9 +1883,8 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                         
                         // 如果旋转创建的不是实体，尝试转换为实体
                         if (chamferCylinder.ShapeType() == TopAbs_SHELL) {
-                            BRepBuilderAPI_MakeSolid solidMaker(TopoDS::Shell(chamferCylinder));
-                            if (solidMaker.IsDone()) {
-                                TopoDS_Solid solid = solidMaker.Solid();
+                            TopoDS_Solid solid = try_make_solid_from_shell(chamferCylinder);
+                            if (!solid.IsNull()) {
                                 GProp_GProps props;
                                 BRepGProp::VolumeProperties(solid, props);
                                 double volume = fabs(props.Mass());
@@ -1983,30 +2041,10 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                                 
                                 TopoDS_Wire profileWire = profileWireMaker.Wire();
                                 
-                                // 创建面
-                                BRepBuilderAPI_MakeFace profileFaceMaker(profileWire, Standard_True);
-                                if (!profileFaceMaker.IsDone()) {
-                                    std::cout << "[STEP Exporter] ⚠ Failed to create profile face" << std::endl;
-                                    throw std::runtime_error("Profile face creation failed");
-                                }
-                                
-                                TopoDS_Face profileFace = profileFaceMaker.Face();
-                                
                                 std::cout << "[STEP Exporter] ✓ Created profile face" << std::endl;
                                 
-                                // 绕 Z 轴旋转 360 度创建实体
-                                gp_Ax1 rotationAxis(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1));
-                                BRepPrimAPI_MakeRevol revolMaker(profileFace, rotationAxis, 2 * M_PI, Standard_True);
-                                
-                                if (revolMaker.IsDone()) {
-                                    TopoDS_Shape taperedShape = revolMaker.Shape();
-                                    
-                                    // 应用位置变换
-                                    gp_Pnt originalBasePoint = scaled_cone_bottom_point;
-                                    gp_Trsf transform;
-                                    transform.SetTranslation(gp_Vec(originalBasePoint.X(), originalBasePoint.Y(), originalBasePoint.Z()));
-                                    taperedShape.Move(transform);
-                                    
+                                TopoDS_Shape taperedShape = revolve_profile_wire(profileWire, scaled_cone_bottom_point);
+                                if (!taperedShape.IsNull()) {
                                     if (taperedShape.ShapeType() == TopAbs_SOLID) {
                                         GProp_GProps props;
                                         BRepGProp::VolumeProperties(taperedShape, props);
@@ -2014,9 +2052,8 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                                         std::cout << "[STEP Exporter] ✓ Created tapered cylinder via revolution (Volume: " << volume << ")" << std::endl;
                                         return taperedShape;
                                     } else if (taperedShape.ShapeType() == TopAbs_SHELL) {
-                                        BRepBuilderAPI_MakeSolid solidMaker(TopoDS::Shell(taperedShape));
-                                        if (solidMaker.IsDone()) {
-                                            TopoDS_Solid solid = solidMaker.Solid();
+                                        TopoDS_Solid solid = try_make_solid_from_shell(taperedShape);
+                                        if (!solid.IsNull()) {
                                             GProp_GProps props;
                                             BRepGProp::VolumeProperties(solid, props);
                                             double volume = fabs(props.Mass());
@@ -2070,29 +2107,15 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                                 }
                                 
                                 TopoDS_Wire profileWire = profileWireMaker.Wire();
-                                BRepBuilderAPI_MakeFace profileFaceMaker(profileWire, Standard_True);
-                                if (!profileFaceMaker.IsDone()) {
-                                    throw std::runtime_error("Profile face creation failed");
-                                }
                                 
-                                TopoDS_Face profileFace = profileFaceMaker.Face();
-                                
-                                gp_Ax1 rotationAxis(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1));
-                                BRepPrimAPI_MakeRevol revolMaker(profileFace, rotationAxis, 2 * M_PI, Standard_True);
-                                
-                                if (revolMaker.IsDone()) {
-                                    TopoDS_Shape taperedShape = revolMaker.Shape();
-                                    gp_Pnt originalBasePoint = scaled_cone_bottom_point;
-                                    gp_Trsf transform;
-                                    transform.SetTranslation(gp_Vec(originalBasePoint.X(), originalBasePoint.Y(), originalBasePoint.Z()));
-                                    taperedShape.Move(transform);
-                                    
+                                TopoDS_Shape taperedShape = revolve_profile_wire(profileWire, scaled_cone_bottom_point);
+                                if (!taperedShape.IsNull()) {
                                     if (taperedShape.ShapeType() == TopAbs_SOLID) {
                                         return taperedShape;
                                     } else if (taperedShape.ShapeType() == TopAbs_SHELL) {
-                                        BRepBuilderAPI_MakeSolid solidMaker(TopoDS::Shell(taperedShape));
-                                        if (solidMaker.IsDone()) {
-                                            return solidMaker.Solid();
+                                        TopoDS_Solid solid = try_make_solid_from_shell(taperedShape);
+                                        if (!solid.IsNull()) {
+                                            return solid;
                                         }
                                     }
                                 }
@@ -2609,9 +2632,8 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                                             }
                                             
                                             if (!shell.IsNull()) {
-                                                BRepBuilderAPI_MakeSolid solidMaker(shell);
-                                                if (solidMaker.IsDone()) {
-                                                    TopoDS_Solid solid = solidMaker.Solid();
+                                                TopoDS_Solid solid = try_make_solid_from_shell(shell);
+                                                if (!solid.IsNull()) {
                                                     // 验证体积
                                                     GProp_GProps props;
                                                     BRepGProp::VolumeProperties(solid, props);
@@ -2671,17 +2693,7 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                     // 方法2: 使用Geom_CylindricalSurface和BRepBuilderAPI_MakeFace创建完整的圆柱体
                     std::cout << "[STEP Exporter] Method 2: Using Geom_CylindricalSurface..." << std::endl;
                     try {
-                        // 创建圆柱坐标系
-                        gp_Ax3 cylAxis(scaled_bottom_point, cyl.axis_direction);
-                        Handle(Geom_CylindricalSurface) cylSurface = new Geom_CylindricalSurface(cylAxis, scaled_radius);
-                        
-                        // 创建圆柱面（从0到2π，从0到scaled_height）
-                        Standard_Real u1 = 0.0;
-                        Standard_Real u2 = 2.0 * M_PI;
-                        Standard_Real v1 = 0.0;
-                        Standard_Real v2 = scaled_height;
-                        
-                        TopoDS_Face cylFace = BRepBuilderAPI_MakeFace(cylSurface, u1, u2, v1, v2, Precision::Confusion());
+                        TopoDS_Face cylFace = create_cylindrical_face(scaled_bottom_point, cyl.axis_direction, scaled_radius, scaled_height);
                         
                         if (!cylFace.IsNull()) {
                             std::cout << "[STEP Exporter] ✓ Created cylindrical face (Method 2)" << std::endl;
@@ -2903,43 +2915,27 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                         } else {
                             TopoDS_Wire profileWire = profileWireMaker.Wire();
                             
-                            BRepBuilderAPI_MakeFace profileFaceMaker(profileWire, Standard_True);
-                            if (!profileFaceMaker.IsDone()) {
-                                std::cout << "[STEP Exporter] Failed to create profile face" << std::endl;
-                            } else {
-                                TopoDS_Face profileFace = profileFaceMaker.Face();
-                                
-                                gp_Ax1 rotationAxis(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1));
-                                BRepPrimAPI_MakeRevol revolMaker(profileFace, rotationAxis, 2 * M_PI, Standard_True);
-                                
-                                if (revolMaker.IsDone()) {
-                                    TopoDS_Shape taperedShape = revolMaker.Shape();
-                                    
-                                    gp_Trsf transform;
-                                    transform.SetTranslation(gp_Vec(originalBasePoint.X(), originalBasePoint.Y(), originalBasePoint.Z()));
-                                    taperedShape.Move(transform);
-                                    
-                                    if (taperedShape.ShapeType() == TopAbs_SOLID) {
+                            TopoDS_Shape taperedShape = revolve_profile_wire(profileWire, originalBasePoint);
+                            if (!taperedShape.IsNull()) {
+                                if (taperedShape.ShapeType() == TopAbs_SOLID) {
+                                    GProp_GProps props;
+                                    BRepGProp::VolumeProperties(taperedShape, props);
+                                    double volume = fabs(props.Mass());
+                                    std::cout << "[STEP Exporter] ✓ Created tapered cylinder with fillet/chamfer via revolution (Volume: " << volume << ")" << std::endl;
+                                    return taperedShape;
+                                } else if (taperedShape.ShapeType() == TopAbs_SHELL) {
+                                    TopoDS_Solid solid = try_make_solid_from_shell(taperedShape);
+                                    if (!solid.IsNull()) {
                                         GProp_GProps props;
-                                        BRepGProp::VolumeProperties(taperedShape, props);
+                                        BRepGProp::VolumeProperties(solid, props);
                                         double volume = fabs(props.Mass());
-                                        std::cout << "[STEP Exporter] ✓ Created tapered cylinder with fillet/chamfer via revolution (Volume: " << volume << ")" << std::endl;
-                                        return taperedShape;
-                                    } else if (taperedShape.ShapeType() == TopAbs_SHELL) {
-                                        BRepBuilderAPI_MakeSolid solidMaker(TopoDS::Shell(taperedShape));
-                                        if (solidMaker.IsDone()) {
-                                            TopoDS_Solid solid = solidMaker.Solid();
-                                            GProp_GProps props;
-                                            BRepGProp::VolumeProperties(solid, props);
-                                            double volume = fabs(props.Mass());
-                                            std::cout << "[STEP Exporter] ✓ Created solid tapered cylinder from shell (Volume: " << volume << ")" << std::endl;
-                                            return solid;
-                                        }
+                                        std::cout << "[STEP Exporter] ✓ Created solid tapered cylinder from shell (Volume: " << volume << ")" << std::endl;
+                                        return solid;
+                                    }
                                     }
                                 } else {
                                     std::cout << "[STEP Exporter] Revolution failed" << std::endl;
                                 }
-                            }
                         }
                     } catch (const std::exception& e) {
                         std::cout << "[STEP Exporter] Revolution method failed: " << e.what() << std::endl;
@@ -3016,22 +3012,9 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                         try {
                             std::cout << "[STEP Exporter] Trying alternative cone creation method..." << std::endl;
                             
-                            // 计算圆锥的半顶角
-                            double angle = atan(fabs(r1 - r2) / height);
+                            TopoDS_Face coneFace = create_conical_face(bottom_point, axisDir, r1, r2, height);
                             
-                            // 创建圆锥坐标系
-                            gp_Ax3 coneAxis(bottom_point, axisDir);
-                            Handle(Geom_ConicalSurface) coneSurface = new Geom_ConicalSurface(coneAxis, angle, r1);
-                            
-                            // 创建圆锥面（从0到2π，从0到height）
-                            Standard_Real u1 = 0.0;
-                            Standard_Real u2 = 2.0 * M_PI;
-                            Standard_Real v1 = 0.0;
-                            Standard_Real v2 = height;
-                            
-                            BRepBuilderAPI_MakeFace coneFace(coneSurface, u1, u2, v1, v2, 1e-6);
-                            
-                            if (!coneFace.IsDone()) {
+                            if (coneFace.IsNull()) {
                                 std::cout << "[STEP Exporter] Failed to create cone face" << std::endl;
                             } else {
                                 // 创建底部圆形端面
@@ -3052,14 +3035,14 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                                 BRep_Builder builder;
                                 TopoDS_Shell shell;
                                 builder.MakeShell(shell);
-                                builder.Add(shell, coneFace.Face());
+                                builder.Add(shell, coneFace);
                                 if (bottomFace.IsDone()) builder.Add(shell, bottomFace.Face());
                                 if (topFace.IsDone()) builder.Add(shell, topFace.Face());
                                 
-                                BRepBuilderAPI_MakeSolid solidMaker(shell);
-                                if (solidMaker.IsDone()) {
+                                TopoDS_Solid solid = try_make_solid_from_shell(shell);
+                                if (!solid.IsNull()) {
                                     std::cout << "[STEP Exporter] ✓ Created analytical cone using alternative method" << std::endl;
-                                    return solidMaker.Solid();
+                                    return solid;
                                 }
                             }
                         } catch (...) {
@@ -3442,27 +3425,10 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                                 
                                 TopoDS_Wire profileWire = profileWireMaker.Wire();
                                 
-                                BRepBuilderAPI_MakeFace profileFaceMaker(profileWire, Standard_True);
-                                if (!profileFaceMaker.IsDone()) {
-                                    std::cout << "[STEP Exporter] Failed to create profile face" << std::endl;
-                                    throw std::runtime_error("Profile face creation failed");
-                                }
-                                
-                                TopoDS_Face profileFace = profileFaceMaker.Face();
-                                
                                 std::cout << "[STEP Exporter] Created profile face" << std::endl;
                                 
-                                gp_Ax1 rotationAxis(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1));
-                                BRepPrimAPI_MakeRevol revolMaker(profileFace, rotationAxis, 2 * M_PI, Standard_True);
-                                
-                                if (revolMaker.IsDone()) {
-                                    TopoDS_Shape taperedShape = revolMaker.Shape();
-                                    
-                                    gp_Pnt originalBasePoint = scaled_basePoint;
-                                    gp_Trsf transform;
-                                    transform.SetTranslation(gp_Vec(originalBasePoint.X(), originalBasePoint.Y(), originalBasePoint.Z()));
-                                    taperedShape.Move(transform);
-                                    
+                                TopoDS_Shape taperedShape = revolve_profile_wire(profileWire, scaled_basePoint);
+                                if (!taperedShape.IsNull()) {
                                     if (taperedShape.ShapeType() == TopAbs_SOLID) {
                                         GProp_GProps props;
                                         BRepGProp::VolumeProperties(taperedShape, props);
@@ -3470,9 +3436,8 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                                         std::cout << "[STEP Exporter] Created tapered cylinder via revolution (Volume: " << volume << ")" << std::endl;
                                         return taperedShape;
                                     } else if (taperedShape.ShapeType() == TopAbs_SHELL) {
-                                        BRepBuilderAPI_MakeSolid solidMaker(TopoDS::Shell(taperedShape));
-                                        if (solidMaker.IsDone()) {
-                                            TopoDS_Solid solid = solidMaker.Solid();
+                                        TopoDS_Solid solid = try_make_solid_from_shell(taperedShape);
+                                        if (!solid.IsNull()) {
                                             GProp_GProps props;
                                             BRepGProp::VolumeProperties(solid, props);
                                             double volume = fabs(props.Mass());
@@ -3526,25 +3491,8 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                                 
                                 TopoDS_Wire profileWire = profileWireMaker.Wire();
                                 
-                                BRepBuilderAPI_MakeFace profileFaceMaker(profileWire, Standard_True);
-                                if (!profileFaceMaker.IsDone()) {
-                                    std::cout << "[STEP Exporter] Failed to create profile face" << std::endl;
-                                    throw std::runtime_error("Profile face creation failed");
-                                }
-                                
-                                TopoDS_Face profileFace = profileFaceMaker.Face();
-                                
-                                gp_Ax1 rotationAxis(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1));
-                                BRepPrimAPI_MakeRevol revolMaker(profileFace, rotationAxis, 2 * M_PI, Standard_True);
-                                
-                                if (revolMaker.IsDone()) {
-                                    TopoDS_Shape taperedShape = revolMaker.Shape();
-                                    
-                                    gp_Pnt originalBasePoint = scaled_basePoint;
-                                    gp_Trsf transform;
-                                    transform.SetTranslation(gp_Vec(originalBasePoint.X(), originalBasePoint.Y(), originalBasePoint.Z()));
-                                    taperedShape.Move(transform);
-                                    
+                                TopoDS_Shape taperedShape = revolve_profile_wire(profileWire, scaled_basePoint);
+                                if (!taperedShape.IsNull()) {
                                     if (taperedShape.ShapeType() == TopAbs_SOLID) {
                                         GProp_GProps props;
                                         BRepGProp::VolumeProperties(taperedShape, props);

@@ -203,6 +203,23 @@ static TopoDS_Shape revolve_profile_wire(const TopoDS_Wire& profileWire, const g
     return result;
 }
 
+static double compute_volume(const TopoDS_Shape& shape)
+{
+    GProp_GProps props;
+    BRepGProp::VolumeProperties(shape, props);
+    return fabs(props.Mass());
+}
+
+static std::string get_surface_type_name(const Handle(Geom_Surface)& surface)
+{
+    if (surface->IsKind(STANDARD_TYPE(Geom_CylindricalSurface))) return "Cylindrical";
+    if (surface->IsKind(STANDARD_TYPE(Geom_Plane))) return "Plane";
+    if (surface->IsKind(STANDARD_TYPE(Geom_ToroidalSurface))) return "Toroidal";
+    if (surface->IsKind(STANDARD_TYPE(Geom_ConicalSurface))) return "Conical";
+    if (surface->IsKind(STANDARD_TYPE(Geom_SurfaceOfRevolution))) return "Revolution";
+    return "Unknown";
+}
+
 
 // ==================== 创建带圆柱面的实体 ====================
 
@@ -1732,20 +1749,13 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                             TopoDS_Face face = TopoDS::Face(exp.Current());
                             TopLoc_Location loc;
                             Handle(Geom_Surface) surface = BRep_Tool::Surface(face, loc);
-                            std::string surfaceType = "Unknown";
-                            if (surface->IsKind(STANDARD_TYPE(Geom_CylindricalSurface))) surfaceType = "Cylindrical";
-                            else if (surface->IsKind(STANDARD_TYPE(Geom_Plane))) surfaceType = "Plane";
-                            else if (surface->IsKind(STANDARD_TYPE(Geom_ToroidalSurface))) surfaceType = "Toroidal";
-                            else if (surface->IsKind(STANDARD_TYPE(Geom_ConicalSurface))) surfaceType = "Conical";
-                            else if (surface->IsKind(STANDARD_TYPE(Geom_SurfaceOfRevolution))) surfaceType = "Revolution";
+                            std::string surfaceType = get_surface_type_name(surface);
                             std::cout << "  - Face " << faceCount << " type: " << surfaceType << std::endl;
                         }
                         
                         // 检查是否为有效实体
                         if (filletCylinder.ShapeType() == TopAbs_SOLID) {
-                            GProp_GProps props;
-                            BRepGProp::VolumeProperties(filletCylinder, props);
-                            double volume = fabs(props.Mass());
+                            double volume = compute_volume(filletCylinder);
                             if (volume > 1.0e-12) {
                                 std::cout << "[STEP Exporter] ✓ Created solid fillet cylinder via revolution (Volume: " << volume << ")" << std::endl;
                                 return filletCylinder;
@@ -1861,20 +1871,13 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                             TopoDS_Face face = TopoDS::Face(exp.Current());
                             TopLoc_Location loc;
                             Handle(Geom_Surface) surface = BRep_Tool::Surface(face, loc);
-                            std::string surfaceType = "Unknown";
-                            if (surface->IsKind(STANDARD_TYPE(Geom_CylindricalSurface))) surfaceType = "Cylindrical";
-                            else if (surface->IsKind(STANDARD_TYPE(Geom_Plane))) surfaceType = "Plane";
-                            else if (surface->IsKind(STANDARD_TYPE(Geom_ToroidalSurface))) surfaceType = "Toroidal";
-                            else if (surface->IsKind(STANDARD_TYPE(Geom_ConicalSurface))) surfaceType = "Conical";
-                            else if (surface->IsKind(STANDARD_TYPE(Geom_SurfaceOfRevolution))) surfaceType = "Revolution";
+                            std::string surfaceType = get_surface_type_name(surface);
                             std::cout << "  - Face " << faceCount << " type: " << surfaceType << std::endl;
                         }
                         
                         // 检查是否为有效实体
                         if (chamferCylinder.ShapeType() == TopAbs_SOLID) {
-                            GProp_GProps props;
-                            BRepGProp::VolumeProperties(chamferCylinder, props);
-                            double volume = fabs(props.Mass());
+                            double volume = compute_volume(chamferCylinder);
                             if (volume > 1.0e-12) {
                                 std::cout << "[STEP Exporter] ✓ Created solid chamfered cylinder via revolution (Volume: " << volume << ")" << std::endl;
                                 return chamferCylinder;
@@ -1885,9 +1888,7 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                         if (chamferCylinder.ShapeType() == TopAbs_SHELL) {
                             TopoDS_Solid solid = try_make_solid_from_shell(chamferCylinder);
                             if (!solid.IsNull()) {
-                                GProp_GProps props;
-                                BRepGProp::VolumeProperties(solid, props);
-                                double volume = fabs(props.Mass());
+                                double volume = compute_volume(solid);
                                 if (volume > 1.0e-12) {
                                     std::cout << "[STEP Exporter] ✓ Created solid chamfered cylinder from shell (Volume: " << volume << ")" << std::endl;
                                     return solid;
@@ -2046,17 +2047,13 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                                 TopoDS_Shape taperedShape = revolve_profile_wire(profileWire, scaled_cone_bottom_point);
                                 if (!taperedShape.IsNull()) {
                                     if (taperedShape.ShapeType() == TopAbs_SOLID) {
-                                        GProp_GProps props;
-                                        BRepGProp::VolumeProperties(taperedShape, props);
-                                        double volume = fabs(props.Mass());
+                                        double volume = compute_volume(taperedShape);
                                         std::cout << "[STEP Exporter] ✓ Created tapered cylinder via revolution (Volume: " << volume << ")" << std::endl;
                                         return taperedShape;
                                     } else if (taperedShape.ShapeType() == TopAbs_SHELL) {
                                         TopoDS_Solid solid = try_make_solid_from_shell(taperedShape);
                                         if (!solid.IsNull()) {
-                                            GProp_GProps props;
-                                            BRepGProp::VolumeProperties(solid, props);
-                                            double volume = fabs(props.Mass());
+                                            double volume = compute_volume(solid);
                                             std::cout << "[STEP Exporter] ✓ Created solid tapered cylinder from shell (Volume: " << volume << ")" << std::endl;
                                             return solid;
                                         }
@@ -2635,9 +2632,7 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                                                 TopoDS_Solid solid = try_make_solid_from_shell(shell);
                                                 if (!solid.IsNull()) {
                                                     // 验证体积
-                                                    GProp_GProps props;
-                                                    BRepGProp::VolumeProperties(solid, props);
-                                                    double volume = fabs(props.Mass());
+                                                    double volume = compute_volume(solid);
                                                     if (volume > 1.0e-12) {
                                                         std::cout << "[STEP Exporter] ✓ Created solid cone (Volume: " << volume << ")" << std::endl;
                                                         return solid;
@@ -2918,17 +2913,13 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                             TopoDS_Shape taperedShape = revolve_profile_wire(profileWire, originalBasePoint);
                             if (!taperedShape.IsNull()) {
                                 if (taperedShape.ShapeType() == TopAbs_SOLID) {
-                                    GProp_GProps props;
-                                    BRepGProp::VolumeProperties(taperedShape, props);
-                                    double volume = fabs(props.Mass());
+                                    double volume = compute_volume(taperedShape);
                                     std::cout << "[STEP Exporter] ✓ Created tapered cylinder with fillet/chamfer via revolution (Volume: " << volume << ")" << std::endl;
                                     return taperedShape;
                                 } else if (taperedShape.ShapeType() == TopAbs_SHELL) {
                                     TopoDS_Solid solid = try_make_solid_from_shell(taperedShape);
                                     if (!solid.IsNull()) {
-                                        GProp_GProps props;
-                                        BRepGProp::VolumeProperties(solid, props);
-                                        double volume = fabs(props.Mass());
+                                        double volume = compute_volume(solid);
                                         std::cout << "[STEP Exporter] ✓ Created solid tapered cylinder from shell (Volume: " << volume << ")" << std::endl;
                                         return solid;
                                     }
@@ -3430,17 +3421,13 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                                 TopoDS_Shape taperedShape = revolve_profile_wire(profileWire, scaled_basePoint);
                                 if (!taperedShape.IsNull()) {
                                     if (taperedShape.ShapeType() == TopAbs_SOLID) {
-                                        GProp_GProps props;
-                                        BRepGProp::VolumeProperties(taperedShape, props);
-                                        double volume = fabs(props.Mass());
+                                        double volume = compute_volume(taperedShape);
                                         std::cout << "[STEP Exporter] Created tapered cylinder via revolution (Volume: " << volume << ")" << std::endl;
                                         return taperedShape;
                                     } else if (taperedShape.ShapeType() == TopAbs_SHELL) {
                                         TopoDS_Solid solid = try_make_solid_from_shell(taperedShape);
                                         if (!solid.IsNull()) {
-                                            GProp_GProps props;
-                                            BRepGProp::VolumeProperties(solid, props);
-                                            double volume = fabs(props.Mass());
+                                            double volume = compute_volume(solid);
                                             std::cout << "[STEP Exporter] Created solid tapered cylinder from shell (Volume: " << volume << ")" << std::endl;
                                             return solid;
                                         }
@@ -3494,9 +3481,7 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                                 TopoDS_Shape taperedShape = revolve_profile_wire(profileWire, scaled_basePoint);
                                 if (!taperedShape.IsNull()) {
                                     if (taperedShape.ShapeType() == TopAbs_SOLID) {
-                                        GProp_GProps props;
-                                        BRepGProp::VolumeProperties(taperedShape, props);
-                                        double volume = fabs(props.Mass());
+                                        double volume = compute_volume(taperedShape);
                                         std::cout << "[STEP Exporter] Created tapered cylinder via revolution (Volume: " << volume << ")" << std::endl;
                                         return taperedShape;
                                     }

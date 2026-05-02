@@ -604,19 +604,9 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
             std::cout << "  - Inner top radius: " << scaled_inner_top_r << std::endl;
             std::cout << "  - Height: " << scaled_height << std::endl;
             
-            // 创建外锥形柱体（使用BRepPrimAPI_MakeCone）
-            TopoDS_Shape outerCone;
-            try {
-                gp_Ax2 outerAx2(scaled_basePoint, axisDir);
-                BRepPrimAPI_MakeCone outerMaker(outerAx2, 
-                                                scaled_outer_bottom_r,  // 底部半径
-                                                scaled_outer_top_r,     // 顶部半径
-                                                scaled_height);
-                outerCone = outerMaker.Solid();
-                std::cout << "[STEP Exporter] Created outer cone using BRepPrimAPI_MakeCone, Type: " << outerCone.ShapeType() << std::endl;
-            } catch (...) {
-                std::cout << "[STEP Exporter] Failed to create outer cone using BRepPrimAPI_MakeCone" << std::endl;
-            }
+            // 创建外锥形柱体
+            TopoDS_Shape outerCone = create_cone_solid(scaled_basePoint, axisDir, scaled_outer_bottom_r, scaled_outer_top_r, scaled_height);
+            std::cout << "[STEP Exporter] Created outer cone, Type: " << (outerCone.IsNull() ? "Null" : "Solid") << std::endl;
             
             if (outerCone.IsNull()) {
                 std::cout << "[STEP Exporter] Failed to create outer cone, falling back to mesh method" << std::endl;
@@ -624,19 +614,9 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                 return result;
             }
             
-            // 创建内锥形柱体（孔，使用BRepPrimAPI_MakeCone）
-            TopoDS_Shape innerCone;
-            try {
-                gp_Ax2 innerAx2(scaled_basePoint, axisDir);
-                BRepPrimAPI_MakeCone innerMaker(innerAx2,
-                                                scaled_inner_bottom_r,  // 底部半径
-                                                scaled_inner_top_r,     // 顶部半径
-                                                scaled_height);
-                innerCone = innerMaker.Solid();
-                std::cout << "[STEP Exporter] Created inner cone using BRepPrimAPI_MakeCone, Type: " << innerCone.ShapeType() << std::endl;
-            } catch (...) {
-                std::cout << "[STEP Exporter] Failed to create inner cone using BRepPrimAPI_MakeCone" << std::endl;
-            }
+            // 创建内锥形柱体（孔）
+            TopoDS_Shape innerCone = create_cone_solid(scaled_basePoint, axisDir, scaled_inner_bottom_r, scaled_inner_top_r, scaled_height);
+            std::cout << "[STEP Exporter] Created inner cone, Type: " << (innerCone.IsNull() ? "Null" : "Solid") << std::endl;
             
             if (innerCone.IsNull()) {
                 std::cout << "[STEP Exporter] Failed to create inner cone, falling back to mesh method" << std::endl;
@@ -734,15 +714,13 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                 double s_chamferSize = chamferSize / scale;
                 
                 // 创建锥形主体
-                gp_Ax2 coneAxes(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1));
-                BRepPrimAPI_MakeCone coneMaker(coneAxes, s_bottomR, s_topR, s_height);
-                coneMaker.Build();
+                TopoDS_Shape coneShape = create_cone_solid(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1), s_bottomR, s_topR, s_height);
                 
-                if (!coneMaker.IsDone()) {
+                if (coneShape.IsNull()) {
                     throw std::runtime_error("Cone creation failed");
                 }
                 
-                TopoDS_Shape shape = coneMaker.Shape();
+                TopoDS_Shape shape = coneShape;
                 
                 // 先应用底部倒角（在原始锥形上操作）
                 if (s_chamferSize > 0.01) {
@@ -920,17 +898,9 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                 std::cout << "  - Inner radius: " << scaled_inner_radius << " (scaled from " << innerCyl->radius << ")" << std::endl;
                 std::cout << "  - Height: " << scaled_height << " (scaled from " << height << ")" << std::endl;
                 
-                // 创建外圆柱体（使用BRepPrimAPI_MakeCylinder）
-                TopoDS_Shape outerCylinder;
-                try {
-                    gp_Ax2 outerAx2(scaled_basePoint, axisDir);
-                    BRepPrimAPI_MakeCylinder outerMaker(outerAx2, scaled_outer_radius, scaled_height);
-                    outerCylinder = outerMaker.Solid();
-                    
-                    std::cout << "[STEP Exporter] Created outer cylinder using BRepPrimAPI_MakeCylinder, Type: " << outerCylinder.ShapeType() << std::endl;
-                } catch (...) {
-                    std::cout << "[STEP Exporter] Failed to create outer cylinder using BRepPrimAPI_MakeCylinder" << std::endl;
-                }
+                // 创建外圆柱体
+                TopoDS_Shape outerCylinder = create_cylinder_solid(scaled_basePoint, axisDir, scaled_outer_radius, scaled_height);
+                std::cout << "[STEP Exporter] Created outer cylinder, Type: " << (outerCylinder.IsNull() ? "Null" : "Solid") << std::endl;
                 
                 if (outerCylinder.IsNull()) {
                     std::cout << "[STEP Exporter] Failed to create outer cylinder, falling back to mesh method" << std::endl;
@@ -938,17 +908,9 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                     return result;
                 }
                 
-                // 创建内圆柱体（使用BRepPrimAPI_MakeCylinder）
-                TopoDS_Shape innerCylinder;
-                try {
-                    gp_Ax2 innerAx2(scaled_basePoint, axisDir);
-                    BRepPrimAPI_MakeCylinder innerMaker(innerAx2, scaled_inner_radius, scaled_height);
-                    innerCylinder = innerMaker.Solid();
-                    
-                    std::cout << "[STEP Exporter] Created inner cylinder using BRepPrimAPI_MakeCylinder, Type: " << innerCylinder.ShapeType() << std::endl;
-                } catch (...) {
-                    std::cout << "[STEP Exporter] Failed to create inner cylinder using BRepPrimAPI_MakeCylinder" << std::endl;
-                }
+                // 创建内圆柱体
+                TopoDS_Shape innerCylinder = create_cylinder_solid(scaled_basePoint, axisDir, scaled_inner_radius, scaled_height);
+                std::cout << "[STEP Exporter] Created inner cylinder, Type: " << (innerCylinder.IsNull() ? "Null" : "Solid") << std::endl;
                 
                 if (innerCylinder.IsNull()) {
                     std::cout << "[STEP Exporter] Failed to create inner cylinder, falling back to mesh method" << std::endl;
@@ -1077,21 +1039,15 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                             double s_innerTopR = innerTopR / s;
                             double s_height = cylHeight / s;
                             
-                            gp_Ax2 coneAxes(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1));
-                            
-                            BRepPrimAPI_MakeCone outerConeMaker(coneAxes, s_outerBottomR, s_outerTopR, s_height);
-                            outerConeMaker.Build();
-                            if (!outerConeMaker.IsDone()) {
+                            TopoDS_Shape outerCone = create_cone_solid(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1), s_outerBottomR, s_outerTopR, s_height);
+                            if (outerCone.IsNull()) {
                                 throw std::runtime_error("Outer cone creation failed");
                             }
-                            TopoDS_Shape outerCone = outerConeMaker.Shape();
                             
-                            BRepPrimAPI_MakeCone innerConeMaker(coneAxes, s_innerBottomR, s_innerTopR, s_height);
-                            innerConeMaker.Build();
-                            if (!innerConeMaker.IsDone()) {
+                            TopoDS_Shape innerCone = create_cone_solid(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1), s_innerBottomR, s_innerTopR, s_height);
+                            if (innerCone.IsNull()) {
                                 throw std::runtime_error("Inner cone creation failed");
                             }
-                            TopoDS_Shape innerCone = innerConeMaker.Shape();
                             
                             TopoDS_Shape result = create_hollow_shape_via_cut(outerCone, innerCone);
                             if (result.IsNull()) {
@@ -1782,9 +1738,7 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                         
                         // 如果不行，回退到标准圆柱
                         std::cout << "[STEP Exporter] ⚠ Failed, using standard cylinder..." << std::endl;
-                        gp_Ax2 cylinderAxis2(basePoint, axisDir);
-                        BRepPrimAPI_MakeCylinder cylinderMaker2(cylinderAxis2, cyl.radius, cylinderHeight);
-                        return cylinderMaker2.Shape();
+                        return create_cylinder_solid(basePoint, axisDir, cyl.radius, cylinderHeight);
                         
                     } catch (const Standard_Failure& e) {
                         std::cerr << "[STEP Exporter] Failed to create fillet cylinder: " << e.GetMessageString() << std::endl;
@@ -2173,14 +2127,11 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                             std::cout << "  - Height: " << scaled_cone_height << std::endl;
                             
                             // 尝试使用不同的参数创建BRepPrimAPI_MakeCone
-                            gp_Ax2 axis(basePoint, axisDir);
-                            BRepPrimAPI_MakeCone coneMaker(axis, r1, r2, scaled_cone_height);
+                            TopoDS_Shape result = create_cone_solid(basePoint, axisDir, r1, r2, scaled_cone_height);
                             
-                            if (coneMaker.IsDone()) {
-                                TopoDS_Shape result = coneMaker.Shape();
+                            if (!result.IsNull()) {
                                 std::cout << "[STEP Exporter] ✓ Created analytical cone (Method 1): bottom R=" 
                                           << r1 << " top R=" << r2 << " H=" << scaled_cone_height << std::endl;
-                                std::cout << "[STEP Exporter] Shape type: " << result.ShapeType() << std::endl;
                                 
                                 // 检查创建的形状是否包含两个端面
                                 int faceCount = 0;
@@ -2206,31 +2157,29 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                                     std::cout << "[STEP Exporter] ⚠ Cone missing end faces" << std::endl;
                                 }
                             } else {
-                                std::cerr << "[STEP Exporter] Method 1 failed: BRepPrimAPI_MakeCone status: " << coneMaker.IsDone() << std::endl;
+                                std::cerr << "[STEP Exporter] Method 1 failed" << std::endl;
                                 
                                 // 尝试使用默认的Z轴方向创建圆锥体
                                 std::cout << "[STEP Exporter] Trying with default Z-axis direction..." << std::endl;
-                                gp_Ax2 axisZ(basePoint, gp_Dir(0, 0, 1));
-                                BRepPrimAPI_MakeCone coneMakerZ(axisZ, r1, r2, scaled_cone_height);
+                                TopoDS_Shape resultZ = create_cone_solid(basePoint, gp_Dir(0, 0, 1), r1, r2, scaled_cone_height);
                                 
-                                if (coneMakerZ.IsDone()) {
-                                    TopoDS_Shape result = coneMakerZ.Shape();
+                                if (!resultZ.IsNull()) {
                                     std::cout << "[STEP Exporter] ✓ Created analytical cone with Z-axis: bottom R=" 
                                               << r1 << " top R=" << r2 << " H=" << scaled_cone_height << std::endl;
                                     
                                     // 检查创建的形状是否包含两个端面
                                     int faceCount = 0;
-                                    for (TopExp_Explorer exp(result, TopAbs_FACE); exp.More(); exp.Next()) {
+                                    for (TopExp_Explorer exp(resultZ, TopAbs_FACE); exp.More(); exp.Next()) {
                                         faceCount++;
                                     }
                                     std::cout << "[STEP Exporter] Cone shape has " << faceCount << " faces" << std::endl;
                                     
                                     if (faceCount >= 3) {
                                         std::cout << "[STEP Exporter] ✓ Cone has end faces" << std::endl;
-                                        return result;
+                                        return resultZ;
                                     }
                                 } else {
-                                    std::cerr << "[STEP Exporter] Method 1 with Z-axis failed: BRepPrimAPI_MakeCone status: " << coneMakerZ.IsDone() << std::endl;
+                                    std::cerr << "[STEP Exporter] Method 1 with Z-axis failed" << std::endl;
                                 }
                             }
                         } catch (const Standard_Failure& e) {
@@ -2674,19 +2623,16 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                         }
                     }
                 } else {
-                    // 方法1: 使用BRepPrimAPI_MakeCylinder
-                    std::cout << "[STEP Exporter] Method 1: Using BRepPrimAPI_MakeCylinder..." << std::endl;
-                    gp_Ax2 axis(scaled_bottom_point, cyl.axis_direction);
-                    BRepPrimAPI_MakeCylinder cylMaker(axis, scaled_radius, scaled_height);
+                    // 方法1: 使用create_cylinder_solid
+                    std::cout << "[STEP Exporter] Method 1: Using create_cylinder_solid..." << std::endl;
+                    TopoDS_Shape result = create_cylinder_solid(scaled_bottom_point, cyl.axis_direction, scaled_radius, scaled_height);
                     
-                    if (cylMaker.IsDone()) {
-                        TopoDS_Shape result = cylMaker.Shape();
+                    if (!result.IsNull()) {
                         std::cout << "[STEP Exporter] ✓ Created analytical cylinder (Method 1): R=" 
                                   << scaled_radius << " H=" << scaled_height << std::endl;
-                        std::cout << "[STEP Exporter] Shape type: " << result.ShapeType() << std::endl;
                         return result;
                     } else {
-                        std::cerr << "[STEP Exporter] Method 1 failed: BRepPrimAPI_MakeCylinder status: " << cylMaker.IsDone() << std::endl;
+                        std::cerr << "[STEP Exporter] Method 1 failed" << std::endl;
                     }
                     
                     // 方法2: 使用Geom_CylindricalSurface和BRepBuilderAPI_MakeFace创建完整的圆柱体
@@ -2972,12 +2918,10 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                     if (r1 <= 0 || r2 <= 0 || height <= 0) {
                         std::cout << "[STEP Exporter] Invalid cone parameters: r1=" << r1 << " r2=" << r2 << " height=" << height << std::endl;
                     } else {
-                        // 尝试使用BRepPrimAPI_MakeCone创建圆锥
+                        // 尝试使用create_cone_solid创建圆锥
                         try {
-                            gp_Ax2 coneAxis(bottom_point, axisDir);
-                            BRepPrimAPI_MakeCone coneMaker(coneAxis, r1, r2, height);
-                            if (coneMaker.IsDone()) {
-                                TopoDS_Shape coneShape = coneMaker.Shape();
+                            TopoDS_Shape coneShape = create_cone_solid(bottom_point, axisDir, r1, r2, height);
+                            if (!coneShape.IsNull()) {
                                 std::cout << "[STEP Exporter] ✓ Created analytical cone from cone candidate" << std::endl;
                                 
                                 // 如果需要爆炸图，创建爆炸图
@@ -2992,7 +2936,7 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                                 std::cout << "[STEP Exporter] BRepPrimAPI_MakeCone failed (not done), trying alternative method..." << std::endl;
                             }
                         } catch (...) {
-                            std::cout << "[STEP Exporter] BRepPrimAPI_MakeCone threw exception, trying alternative method..." << std::endl;
+                            std::cout << "[STEP Exporter] create_cone_solid threw exception, trying alternative method..." << std::endl;
                         }
                         
                         // 备用方法：使用Geom_ConicalSurface和BRepBuilderAPI_MakeFace
@@ -3138,12 +3082,11 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                                 bottom_point = top_point;
                             }
                             
-                            gp_Ax2 coneAxis(bottom_point, axisDir);
-                            BRepPrimAPI_MakeCone coneMaker(coneAxis, r1, r2, height);
+                            TopoDS_Shape coneShape = create_cone_solid(bottom_point, axisDir, r1, r2, height);
                             
-                            if (coneMaker.IsDone()) {
+                            if (!coneShape.IsNull()) {
                                 std::cout << "[STEP Exporter] ✓ Created analytical cone from high-ratio cylinders" << std::endl;
-                                return coneMaker.Shape();
+                                return coneShape;
                             }
                         } catch (...) {
                             std::cout << "[STEP Exporter] Failed to create cone from high-ratio cylinders, falling back" << std::endl;

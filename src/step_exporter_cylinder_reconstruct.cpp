@@ -2311,19 +2311,15 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                                 
                                 // 底部端面的法线方向应该与轴线方向相反（指向外部）
                                 gp_Dir bottomNormal = axisDir.Reversed();
-                                gp_Circ bottomCircle(gp_Ax2(bottomCenter, bottomNormal), r1);
-                                BRepBuilderAPI_MakeEdge bottomEdge(bottomCircle);
-                                BRepBuilderAPI_MakeWire bottomWire(bottomEdge.Edge());
-                                BRepBuilderAPI_MakeFace bottomCircularFace(bottomWire.Wire());
+                                TopoDS_Face bottomCircularFace = create_circular_face(bottomCenter, bottomNormal, r1);
                                 
                                 // 验证底部端面创建成功
-                                if (bottomCircularFace.IsDone()) {
+                                if (!bottomCircularFace.IsNull()) {
                                     std::cout << "[STEP Exporter] ✓ Created bottom circular face" << std::endl;
                                     std::cout << "[STEP Exporter] Bottom face: center=(" << bottomCenter.X() << ", " << bottomCenter.Y() << ", " << bottomCenter.Z() << ") radius=" << r1 << std::endl;
                                     // 检查底部端面的方向
-                                    TopoDS_Face bottomFace = bottomCircularFace.Face();
                                     TopLoc_Location loc;
-                                    Handle(Geom_Surface) surface = BRep_Tool::Surface(bottomFace, loc);
+                                    Handle(Geom_Surface) surface = BRep_Tool::Surface(bottomCircularFace, loc);
                                     gp_Pnt center;
                                     gp_Vec d1u, d1v;
                                     surface->D1(0, 0, center, d1u, d1v);
@@ -2340,19 +2336,15 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                                 
                                 // 顶部端面的法线方向应该与轴线方向相同（指向外部）
                                 gp_Dir topNormal = axisDir;
-                                gp_Circ topCircle(gp_Ax2(topCenter, topNormal), r2);
-                                BRepBuilderAPI_MakeEdge topEdge(topCircle);
-                                BRepBuilderAPI_MakeWire topWire(topEdge.Edge());
-                                BRepBuilderAPI_MakeFace topCircularFace(topWire.Wire());
+                                TopoDS_Face topCircularFace = create_circular_face(topCenter, topNormal, r2);
                                 
                                 // 验证顶部端面创建成功
-                                if (topCircularFace.IsDone()) {
+                                if (!topCircularFace.IsNull()) {
                                     std::cout << "[STEP Exporter] ✓ Created top circular face" << std::endl;
                                     std::cout << "[STEP Exporter] Top face: center=(" << topCenter.X() << ", " << topCenter.Y() << ", " << topCenter.Z() << ") radius=" << r2 << std::endl;
                                     // 检查顶部端面的方向
-                                    TopoDS_Face topFace = topCircularFace.Face();
                                     TopLoc_Location loc;
-                                    Handle(Geom_Surface) surface = BRep_Tool::Surface(topFace, loc);
+                                    Handle(Geom_Surface) surface = BRep_Tool::Surface(topCircularFace, loc);
                                     gp_Pnt center;
                                     gp_Vec d1u, d1v;
                                     surface->D1(0, 0, center, d1u, d1v);
@@ -2367,10 +2359,10 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                                     if (dotProduct < 0) {
                                         // 需要反转面的方向
                                         // 使用BRep_Builder的Reverse方法来反转面的方向
-                                        topFace.Reverse();
+                                        topCircularFace.Reverse();
                                         std::cout << "[STEP Exporter] Reversed top face direction to point outward" << std::endl;
                                         // 再次检查方向
-                                        surface = BRep_Tool::Surface(topFace, loc);
+                                        surface = BRep_Tool::Surface(topCircularFace, loc);
                                         surface->D1(0, 0, center, d1u, d1v);
                                         normal = d1u.Crossed(d1v).Normalized();
                                         std::cout << "[STEP Exporter] New top face normal: (" << normal.X() << ", " << normal.Y() << ", " << normal.Z() << ")" << std::endl;
@@ -2378,10 +2370,10 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                                 }
                                 
                                 // 验证端面创建成功
-                                if (!bottomCircularFace.IsDone()) {
+                                if (bottomCircularFace.IsNull()) {
                                     std::cerr << "[STEP Exporter] ERROR: Failed to create bottom circular face" << std::endl;
                                 }
-                                if (!topCircularFace.IsDone()) {
+                                if (topCircularFace.IsNull()) {
                                     std::cerr << "[STEP Exporter] ERROR: Failed to create top circular face" << std::endl;
                                 }
                                 
@@ -2394,10 +2386,9 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                                 }
                                 
                                 // 检查顶部端面的方向
-                                if (topCircularFace.IsDone()) {
-                                    TopoDS_Face topFace = topCircularFace.Face();
+                                if (!topCircularFace.IsNull()) {
                                     TopLoc_Location loc;
-                                    Handle(Geom_Surface) surface = BRep_Tool::Surface(topFace, loc);
+                                    Handle(Geom_Surface) surface = BRep_Tool::Surface(topCircularFace, loc);
                                     gp_Pnt center;
                                     gp_Vec d1u, d1v;
                                     surface->D1(0, 0, center, d1u, d1v);
@@ -2418,10 +2409,9 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                                 }
                                 
                                 // 检查底部端面的范围
-                                if (bottomCircularFace.IsDone()) {
-                                    TopoDS_Face bottomFace = bottomCircularFace.Face();
+                                if (!bottomCircularFace.IsNull()) {
                                     Bnd_Box bbox;
-                                    BRepBndLib::Add(bottomFace, bbox);
+                                    BRepBndLib::Add(bottomCircularFace, bbox);
                                     if (!bbox.IsVoid()) {
                                         gp_Pnt minPnt = bbox.CornerMin();
                                         gp_Pnt maxPnt = bbox.CornerMax();
@@ -2430,10 +2420,9 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                                 }
                                 
                                 // 检查顶部端面的范围
-                                if (topCircularFace.IsDone()) {
-                                    TopoDS_Face topFace = topCircularFace.Face();
+                                if (!topCircularFace.IsNull()) {
                                     Bnd_Box bbox;
-                                    BRepBndLib::Add(topFace, bbox);
+                                    BRepBndLib::Add(topCircularFace, bbox);
                                     if (!bbox.IsVoid()) {
                                         gp_Pnt minPnt = bbox.CornerMin();
                                         gp_Pnt maxPnt = bbox.CornerMax();
@@ -2453,14 +2442,14 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                                     gp_Vec bottomMove(axisDir.X() * (-explodeDistance), axisDir.Y() * (-explodeDistance), axisDir.Z() * (-explodeDistance));
                                     bottomTrsf.SetTranslation(bottomMove);
                                     TopLoc_Location bottomLoc(bottomTrsf);
-                                    TopoDS_Face bottomFaceMoved = TopoDS::Face(bottomCircularFace.Face().Moved(bottomLoc));
+                                    TopoDS_Face bottomFaceMoved = TopoDS::Face(bottomCircularFace.Moved(bottomLoc));
                                     
                                     // 创建顶部端面的副本并向上移动
                                     gp_Trsf topTrsf;
                                     gp_Vec topMove(axisDir.X() * explodeDistance, axisDir.Y() * explodeDistance, axisDir.Z() * explodeDistance);
                                     topTrsf.SetTranslation(topMove);
                                     TopLoc_Location topLoc(topTrsf);
-                                    TopoDS_Face topFaceMoved = TopoDS::Face(topCircularFace.Face().Moved(topLoc));
+                                    TopoDS_Face topFaceMoved = TopoDS::Face(topCircularFace.Moved(topLoc));
                                     
                                     // 为每个面添加标签，便于在FreeCAD中识别
                                     // 保存每个面为BREP文件，用于调试
@@ -2512,8 +2501,7 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                                     
                                     std::cout << "[STEP Exporter] Bottom face edges:" << std::endl;
                                     int bottomEdgeCount = 0;
-                                    TopoDS_Face bottomFace = bottomCircularFace.Face();
-                                    for (TopExp_Explorer exp(bottomFace, TopAbs_EDGE); exp.More(); exp.Next()) {
+                                    for (TopExp_Explorer exp(bottomCircularFace, TopAbs_EDGE); exp.More(); exp.Next()) {
                                         bottomEdgeCount++;
                                         TopoDS_Edge edge = TopoDS::Edge(exp.Current());
                                         TopLoc_Location loc;
@@ -2529,8 +2517,7 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                                     
                                     std::cout << "[STEP Exporter] Top face edges:" << std::endl;
                                     int topEdgeCount = 0;
-                                    TopoDS_Face topFace = topCircularFace.Face();
-                                    for (TopExp_Explorer exp(topFace, TopAbs_EDGE); exp.More(); exp.Next()) {
+                                    for (TopExp_Explorer exp(topCircularFace, TopAbs_EDGE); exp.More(); exp.Next()) {
                                         topEdgeCount++;
                                         TopoDS_Edge edge = TopoDS::Edge(exp.Current());
                                         TopLoc_Location loc;
@@ -2546,8 +2533,8 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                                     
                                     BRepBuilderAPI_Sewing sewing(Precision::Confusion());
                                     sewing.Add(coneFace);
-                                    sewing.Add(bottomCircularFace.Face());
-                                    sewing.Add(topCircularFace.Face());
+                                    sewing.Add(bottomCircularFace);
+                                    sewing.Add(topCircularFace);
                                     sewing.Perform();
                                     
                                     TopoDS_Shape sewnShape = sewing.SewedShape();
@@ -2608,8 +2595,8 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                                         TopoDS_Compound compound;
                                         builder.MakeCompound(compound);
                                         builder.Add(compound, coneFace);
-                                        builder.Add(compound, bottomCircularFace.Face());
-                                        builder.Add(compound, topCircularFace.Face());
+                                        builder.Add(compound, bottomCircularFace);
+                                        builder.Add(compound, topCircularFace);
                                         return compound;
                                     }
                                 }
@@ -2645,26 +2632,20 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                             
                             // 创建底部圆形端面
                             gp_Pnt bottomCenter = scaled_bottom_point;
-                            gp_Circ bottomCircle(gp_Ax2(bottomCenter, cyl.axis_direction), scaled_radius);
-                            BRepBuilderAPI_MakeEdge bottomEdge(bottomCircle);
-                            BRepBuilderAPI_MakeWire bottomWire(bottomEdge.Edge());
-                            BRepBuilderAPI_MakeFace bottomCircularFace(bottomWire.Wire());
+                            TopoDS_Face bottomCircularFace = create_circular_face(bottomCenter, cyl.axis_direction, scaled_radius);
                             
                             // 创建顶部圆形端面
                             gp_Vec axisVec(cyl.axis_direction.X(), cyl.axis_direction.Y(), cyl.axis_direction.Z());
                             gp_Pnt topCenter = scaled_bottom_point.Translated(axisVec.Multiplied(scaled_height));
-                            gp_Circ topCircle(gp_Ax2(topCenter, cyl.axis_direction), scaled_radius);
-                            BRepBuilderAPI_MakeEdge topEdge(topCircle);
-                            BRepBuilderAPI_MakeWire topWire(topEdge.Edge());
-                            BRepBuilderAPI_MakeFace topCircularFace(topWire.Wire());
+                            TopoDS_Face topCircularFace = create_circular_face(topCenter, cyl.axis_direction, scaled_radius);
                             
                             // 创建复合形状
                             BRep_Builder builder;
                             TopoDS_Compound compound;
                             builder.MakeCompound(compound);
                             builder.Add(compound, cylFace);
-                            builder.Add(compound, bottomCircularFace.Face());
-                            builder.Add(compound, topCircularFace.Face());
+                            builder.Add(compound, bottomCircularFace);
+                            builder.Add(compound, topCircularFace);
                             
                             std::cout << "[STEP Exporter] ✓ Created complete cylinder with end faces (Method 2)" << std::endl;
                             return compound;
@@ -2949,26 +2930,20 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                                 std::cout << "[STEP Exporter] Failed to create cone face" << std::endl;
                             } else {
                                 // 创建底部圆形端面
-                                gp_Circ bottomCircle(gp_Ax2(bottom_point, axisDir), r1);
-                                BRepBuilderAPI_MakeEdge bottomEdge(bottomCircle);
-                                BRepBuilderAPI_MakeWire bottomWire(bottomEdge.Edge());
-                                BRepBuilderAPI_MakeFace bottomFace(bottomWire.Wire(), true);
+                                TopoDS_Face bottomFace = create_circular_face(bottom_point, axisDir, r1);
                                 
                                 // 创建顶部圆形端面
                                 gp_Vec axisVec(axisDir.X(), axisDir.Y(), axisDir.Z());
                                 gp_Pnt topCenter = bottom_point.Translated(axisVec.Multiplied(height));
-                                gp_Circ topCircle(gp_Ax2(topCenter, axisDir), r2);
-                                BRepBuilderAPI_MakeEdge topEdge(topCircle);
-                                BRepBuilderAPI_MakeWire topWire(topEdge.Edge());
-                                BRepBuilderAPI_MakeFace topFace(topWire.Wire(), true);
+                                TopoDS_Face topFace = create_circular_face(topCenter, axisDir, r2);
                                 
                                 // 组合所有面
                                 BRep_Builder builder;
                                 TopoDS_Shell shell;
                                 builder.MakeShell(shell);
                                 builder.Add(shell, coneFace);
-                                if (bottomFace.IsDone()) builder.Add(shell, bottomFace.Face());
-                                if (topFace.IsDone()) builder.Add(shell, topFace.Face());
+                                if (!bottomFace.IsNull()) builder.Add(shell, bottomFace);
+                                if (!topFace.IsNull()) builder.Add(shell, topFace);
                                 
                                 TopoDS_Solid solid = try_make_solid_from_shell(shell);
                                 if (!solid.IsNull()) {
@@ -3446,20 +3421,12 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                         sewer.Add(conicalFace);
                         
                         // 创建底面
-                        gp_Circ bottomCirc(gp_Ax2(scaled_basePoint, axisDir), scaled_r1);
-                        Handle(Geom_Circle) bottomCircle = new Geom_Circle(bottomCirc);
-                        TopoDS_Edge bottomEdge = BRepBuilderAPI_MakeEdge(bottomCircle);
-                        TopoDS_Wire bottomWire = BRepBuilderAPI_MakeWire(bottomEdge);
-                        TopoDS_Face bottomFace = BRepBuilderAPI_MakeFace(bottomWire);
+                        TopoDS_Face bottomFace = create_circular_face(scaled_basePoint, axisDir, scaled_r1);
                         sewer.Add(bottomFace);
                         
                         // 创建顶面
                         gp_Pnt topCenter = scaled_basePoint.Translated(gp_Vec(axisDir) * scaled_height);
-                        gp_Circ topCirc(gp_Ax2(topCenter, axisDir), scaled_r2);
-                        Handle(Geom_Circle) topCircle = new Geom_Circle(topCirc);
-                        TopoDS_Edge topEdge = BRepBuilderAPI_MakeEdge(topCircle);
-                        TopoDS_Wire topWire = BRepBuilderAPI_MakeWire(topEdge);
-                        TopoDS_Face topFace = BRepBuilderAPI_MakeFace(topWire);
+                        TopoDS_Face topFace = create_circular_face(topCenter, axisDir, scaled_r2);
                         sewer.Add(topFace);
                         
                         sewer.Perform();

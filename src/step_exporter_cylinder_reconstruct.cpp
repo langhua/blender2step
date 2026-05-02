@@ -220,6 +220,24 @@ static std::string get_surface_type_name(const Handle(Geom_Surface)& surface)
     return "Unknown";
 }
 
+static TopoDS_Solid try_convert_to_valid_solid(const TopoDS_Shape& shape)
+{
+    if (shape.IsNull()) return TopoDS_Solid();
+    
+    if (shape.ShapeType() == TopAbs_SOLID) {
+        double volume = compute_volume(shape);
+        if (volume > 1.0e-12) return TopoDS::Solid(shape);
+    } else if (shape.ShapeType() == TopAbs_SHELL) {
+        TopoDS_Solid solid = try_make_solid_from_shell(shape);
+        if (!solid.IsNull()) {
+            double volume = compute_volume(solid);
+            if (volume > 1.0e-12) return solid;
+        }
+    }
+    
+    return TopoDS_Solid();
+}
+
 
 // ==================== 创建带圆柱面的实体 ====================
 
@@ -2045,19 +2063,11 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                                 std::cout << "[STEP Exporter] ✓ Created profile face" << std::endl;
                                 
                                 TopoDS_Shape taperedShape = revolve_profile_wire(profileWire, scaled_cone_bottom_point);
-                                if (!taperedShape.IsNull()) {
-                                    if (taperedShape.ShapeType() == TopAbs_SOLID) {
-                                        double volume = compute_volume(taperedShape);
-                                        std::cout << "[STEP Exporter] ✓ Created tapered cylinder via revolution (Volume: " << volume << ")" << std::endl;
-                                        return taperedShape;
-                                    } else if (taperedShape.ShapeType() == TopAbs_SHELL) {
-                                        TopoDS_Solid solid = try_make_solid_from_shell(taperedShape);
-                                        if (!solid.IsNull()) {
-                                            double volume = compute_volume(solid);
-                                            std::cout << "[STEP Exporter] ✓ Created solid tapered cylinder from shell (Volume: " << volume << ")" << std::endl;
-                                            return solid;
-                                        }
-                                    }
+                                TopoDS_Solid solid = try_convert_to_valid_solid(taperedShape);
+                                if (!solid.IsNull()) {
+                                    double volume = compute_volume(solid);
+                                    std::cout << "[STEP Exporter] ✓ Created tapered cylinder via revolution (Volume: " << volume << ")" << std::endl;
+                                    return solid;
                                 } else {
                                     std::cout << "[STEP Exporter] ⚠ Revolution failed" << std::endl;
                                 }
@@ -2106,15 +2116,9 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                                 TopoDS_Wire profileWire = profileWireMaker.Wire();
                                 
                                 TopoDS_Shape taperedShape = revolve_profile_wire(profileWire, scaled_cone_bottom_point);
-                                if (!taperedShape.IsNull()) {
-                                    if (taperedShape.ShapeType() == TopAbs_SOLID) {
-                                        return taperedShape;
-                                    } else if (taperedShape.ShapeType() == TopAbs_SHELL) {
-                                        TopoDS_Solid solid = try_make_solid_from_shell(taperedShape);
-                                        if (!solid.IsNull()) {
-                                            return solid;
-                                        }
-                                    }
+                                TopoDS_Solid solid = try_convert_to_valid_solid(taperedShape);
+                                if (!solid.IsNull()) {
+                                    return solid;
                                 }
                             }
                         } catch (const Standard_Failure& e) {
@@ -2911,21 +2915,13 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                             TopoDS_Wire profileWire = profileWireMaker.Wire();
                             
                             TopoDS_Shape taperedShape = revolve_profile_wire(profileWire, originalBasePoint);
-                            if (!taperedShape.IsNull()) {
-                                if (taperedShape.ShapeType() == TopAbs_SOLID) {
-                                    double volume = compute_volume(taperedShape);
-                                    std::cout << "[STEP Exporter] ✓ Created tapered cylinder with fillet/chamfer via revolution (Volume: " << volume << ")" << std::endl;
-                                    return taperedShape;
-                                } else if (taperedShape.ShapeType() == TopAbs_SHELL) {
-                                    TopoDS_Solid solid = try_make_solid_from_shell(taperedShape);
-                                    if (!solid.IsNull()) {
-                                        double volume = compute_volume(solid);
-                                        std::cout << "[STEP Exporter] ✓ Created solid tapered cylinder from shell (Volume: " << volume << ")" << std::endl;
-                                        return solid;
-                                    }
-                                    }
-                                } else {
-                                    std::cout << "[STEP Exporter] Revolution failed" << std::endl;
+                            TopoDS_Solid solid = try_convert_to_valid_solid(taperedShape);
+                            if (!solid.IsNull()) {
+                                double volume = compute_volume(solid);
+                                std::cout << "[STEP Exporter] ✓ Created tapered cylinder with fillet/chamfer via revolution (Volume: " << volume << ")" << std::endl;
+                                return solid;
+                            } else {
+                                std::cout << "[STEP Exporter] Revolution failed" << std::endl;
                                 }
                         }
                     } catch (const std::exception& e) {
@@ -3419,19 +3415,11 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                                 std::cout << "[STEP Exporter] Created profile face" << std::endl;
                                 
                                 TopoDS_Shape taperedShape = revolve_profile_wire(profileWire, scaled_basePoint);
-                                if (!taperedShape.IsNull()) {
-                                    if (taperedShape.ShapeType() == TopAbs_SOLID) {
-                                        double volume = compute_volume(taperedShape);
-                                        std::cout << "[STEP Exporter] Created tapered cylinder via revolution (Volume: " << volume << ")" << std::endl;
-                                        return taperedShape;
-                                    } else if (taperedShape.ShapeType() == TopAbs_SHELL) {
-                                        TopoDS_Solid solid = try_make_solid_from_shell(taperedShape);
-                                        if (!solid.IsNull()) {
-                                            double volume = compute_volume(solid);
-                                            std::cout << "[STEP Exporter] Created solid tapered cylinder from shell (Volume: " << volume << ")" << std::endl;
-                                            return solid;
-                                        }
-                                    }
+                                TopoDS_Solid solid = try_convert_to_valid_solid(taperedShape);
+                                if (!solid.IsNull()) {
+                                    double volume = compute_volume(solid);
+                                    std::cout << "[STEP Exporter] Created tapered cylinder via revolution (Volume: " << volume << ")" << std::endl;
+                                    return solid;
                                 } else {
                                     std::cout << "[STEP Exporter] Revolution failed" << std::endl;
                                 }
@@ -3479,12 +3467,11 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                                 TopoDS_Wire profileWire = profileWireMaker.Wire();
                                 
                                 TopoDS_Shape taperedShape = revolve_profile_wire(profileWire, scaled_basePoint);
-                                if (!taperedShape.IsNull()) {
-                                    if (taperedShape.ShapeType() == TopAbs_SOLID) {
-                                        double volume = compute_volume(taperedShape);
-                                        std::cout << "[STEP Exporter] Created tapered cylinder via revolution (Volume: " << volume << ")" << std::endl;
-                                        return taperedShape;
-                                    }
+                                TopoDS_Solid solid = try_convert_to_valid_solid(taperedShape);
+                                if (!solid.IsNull()) {
+                                    double volume = compute_volume(solid);
+                                    std::cout << "[STEP Exporter] Created tapered cylinder via revolution (Volume: " << volume << ")" << std::endl;
+                                    return solid;
                                 } else {
                                     std::cout << "[STEP Exporter] Revolution failed" << std::endl;
                                 }

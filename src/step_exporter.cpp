@@ -2272,11 +2272,7 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
         progress_callback = NULL;
     }
 
-    // 进度回调辅助函数
-    std::cout << "[STEP Exporter] DEBUG: enable_logging = " << enable_logging << ", progress_callback = " << (progress_callback != NULL ? "non-NULL" : "NULL") << std::endl;
     auto call_progress = [&](double progress) {
-        std::cout << "[STEP Exporter] DEBUG: call_progress invoked with progress = " << progress << std::endl;
-        std::cout.flush();
         if (progress_callback != NULL) {
             // 确保进度在0-100范围内
             if (progress < 0.0) progress = 0.0;
@@ -2304,9 +2300,6 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
         }
     };
 
-    std::cout << "[STEP Exporter] DEBUG: After PyArg_ParseTuple, sew_tolerance = " << sew_tolerance << std::endl;
-    
-    // 如果缝合容差为零，设置为默认值
     if (sew_tolerance == 0.0) {
         std::cout << "[STEP Exporter] WARNING: Sewing tolerance is zero! Setting to default 0.001 m." << std::endl;
         sew_tolerance = 0.001;
@@ -2361,9 +2354,6 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
     } else {
         std::cerr << "[STEP Exporter] WARNING: Log filename is empty (enable_logging=" << enable_logging << ", filename=" << (filename ? filename : "null") << ")" << std::endl;
     }
-
-    // 最终容差检查
-    std::cout << "[STEP Exporter] DEBUG: Final sewing tolerance = " << sew_tolerance << " m" << std::endl;
 
     if (enable_logging) {
         std::cout << "\n[STEP Exporter] =========================================" << std::endl;
@@ -2560,15 +2550,7 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
             }
         }
         
-        // 调试：打印当前容差
-        if (enable_logging) {
-            std::cout << "[STEP Exporter] DEBUG: Before object loop, sew_tolerance = " << sew_tolerance << std::endl;
-            std::cout.flush();
-        }
-        
         for (Py_ssize_t i = 0; i < num_objects; i++) {
-            std::cout << "[STEP Exporter] DEBUG: Inside object loop, sew_tolerance = " << sew_tolerance << std::endl;
-            std::cout.flush();
             PyObject* obj_dict = PyList_GetItem(scene_data_list, i);
 
             if (!PyDict_Check(obj_dict)) {
@@ -2745,13 +2727,10 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
                 // 使用带圆柱体重构的函数
                 // 确保缝合容差不小于最小值
                 double actual_tolerance = sew_tolerance;
-                std::cout << "[STEP Exporter] DEBUG: Before tolerance check, sew_tolerance=" << sew_tolerance << ", actual_tolerance=" << actual_tolerance << std::endl;
                 if (actual_tolerance < 1.0e-6) {
                     std::cout << "[STEP Exporter] WARNING: actual_tolerance=" << actual_tolerance << " is too small, increasing to 1e-06" << std::endl;
                     actual_tolerance = 1.0e-6;
-                    std::cout << "[STEP Exporter] DEBUG: After assignment, actual_tolerance=" << actual_tolerance << std::endl;
                 }
-                std::cout << "[STEP Exporter] DEBUG: Calling create_solid_from_mesh_with_cylinders with tolerance=" << actual_tolerance << std::endl;
                 TopoDS_Shape shape = create_solid_from_mesh_with_cylinders(vertices, faces, actual_tolerance, create_solid, false, scale);
 
                 if (!shape.IsNull()) {
@@ -2899,7 +2878,6 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
             
             // 根据形状类型选择传输模式
             STEPControl_StepModelType transfer_mode = STEPControl_AsIs;
-            std::cout << "[STEP Exporter] DEBUG: Shape " << i + 1 << " type value = " << finalShape.ShapeType() << " (4=FACE)" << std::endl;
             switch (finalShape.ShapeType()) {
                 case TopAbs_SOLID:
                     // 对于实体形状，总是使用ManifoldSolidBrep以确保最大兼容性
@@ -2960,12 +2938,9 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
                             BRepGProp::VolumeProperties(shape_to_use, volumeProps);
                             double volume = fabs(volumeProps.Mass());
                             std::cout << "[STEP Exporter]   Shape " << i + 1 << " is SHELL, area=" << area << ", volume=" << volume << std::endl;
-                            std::cout << "[STEP Exporter]   DEBUG: area > 1e-12 = " << (area > 1e-12) << ", volume < 1e-12 = " << (volume < 1e-12) << std::endl;
                             
-                            // 方法4：如果体积为零但面积不为零，尝试挤出为薄实体
                             if (volume < 1e-12 && area > 1e-12) {
                                 std::cout << "[STEP Exporter]   Shape " << i + 1 << " has zero volume, attempting extrusion..." << std::endl;
-                                std::cout << "[STEP Exporter]   DEBUG: shape_to_use type = " << shape_to_use.ShapeType() << " (4=SHELL)" << std::endl;
                                 
                                 bool extrusion_success = false;
                                 TopoDS_Shape extrudedShape;
@@ -3359,7 +3334,6 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
                 case TopAbs_FACE:
                     // 对于面类型，尝试转换为实体以提高Bambu兼容性
                     {
-                        std::cout << "[STEP Exporter] DEBUG: ENTERING FACE CASE for shape " << i + 1 << std::endl;
                         std::cout << "[STEP Exporter]   Shape " << i + 1 << " is FACE, attempting to convert to SOLID..." << std::endl;
                         
                         bool converted_to_solid = false;

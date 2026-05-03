@@ -169,6 +169,17 @@ static bool parse_vertex_coord(PyObject* coord, double& out_value) {
     return success;
 }
 
+static bool parse_face_index(PyObject* idx_obj, int& out_index) {
+    if (PyLong_Check(idx_obj)) {
+        out_index = static_cast<int>(PyLong_AsLong(idx_obj));
+        return true;
+    } else if (PyFloat_Check(idx_obj)) {
+        out_index = static_cast<int>(PyFloat_AS_DOUBLE(idx_obj));
+        return true;
+    }
+    return false;
+}
+
 // 从网格创建形状（原始版本）
 static TopoDS_Shape create_shape_from_mesh(const std::vector<std::vector<double>>& vertices,
                                            const std::vector<std::vector<int>>& faces,
@@ -2113,14 +2124,9 @@ static PyObject* export_scene(PyObject* self, PyObject* args) {
                         for (Py_ssize_t idx = 0; idx < num_indices; idx++) {
                             PyObject* idx_obj = PyList_GetItem(face_item, idx);
                             int vertex_idx;
-                            if (PyLong_Check(idx_obj)) {
-                                vertex_idx = static_cast<int>(PyLong_AsLong(idx_obj));
-                            } else if (PyFloat_Check(idx_obj)) {
-                                vertex_idx = static_cast<int>(PyFloat_AS_DOUBLE(idx_obj));
-                            } else {
-                                continue;
+                            if (parse_face_index(idx_obj, vertex_idx)) {
+                                face_indices.push_back(vertex_idx);
                             }
-                            face_indices.push_back(vertex_idx);
                         }
                         faces.push_back(face_indices);
                     }
@@ -2130,14 +2136,9 @@ static PyObject* export_scene(PyObject* self, PyObject* args) {
                         for (Py_ssize_t idx = 0; idx < num_indices; idx++) {
                             PyObject* idx_obj = PyTuple_GetItem(face_item, idx);
                             int vertex_idx;
-                            if (PyLong_Check(idx_obj)) {
-                                vertex_idx = static_cast<int>(PyLong_AsLong(idx_obj));
-                            } else if (PyFloat_Check(idx_obj)) {
-                                vertex_idx = static_cast<int>(PyFloat_AS_DOUBLE(idx_obj));
-                            } else {
-                                continue;
+                            if (parse_face_index(idx_obj, vertex_idx)) {
+                                face_indices.push_back(vertex_idx);
                             }
-                            face_indices.push_back(vertex_idx);
                         }
                         faces.push_back(face_indices);
                     }
@@ -2681,77 +2682,6 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
                     bool valid_vertex = false;
                     std::vector<double> vertex(3);
                     
-                    // 调试：前5个顶点的详细信息
-                    std::cout << "[STEP Exporter] DEBUG: In vertex loop v=" << v << std::endl;
-                    std::cout.flush();
-                    if (v < 5) {
-                        std::cout << "[STEP Exporter] DEBUG: vertex_item type: " << vertex_item->ob_type->tp_name << std::endl;
-                        std::cout << "[STEP Exporter] DEBUG: PyTuple_Check=" << PyTuple_Check(vertex_item) 
-                                  << ", PyList_Check=" << PyList_Check(vertex_item) << std::endl;
-                        if (PyList_Check(vertex_item)) {
-                            Py_ssize_t list_size = PyList_Size(vertex_item);
-                            std::cout << "[STEP Exporter] DEBUG: List size=" << list_size << std::endl;
-                            for (int j = 0; j < std::min(list_size, (Py_ssize_t)3); j++) {
-                                PyObject* coord = PyList_GetItem(vertex_item, j);
-                                std::cout << "[STEP Exporter] DEBUG:   coord[" << j << "] type: " << coord->ob_type->tp_name 
-                                          << ", PyFloat_Check=" << PyFloat_Check(coord) 
-                                          << ", PyLong_Check=" << PyLong_Check(coord) << std::endl;
-                                // 额外调试：打印Python对象的字符串表示
-                                PyObject* repr = PyObject_Repr(coord);
-                                if (repr && PyUnicode_Check(repr)) {
-                                    const char* repr_str = PyUnicode_AsUTF8(repr);
-                                    if (repr_str) {
-                                        std::cout << "[STEP Exporter] DEBUG:   coord[" << j << "] repr: " << repr_str << std::endl;
-                                    }
-                                }
-                                if (repr) {
-                                    Py_DECREF(repr);
-                                }
-                                if (PyFloat_Check(coord)) {
-                                    double val1 = PyFloat_AsDouble(coord);
-                                    double val2 = PyFloat_AS_DOUBLE(coord);
-                                    // 直接访问ob_fval作为调试
-                                    PyFloatObject* float_obj = (PyFloatObject*)coord;
-                                    // 检查类型指针
-                                    std::cout << "[STEP Exporter] DEBUG:   coord[" << j << "] type pointer: " << coord->ob_type 
-                                              << ", PyFloat_Type pointer: " << &PyFloat_Type << std::endl;
-                                    std::cout << "[STEP Exporter] DEBUG:   coord[" << j << "] value PyFloat_AsDouble=" << val1 
-                                              << ", PyFloat_AS_DOUBLE=" << val2 
-                                              << ", ob_fval=" << float_obj->ob_fval << std::endl;
-                                    
-                                    // 棰濆璋冭瘯锛氭鏌ュ璞℃槸鍚︽湁__float__鏂规硶
-                                    if (PyObject_HasAttrString(coord, "__float__")) {
-                                        std::cout << "[STEP Exporter] DEBUG:   coord[" << j << "] has __float__ method" << std::endl;
-                                        // 灏濊瘯鐩存帴璋冪敤__float__
-                                        PyObject* float_method = PyObject_GetAttrString(coord, "__float__");
-                                        if (float_method && PyCallable_Check(float_method)) {
-                                            PyObject* result = PyObject_CallObject(float_method, NULL);
-                                            if (result) {
-                                                if (PyFloat_Check(result)) {
-                                                    double val4 = PyFloat_AsDouble(result);
-                                                    std::cout << "[STEP Exporter] DEBUG:   coord[" << j << "] via __float__()=" << val4 << std::endl;
-                                                }
-                                                Py_DECREF(result);
-                                            }
-                                            Py_DECREF(float_method);
-                                        }
-                                    }
-                                    
-                                    // 灏濊瘯浣跨敤PyNumber_Float浣滀负澶囩敤鏂规
-                                    PyObject* float_converted = PyNumber_Float(coord);
-                                    if (float_converted) {
-                                        double val3 = PyFloat_AS_DOUBLE(float_converted);
-                                        std::cout << "[STEP Exporter] DEBUG:   coord[" << j << "] via PyNumber_Float=" << val3 << std::endl;
-                                        Py_DECREF(float_converted);
-                                    }
-                                } else if (PyLong_Check(coord)) {
-                                    long val = PyLong_AsLong(coord);
-                                    std::cout << "[STEP Exporter] DEBUG:   coord[" << j << "] value=" << val << std::endl;
-                                }
-                            }
-                        }
-                    }
-                    
                     if (PyTuple_Check(vertex_item) && PyTuple_Size(vertex_item) >= 3) {
                         for (int k = 0; k < 3; k++) {
                             PyObject* coord = PyTuple_GetItem(vertex_item, k);
@@ -2772,16 +2702,6 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
                     }
                 }
                 
-                // 调试：打印前几个顶点坐标
-                if (!vertices.empty()) {
-                    std::cout << "[STEP Exporter] DEBUG: First 5 vertices (scale already applied in Python):" << std::endl;
-                    for (size_t i = 0; i < std::min(vertices.size(), (size_t)5); i++) {
-                        std::cout << "  Vertex " << i << ": (" 
-                                  << vertices[i][0] << ", " 
-                                  << vertices[i][1] << ", " 
-                                  << vertices[i][2] << ")" << std::endl;
-                    }
-                }
             } else {
                 std::cerr << "[STEP Exporter]   No vertices found or vertices is not a list" << std::endl;
                 continue;
@@ -2813,14 +2733,9 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
                         for (Py_ssize_t idx = 0; idx < num_indices; idx++) {
                             PyObject* idx_obj = PyList_GetItem(face_item, idx);
                             int vertex_idx;
-                            if (PyLong_Check(idx_obj)) {
-                                vertex_idx = static_cast<int>(PyLong_AsLong(idx_obj));
-                            } else if (PyFloat_Check(idx_obj)) {
-                                vertex_idx = static_cast<int>(PyFloat_AS_DOUBLE(idx_obj));
-                            } else {
-                                continue;
+                            if (parse_face_index(idx_obj, vertex_idx)) {
+                                face_indices.push_back(vertex_idx);
                             }
-                            face_indices.push_back(vertex_idx);
                         }
                         faces.push_back(face_indices);
                     }
@@ -2830,14 +2745,9 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
                         for (Py_ssize_t idx = 0; idx < num_indices; idx++) {
                             PyObject* idx_obj = PyTuple_GetItem(face_item, idx);
                             int vertex_idx;
-                            if (PyLong_Check(idx_obj)) {
-                                vertex_idx = static_cast<int>(PyLong_AsLong(idx_obj));
-                            } else if (PyFloat_Check(idx_obj)) {
-                                vertex_idx = static_cast<int>(PyFloat_AS_DOUBLE(idx_obj));
-                            } else {
-                                continue;
+                            if (parse_face_index(idx_obj, vertex_idx)) {
+                                face_indices.push_back(vertex_idx);
                             }
-                            face_indices.push_back(vertex_idx);
                         }
                         faces.push_back(face_indices);
                     }

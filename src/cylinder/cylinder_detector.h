@@ -1,4 +1,4 @@
-﻿// Cylinder Detector V2 - Header file
+﻿﻿// Cylinder Detector V2 - Header file
 #ifndef CYLINDER_DETECTOR_H
 #define CYLINDER_DETECTOR_H
 

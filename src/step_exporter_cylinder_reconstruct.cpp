@@ -3399,19 +3399,8 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                         }
                     }
                     
-                    // 使用Geom_ConicalSurface和BRepBuilderAPI_MakeFace创建圆锥
-                    gp_Ax2 coneAxis(scaled_basePoint, axisDir);
-                    
-                    // 计算圆锥的半角
-                    double semi_angle = atan2(scaled_r1 - scaled_r2, scaled_height);
-                    
-                    std::cout << "[STEP Exporter] Semi-angle: " << (semi_angle * 180.0 / M_PI) << " degrees" << std::endl;
-                    
-                    // 创建圆锥面 - Geom_ConicalSurface需要(axis, semi_angle, radius_at_height_0)
-                    Handle(Geom_ConicalSurface) conicalSurf = new Geom_ConicalSurface(coneAxis, semi_angle, scaled_r1);
-                    
-                    // 创建有界圆锥面
-                    TopoDS_Face conicalFace = BRepBuilderAPI_MakeFace(conicalSurf, 0, 2*M_PI, 0, scaled_height, Precision::Confusion());
+                    // 使用create_conical_face创建圆锥面
+                    TopoDS_Face conicalFace = create_conical_face(scaled_basePoint, axisDir, scaled_r1, scaled_r2, scaled_height);
                     
                     std::cout << "[STEP Exporter] Conical face created, IsNull: " << conicalFace.IsNull() << std::endl;
                     

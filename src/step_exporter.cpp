@@ -129,6 +129,46 @@ TopoDS_Shape static fix_shape(const TopoDS_Shape& shape, double tolerance = 1.0e
     }
 }
 
+static bool parse_vertex_coord(PyObject* coord, double& out_value) {
+    double coord_value = 0.0;
+    bool success = false;
+
+    PyObject* float_obj = PyNumber_Float(coord);
+    if (float_obj) {
+        coord_value = PyFloat_AS_DOUBLE(float_obj);
+        Py_DECREF(float_obj);
+        success = true;
+    } else {
+        PyErr_Clear();
+        if (PyFloat_Check(coord)) {
+            coord_value = PyFloat_AsDouble(coord);
+            success = true;
+        } else if (PyLong_Check(coord)) {
+            coord_value = static_cast<double>(PyLong_AsLong(coord));
+            success = true;
+        }
+    }
+
+    if (success) {
+        PyObject* repr = PyObject_Repr(coord);
+        if (repr && PyUnicode_Check(repr)) {
+            const char* repr_str = PyUnicode_AsUTF8(repr);
+            if (repr_str) {
+                try {
+                    double parsed_value = std::stod(repr_str);
+                    if (fabs(parsed_value - coord_value) > 1e-12) {
+                        coord_value = parsed_value;
+                    }
+                } catch (...) {}
+            }
+        }
+        if (repr) { Py_DECREF(repr); }
+        out_value = coord_value;
+    }
+
+    return success;
+}
+
 // 从网格创建形状（原始版本）
 static TopoDS_Shape create_shape_from_mesh(const std::vector<std::vector<double>>& vertices,
                                            const std::vector<std::vector<int>>& faces,
@@ -2038,209 +2078,15 @@ static PyObject* export_scene(PyObject* self, PyObject* args) {
                     if (PyTuple_Check(vertex_item) && PyTuple_Size(vertex_item) >= 3) {
                         for (int k = 0; k < 3; k++) {
                             PyObject* coord = PyTuple_GetItem(vertex_item, k);
-                            double coord_value = 0.0;
-                            bool success = false;
-                            
-                            // First try PyNumber_Float, works for any object implementing __float__
-                            PyObject* float_obj = PyNumber_Float(coord);
-                            if (float_obj) {
-                                coord_value = PyFloat_AS_DOUBLE(float_obj);
-                                Py_DECREF(float_obj);
-                                success = true;
-
-                                                        if (v < 5) {
-
-                                                            std::cout << "[STEP Exporter] DEBUG: PyNumber_Float succeeded, coord_value = " << coord_value << std::endl;
-
-                                                        }
-                            } else {
-                                // Clear any exception
-                                PyErr_Clear();
-                                // Fallback to PyFloat_AsDouble
-                            if (PyFloat_Check(coord)) {
-                                    coord_value = PyFloat_AsDouble(coord);
-                                    success = true;
-
-                                                        if (v < 5) {
-
-                                                            std::cout << "[STEP Exporter] DEBUG: PyNumber_Float succeeded, coord_value = " << coord_value << std::endl;
-
-                                                        }
-                            } else if (PyLong_Check(coord)) {
-                                    coord_value = static_cast<double>(PyLong_AsLong(coord));
-                                    success = true;
-
-                                                        if (v < 5) {
-
-                                                            std::cout << "[STEP Exporter] DEBUG: PyNumber_Float succeeded, coord_value = " << coord_value << std::endl;
-
-                                                        }
-                                }
-                            }
-                            
-                            if (success) {
-                                // Always try to parse from repr string to bypass float ABI issues
-                                PyObject* repr = PyObject_Repr(coord);
-                                if (v < 5) {
-                                    std::cout << "[STEP Exporter] DEBUG: repr pointer: " << repr << std::endl;
-                                    std::cout.flush();
-                                }
-                                if (repr && PyUnicode_Check(repr)) {
-                                    const char* repr_str = PyUnicode_AsUTF8(repr);
-                                    if (repr_str) {
-                                        if (v < 5) {
-                                            std::cout << "[STEP Exporter] DEBUG: repr string: " << repr_str << " (length=" << strlen(repr_str) << ")" << std::endl;
-                                        }
-                                        try {
-                                            double parsed_value = std::stod(repr_str);
-                                            if (v < 5) {
-                                                std::cout << "[STEP Exporter] DEBUG: parsed value: " << parsed_value << std::endl;
-                                            }
-                                            // Check if parsed value differs significantly from coord_value
-                                            if (fabs(parsed_value - coord_value) > 1e-12) {
-                                                coord_value = parsed_value;
-                                                if (v < 5) {
-                                                    std::cout << "[STEP Exporter] DEBUG: Using repr parsed value (differs from coord_value): " << repr_str << " -> " << parsed_value << std::endl;
-                                                }
-                            } else {
-                                                if (v < 5) {
-                                                    std::cout << "[STEP Exporter] DEBUG: parsed value matches coord_value within tolerance, keeping coord_value" << std::endl;
-                            }
-                                            }
-                                        } catch (const std::exception& e) {
-                                            if (v < 5) {
-                                                std::cout << "[STEP Exporter] DEBUG: std::stod exception: " << e.what() << std::endl;
-                                            }
-                                            // parsing failed, keep original value
-                                        } catch (...) {
-                                            if (v < 5) {
-                                                std::cout << "[STEP Exporter] DEBUG: unknown exception" << std::endl;
-                                            }
-                                            // parsing failed, keep original value
-                                        }
-                                    } else {
-                                        if (v < 5) {
-                                            std::cout << "[STEP Exporter] DEBUG: repr_str is null" << std::endl;
-                                        }
-                                    }
-                                } else {
-                                    if (v < 5) {
-                                        std::cout << "[STEP Exporter] DEBUG: repr is null or not Unicode object" << std::endl;
-                                        if (repr) {
-                                            std::cout << "[STEP Exporter] DEBUG: repr type: " << Py_TYPE(repr)->tp_name << std::endl;
-                                        }
-                                    }
-                                }
-                                if (repr) { Py_DECREF(repr); }
-                                vertex[k] = coord_value;
+                            if (!parse_vertex_coord(coord, vertex[k])) break;
                             if (k == 2) valid_vertex = true;
-                            } else {
-                                break;
-                            }
                         }
                     }
                     else if (PyList_Check(vertex_item) && PyList_Size(vertex_item) >= 3) {
                         for (int i = 0; i < 3; i++) {
                             PyObject* coord = PyList_GetItem(vertex_item, i);
-                            double coord_value = 0.0;
-                            bool success = false;
-                            
-                            // First try PyNumber_Float, works for any object implementing __float__
-                            PyObject* float_obj = PyNumber_Float(coord);
-                            if (float_obj) {
-                                coord_value = PyFloat_AS_DOUBLE(float_obj);
-                                Py_DECREF(float_obj);
-                                success = true;
-
-                                                        if (v < 5) {
-
-                                                            std::cout << "[STEP Exporter] DEBUG: PyNumber_Float succeeded, coord_value = " << coord_value << std::endl;
-
-                                                        }
-                            } else {
-                                // Clear any exception
-                                PyErr_Clear();
-                                // Fallback to PyFloat_AsDouble
-                            if (PyFloat_Check(coord)) {
-                                    coord_value = PyFloat_AsDouble(coord);
-                                    success = true;
-
-                                                        if (v < 5) {
-
-                                                            std::cout << "[STEP Exporter] DEBUG: PyNumber_Float succeeded, coord_value = " << coord_value << std::endl;
-
-                                                        }
-                            } else if (PyLong_Check(coord)) {
-                                    coord_value = static_cast<double>(PyLong_AsLong(coord));
-                                    success = true;
-
-                                                        if (v < 5) {
-
-                                                            std::cout << "[STEP Exporter] DEBUG: PyNumber_Float succeeded, coord_value = " << coord_value << std::endl;
-
-                                                        }
-                                }
-                            }
-                            
-                            if (success) {
-                                // Always try to parse from repr string to bypass float ABI issues
-                                PyObject* repr = PyObject_Repr(coord);
-                                if (v < 5) {
-                                    std::cout << "[STEP Exporter] DEBUG: repr pointer: " << repr << std::endl;
-                                    std::cout.flush();
-                                }
-                                if (repr && PyUnicode_Check(repr)) {
-                                    const char* repr_str = PyUnicode_AsUTF8(repr);
-                                    if (repr_str) {
-                                        if (v < 5) {
-                                            std::cout << "[STEP Exporter] DEBUG: repr string: " << repr_str << " (length=" << strlen(repr_str) << ")" << std::endl;
-                                        }
-                                        try {
-                                            double parsed_value = std::stod(repr_str);
-                                            if (v < 5) {
-                                                std::cout << "[STEP Exporter] DEBUG: parsed value: " << parsed_value << std::endl;
-                                            }
-                                            // Check if parsed value differs significantly from coord_value
-                                            if (fabs(parsed_value - coord_value) > 1e-12) {
-                                                coord_value = parsed_value;
-                                                if (v < 5) {
-                                                    std::cout << "[STEP Exporter] DEBUG: Using repr parsed value (differs from coord_value): " << repr_str << " -> " << parsed_value << std::endl;
-                                                }
-                            } else {
-                                                if (v < 5) {
-                                                    std::cout << "[STEP Exporter] DEBUG: parsed value matches coord_value within tolerance, keeping coord_value" << std::endl;
-                            }
-                                            }
-                                        } catch (const std::exception& e) {
-                                            if (v < 5) {
-                                                std::cout << "[STEP Exporter] DEBUG: std::stod exception: " << e.what() << std::endl;
-                                            }
-                                            // parsing failed, keep original value
-                                        } catch (...) {
-                                            if (v < 5) {
-                                                std::cout << "[STEP Exporter] DEBUG: unknown exception" << std::endl;
-                                            }
-                                            // parsing failed, keep original value
-                                        }
-                                    } else {
-                                        if (v < 5) {
-                                            std::cout << "[STEP Exporter] DEBUG: repr_str is null" << std::endl;
-                                        }
-                                    }
-                                } else {
-                                    if (v < 5) {
-                                        std::cout << "[STEP Exporter] DEBUG: repr is null or not Unicode object" << std::endl;
-                                        if (repr) {
-                                            std::cout << "[STEP Exporter] DEBUG: repr type: " << Py_TYPE(repr)->tp_name << std::endl;
-                                        }
-                                    }
-                                }
-                                if (repr) { Py_DECREF(repr); }
-                                vertex[i] = coord_value;
+                            if (!parse_vertex_coord(coord, vertex[i])) break;
                             if (i == 2) valid_vertex = true;
-                            } else {
-                                break;
-                            }
                         }
                     }
                     
@@ -2909,217 +2755,15 @@ static PyObject* export_scene_enhanced(PyObject* self, PyObject* args) {
                     if (PyTuple_Check(vertex_item) && PyTuple_Size(vertex_item) >= 3) {
                         for (int k = 0; k < 3; k++) {
                             PyObject* coord = PyTuple_GetItem(vertex_item, k);
-                            double coord_value = 0.0;
-                            bool success = false;
-                            
-                            // First try PyNumber_Float, works for any object implementing __float__
-                            PyObject* float_obj = PyNumber_Float(coord);
-                            if (float_obj) {
-                                coord_value = PyFloat_AS_DOUBLE(float_obj);
-                                Py_DECREF(float_obj);
-                                success = true;
-
-                                                        if (v < 5) {
-
-                                                            std::cout << "[STEP Exporter] DEBUG: PyNumber_Float succeeded, coord_value = " << coord_value << std::endl;
-
-                                                        }
-                            } else {
-                                // Clear any exception
-                                PyErr_Clear();
-                                // Fallback to PyFloat_AsDouble
-                            if (PyFloat_Check(coord)) {
-                                    coord_value = PyFloat_AsDouble(coord);
-                                    success = true;
-
-                                                        if (v < 5) {
-
-                                                            std::cout << "[STEP Exporter] DEBUG: PyNumber_Float succeeded, coord_value = " << coord_value << std::endl;
-
-                                                        }
-                            } else if (PyLong_Check(coord)) {
-                                    coord_value = static_cast<double>(PyLong_AsLong(coord));
-                                    success = true;
-
-                                                        if (v < 5) {
-
-                                                            std::cout << "[STEP Exporter] DEBUG: PyNumber_Float succeeded, coord_value = " << coord_value << std::endl;
-
-                                                        }
-                                }
-                            }
-                            
-                            if (success) {
-                                // Always try to parse from repr string to bypass float ABI issues
-                                PyObject* repr = PyObject_Repr(coord);
-                                if (v < 5) {
-                                    std::cout << "[STEP Exporter] DEBUG: repr pointer: " << repr << std::endl;
-                                    std::cout.flush();
-                                }
-                                if (repr && PyUnicode_Check(repr)) {
-                                    const char* repr_str = PyUnicode_AsUTF8(repr);
-                                    if (repr_str) {
-                                        if (v < 5) {
-                                            std::cout << "[STEP Exporter] DEBUG: repr string: " << repr_str << " (length=" << strlen(repr_str) << ")" << std::endl;
-                                        }
-                                        try {
-                                            double parsed_value = std::stod(repr_str);
-                                            if (v < 5) {
-                                                std::cout << "[STEP Exporter] DEBUG: parsed value: " << parsed_value << std::endl;
-                                            }
-                                            // Check if parsed value differs significantly from coord_value
-                                            if (fabs(parsed_value - coord_value) > 1e-12) {
-                                                coord_value = parsed_value;
-                                                if (v < 5) {
-                                                    std::cout << "[STEP Exporter] DEBUG: Using repr parsed value (differs from coord_value): " << repr_str << " -> " << parsed_value << std::endl;
-                                                }
-                            } else {
-                                                if (v < 5) {
-                                                    std::cout << "[STEP Exporter] DEBUG: parsed value matches coord_value within tolerance, keeping coord_value" << std::endl;
-                            }
-                                            }
-                                        } catch (const std::exception& e) {
-                                            if (v < 5) {
-                                                std::cout << "[STEP Exporter] DEBUG: std::stod exception: " << e.what() << std::endl;
-                                            }
-                                            // parsing failed, keep original value
-                                        } catch (...) {
-                                            if (v < 5) {
-                                                std::cout << "[STEP Exporter] DEBUG: unknown exception" << std::endl;
-                                            }
-                                            // parsing failed, keep original value
-                                        }
-                                    } else {
-                                        if (v < 5) {
-                                            std::cout << "[STEP Exporter] DEBUG: repr_str is null" << std::endl;
-                                        }
-                                    }
-                                } else {
-                                    if (v < 5) {
-                                        std::cout << "[STEP Exporter] DEBUG: repr is null or not Unicode object" << std::endl;
-                                        if (repr) {
-                                            std::cout << "[STEP Exporter] DEBUG: repr type: " << Py_TYPE(repr)->tp_name << std::endl;
-                                        }
-                                    }
-                                }
-                                if (repr) { Py_DECREF(repr); }
-                                vertex[k] = coord_value;
+                            if (!parse_vertex_coord(coord, vertex[k])) break;
                             if (k == 2) valid_vertex = true;
-                            } else {
-                                break;
-                            }
                         }
                     }
                     else if (PyList_Check(vertex_item) && PyList_Size(vertex_item) >= 3) {
                         for (int i = 0; i < 3; i++) {
                             PyObject* coord = PyList_GetItem(vertex_item, i);
-                            double coord_value = 0.0;
-                            bool success = false;
-                            
-                            // First try PyNumber_Float, works for any object implementing __float__
-                            PyObject* float_obj = PyNumber_Float(coord);
-                            if (float_obj) {
-                                coord_value = PyFloat_AS_DOUBLE(float_obj);
-                                Py_DECREF(float_obj);
-                                success = true;
-
-                                                        if (v < 5) {
-
-                                                            std::cout << "[STEP Exporter] DEBUG: PyNumber_Float succeeded, coord_value = " << coord_value << std::endl;
-
-                                                        }
-                            } else {
-                                // Clear any exception
-                                PyErr_Clear();
-                                // Fallback to PyFloat_AsDouble
-                            if (PyFloat_Check(coord)) {
-                                    coord_value = PyFloat_AsDouble(coord);
-                                    success = true;
-
-                                                        if (v < 5) {
-
-                                                            std::cout << "[STEP Exporter] DEBUG: PyNumber_Float succeeded, coord_value = " << coord_value << std::endl;
-
-                                                        }
-                            } else if (PyLong_Check(coord)) {
-                                    coord_value = static_cast<double>(PyLong_AsLong(coord));
-                                    success = true;
-
-                                                        if (v < 5) {
-
-                                                            std::cout << "[STEP Exporter] DEBUG: PyNumber_Float succeeded, coord_value = " << coord_value << std::endl;
-
-                                                        }
-                                }
-                            }
-                            
-                            if (success) {
-                                // If value is 0.0 but repr() string is non-zero, try parsing from string
-                                if (v < 5) {
-                                    std::cout << "[STEP Exporter] DEBUG: success block: coord_value=" << coord_value << ", fabs(coord_value)=" << fabs(coord_value) << std::endl;
-                                }
-                                // Unconditional test: check if we enter this code block
-                                if (v < 5) {
-                                    std::cout << "[STEP Exporter] DEBUG: TEST POINT 1: Entered success block" << std::endl;
-                                }
-                                // Always try to parse from repr string to bypass float ABI issues
-                                PyObject* repr = PyObject_Repr(coord);
-                                if (v < 5) {
-                                    std::cout << "[STEP Exporter] DEBUG: repr pointer: " << repr << std::endl;
-                                    std::cout.flush();
-                                }
-                                if (repr && PyUnicode_Check(repr)) {
-                                    const char* repr_str = PyUnicode_AsUTF8(repr);
-                                    if (repr_str) {
-                                        if (v < 5) {
-                                            std::cout << "[STEP Exporter] DEBUG: repr string: " << repr_str << " (length=" << strlen(repr_str) << ")" << std::endl;
-                                        }
-                                        try {
-                                            double parsed_value = std::stod(repr_str);
-                                            if (v < 5) {
-                                                std::cout << "[STEP Exporter] DEBUG: parsed value: " << parsed_value << std::endl;
-                                            }
-                                            // Check if parsed value differs significantly from coord_value
-                                            if (fabs(parsed_value - coord_value) > 1e-12) {
-                                                coord_value = parsed_value;
-                                                if (v < 5) {
-                                                    std::cout << "[STEP Exporter] DEBUG: Using repr parsed value (differs from coord_value): " << repr_str << " -> " << parsed_value << std::endl;
-                                                }
-                            } else {
-                                                if (v < 5) {
-                                                    std::cout << "[STEP Exporter] DEBUG: parsed value matches coord_value within tolerance, keeping coord_value" << std::endl;
-                            }
-                                            }
-                                        } catch (const std::exception& e) {
-                                            if (v < 5) {
-                                                std::cout << "[STEP Exporter] DEBUG: std::stod exception: " << e.what() << std::endl;
-                                            }
-                                            // parsing failed, keep original value
-                                        } catch (...) {
-                                            if (v < 5) {
-                                                std::cout << "[STEP Exporter] DEBUG: unknown exception" << std::endl;
-                                            }
-                                            // parsing failed, keep original value
-                                        }
-                                    } else {
-                                        if (v < 5) {
-                                            std::cout << "[STEP Exporter] DEBUG: repr_str is null" << std::endl;
-                                        }
-                                    }
-                                } else {
-                                    if (v < 5) {
-                                        std::cout << "[STEP Exporter] DEBUG: repr is null or not Unicode object" << std::endl;
-                                        if (repr) {
-                                            std::cout << "[STEP Exporter] DEBUG: repr type: " << Py_TYPE(repr)->tp_name << std::endl;
-                                        }
-                                    }
-                                }
-                                if (repr) { Py_DECREF(repr); }
-                                vertex[i] = coord_value;
+                            if (!parse_vertex_coord(coord, vertex[i])) break;
                             if (i == 2) valid_vertex = true;
-                            } else {
-                                break;
-                            }
                         }
                     }
                     
@@ -4409,18 +4053,20 @@ static PyObject* add_object_to_export(PyObject* self, PyObject* args) {
                         PyObject* vertex_item = PyList_GetItem(vertices_obj, v);
                         if (PyTuple_Check(vertex_item) && PyTuple_Size(vertex_item) >= 3) {
                             std::vector<double> vertex(3);
+                            bool valid = true;
                             for (int k = 0; k < 3; k++) {
                                 PyObject* coord = PyTuple_GetItem(vertex_item, k);
-                                vertex[k] = PyFloat_AsDouble(coord);
+                                if (!parse_vertex_coord(coord, vertex[k])) { valid = false; break; }
                             }
-                            vertices.push_back(vertex);
+                            if (valid) vertices.push_back(vertex);
                         } else if (PyList_Check(vertex_item) && PyList_Size(vertex_item) >= 3) {
                             std::vector<double> vertex(3);
+                            bool valid = true;
                             for (int k = 0; k < 3; k++) {
                                 PyObject* coord = PyList_GetItem(vertex_item, k);
-                                vertex[k] = PyFloat_AsDouble(coord);
+                                if (!parse_vertex_coord(coord, vertex[k])) { valid = false; break; }
                             }
-                            vertices.push_back(vertex);
+                            if (valid) vertices.push_back(vertex);
                         }
                     }
                 }

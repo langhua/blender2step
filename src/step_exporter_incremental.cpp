@@ -428,6 +428,15 @@ PyObject* add_object_to_export(PyObject* self, PyObject* args) {
             transfer_mode = STEPControl_ManifoldSolidBrep;
         } else if (shape.ShapeType() == TopAbs_EDGE || shape.ShapeType() == TopAbs_WIRE) {
             transfer_mode = STEPControl_GeometricCurveSet;
+        } else if (shape.ShapeType() == TopAbs_COMPOUND) {
+            bool has_faces = false;
+            for (TopExp_Explorer exp(shape, TopAbs_FACE); exp.More(); exp.Next()) {
+                has_faces = true;
+                break;
+            }
+            if (!has_faces) {
+                transfer_mode = STEPControl_GeometricCurveSet;
+            }
         }
 
         IFSelect_ReturnStatus status = g_incremental_writer->Transfer(shape, transfer_mode);

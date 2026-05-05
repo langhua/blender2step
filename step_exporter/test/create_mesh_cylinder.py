@@ -650,6 +650,62 @@ def create_hollow_cylinder(name, center, outer_radius, inner_radius, height, seg
         return None
 
 
+def apply_top_fillet_to_mesh(obj, height, fillet_radius, fillet_segments=16):
+    """
+    对网格对象的顶部边缘应用圆倒角（包括外边缘和内边缘）
+
+    适用于空心圆柱体，顶部为环形面，同时对外圆边界和内圆边界进行圆角。
+    先清理网格（合并重复顶点、融并共面边），再执行圆角，消除布尔运算产生的凸起。
+
+    Args:
+        obj: 网格对象（必须已定位到最终位置）
+        height: 圆柱体高度（用于定位顶部边缘）
+        fillet_radius: 圆角半径
+        fillet_segments: 圆角分段数（默认16，产生平滑圆角）
+    """
+    import bpy
+
+    bpy.ops.object.select_all(action='DESELECT')
+    obj.select_set(True)
+    bpy.context.view_layer.objects.active = obj
+
+    bpy.ops.object.mode_set(mode='EDIT')
+    bpy.ops.mesh.select_all(action='SELECT')
+
+    bpy.ops.mesh.remove_doubles(threshold=0.0001)
+
+    bpy.ops.mesh.dissolve_limited(angle_limit=math.radians(1.0))
+
+    bpy.ops.mesh.select_all(action='DESELECT')
+    bpy.ops.object.mode_set(mode='OBJECT')
+
+    top_z = height / 2.0
+    selected_count = 0
+
+    for edge in obj.data.edges:
+        v1 = obj.data.vertices[edge.vertices[0]]
+        v2 = obj.data.vertices[edge.vertices[1]]
+        if abs(v1.co.z - top_z) < 0.001 and abs(v2.co.z - top_z) < 0.001:
+            edge.select = True
+            selected_count += 1
+
+    print(f"     -> Selected {selected_count} top edges for fillet")
+
+    bpy.ops.object.mode_set(mode='EDIT')
+
+    bpy.ops.mesh.bevel(
+        offset=fillet_radius,
+        segments=fillet_segments,
+        profile=0.5,
+        clamp_overlap=True,
+        affect='EDGES'
+    )
+
+    bpy.ops.object.mode_set(mode='OBJECT')
+    obj.update_tag()
+    bpy.context.view_layer.update()
+
+
 def create_mechanical_demo_scene():
     """
     创建机械设计演示场景
@@ -806,6 +862,27 @@ def create_mechanical_demo_scene():
         print("     -> Should export as cone with tapered hole")
     else:
         print("   [FAIL] Failed to create tapered hollow cylinder")
+
+    print("\n[5f/6] 创建带顶部倒角的锥形螺柱（外圆和内圆顶部均有倒角）...")
+    tapered_hollow_chamfer = create_tapered_hollow_cylinder(
+        "Cylinder_Tapered_Hollow_Chamfer",
+        [180, 80, 0],
+        25,  # 外柱底部半径
+        20,  # 外柱顶部半径（上小下大）
+        8,   # 内孔底部半径
+        12,  # 内孔顶部半径（上大下小）
+        60,  # 高度
+        segments=64
+    )
+    if tapered_hollow_chamfer:
+        apply_top_fillet_to_mesh(tapered_hollow_chamfer, 60, 1.5, fillet_segments=16)
+        print("   [OK] Tapered hollow cylinder with top fillet")
+        print("     -> Outer: bottom 25mm, top 20mm (smaller top, larger bottom)")
+        print("     -> Inner: bottom 8mm, top 12mm (larger top, smaller bottom)")
+        print("     -> Height: 60mm, Top fillet: R1.5mm (outer + inner edges)")
+        print("     -> Should export as cone with tapered hole and top fillets")
+    else:
+        print("   [FAIL] Failed to create tapered hollow cylinder with chamfer")
     
     print("\n[6/6] 创建带 2°斜率的参考圆柱...")
     slope_rad = math.radians(2)
@@ -824,7 +901,7 @@ def create_mechanical_demo_scene():
     
     print("\n" + "="*60)
     print("[OK] Mechanical parts created! (Mesh version)")
-    print("  Total 11 objects, all MESH type:")
+    print("  Total 12 objects, all MESH type:")
     print("  1. Solid cylinder - exports as analytical cylinder")
     print("  2. 3-degree tapered cylinder - exports as analytical cone")
     print("  3. 4-degree tapered cylinder - exports as analytical cone")
@@ -835,7 +912,8 @@ def create_mechanical_demo_scene():
     print("  8. Tapered cylinder with fillet and chamfer - exports as complex analytical surface")
     print("  9. Hollow cylinder - exports as cylinder with hole")
     print("  10. Tapered hollow cylinder - exports as cone with tapered hole")
-    print("  11. 2-degree tapered reference cylinder - exports as analytical cone")
+    print("  11. Tapered hollow cylinder with top fillet - exports as cone with tapered hole and fillets")
+    print("  12. 2-degree tapered reference cylinder - exports as analytical cone")
     print("="*60)
     print("\nNext: File -> Export -> STEP (Enhanced)")
     print("Verify in FreeCAD:")

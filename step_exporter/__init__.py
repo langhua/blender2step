@@ -191,7 +191,7 @@ def _get_mesh_data_enhanced(obj, context, scale, apply_modifiers=True):
     
     sys.stdout.flush()
     
-    return {
+    result = {
         'name': obj.name,
         'type': 'mesh',
         'vertices': vertices,
@@ -199,6 +199,12 @@ def _get_mesh_data_enhanced(obj, context, scale, apply_modifiers=True):
         'normals': normals,
         'matrix_world': list(eval_obj.matrix_world),
     }
+
+    top_fillet_radius = obj.get("step_top_fillet_radius", 0.0)
+    if top_fillet_radius > 0:
+        result['top_fillet_radius'] = float(top_fillet_radius)
+
+    return result
 
 def _get_curve_data_enhanced(obj, context, scale, apply_modifiers=True):
     """获取曲线数据（增强版）- 使用spline数据直接导出曲线"""

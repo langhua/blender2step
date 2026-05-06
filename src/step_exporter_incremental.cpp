@@ -6,6 +6,8 @@
 #include <vector>
 #include <map>
 #include <sstream>
+#include <BRepFilletAPI_MakeFillet.hxx>
+#include <BRepAdaptor_Curve.hxx>
 
 // ====================== 增量导出全局状态 ======================
 

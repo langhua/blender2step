@@ -114,14 +114,16 @@ def export_step(args):
         for tri in mesh.loop_triangles:
             normals.append([float(tri.normal.x), float(tri.normal.y), float(tri.normal.z)])
         
-        objects_data.append({
+        obj_data = {
             'name': obj.name,
             'type': 'mesh',
             'vertices': vertices,
             'faces': faces,
             'normals': normals,
             'matrix_world': list(eval_obj.matrix_world),
-        })
+        }
+        
+        objects_data.append(obj_data)
     
     print(f'Prepared {len(objects_data)} objects for export')
     

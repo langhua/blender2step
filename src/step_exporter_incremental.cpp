@@ -24,6 +24,7 @@ static int g_incremental_enable_logging = 1;
 static double g_incremental_scale = 1.0;
 static double g_incremental_sew_tolerance = 0.001;
 static PyObject* g_py_log_callback = NULL;
+static std::vector<TopoDS_Shape> g_incremental_shapes;
 
 // 日志宏：仅通过Python回调写入日志文件
 #define LOG_INCREMENTAL(msg) \
@@ -152,6 +153,7 @@ PyObject* init_incremental_export(PyObject* self, PyObject* args) {
     g_incremental_filename = filename;
     g_incremental_total_objects = total_objects;
     g_incremental_object_count = 0;
+    g_incremental_shapes.clear();
     g_incremental_step_schema = step_schema;
     g_incremental_unit = unit;
     g_incremental_fix_geometry = fix_geometry;
@@ -424,34 +426,11 @@ PyObject* add_object_to_export(PyObject* self, PyObject* args) {
             }
         }
 
-        // 传输到STEP writer
-        STEPControl_StepModelType transfer_mode = STEPControl_ManifoldSolidBrep;
-        if (shape.ShapeType() == TopAbs_SHELL) {
-            transfer_mode = STEPControl_ManifoldSolidBrep;
-        } else if (shape.ShapeType() == TopAbs_EDGE || shape.ShapeType() == TopAbs_WIRE) {
-            transfer_mode = STEPControl_GeometricCurveSet;
-        } else if (shape.ShapeType() == TopAbs_COMPOUND) {
-            bool has_faces = false;
-            for (TopExp_Explorer exp(shape, TopAbs_FACE); exp.More(); exp.Next()) {
-                has_faces = true;
-                break;
-            }
-            if (!has_faces) {
-                transfer_mode = STEPControl_GeometricCurveSet;
-            }
-        }
-
-        IFSelect_ReturnStatus status = g_incremental_writer->Transfer(shape, transfer_mode);
-        if (status != IFSelect_RetDone) {
-            if (g_incremental_enable_logging) {
-                LOG_INCREMENTAL("[STEP Exporter]   ✗ Failed to transfer shape");
-            }
-            if (progress_callback) Py_DECREF(progress_callback);
-            Py_RETURN_FALSE;
-        }
+        // 收集形状，稍后在finalize中合并
+        g_incremental_shapes.push_back(shape);
 
         if (g_incremental_enable_logging) {
-            LOG_INCREMENTAL("[STEP Exporter]   ✓ Object " << obj_index << "/" << total << " added successfully");
+            LOG_INCREMENTAL("[STEP Exporter]   ✓ Object " << obj_index << "/" << total << " collected successfully");
         }
 
         // 计算进度
@@ -481,6 +460,121 @@ PyObject* finalize_incremental_export(PyObject* self, PyObject* args) {
 
     if (g_incremental_enable_logging) {
         LOG_INCREMENTAL("\n[STEP Exporter] Finalizing export to: " << g_incremental_filename);
+        LOG_INCREMENTAL("[STEP Exporter] Total shapes collected: " << g_incremental_shapes.size());
+    }
+
+    if (g_incremental_shapes.empty()) {
+        LOG_INCREMENTAL("[STEP Exporter] No shapes to export");
+        delete g_incremental_writer;
+        g_incremental_writer = NULL;
+        Py_RETURN_FALSE;
+    }
+
+    // 融合所有形状为单一实体
+    TopoDS_Shape fused_shape;
+    if (g_incremental_shapes.size() == 1) {
+        fused_shape = g_incremental_shapes[0];
+        if (g_incremental_enable_logging) {
+            LOG_INCREMENTAL("[STEP Exporter] Single shape, no merging needed");
+        }
+    } else {
+        if (g_incremental_enable_logging) {
+            LOG_INCREMENTAL("[STEP Exporter] Merging " << g_incremental_shapes.size() << " shapes via sewing...");
+        }
+        
+        // 使用BRepBuilderAPI_Sewing来缝合所有形状（处理共面情况比Fuse更好）
+        try {
+            BRepBuilderAPI_Sewing sewer(g_incremental_sew_tolerance);
+            for (size_t i = 0; i < g_incremental_shapes.size(); i++) {
+                sewer.Add(g_incremental_shapes[i]);
+                if (g_incremental_enable_logging) {
+                    LOG_INCREMENTAL("[STEP Exporter]   Added shape " << (i+1) << "/" << g_incremental_shapes.size());
+                }
+            }
+            sewer.Perform();
+            fused_shape = sewer.SewedShape();
+            
+            if (fused_shape.IsNull()) {
+                if (g_incremental_enable_logging) {
+                    LOG_INCREMENTAL("[STEP Exporter]   ⚠ Sewing produced null shape, using compound fallback");
+                }
+                // 回退到复合体
+                BRep_Builder builder;
+                TopoDS_Compound compound;
+                builder.MakeCompound(compound);
+                for (size_t i = 0; i < g_incremental_shapes.size(); i++) {
+                    builder.Add(compound, g_incremental_shapes[i]);
+                }
+                fused_shape = compound;
+            } else {
+                if (g_incremental_enable_logging) {
+                    LOG_INCREMENTAL("[STEP Exporter]   ✓ Sewing successful, shape type: " << fused_shape.ShapeType());
+                }
+            }
+        } catch (const Standard_Failure& e) {
+            if (g_incremental_enable_logging) {
+                LOG_INCREMENTAL("[STEP Exporter]   ⚠ Sewing exception: " << e.GetMessageString());
+            }
+            // 异常时使用复合体
+            BRep_Builder builder;
+            TopoDS_Compound compound;
+            builder.MakeCompound(compound);
+            for (size_t i = 0; i < g_incremental_shapes.size(); i++) {
+                builder.Add(compound, g_incremental_shapes[i]);
+            }
+            fused_shape = compound;
+        }
+    }
+
+    // 将缝合后的形状转换为实体（如果是SHELL）
+    if (g_incremental_create_solid && fused_shape.ShapeType() == TopAbs_SHELL) {
+        try {
+            BRepBuilderAPI_MakeSolid solidMaker(TopoDS::Shell(fused_shape));
+            if (solidMaker.IsDone()) {
+                fused_shape = solidMaker.Solid();
+                if (g_incremental_enable_logging) {
+                    LOG_INCREMENTAL("[STEP Exporter]   ✓ Sewed shell converted to solid");
+                }
+            }
+        } catch (...) {
+            if (g_incremental_enable_logging) {
+                LOG_INCREMENTAL("[STEP Exporter]   ⚠ Failed to convert sewed shell to solid");
+            }
+        }
+    }
+
+    // 修复融合后的形状
+    if (g_incremental_fix_geometry && !fused_shape.IsNull()) {
+        fused_shape = fix_shape_enhanced(fused_shape, g_incremental_sew_tolerance);
+    }
+
+    // 传输融合后的形状到STEP writer
+    STEPControl_StepModelType transfer_mode = STEPControl_ManifoldSolidBrep;
+    if (fused_shape.ShapeType() == TopAbs_SHELL) {
+        transfer_mode = STEPControl_ManifoldSolidBrep;
+    } else if (fused_shape.ShapeType() == TopAbs_EDGE || fused_shape.ShapeType() == TopAbs_WIRE) {
+        transfer_mode = STEPControl_GeometricCurveSet;
+    } else if (fused_shape.ShapeType() == TopAbs_COMPOUND) {
+        bool has_faces = false;
+        for (TopExp_Explorer exp(fused_shape, TopAbs_FACE); exp.More(); exp.Next()) {
+            has_faces = true;
+            break;
+        }
+        if (!has_faces) {
+            transfer_mode = STEPControl_GeometricCurveSet;
+        }
+    }
+
+    if (g_incremental_enable_logging) {
+        LOG_INCREMENTAL("[STEP Exporter] Transferring fused shape (type: " << fused_shape.ShapeType() << ") to writer...");
+    }
+
+    IFSelect_ReturnStatus transfer_status = g_incremental_writer->Transfer(fused_shape, transfer_mode);
+    if (transfer_status != IFSelect_RetDone) {
+        LOG_INCREMENTAL("[STEP Exporter] Failed to transfer fused shape to STEP writer");
+        delete g_incremental_writer;
+        g_incremental_writer = NULL;
+        Py_RETURN_FALSE;
     }
 
     IFSelect_ReturnStatus write_status = g_incremental_writer->Write(g_incremental_filename.c_str());
@@ -489,7 +583,7 @@ PyObject* finalize_incremental_export(PyObject* self, PyObject* args) {
 
     if (success) {
         if (g_incremental_enable_logging) {
-            LOG_INCREMENTAL("[STEP Exporter] Successfully exported " << g_incremental_object_count << " object(s)");
+            LOG_INCREMENTAL("[STEP Exporter] Successfully exported " << g_incremental_object_count << " object(s) as single fused solid");
             LOG_INCREMENTAL("[STEP Exporter] =========================================");
         }
     } else {
@@ -499,6 +593,7 @@ PyObject* finalize_incremental_export(PyObject* self, PyObject* args) {
     // 清理
     delete g_incremental_writer;
     g_incremental_writer = NULL;
+    g_incremental_shapes.clear();
 
     // 恢复std::cout和std::cerr
     if (g_original_cout_buf) {

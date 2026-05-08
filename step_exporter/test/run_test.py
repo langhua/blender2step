@@ -26,6 +26,8 @@ def parse_args():
     parser.add_argument('--freecad-path', type=str, default=r'F:\Program Files\FreeCAD 1.0\bin\FreeCAD.exe', help='Path to FreeCAD executable')
     parser.add_argument('--skip-export', action='store_true', help='Skip STEP export (only run screenshot)')
     parser.add_argument('--skip-screenshot', action='store_true', help='Skip screenshot (only run export)')
+    parser.add_argument('--bottom-shell', action='store_true', help='Generate and screenshot bottom shell instead of test cylinders')
+    parser.add_argument('--freecad-screenshot', action='store_true', help='Use FreeCAD for screenshot (default: Blender for bottom shell)')
     
     # 只解析--之后的参数
     if '--' in sys.argv:
@@ -192,6 +194,79 @@ def export_step(args):
     
     return output_path
 
+def take_screenshot_blender(args, step_file):
+    """使用Blender内置渲染截图"""
+    test_number = args.test_number
+    screenshot_dir = args.screenshot_dir
+    
+    # 确保截图目录存在
+    os.makedirs(screenshot_dir, exist_ok=True)
+    
+    output_image = os.path.join(screenshot_dir, f'test{test_number}.png')
+    
+    print(f"Taking screenshot with Blender rendering")
+    print(f"Output image: {output_image}")
+    
+    # 设置相机位置 - 顶视图视角
+    # 删除旧相机
+    old_cam = bpy.data.objects.get('Camera')
+    if old_cam:
+        bpy.data.objects.remove(old_cam, do_unlink=True)
+    
+    # 创建新相机
+    cam_data = bpy.data.cameras.new('Camera')
+    cam_data.type = 'ORTHO'  # 使用正交投影
+    cam_data.ortho_scale = 120  # 设置正交缩放，确保完整显示100x70的物体
+    cam = bpy.data.objects.new('Camera', cam_data)
+    bpy.context.collection.objects.link(cam)
+    bpy.context.scene.camera = cam
+    
+    # 顶视图：从正上方拍摄，相机朝下看
+    # Workbench相机默认朝向-Z，不需要旋转
+    # 底壳位置在(0, 0, 5.0)，相机放在正上方
+    cam.location = (0, 0, 50)
+    cam.rotation_euler = (0, 0, 0)
+    
+    print(f"Camera location: {cam.location}")
+    print(f"Camera rotation: {cam.rotation_euler}")
+    
+    # 设置灯光 - Workbench使用STUDIO灯光，不需要额外灯光
+    
+    # 设置渲染 - 使用Workbench引擎（后台模式更可靠）
+    bpy.context.scene.render.engine = 'BLENDER_WORKBENCH'
+    bpy.context.scene.render.resolution_x = 1920
+    bpy.context.scene.render.resolution_y = 1080
+    bpy.context.scene.render.filepath = output_image
+    bpy.context.scene.render.image_settings.file_format = 'PNG'
+    
+    # Workbench渲染设置
+    bpy.context.scene.display.shading.light = 'STUDIO'
+    bpy.context.scene.display.shading.studio_light = 'Default'
+    bpy.context.scene.display.shading.color_type = 'MATERIAL'
+    
+    # 给对象添加材质 - 浅蓝色塑料
+    for obj in bpy.context.scene.objects:
+        if obj.type == 'MESH' and not obj.data.materials:
+            mat = bpy.data.materials.new(name='PlasticBlue')
+            mat.use_nodes = False
+            mat.diffuse_color = (0.4, 0.6, 0.9, 1.0)
+            mat.specular_intensity = 0.5
+            obj.data.materials.append(mat)
+    
+    # 打印场景信息
+    print(f"Scene objects: {[obj.name for obj in bpy.context.scene.objects]}")
+    print(f"Camera: {bpy.context.scene.camera}")
+    
+    # 渲染
+    bpy.ops.render.render(write_still=True)
+    
+    if os.path.exists(output_image):
+        print(f"SUCCESS: Screenshot saved to {output_image}")
+        return True
+    else:
+        print(f"ERROR: Screenshot not saved to {output_image}")
+        return False
+
 def take_screenshot(args, step_file):
     """使用FreeCAD截图"""
     test_number = args.test_number
@@ -227,6 +302,10 @@ def take_screenshot(args, step_file):
     env['IMAGE_HEIGHT'] = '1080'
     # 使用离屏渲染模式
     env['QT_QPA_PLATFORM'] = 'offscreen'
+    # 设置FreeCAD用户目录为可写目录
+    freecad_user_home = os.path.join(screenshot_dir, 'freecad_home')
+    os.makedirs(freecad_user_home, exist_ok=True)
+    env['FREECAD_USER_HOME'] = freecad_user_home
     
     # 直接运行FreeCAD并传入脚本
     cmd = [
@@ -281,25 +360,22 @@ def main():
     
     step_file = None
     
-    # 步骤0: 创建测试圆柱体（检查场景中是否有圆柱体对象）
-    mesh_objects = [obj for obj in bpy.context.scene.objects if obj.type == 'MESH']
-    has_cylinders = any('Cylinder' in obj.name for obj in mesh_objects)
-    
-    if not has_cylinders:
+    # 步骤0: 创建底壳或测试圆柱体
+    if args.bottom_shell:
         print("=" * 60)
-        print("Step 0: Creating test cylinders")
+        print("Step 0: Creating bottom shell")
         print("=" * 60)
         
         # 删除默认对象
         bpy.ops.object.select_all(action='SELECT')
         bpy.ops.object.delete()
         
-        # 导入并运行create_mesh_cylinder.py
+        # 导入并运行create_bottom_shell.py
         script_dir = os.path.dirname(os.path.abspath(__file__))
-        create_script = os.path.join(script_dir, 'create_mesh_cylinder.py')
+        create_script = os.path.join(script_dir, 'create_bottom_shell.py')
         
         if os.path.exists(create_script):
-            # 读取并执行create_mesh_cylinder.py的内容
+            # 读取并执行create_bottom_shell.py的内容
             with open(create_script, 'r', encoding='utf-8') as f:
                 code = f.read()
             
@@ -308,15 +384,50 @@ def main():
             exec(compile(code, create_script, 'exec'), script_globals)
             
             # 显式调用主函数
-            if 'create_mechanical_demo_scene' in script_globals:
-                script_globals['create_mechanical_demo_scene']()
+            if 'create_bottom_shell_scene' in script_globals:
+                script_globals['create_bottom_shell_scene']()
             
-            print("Test cylinders created successfully")
+            print("Bottom shell created successfully")
             print(f"Created {len(bpy.context.scene.objects)} objects")
         else:
-            print(f"WARNING: create_mesh_cylinder.py not found at {create_script}")
+            print(f"WARNING: create_bottom_shell.py not found at {create_script}")
     else:
-        print(f"Found {len(mesh_objects)} mesh objects including cylinders")
+        # 创建测试圆柱体（检查场景中是否有圆柱体对象）
+        mesh_objects = [obj for obj in bpy.context.scene.objects if obj.type == 'MESH']
+        has_cylinders = any('Cylinder' in obj.name for obj in mesh_objects)
+        
+        if not has_cylinders:
+            print("=" * 60)
+            print("Step 0: Creating test cylinders")
+            print("=" * 60)
+            
+            # 删除默认对象
+            bpy.ops.object.select_all(action='SELECT')
+            bpy.ops.object.delete()
+            
+            # 导入并运行create_mesh_cylinder.py
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            create_script = os.path.join(script_dir, 'create_mesh_cylinder.py')
+            
+            if os.path.exists(create_script):
+                # 读取并执行create_mesh_cylinder.py的内容
+                with open(create_script, 'r', encoding='utf-8') as f:
+                    code = f.read()
+                
+                # 创建一个命名空间来执行脚本
+                script_globals = {'__name__': '__main__', '__file__': create_script}
+                exec(compile(code, create_script, 'exec'), script_globals)
+                
+                # 显式调用主函数
+                if 'create_mechanical_demo_scene' in script_globals:
+                    script_globals['create_mechanical_demo_scene']()
+                
+                print("Test cylinders created successfully")
+                print(f"Created {len(bpy.context.scene.objects)} objects")
+            else:
+                print(f"WARNING: create_mesh_cylinder.py not found at {create_script}")
+        else:
+            print(f"Found {len(mesh_objects)} mesh objects including cylinders")
     
     # 步骤1: 导出STEP文件
     if not args.skip_export:
@@ -331,12 +442,21 @@ def main():
             print(f"ERROR: STEP file not found: {step_file}")
             sys.exit(1)
     
-    # 步骤2: 使用FreeCAD截图
+    # 步骤2: 截图
     if not args.skip_screenshot:
         print("=" * 60)
-        print("Step 2: Taking screenshot with FreeCAD")
+        if args.bottom_shell and not args.freecad_screenshot:
+            print("Step 2: Taking screenshot with Blender")
+        else:
+            print("Step 2: Taking screenshot with FreeCAD")
         print("=" * 60)
-        success = take_screenshot(args, step_file)
+        
+        if args.bottom_shell and not args.freecad_screenshot:
+            # 底壳使用Blender内置渲染截图
+            success = take_screenshot_blender(args, step_file)
+        else:
+            # 其他测试或指定FreeCAD时使用FreeCAD截图
+            success = take_screenshot(args, step_file)
         
         if success:
             print("=" * 60)
@@ -349,8 +469,7 @@ def main():
             print("TEST COMPLETED WITH WARNINGS (STEP export OK, screenshot failed)")
             print("=" * 60)
             print(f"STEP file: {step_file}")
-            print("WARNING: FreeCAD screenshot failed - this may be due to complex geometry in the STEP file")
-            print("You can manually open the STEP file in FreeCAD GUI to verify the geometry")
+            print("WARNING: Screenshot failed")
             # 截图失败但仍然退出，因为STEP导出已经成功
             sys.exit(0)
     else:

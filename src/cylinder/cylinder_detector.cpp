@@ -10,6 +10,24 @@ std::vector<CylinderCandidate> CylinderDetectorV2::detect(double radius_tol, dou
     m_faceInfos = CylinderFaceAnalyzer::analyze_faces(m_vertices, m_faces);
     std::cout << "[STEP Exporter] [CylDet] Analyzed " << m_faceInfos.size() << " faces" << std::endl;
     
+    // 计算包围盒，用于过滤被误检测为圆柱面的平面侧壁
+    double bbox_xmin = m_vertices[0][0], bbox_ymin = m_vertices[0][1], bbox_zmin = m_vertices[0][2];
+    double bbox_xmax = bbox_xmin, bbox_ymax = bbox_ymin, bbox_zmax = bbox_zmin;
+    for (const auto& v : m_vertices) {
+        bbox_xmin = std::min(bbox_xmin, v[0]);
+        bbox_ymin = std::min(bbox_ymin, v[1]);
+        bbox_zmin = std::min(bbox_zmin, v[2]);
+        bbox_xmax = std::max(bbox_xmax, v[0]);
+        bbox_ymax = std::max(bbox_ymax, v[1]);
+        bbox_zmax = std::max(bbox_zmax, v[2]);
+    }
+    double bbox_width = bbox_xmax - bbox_xmin;
+    double bbox_depth = bbox_ymax - bbox_ymin;
+    // 最大合理圆柱半径：取包围盒宽度和深度中较大者的40%
+    // 用于过滤平面侧壁（它们会被检测为半径非常大的"圆柱"）
+    double max_reasonable_radius = std::max(bbox_width, bbox_depth) * 0.4;
+    std::cout << "[STEP Exporter] [CylDet] BBox: " << bbox_width << "x" << bbox_depth << ", maxR=" << max_reasonable_radius << std::endl;
+    
     std::vector<CylinderCandidate> results;
     int max_iterations = 10;
     
@@ -36,12 +54,23 @@ std::vector<CylinderCandidate> CylinderDetectorV2::detect(double radius_tol, dou
         
         for (const auto& axis : axes) {
             auto cyl = CylinderClusterDetector::detect_cluster(
-                axis, radius_tol, min_faces,
+                axis, radius_tol, min_faces, max_reasonable_radius,
                 m_faceInfos, m_vertices,
                 std::set<int>(), m_usedFaces
             );
             
-            if (!cyl.face_indices.empty() && cyl.quality_score >= 0.2) {  // 降低到0.2以检测小聚类
+            if (!cyl.face_indices.empty() && cyl.quality_score >= 0.2) {
+                // 检查圆柱半径是否合理：过滤掉被误检测为圆柱的平面侧壁
+                if (cyl.radius > max_reasonable_radius) {
+                    std::cout << "[STEP Exporter] [CylDet] Skipping false positive: R=" << cyl.radius << " > maxR=" << max_reasonable_radius << std::endl;
+                    // 仍然标记这些面为已使用，避免重复检测
+                    for (int fidx : cyl.face_indices) {
+                        m_usedFaces.insert(fidx);
+                    }
+                    found_new = true;  // 标记为已处理，让循环继续
+                    continue;
+                }
+                
                 for (int fidx : cyl.face_indices) {
                     m_usedFaces.insert(fidx);
                 }
@@ -51,20 +80,30 @@ std::vector<CylinderCandidate> CylinderDetectorV2::detect(double radius_tol, dou
                 
                 std::set<int> first_cyl_faces(cyl.face_indices.begin(), cyl.face_indices.end());
                 auto cyl2 = CylinderClusterDetector::detect_cluster(
-                    axis, radius_tol, min_faces,
+                    axis, radius_tol, min_faces, max_reasonable_radius,
                     m_faceInfos, m_vertices,
                     first_cyl_faces, m_usedFaces
                 );
                 
-                if (!cyl2.face_indices.empty() && cyl2.quality_score >= 0.2) {  // 降低到0.2
-                    double radius_diff = fabs(cyl.radius - cyl2.radius) / ((cyl.radius + cyl2.radius) / 2);
-                    if (radius_diff > 0.015) {  // 降低到1.5%以检测更小角度锥形圆柱（2度锥角约2%差异）
+                if (!cyl2.face_indices.empty() && cyl2.quality_score >= 0.2) {
+                    // 同样检查第二个圆柱的半径
+                    if (cyl2.radius > max_reasonable_radius) {
+                        std::cout << "[STEP Exporter] [CylDet] Skipping false positive (cyl2): R=" << cyl2.radius << " > maxR=" << max_reasonable_radius << std::endl;
+                        // 仍然标记这些面为已使用
                         for (int fidx : cyl2.face_indices) {
                             m_usedFaces.insert(fidx);
                         }
-                        results.push_back(cyl2);
-                        found_new = true;
-                        std::cout << "[STEP Exporter] [CylDet] Found second cylinder (iter " << iter << "): R=" << cyl2.radius << " N=" << cyl2.face_indices.size() << " Q=" << cyl2.quality_score << std::endl;
+                        found_new = true;  // 标记为已处理
+                    } else {
+                        double radius_diff = fabs(cyl.radius - cyl2.radius) / ((cyl.radius + cyl2.radius) / 2);
+                        if (radius_diff > 0.015) {
+                            for (int fidx : cyl2.face_indices) {
+                                m_usedFaces.insert(fidx);
+                            }
+                            results.push_back(cyl2);
+                            found_new = true;
+                            std::cout << "[STEP Exporter] [CylDet] Found second cylinder (iter " << iter << "): R=" << cyl2.radius << " N=" << cyl2.face_indices.size() << " Q=" << cyl2.quality_score << std::endl;
+                        }
                     }
                 }
             }

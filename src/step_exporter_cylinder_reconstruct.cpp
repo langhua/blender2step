@@ -298,7 +298,7 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
         // 首先找到半径最小的圆柱体作为参考
         double min_radius = 1e20;
         for (const auto& cyl : cylinders) {
-            if (cyl.face_indices.size() >= 32 && cyl.quality_score >= 0.25) {
+            if (cyl.face_indices.size() >= 32 && cyl.quality_score >= 0.2) {
                 min_radius = std::min(min_radius, cyl.radius);
             }
         }
@@ -309,7 +309,7 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
             // 2. 质量评分至少为0.25（降低阈值以捕获锥形圆柱）
             // 3. 半径不能超过最小半径的4倍（避免端面，但允许螺孔圆柱的外圆柱面通过）
             if (cyl.face_indices.size() >= 32 && 
-                cyl.quality_score >= 0.25 &&
+                cyl.quality_score >= 0.2 &&
                 cyl.radius <= min_radius * 4.0) {
                 filtered_cylinders.push_back(cyl);
             }
@@ -3061,7 +3061,7 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
         // 过滤低质量检测
         std::vector<CylinderCandidate> filtered;
         for (const auto& c : cylinders) {
-            if (c.quality_score >= 0.55) {
+            if (c.quality_score >= 0.2) {
                 filtered.push_back(c);
             }
         }

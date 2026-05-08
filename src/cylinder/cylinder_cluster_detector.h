@@ -14,6 +14,7 @@ public:
         const gp_Dir& axis,
         double radius_tol,
         double min_faces,
+        double max_radius,
         const std::vector<FaceInfo>& faceInfos,
         const std::vector<std::vector<double>>& vertices,
         const std::set<int>& exclude_faces,

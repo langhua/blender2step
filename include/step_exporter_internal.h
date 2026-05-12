@@ -32,6 +32,11 @@ std::vector<gp_Pnt> extract_control_points(const std::map<std::string, PyObject*
 // Enhanced shape fixing
 TopoDS_Shape fix_shape_enhanced(const TopoDS_Shape& shape, double tolerance = 1.0e-6);
 
+// Direct BRep rounded box creation (bypasses mesh conversion)
+TopoDS_Shape create_rounded_box_solid(double width, double depth, double height, double corner_radius);
+TopoDS_Shape create_bottom_shell_solid(double width, double depth, double outer_height,
+                                        double bottom_thickness, double wall_thickness, double corner_radius);
+
 // Python interface functions
 PyObject* get_version(PyObject* self, PyObject* args);
 PyObject* export_step(PyObject* self, PyObject* args);

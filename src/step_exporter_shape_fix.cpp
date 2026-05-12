@@ -161,8 +161,15 @@ TopoDS_Shape fix_shape_enhanced(const TopoDS_Shape& shape, double tolerance) {
         if (bboxSize > 1.0e-6) {
             // 使用包围盒对角线长度的0.1%作为容差，但保持在合理范围内
             adjustedTolerance = bboxSize * 0.001; // 0.1% of bbox size
-            if (adjustedTolerance < tolerance) adjustedTolerance = tolerance;
-            if (adjustedTolerance > tolerance * 100.0) adjustedTolerance = tolerance * 100.0;
+            std::cout << "[STEP Exporter] DEBUG_FIX: bboxSize=" << bboxSize << " initial adjustedTolerance=" << adjustedTolerance << std::endl;
+            // 关键修复：当tolerance=0时，不要用0来限制adjustedTolerance
+            if (tolerance > 0) {
+                if (adjustedTolerance < tolerance) adjustedTolerance = tolerance;
+                if (adjustedTolerance > tolerance * 100.0) adjustedTolerance = tolerance * 100.0;
+                std::cout << "[STEP Exporter] DEBUG_FIX: after tolerance clamp adjustedTolerance=" << adjustedTolerance << std::endl;
+            } else {
+                std::cout << "[STEP Exporter] DEBUG_FIX: tolerance=0, skipping clamp, keeping adjustedTolerance=" << adjustedTolerance << std::endl;
+            }
             std::cout << "[STEP Exporter] Adjusted tolerance to " << adjustedTolerance << " based on bbox size " << bboxSize << std::endl;
         } else {
             // 如果包围盒大小极小（<=1微米），视为零尺寸模型，强制使用最小容差
@@ -347,7 +354,7 @@ TopoDS_Shape fix_shape_enhanced(const TopoDS_Shape& shape, double tolerance) {
         }
 
         // 第七步：统一相同域合并相邻面（仅对低面数模型）
-        if (!simplifyForHighPoly && !preserveSolidity && fixedShape.ShapeType() != TopAbs_SOLID) {
+        if (!simplifyForHighPoly) {
             std::cout << "[STEP Exporter] Step 7: Unifying same domain..." << std::endl;
             try {
                 Handle(ShapeUpgrade_UnifySameDomain) unify = new ShapeUpgrade_UnifySameDomain;
@@ -357,20 +364,19 @@ TopoDS_Shape fix_shape_enhanced(const TopoDS_Shape& shape, double tolerance) {
                 unify->Build();
                 
                 if (!unify->Shape().IsNull()) {
+                    int beforeFaceCount = 0, afterFaceCount = 0;
+                    for (TopExp_Explorer uexp(fixedShape, TopAbs_FACE); uexp.More(); uexp.Next()) beforeFaceCount++;
                     fixedShape = unify->Shape();
-                    std::cout << "[STEP Exporter]   Unification completed." << std::endl;
+                    for (TopExp_Explorer uexp(fixedShape, TopAbs_FACE); uexp.More(); uexp.Next()) afterFaceCount++;
+                    std::cout << "[STEP Exporter]   Unification completed: " << beforeFaceCount << " -> " << afterFaceCount << " faces." << std::endl;
                 }
             } catch (const Standard_Failure& e) {
                 std::cout << "[STEP Exporter]   Unification failed: " << e.GetMessageString() << ", continuing with current shape." << std::endl;
             } catch (const std::exception& e) {
                 std::cout << "[STEP Exporter]   Unification failed (std): " << e.what() << ", continuing with current shape." << std::endl;
             }
-        } else if (simplifyForHighPoly) {
-            std::cout << "[STEP Exporter] Step 7: Skipped for high-poly model." << std::endl;
-        } else if (preserveSolidity) {
-            std::cout << "[STEP Exporter] Step 7: Skipped to preserve solidity." << std::endl;
         } else {
-            std::cout << "[STEP Exporter] Step 7: Skipped because shape is SOLID." << std::endl;
+            std::cout << "[STEP Exporter] Step 7: Skipped for high-poly model." << std::endl;
         }
 
         // 第八步：迭代修复（最多5次）（仅对低面数模型）

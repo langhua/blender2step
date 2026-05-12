@@ -2655,9 +2655,9 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                 
                 std::cerr << "[STEP Exporter] All methods failed to create analytical cylinder" << std::endl;
             } catch (const Standard_Failure& e) {
-                std::cerr << "[STEP Exporter] OCC Exception creating analytical cylinder: " << e.GetMessageString() << std::endl;
+                std::cout << "[STEP Exporter] OCC Exception creating analytical cylinder: " << e.GetMessageString() << std::endl;
             } catch (...) {
-                std::cerr << "[STEP Exporter] Unknown exception creating analytical cylinder" << std::endl;
+                std::cout << "[STEP Exporter] Unknown exception creating analytical cylinder" << std::endl;
             }
             }
         }
@@ -3033,7 +3033,7 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                 }
             }
             
-            std::cerr << "[STEP Exporter] Using safe fallback: standard mesh method." << std::endl;
+            std::cout << "[STEP Exporter] Using safe fallback: standard mesh method." << std::endl;
             
             // 使用原始方法确保正确性
             TopoDS_Shape result = create_solid_from_mesh(vertices, faces, tolerance, make_solid, scale);
@@ -3042,7 +3042,7 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                 std::cout << "[STEP Exporter] Standard method succeeded (Type=" 
                           << result.ShapeType() << ")" << std::endl;
             } else {
-                std::cerr << "[STEP Exporter] ERROR: Standard method also failed!" << std::endl;
+                std::cout << "[STEP Exporter] ERROR: Standard method also failed!" << std::endl;
             }
             
             return result;
@@ -3463,12 +3463,21 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
             }
         }
         
-        std::cout << "[STEP Exporter] Created " << cylFaceCount << " cylindrical + " 
-                  << planarCount << " planar faces" << std::endl;
+        fprintf(stdout, "[STEP Exporter] Created %d cylindrical + %d planar faces\n", cylFaceCount, planarCount);
+        
+        // 写入调试文件
+        FILE* dbg = fopen("F:/git/blender2step/build/debug_sewing.txt", "w");
+        if (dbg) {
+            fprintf(dbg, "Before sewing: cylFaceCount=%d planarCount=%d\n", cylFaceCount, planarCount);
+            fclose(dbg);
+        }
+        
+        fprintf(stdout, "[STEP Exporter] Starting sewing...\n");
         
         // 缝合
         double diag = compute_bounding_diagonal(vertices);
         double sewTol = std::max(diag * 0.002, 0.5);  // 更大的容差
+        fprintf(stdout, "[STEP Exporter] Sewing with tolerance=%f diag=%f\n", sewTol, diag);
         
         BRepBuilderAPI_Sewing sewer(sewTol);
         TopExp_Explorer exp(compound, TopAbs_FACE);
@@ -3482,19 +3491,58 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
         sewer.Perform();
         TopoDS_Shape sewed = sewer.SewedShape();
         
-        std::cout << "[STEP Exporter] Sewed type=" << sewed.ShapeType()
-                  << " (tolerance=" << sewTol << ", faces=" << fc << ")" << std::endl;
+        fprintf(stdout, "[STEP Exporter] Sewed type=%d (tolerance=%f, faces=%d)\n", 
+                (int)sewed.ShapeType(), sewTol, fc);
         
         // 如果缝合结果不好，回退
         if (sewed.IsNull()) {
-            std::cerr << "[STEP Exporter] Sewing failed, falling back to standard method" << std::endl;
+            fprintf(stdout, "[STEP Exporter] Sewing failed, falling back to standard method\n");
             return create_solid_from_mesh(vertices, faces, tolerance, make_solid, scale);
+        }
+        
+        // 统一相同域：合并共面面片，减少STEP文件中的三角面数量
+        // 将992个平面面片合并为6个（上、下、左、右、前、后）
+        try {
+            // 先尝试将COMPOUND转换为SHELL
+            TopoDS_Shape shapeForUnify = sewed;
+            if (sewed.ShapeType() == TopAbs_COMPOUND) {
+                fprintf(stdout, "[STEP Exporter] Converting COMPOUND to SHELL for unification...\n");
+                BRep_Builder shellBuilder;
+                TopoDS_Shell shell;
+                shellBuilder.MakeShell(shell);
+                for (TopExp_Explorer exp2(sewed, TopAbs_FACE); exp2.More(); exp2.Next()) {
+                    shellBuilder.Add(shell, TopoDS::Face(exp2.Current()));
+                }
+                shapeForUnify = shell;
+                fprintf(stdout, "[STEP Exporter]   Converted to SHELL successfully.\n");
+            }
+            
+            Handle(ShapeUpgrade_UnifySameDomain) unify = new ShapeUpgrade_UnifySameDomain;
+            unify->Initialize(shapeForUnify, Standard_True, Standard_True, Standard_True);
+            unify->SetLinearTolerance(sewTol * 10.0);  // 更大的线性容差
+            unify->SetAngularTolerance(0.1);  // 更大的角度容差（弧度）
+            unify->Build();
+            if (!unify->Shape().IsNull()) {
+                TopoDS_Shape unified = unify->Shape();
+                int unifiedFaceCount = 0;
+                for (TopExp_Explorer uexp(unified, TopAbs_FACE); uexp.More(); uexp.Next()) unifiedFaceCount++;
+                fprintf(stdout, "[STEP Exporter] Unified shape: %d faces (was %d)\n", unifiedFaceCount, fc);
+                sewed = unified;
+            } else {
+                fprintf(stdout, "[STEP Exporter] Unification produced null shape, using sewed shape\n");
+            }
+        } catch (const Standard_Failure& e) {
+            fprintf(stdout, "[STEP Exporter] Unification failed: '%s', using sewed shape\n", e.GetMessageString());
+        } catch (const std::exception& e) {
+            fprintf(stdout, "[STEP Exporter] Unification failed (std): '%s', using sewed shape\n", e.what());
+        } catch (...) {
+            fprintf(stdout, "[STEP Exporter] Unification failed (unknown), using sewed shape\n");
         }
         
         return sewed;
         
     } catch (...) {
-        std::cerr << "[STEP Exporter] Exception, falling back to standard method" << std::endl;
+        fprintf(stdout, "[STEP Exporter] Exception, falling back to standard method\n");
         return create_solid_from_mesh(vertices, faces, tolerance, make_solid, scale);
     }
 }

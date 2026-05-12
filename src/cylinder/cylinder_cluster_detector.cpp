@@ -459,13 +459,16 @@ do_normal_clustering:
                 std::cout.flush();
                 
                 // 按面法线方向将面分组到八个扇区
-                // 注意：这里不跳过已使用的面，因为圆角面可能已被距离聚类消耗
-                // 也不依赖is_candidate数组（它对已使用面为false），而是直接计算法线点积
+                // 跳过已使用的面（在used_faces或exclude_faces中），避免重复检测同一圆角
                 std::map<int, std::vector<int>> normal_groups;
                 int n_total = 0, n_excluded = 0, n_area = 0, n_not_candidate = 0, n_xy_len = 0, n_added = 0;
                 for (size_t i = 0; i < faceInfos.size(); i++) {
                     n_total++;
-                    // 不跳过已使用的面，让法线聚类能找到圆角面
+                    // 跳过已使用的面，避免重复检测同一圆角
+                    if (used_faces.count(faceInfos[i].face_index) || exclude_faces.count(faceInfos[i].face_index)) {
+                        n_excluded++;
+                        continue;
+                    }
                     if (faceInfos[i].area < 1e-10) { n_area++; continue; }
                     
                     // 直接计算法线是否垂直于轴线，不依赖is_candidate（它对已使用面为false）

@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <PropertyGroup>
     <PreferredToolArchitecture>x64</PreferredToolArchitecture>
@@ -347,6 +347,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
     <ClCompile Include="F:\git\blender2step\src\step_exporter_curve_nurbs.cpp" />
     <ClCompile Include="F:\git\blender2step\src\step_exporter_curve_common.cpp" />
     <ClCompile Include="F:\git\blender2step\src\step_exporter_shape_fix.cpp" />
+    <ClCompile Include="F:\git\blender2step\src\step_exporter_rounded_box.cpp" />
     <ClCompile Include="F:\git\blender2step\src\step_exporter_export_scene.cpp" />
     <ClCompile Include="F:\git\blender2step\src\step_exporter_export_enhanced_parse.cpp" />
     <ClCompile Include="F:\git\blender2step\src\step_exporter_export_enhanced_progress.cpp" />

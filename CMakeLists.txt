@@ -98,6 +98,8 @@ add_library(step_exporter SHARED
     src/step_exporter_module.cpp
     # STEP converter
     src/step_converter.cpp
+    # Rounded box and bottom shell creation
+    src/step_exporter_rounded_box.cpp
     # Cylinder detection and reconstruction
     src/cylinder/cylinder_types.h
     src/cylinder/cylinder_detector.h

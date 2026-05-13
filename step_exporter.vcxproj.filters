@@ -61,6 +61,9 @@
     <ClCompile Include="F:\git\blender2step\src\step_converter.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="F:\git\blender2step\src\step_exporter_rounded_box.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="F:\git\blender2step\src\cylinder\cylinder_detector.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>

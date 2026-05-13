@@ -36,6 +36,13 @@ TopoDS_Shape fix_shape_enhanced(const TopoDS_Shape& shape, double tolerance = 1.
 TopoDS_Shape create_rounded_box_solid(double width, double depth, double height, double corner_radius);
 TopoDS_Shape create_bottom_shell_solid(double width, double depth, double outer_height,
                                         double bottom_thickness, double wall_thickness, double corner_radius);
+TopoDS_Shape create_rounded_box_with_corner_holes(double width, double depth, double thickness,
+                                                    double corner_radius, double hole_radius,
+                                                    double hole_offset_x, double hole_offset_y);
+TopoDS_Shape create_bottom_shell_with_corner_holes(double width, double depth, double outer_height,
+                                                     double bottom_thickness, double wall_thickness,
+                                                     double corner_radius, double hole_radius,
+                                                     double hole_offset_x, double hole_offset_y);
 
 // Python interface functions
 PyObject* get_version(PyObject* self, PyObject* args);

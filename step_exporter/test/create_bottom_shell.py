@@ -18,6 +18,8 @@
 import bpy
 import bmesh
 import math
+import sys
+import os
 
 
 def clear_scene():
@@ -33,8 +35,18 @@ def apply_boolean(obj, tool_obj, operation='DIFFERENCE'):
     mod = obj.modifiers.new(name="Boolean", type='BOOLEAN')
     mod.operation = operation
     mod.object = tool_obj
+    mod.solver = 'EXACT'
+
     bpy.context.view_layer.objects.active = obj
-    bpy.ops.object.modifier_apply(modifier=mod.name)
+
+    with bpy.context.temp_override(object=obj, active_object=obj, selected_objects=[obj]):
+        bpy.ops.object.modifier_apply(modifier=mod.name)
+
+    bpy.context.view_layer.objects.active = obj
+    bpy.ops.object.mode_set(mode='EDIT')
+    bpy.ops.mesh.select_all(action='SELECT')
+    bpy.ops.mesh.remove_doubles(threshold=0.0001)
+    bpy.ops.object.mode_set(mode='OBJECT')
 
 
 def add_material(obj, name=None):
@@ -55,15 +67,12 @@ def create_rounded_box(name, width, depth, height, corner_radius, segments=32):
     hd = depth / 2.0
     hh = height / 2.0
     
-    # 确保圆角半径不超过最小尺寸的一半
     max_radius = min(hw, hd) * 0.99
     corner_radius = min(corner_radius, max_radius)
     
-    # 计算圆角矩形的轮廓点
     top_profile = []
     bottom_profile = []
     
-    # 右上角圆角：圆心 (hw - corner_radius, hd - corner_radius)
     for i in range(segments):
         angle = (math.pi/2) * i / segments
         x = hw - corner_radius + corner_radius * math.cos(angle)
@@ -71,7 +80,6 @@ def create_rounded_box(name, width, depth, height, corner_radius, segments=32):
         top_profile.append((x, y, hh))
         bottom_profile.append((x, y, -hh))
     
-    # 上边直边
     for i in range(segments):
         t = i / segments
         x = hw - corner_radius - t * (width - 2 * corner_radius)
@@ -79,7 +87,6 @@ def create_rounded_box(name, width, depth, height, corner_radius, segments=32):
         top_profile.append((x, y, hh))
         bottom_profile.append((x, y, -hh))
     
-    # 左上角圆角
     for i in range(segments):
         angle = math.pi/2 + (math.pi/2) * i / segments
         x = -hw + corner_radius + corner_radius * math.cos(angle)
@@ -87,7 +94,6 @@ def create_rounded_box(name, width, depth, height, corner_radius, segments=32):
         top_profile.append((x, y, hh))
         bottom_profile.append((x, y, -hh))
     
-    # 左边直边
     for i in range(segments):
         t = i / segments
         x = -hw
@@ -95,7 +101,6 @@ def create_rounded_box(name, width, depth, height, corner_radius, segments=32):
         top_profile.append((x, y, hh))
         bottom_profile.append((x, y, -hh))
     
-    # 左下角圆角
     for i in range(segments):
         angle = math.pi + (math.pi/2) * i / segments
         x = -hw + corner_radius + corner_radius * math.cos(angle)
@@ -103,7 +108,6 @@ def create_rounded_box(name, width, depth, height, corner_radius, segments=32):
         top_profile.append((x, y, hh))
         bottom_profile.append((x, y, -hh))
     
-    # 下边直边
     for i in range(segments):
         t = i / segments
         x = -hw + corner_radius + t * (width - 2 * corner_radius)
@@ -111,7 +115,6 @@ def create_rounded_box(name, width, depth, height, corner_radius, segments=32):
         top_profile.append((x, y, hh))
         bottom_profile.append((x, y, -hh))
     
-    # 右下角圆角
     for i in range(segments):
         angle = 3*math.pi/2 + (math.pi/2) * i / segments
         x = hw - corner_radius + corner_radius * math.cos(angle)
@@ -119,7 +122,6 @@ def create_rounded_box(name, width, depth, height, corner_radius, segments=32):
         top_profile.append((x, y, hh))
         bottom_profile.append((x, y, -hh))
     
-    # 右边直边
     for i in range(segments):
         t = i / segments
         x = hw
@@ -127,22 +129,18 @@ def create_rounded_box(name, width, depth, height, corner_radius, segments=32):
         top_profile.append((x, y, hh))
         bottom_profile.append((x, y, -hh))
     
-    # 创建网格
     me = bpy.data.meshes.new(name=name)
     bm = bmesh.new()
     
-    # 添加顶点
     top_verts = [bm.verts.new(v) for v in top_profile]
     bottom_verts = [bm.verts.new(v) for v in bottom_profile]
     
-    # 创建侧面
     num_profile = len(top_profile)
     for i in range(num_profile):
         next_i = (i + 1) % num_profile
         face = [top_verts[i], top_verts[next_i], bottom_verts[next_i], bottom_verts[i]]
         bm.faces.new(face)
     
-    # 创建顶面和底面
     top_center = bm.verts.new((0, 0, hh))
     for i in range(num_profile):
         next_i = (i + 1) % num_profile
@@ -163,7 +161,6 @@ def create_rounded_box(name, width, depth, height, corner_radius, segments=32):
     bpy.context.view_layer.objects.active = obj
     obj.select_set(True)
     
-    # 应用平滑着色
     bpy.ops.object.shade_smooth()
     
     print(f"  Created rounded box with {len(obj.data.vertices)} vertices and {len(obj.data.edges)} edges")
@@ -184,7 +181,6 @@ def create_bottom_shell(
     height = 10.0
     corner_r = 20.0
     
-    # 使用 create_rounded_box 创建单个圆角矩形盒
     obj = create_rounded_box(
         name=name,
         width=width,
@@ -231,9 +227,179 @@ def create_bottom_shell_scene():
     print("\nNext: File -> Export -> STEP (Enhanced)")
 
 
+def create_hollow_shell_blender(name, width, depth, outer_height, bottom_thickness,
+                                   wall_thickness, corner_radius, location, segments=32,
+                                   holes=None):
+    """在Blender中创建中空底壳：内盒+短柱融合 → 外盒切除"""
+    outer = create_rounded_box(
+        name=f"{name}_Outer",
+        width=width,
+        depth=depth,
+        height=outer_height,
+        corner_radius=corner_radius,
+        segments=segments
+    )
+    outer.location = location
+
+    inner_width = width - 2 * wall_thickness
+    inner_depth = depth - 2 * wall_thickness
+    inner_height = outer_height - bottom_thickness + 0.1
+    inner_corner_r = max(corner_radius - wall_thickness, 1.0)
+
+    inner = create_rounded_box(
+        name=f"{name}_Inner",
+        width=inner_width,
+        depth=inner_depth,
+        height=inner_height,
+        corner_radius=inner_corner_r,
+        segments=segments
+    )
+    inner_z = location[2] - outer_height / 2.0 + bottom_thickness + inner_height / 2.0 + 0.05
+    inner.location = (location[0], location[1], inner_z)
+
+    if holes:
+        hole_radius, hole_offset_x, hole_offset_y = holes
+        hw = width / 2.0
+        hd = depth / 2.0
+        hh = outer_height / 2.0
+        hole_cx = hw - hole_offset_x
+        hole_cy = hd - hole_offset_y
+        cyl_z = location[2] - hh - 0.05
+        cyl_height = bottom_thickness + 0.1
+
+        corner_positions = [
+            ( hole_cx,  hole_cy),
+            (-hole_cx,  hole_cy),
+            (-hole_cx, -hole_cy),
+            ( hole_cx, -hole_cy),
+        ]
+        cyl_objs = []
+        for i, (cx, cy) in enumerate(corner_positions):
+            bpy.ops.mesh.primitive_cylinder_add(
+                vertices=64,
+                radius=hole_radius,
+                depth=cyl_height,
+                location=(location[0] + cx, location[1] + cy, cyl_z),
+            )
+            cyl_obj = bpy.context.active_object
+            cyl_obj.name = f"{name}_HoleCyl_{i}"
+            cyl_objs.append(cyl_obj)
+
+        if len(cyl_objs) > 1:
+            bpy.context.view_layer.objects.active = cyl_objs[0]
+            bpy.ops.object.select_all(action='DESELECT')
+            for c in cyl_objs:
+                c.select_set(True)
+            bpy.ops.object.join()
+            cyl_objs = [bpy.context.active_object]
+
+        apply_boolean(inner, cyl_objs[0], operation='UNION')
+        bpy.data.objects.remove(cyl_objs[0], do_unlink=True)
+
+    apply_boolean(outer, inner, operation='DIFFERENCE')
+    bpy.data.objects.remove(inner, do_unlink=True)
+
+    outer.name = name
+    return outer
+
+
+def create_both_bottom_shells_scene():
+    """同时生成两个底壳：一个带4个孔，另一个不带，都导出为完美STEP"""
+    print("\n" + "="*60)
+    print("Dual Bottom Shell Generator")
+    print("="*60)
+
+    print("[1/4] Clearing scene...")
+    clear_scene()
+
+    width = 100.0
+    depth = 70.0
+    outer_height = 10.0
+    bottom_thickness = 2.0
+    wall_thickness = 2.0
+    corner_radius = 20.0
+    hole_radius = 3.0
+    hole_offset_x = 25.0
+    hole_offset_y = 20.0
+
+    print("[2/4] Creating bottom shell WITHOUT holes (Blender preview)...")
+    shell_no_holes = create_hollow_shell_blender(
+        name="BottomShell_NoHoles",
+        width=width,
+        depth=depth,
+        outer_height=outer_height,
+        bottom_thickness=bottom_thickness,
+        wall_thickness=wall_thickness,
+        corner_radius=corner_radius,
+        location=(-60, 0, 0),
+        segments=32
+    )
+    add_material(shell_no_holes, name="ShellNoHolesMaterial")
+    print(f"  [OK] Bottom shell (no holes) created")
+
+    print("[3/4] Creating bottom shell WITH holes (Blender preview)...")
+    shell_with_holes = create_hollow_shell_blender(
+        name="BottomShell_WithHoles",
+        width=width,
+        depth=depth,
+        outer_height=outer_height,
+        bottom_thickness=bottom_thickness,
+        wall_thickness=wall_thickness,
+        corner_radius=corner_radius,
+        location=(60, 0, 0),
+        segments=32,
+        holes=(hole_radius, hole_offset_x, hole_offset_y),
+    )
+    add_material(shell_with_holes, name="ShellWithHolesMaterial")
+    print(f"  [OK] Bottom shell (with holes) created")
+
+    for area in bpy.context.screen.areas:
+        if area.type == 'VIEW_3D':
+            for space in area.spaces:
+                if space.type == 'VIEW_3D':
+                    space.shading.type = 'SOLID'
+                    space.overlay.show_wireframes = False
+
+    print("[4/4] Exporting perfect STEP via C++ extension...")
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'lib'))
+    os.environ['PATH'] = os.path.join(os.path.dirname(__file__), '..', 'lib') + os.pathsep + os.environ.get('PATH', '')
+    if hasattr(os, 'add_dll_directory'):
+        os.add_dll_directory(os.path.join(os.path.dirname(__file__), '..', 'lib'))
+
+    import _step_exporter as cpp_exporter
+
+    output_no_holes = os.path.join(os.path.dirname(__file__), 'bottom_shell_no_holes.step')
+    result1 = cpp_exporter.export_rounded_box_step(
+        output_no_holes,
+        width, depth, outer_height,
+        bottom_thickness, wall_thickness, corner_radius,
+    )
+    if result1:
+        print(f"  [OK] Bottom shell (no holes) -> {output_no_holes}")
+    else:
+        print(f"  [FAIL] Bottom shell (no holes) export failed")
+
+    output_with_holes = os.path.join(os.path.dirname(__file__), 'bottom_shell_with_holes.step')
+    result2 = cpp_exporter.export_bottom_shell_with_holes_step(
+        output_with_holes,
+        width, depth, outer_height,
+        bottom_thickness, wall_thickness,
+        corner_radius, hole_radius,
+        hole_offset_x, hole_offset_y,
+    )
+    if result2:
+        print(f"  [OK] Bottom shell (with holes) -> {output_with_holes}")
+    else:
+        print(f"  [FAIL] Bottom shell (with holes) export failed")
+
+    print("\n" + "="*60)
+    print("[OK] Both bottom shells created and exported!")
+    print("="*60)
+
+
 if __name__ == "__main__":
     try:
-        create_bottom_shell_scene()
+        create_both_bottom_shells_scene()
     except Exception as e:
         print(f"\nError: {e}")
         import traceback

@@ -7,11 +7,13 @@
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
+#include <BRepPrimAPI_MakeCylinder.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
 #include <TopExp.hxx>
 #include <gp_Pnt.hxx>
 #include <gp_Vec.hxx>
+#include <vector>
 #include <gp_Trsf.hxx>
 #include <gp_Ax2.hxx>
 #include <gp_Dir.hxx>
@@ -160,7 +162,7 @@ TopoDS_Shape create_bottom_shell_solid(double width, double depth, double outer_
 
     double inner_width = width - 2.0 * wall_thickness;
     double inner_depth = depth - 2.0 * wall_thickness;
-    double inner_height = outer_height - 2.0 * bottom_thickness;
+    double inner_height = outer_height - bottom_thickness + 1.0;
     double inner_radius = std::max(0.0, corner_radius - wall_thickness);
 
     if (inner_width <= 0 || inner_depth <= 0 || inner_height <= 0) {
@@ -177,7 +179,12 @@ TopoDS_Shape create_bottom_shell_solid(double width, double depth, double outer_
         return outerSolid;
     }
 
-    std::cout << "[STEP Exporter] Inner box centered (no Z translation)" << std::endl;
+    double inner_z_offset = bottom_thickness / 2.0;
+    gp_Trsf innerTrsf;
+    innerTrsf.SetTranslation(gp_Vec(0, 0, inner_z_offset));
+    TopLoc_Location innerLoc(innerTrsf);
+    innerBox.Move(innerLoc);
+    std::cout << "[STEP Exporter] Inner box shifted up by " << inner_z_offset << " for open top" << std::endl;
 
     TopoDS_Solid innerSolid;
     if (innerBox.ShapeType() == TopAbs_SOLID) {
@@ -206,5 +213,244 @@ TopoDS_Shape create_bottom_shell_solid(double width, double depth, double outer_
 
     TopoDS_Shape result = cutMaker.Shape();
     std::cout << "[STEP Exporter] Bottom shell created via boolean cut" << std::endl;
+    return result;
+}
+
+TopoDS_Shape create_rounded_box_with_corner_holes(double width, double depth, double thickness,
+                                                    double corner_radius, double hole_radius,
+                                                    double hole_offset_x, double hole_offset_y)
+{
+    std::cout << "[STEP Exporter] Creating rounded box with corner holes: "
+              << width << "x" << depth << "x" << thickness
+              << " corner_r=" << corner_radius << " hole_r=" << hole_radius
+              << " hole_offset=(" << hole_offset_x << "," << hole_offset_y << ")" << std::endl;
+
+    TopoDS_Shape plate = create_rounded_box_solid(width, depth, thickness, corner_radius);
+    if (plate.IsNull()) {
+        std::cerr << "[STEP Exporter] Failed to create plate" << std::endl;
+        return TopoDS_Shape();
+    }
+
+    TopoDS_Solid plateSolid;
+    if (plate.ShapeType() == TopAbs_SOLID) {
+        plateSolid = TopoDS::Solid(plate);
+    } else if (plate.ShapeType() == TopAbs_COMPOUND || plate.ShapeType() == TopAbs_SHELL) {
+        BRepBuilderAPI_MakeSolid solidMaker;
+        for (TopExp_Explorer exp(plate, TopAbs_SHELL); exp.More(); exp.Next()) {
+            solidMaker.Add(TopoDS::Shell(exp.Current()));
+        }
+        if (solidMaker.IsDone()) {
+            plateSolid = solidMaker.Solid();
+        } else {
+            std::cerr << "[STEP Exporter] Failed to convert plate to solid" << std::endl;
+            return plate;
+        }
+    } else {
+        std::cerr << "[STEP Exporter] Plate is not a solid" << std::endl;
+        return plate;
+    }
+
+    double hw = width / 2.0;
+    double hd = depth / 2.0;
+    double cyl_height = thickness * 3.0;
+    double cyl_half = cyl_height / 2.0;
+
+    double hole_cx = hw - hole_offset_x;
+    double hole_cy = hd - hole_offset_y;
+
+    double corner_positions[4][2] = {
+        { hole_cx,  hole_cy},
+        {-hole_cx,  hole_cy},
+        {-hole_cx, -hole_cy},
+        { hole_cx, -hole_cy}
+    };
+
+    TopoDS_Shape currentShape = plateSolid;
+    int successCount = 0;
+
+    for (int i = 0; i < 4; i++) {
+        double cx = corner_positions[i][0];
+        double cy = corner_positions[i][1];
+
+        std::cout << "[STEP Exporter] Creating hole " << i << " at (" << cx << "," << cy << ")" << std::endl;
+
+        gp_Ax2 cylAxes = gp::XOY();
+        BRepPrimAPI_MakeCylinder cylMaker(cylAxes, hole_radius, cyl_height);
+        TopoDS_Shape holeShape = cylMaker.Shape();
+        if (holeShape.IsNull()) {
+            std::cerr << "[STEP Exporter] Failed to create cylinder for hole " << i << std::endl;
+            continue;
+        }
+
+        gp_Trsf holeTrsf;
+        holeTrsf.SetTranslation(gp_Vec(cx, cy, 0));
+        TopLoc_Location holeLoc(holeTrsf);
+        holeShape.Move(holeLoc);
+
+        TopoDS_Solid holeSolid;
+        if (holeShape.ShapeType() == TopAbs_SOLID) {
+            holeSolid = TopoDS::Solid(holeShape);
+        } else {
+            BRepBuilderAPI_MakeSolid solidMaker;
+            for (TopExp_Explorer exp(holeShape, TopAbs_SHELL); exp.More(); exp.Next()) {
+                solidMaker.Add(TopoDS::Shell(exp.Current()));
+            }
+            if (solidMaker.IsDone()) {
+                holeSolid = solidMaker.Solid();
+            } else {
+                std::cerr << "[STEP Exporter] Failed to convert hole to solid for hole " << i << std::endl;
+                continue;
+            }
+        }
+
+        TopoDS_Solid currentSolid;
+        if (currentShape.ShapeType() == TopAbs_SOLID) {
+            currentSolid = TopoDS::Solid(currentShape);
+        } else {
+            BRepBuilderAPI_MakeSolid solidMaker;
+            for (TopExp_Explorer exp(currentShape, TopAbs_SHELL); exp.More(); exp.Next()) {
+                solidMaker.Add(TopoDS::Shell(exp.Current()));
+            }
+            if (solidMaker.IsDone()) {
+                currentSolid = solidMaker.Solid();
+            } else {
+                std::cerr << "[STEP Exporter] Failed to convert shape to solid for hole " << i << std::endl;
+                continue;
+            }
+        }
+
+        BRepAlgoAPI_Cut cutMaker(currentSolid, holeSolid);
+        if (!cutMaker.IsDone()) {
+            std::cerr << "[STEP Exporter] Boolean cut failed for hole " << i << std::endl;
+            continue;
+        }
+
+        currentShape = cutMaker.Shape();
+        successCount++;
+    }
+
+    std::cout << "[STEP Exporter] Created " << successCount << " corner holes" << std::endl;
+    return currentShape;
+}
+
+TopoDS_Shape create_bottom_shell_with_corner_holes(double width, double depth, double outer_height,
+                                                     double bottom_thickness, double wall_thickness,
+                                                     double corner_radius, double hole_radius,
+                                                     double hole_offset_x, double hole_offset_y)
+{
+    std::cout << "[STEP Exporter] Creating bottom shell with corner holes: "
+              << width << "x" << depth << "x" << outer_height
+              << " bottom=" << bottom_thickness << " wall=" << wall_thickness
+              << " corner_r=" << corner_radius << " hole_r=" << hole_radius
+              << " hole_offset=(" << hole_offset_x << "," << hole_offset_y << ")" << std::endl;
+
+    TopoDS_Shape outerBox = create_rounded_box_solid(width, depth, outer_height, corner_radius);
+    if (outerBox.IsNull()) {
+        std::cerr << "[STEP Exporter] Failed to create outer box" << std::endl;
+        return TopoDS_Shape();
+    }
+
+    TopoDS_Solid outerSolid;
+    if (outerBox.ShapeType() == TopAbs_SOLID) {
+        outerSolid = TopoDS::Solid(outerBox);
+    } else if (outerBox.ShapeType() == TopAbs_COMPOUND || outerBox.ShapeType() == TopAbs_SHELL) {
+        BRepBuilderAPI_MakeSolid solidMaker;
+        for (TopExp_Explorer exp(outerBox, TopAbs_SHELL); exp.More(); exp.Next()) {
+            solidMaker.Add(TopoDS::Shell(exp.Current()));
+        }
+        if (solidMaker.IsDone()) {
+            outerSolid = solidMaker.Solid();
+        } else {
+            std::cerr << "[STEP Exporter] Failed to convert outer box to solid" << std::endl;
+            return outerBox;
+        }
+    } else {
+        std::cerr << "[STEP Exporter] Outer box is not a solid" << std::endl;
+        return outerBox;
+    }
+
+    double inner_width = width - 2.0 * wall_thickness;
+    double inner_depth = depth - 2.0 * wall_thickness;
+    double inner_height = outer_height - bottom_thickness + 0.1;
+    double inner_radius = std::max(0.0, corner_radius - wall_thickness);
+
+    if (inner_width <= 0 || inner_depth <= 0 || inner_height <= 0) {
+        std::cerr << "[STEP Exporter] Wall/bottom thickness too large" << std::endl;
+        return outerSolid;
+    }
+
+    std::cout << "[STEP Exporter] Inner cavity: " << inner_width << "x" << inner_depth
+              << "x" << inner_height << " radius=" << inner_radius << std::endl;
+
+    TopoDS_Shape innerBox = create_rounded_box_solid(inner_width, inner_depth, inner_height, inner_radius);
+    if (innerBox.IsNull()) {
+        std::cerr << "[STEP Exporter] Failed to create inner box" << std::endl;
+        return outerSolid;
+    }
+
+    double inner_z_offset = bottom_thickness / 2.0 + 0.05;
+    gp_Trsf innerTrsf;
+    innerTrsf.SetTranslation(gp_Vec(0, 0, inner_z_offset));
+    TopLoc_Location innerLoc(innerTrsf);
+    innerBox.Move(innerLoc);
+    std::cout << "[STEP Exporter] Inner box shifted up by " << inner_z_offset << " for open top" << std::endl;
+
+    double hw = width / 2.0;
+    double hd = depth / 2.0;
+    double hh = outer_height / 2.0;
+    double hole_cx = hw - hole_offset_x;
+    double hole_cy = hd - hole_offset_y;
+    double cyl_z = -hh - 0.05;
+    double cyl_height = bottom_thickness + 0.1;
+
+    double corner_positions[4][2] = {
+        { hole_cx,  hole_cy},
+        {-hole_cx,  hole_cy},
+        {-hole_cx, -hole_cy},
+        { hole_cx, -hole_cy}
+    };
+
+    TopoDS_Shape fusedInner = innerBox;
+    int cylCount = 0;
+
+    for (int i = 0; i < 4; i++) {
+        double cx = corner_positions[i][0];
+        double cy = corner_positions[i][1];
+
+        std::cout << "[STEP Exporter] Creating bottom cylinder " << i << " at (" << cx << "," << cy << "," << cyl_z << ") h=" << cyl_height << std::endl;
+
+        gp_Ax2 cylAxes(gp_Pnt(0, 0, cyl_z), gp::DZ());
+        BRepPrimAPI_MakeCylinder cylMaker(cylAxes, hole_radius, cyl_height);
+        TopoDS_Shape cylShape = cylMaker.Shape();
+        if (cylShape.IsNull()) {
+            std::cerr << "[STEP Exporter] Failed to create cylinder " << i << std::endl;
+            continue;
+        }
+
+        gp_Trsf cylTrsf;
+        cylTrsf.SetTranslation(gp_Vec(cx, cy, 0));
+        TopLoc_Location cylLoc(cylTrsf);
+        cylShape.Move(cylLoc);
+
+        BRepAlgoAPI_Fuse fuseMaker(fusedInner, cylShape);
+        if (!fuseMaker.IsDone()) {
+            std::cerr << "[STEP Exporter] Boolean fuse failed for cylinder " << i << std::endl;
+            continue;
+        }
+
+        fusedInner = fuseMaker.Shape();
+        cylCount++;
+    }
+
+    std::cout << "[STEP Exporter] Fused " << cylCount << " bottom cylinders with inner box" << std::endl;
+
+    BRepAlgoAPI_Cut hollowMaker(outerSolid, fusedInner);
+    if (!hollowMaker.IsDone()) {
+        std::cerr << "[STEP Exporter] Boolean cut for hollowing failed" << std::endl;
+        return outerSolid;
+    }
+
+    TopoDS_Shape result = hollowMaker.Shape();
+    std::cout << "[STEP Exporter] Bottom shell with corner holes created" << std::endl;
     return result;
 }

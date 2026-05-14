@@ -29,15 +29,20 @@ def parse_args():
     parser.add_argument('--bottom-shell', action='store_true', help='Generate and screenshot bottom shell instead of test cylinders')
     parser.add_argument('--freecad-screenshot', action='store_true', help='Use FreeCAD for screenshot (default: Blender for bottom shell)')
     
-    # 只解析--之后的参数
+    # 只解析--之后的参数（Blender模式）
     if '--' in sys.argv:
         idx = sys.argv.index('--')
         script_args = sys.argv[idx + 1:]
     else:
-        script_args = []
+        # 直接Python运行模式，解析所有参数
+        script_args = sys.argv[1:]
     
     print(f"DEBUG: script_args = {script_args}")
-    return parser.parse_args(script_args)
+    args = parser.parse_args(script_args)
+    print(f"DEBUG: args.bottom_shell = {args.bottom_shell}")
+    print(f"DEBUG: args.skip_export = {args.skip_export}")
+    print(f"DEBUG: args.skip_screenshot = {args.skip_screenshot}")
+    return args
 
 def export_step(args):
     """导出STEP文件"""

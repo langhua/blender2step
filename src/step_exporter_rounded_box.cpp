@@ -455,7 +455,7 @@ TopoDS_Shape create_bottom_shell_with_corner_holes(double width, double depth, d
     return result;
 }
 
-static TopoDS_Shape apply_shell_bottom_fillets(const TopoDS_Shape& shell, double outer_fillet_radius, double inner_fillet_radius, double hh, double bottom_thickness, double wall_thickness)
+static TopoDS_Shape apply_shell_bottom_fillets(const TopoDS_Shape& shell, double outer_fillet_radius, double inner_fillet_radius, double hh, double outer_height, double bottom_thickness, double wall_thickness)
 {
     TopoDS_Solid s;
     if (shell.ShapeType() == TopAbs_SOLID) {
@@ -474,7 +474,10 @@ static TopoDS_Shape apply_shell_bottom_fillets(const TopoDS_Shape& shell, double
     }
 
     double outer_bottom_z = -hh;
-    double inner_bottom_z = -hh + bottom_thickness;
+    double inner_height = outer_height - bottom_thickness + 1.0;
+    double inner_hh = inner_height / 2.0;
+    double inner_z_offset = bottom_thickness / 2.0;
+    double inner_bottom_z = -inner_hh + inner_z_offset;
 
     BRepFilletAPI_MakeFillet filletMaker(s);
     int outerEdgeCount = 0;
@@ -494,7 +497,7 @@ static TopoDS_Shape apply_shell_bottom_fillets(const TopoDS_Shape& shell, double
             filletMaker.Add(outer_fillet_radius, edge);
             outerEdgeCount++;
         }
-        // 内壁底部边缘（z = -hh + bottom_thickness）
+        // 内壁底部边缘（z = -inner_hh + inner_z_offset）
         else if (inner_fillet_radius > 0.001 && fabs(pFirst.Z() - inner_bottom_z) < 0.01 && fabs(pLast.Z() - inner_bottom_z) < 0.01) {
             filletMaker.Add(inner_fillet_radius, edge);
             innerEdgeCount++;
@@ -659,7 +662,7 @@ TopoDS_Shape create_bottom_shell_with_fillets_solid(double width, double depth, 
 
     // 4. 切割后再应用底部圆角（外壁和内壁边缘都有圆角）
     if (outer_fillet_radius > 0.001 || inner_fillet_radius > 0.001) {
-        shellShape = apply_shell_bottom_fillets(shellShape, outer_fillet_radius, inner_fillet_radius, hh, bottom_thickness, wall_thickness);
+        shellShape = apply_shell_bottom_fillets(shellShape, outer_fillet_radius, inner_fillet_radius, hh, outer_height, bottom_thickness, wall_thickness);
     }
 
     std::cout << "[STEP Exporter] Bottom shell with fillets created" << std::endl;

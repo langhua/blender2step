@@ -20,6 +20,217 @@ import bmesh
 import math
 import sys
 import os
+from collections import defaultdict
+
+
+def measure_fillet_radius_from_mesh(obj, is_outer=True, tolerance=0.1):
+    """
+    从 mesh 测量底部圆倒角半径
+    
+    原理：
+    1. 找到底部表面（z 坐标最低的水平面）
+    2. 分析 z-level 分布，找到圆角结束、垂直壁开始的位置
+    3. 圆倒角半径 = 垂直壁开始位置 - 底部位置
+    
+    参数:
+        obj: Blender 对象
+        is_outer: True=测量外壁圆角, False=测量内壁圆角
+        tolerance: 容差值，用于判断顶点是否在同一平面
+    
+    返回:
+        测量得到的圆角半径（mm），如果无法测量则返回 None
+    """
+    if obj.type != 'MESH':
+        print(f"[Measure] Object {obj.name} is not a mesh")
+        return None
+    
+    # 获取评估后的 mesh（应用所有修改器）
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    eval_obj = obj.evaluated_get(depsgraph)
+    mesh_data = eval_obj.data
+    
+    # 创建 bmesh 从 mesh 数据（不需要进入编辑模式）
+    bm = bmesh.new()
+    bm.from_mesh(mesh_data)
+    bm.verts.ensure_lookup_table()
+    bm.edges.ensure_lookup_table()
+    
+    # 获取所有顶点的 Z 坐标
+    z_coords = [v.co.z for v in bm.verts]
+    min_z = min(z_coords)
+    max_z = max(z_coords)
+    height = max_z - min_z
+    
+    print(f"[Measure] Mesh bounds: z=[{min_z:.3f}, {max_z:.3f}], height={height:.3f}")
+    
+    # 按 z 坐标分组顶点（精度 0.01mm）
+    z_layers = defaultdict(list)
+    for v in bm.verts:
+        z_key = round(v.co.z / 0.01) * 0.01
+        z_layers[z_key].append(v)
+    
+    # 找到所有不同的 z 层级
+    sorted_z_levels = sorted(z_layers.keys())
+    
+    print(f"[Measure] Found {len(sorted_z_levels)} z-levels")
+    print(f"[Measure] All z-levels: {sorted_z_levels}")
+    
+    if len(sorted_z_levels) < 2:
+        print("[Measure] Not enough z-levels")
+        bm.free()
+        return None
+    
+    # 底部表面是 z 坐标最低的层级
+    bottom_z = sorted_z_levels[0]
+    bottom_verts = z_layers[bottom_z]
+    
+    print(f"[Measure] Bottom surface at z={bottom_z:.3f} with {len(bottom_verts)} vertices")
+    
+    # 找到圆角结束、垂直壁开始的位置
+    # 策略：找到第一个间隙，其后的 z-level 数量显著少于总数量
+    # 这表示圆角区域结束，进入垂直壁区域（通常只有顶部几个层级）
+    wall_start_z = None
+    total_levels = len(sorted_z_levels)
+    
+    for i in range(1, len(sorted_z_levels)):
+        gap = sorted_z_levels[i] - sorted_z_levels[i-1]
+        levels_after = total_levels - i  # 间隙后的层级数量
+        
+        # 如果间隙后的层级数量少于总数的 25%，说明进入了垂直壁区域
+        if levels_after < total_levels * 0.25 and gap > 0.1:
+            wall_start_z = sorted_z_levels[i]
+            print(f"[Measure] Found wall start at z={sorted_z_levels[i]:.3f} (gap={gap:.3f}, levels_after={levels_after})")
+            break
+    
+    if wall_start_z is None:
+        # 如果没找到，使用最后一个间隙前的位置
+        wall_start_z = sorted_z_levels[-2] if len(sorted_z_levels) > 1 else sorted_z_levels[-1]
+        print(f"[Measure] No clear wall start found, using z={wall_start_z:.3f}")
+    
+    # 圆倒角半径 = 垂直壁开始位置 - 底部位置
+    fillet_radius = wall_start_z - bottom_z
+    
+    print(f"[Measure] Calculated fillet radius: {fillet_radius:.3f} mm")
+    
+    # 验证结果合理性
+    if fillet_radius < 0.1 or fillet_radius > height * 0.8:
+        print(f"[Measure] Warning: Fillet radius {fillet_radius:.3f} mm seems unreasonable")
+        bm.free()
+        return None
+    
+    bm.free()
+    
+    return fillet_radius
+
+
+def measure_shell_fillet_radii(obj):
+    """
+    测量底壳的外壁和内壁圆倒角半径
+    
+    返回:
+        (outer_radius, inner_radius) 元组
+    """
+    print(f"\n{'='*60}")
+    print(f"Measuring fillet radii from mesh: {obj.name}")
+    print(f"{'='*60}")
+    
+    # 获取评估后的 mesh（应用所有修改器）
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    eval_obj = obj.evaluated_get(depsgraph)
+    mesh_data = eval_obj.data
+    
+    # 创建 bmesh 从 mesh 数据
+    bm = bmesh.new()
+    bm.from_mesh(mesh_data)
+    bm.verts.ensure_lookup_table()
+    
+    # 按 z 坐标分组顶点
+    z_layers = defaultdict(list)
+    for v in bm.verts:
+        z_key = round(v.co.z / 0.01) * 0.01
+        z_layers[z_key].append(v)
+    
+    sorted_z_levels = sorted(z_layers.keys())
+    
+    print(f"[Measure] Found {len(sorted_z_levels)} z-levels")
+    print(f"[Measure] All z-levels: {sorted_z_levels}")
+    
+    # 打印每个 z-level 的顶点数量（用于调试）
+    print(f"[Measure] Vertex counts per z-level:")
+    for z_level in sorted_z_levels[:10]:
+        print(f"  z={z_level:.3f}: {len(z_layers[z_level])} vertices")
+    
+    # 外壁底部是 z 坐标最低的层级
+    outer_bottom_z = sorted_z_levels[0]
+    outer_verts = z_layers[outer_bottom_z]
+    print(f"[Measure] Outer bottom at z={outer_bottom_z:.3f} with {len(outer_verts)} vertices")
+    
+    # 找到外壁垂直壁开始的位置
+    # 策略：找到第一个间隙，其后的 z-level 数量显著少于总数量
+    # 注意：使用 sorted_z_levels[i-1]（圆角结束的层级），而不是 sorted_z_levels[i]（间隙后的层级）
+    outer_wall_start_z = None
+    total_levels = len(sorted_z_levels)
+    
+    for i in range(1, len(sorted_z_levels)):
+        gap = sorted_z_levels[i] - sorted_z_levels[i-1]
+        levels_after = total_levels - i
+        
+        if levels_after < total_levels * 0.25 and gap > 0.1:
+            outer_wall_start_z = sorted_z_levels[i-1]  # 圆角结束的层级
+            print(f"[Measure] Found gap at z={sorted_z_levels[i-1]:.3f} -> {sorted_z_levels[i]:.3f} (gap={gap:.3f}, levels_after={levels_after})")
+            break
+    
+    if outer_wall_start_z is None:
+        outer_wall_start_z = sorted_z_levels[-2] if len(sorted_z_levels) > 1 else sorted_z_levels[-1]
+        print(f"[Measure] No clear wall start found, using z={outer_wall_start_z:.3f}")
+    
+    outer_radius = outer_wall_start_z - outer_bottom_z
+    print(f"[Measure] Outer wall starts at z={outer_wall_start_z:.3f}")
+    print(f"[Measure] Calculated outer fillet radius: {outer_radius:.3f} mm")
+    
+    # 找到内壁底部
+    # 内壁底部应该：
+    # 1. 高于外壁底部至少 0.5mm
+    # 2. 低于外壁垂直壁开始位置
+    # 3. 顶点数量较多（表示一个平面）
+    # 策略：找到范围内顶点数量最多的 z-level
+    candidate_z_levels = []
+    for z_level in sorted_z_levels[1:]:
+        if z_level > outer_bottom_z + 0.5 and z_level < outer_wall_start_z:
+            if len(z_layers[z_level]) > len(outer_verts) * 0.3:
+                candidate_z_levels.append((z_level, len(z_layers[z_level])))
+    
+    if candidate_z_levels:
+        # 选择顶点数量最多的 z-level 作为内壁底部
+        inner_bottom_z = max(candidate_z_levels, key=lambda x: x[1])[0]
+        print(f"[Measure] Inner bottom found at z={inner_bottom_z:.3f} with {len(z_layers[inner_bottom_z])} vertices")
+        
+        # 测量内壁圆角：找到内壁侧壁开始的位置
+        # 策略：找到内壁底部上方的最大间隙
+        max_gap = 0
+        inner_wall_start_z = None
+        for i in range(1, len(sorted_z_levels)):
+            if sorted_z_levels[i-1] >= inner_bottom_z:
+                gap = sorted_z_levels[i] - sorted_z_levels[i-1]
+                if gap > max_gap:
+                    max_gap = gap
+                    inner_wall_start_z = sorted_z_levels[i-1]
+                    print(f"[Measure] Inner gap candidate: z={sorted_z_levels[i-1]:.3f} -> {sorted_z_levels[i]:.3f} (gap={gap:.3f})")
+        
+        if inner_wall_start_z is not None:
+            inner_radius = inner_wall_start_z - inner_bottom_z
+            print(f"[Measure] Inner wall starts at z={inner_wall_start_z:.3f}")
+            print(f"[Measure] Calculated inner fillet radius: {inner_radius:.3f} mm")
+        else:
+            inner_radius = outer_radius * 0.5 if outer_radius else None
+            print(f"[Measure] Could not find inner wall start, using estimated value")
+    else:
+        inner_radius = outer_radius * 0.5 if outer_radius else None
+        print(f"[Measure] Could not find inner bottom, using estimated value")
+    
+    bm.free()
+    
+    return outer_radius, inner_radius
 
 
 def clear_scene():
@@ -741,7 +952,7 @@ def create_filleted_bottom_shells_scene():
     print("Filleted Bottom Shell Generator (No Holes)")
     print("="*60)
 
-    print("[1/3] Clearing scene...")
+    print("[1/4] Clearing scene...")
     clear_scene()
 
     width = 100.0
@@ -750,10 +961,12 @@ def create_filleted_bottom_shells_scene():
     bottom_thickness = 2.0
     wall_thickness = 2.0
     corner_radius = 20.0
+    
+    # 初始值（用于 Blender 预览创建）
     outer_fillet_radius = 3.0
     inner_fillet_radius = 1.5
 
-    print("[2/3] Creating filleted bottom shell (Blender preview)...")
+    print("[2/4] Creating filleted bottom shell (Blender preview)...")
     shell = create_filleted_shell_blender(
         name="FilletedShell",
         width=width,
@@ -777,7 +990,22 @@ def create_filleted_bottom_shells_scene():
                     space.shading.type = 'SOLID'
                     space.overlay.show_wireframes = False
 
-    print("[3/3] Exporting parametric STEP via C++ extension...")
+    print("[3/4] Measuring fillet radii from mesh...")
+    measured_outer, measured_inner = measure_shell_fillet_radii(shell)
+    
+    if measured_outer is not None:
+        outer_fillet_radius = measured_outer
+        print(f"  [OK] Measured outer fillet radius: {outer_fillet_radius:.3f} mm")
+    else:
+        print(f"  [WARN] Could not measure outer fillet, using default: {outer_fillet_radius:.3f} mm")
+    
+    if measured_inner is not None:
+        inner_fillet_radius = measured_inner
+        print(f"  [OK] Measured inner fillet radius: {inner_fillet_radius:.3f} mm")
+    else:
+        print(f"  [WARN] Could not measure inner fillet, using default: {inner_fillet_radius:.3f} mm")
+
+    print("[4/4] Exporting parametric STEP via C++ extension...")
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'lib'))
     os.environ['PATH'] = os.path.join(os.path.dirname(__file__), '..', 'lib') + os.pathsep + os.environ.get('PATH', '')
     if hasattr(os, 'add_dll_directory'):

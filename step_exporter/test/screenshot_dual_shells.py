@@ -12,7 +12,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import create_bottom_shell
 
-create_bottom_shell.create_both_bottom_shells_scene()
+create_bottom_shell.create_filleted_bottom_shells_scene()
 
 cam = bpy.data.objects.get('Camera')
 if not cam:
@@ -21,8 +21,10 @@ if not cam:
     bpy.context.collection.objects.link(cam)
     bpy.context.scene.camera = cam
 
-cam.location = (0, -150, 60)
-cam.rotation_euler = (1.1, 0, 0)
+cam.location = (0, -280, 90)
+cam.rotation_euler = (1.2, 0, 0)
+cam.data.type = 'PERSP'
+cam.data.lens = 35
 
 main_light = bpy.data.lights.new(name='MainLight', type='SUN')
 main_light.energy = 8

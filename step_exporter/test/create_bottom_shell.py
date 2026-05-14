@@ -264,8 +264,12 @@ def create_hollow_shell_blender(name, width, depth, outer_height, bottom_thickne
         hh = outer_height / 2.0
         hole_cx = hw - hole_offset_x
         hole_cy = hd - hole_offset_y
-        cyl_z = location[2] - hh - 0.05
-        cyl_height = bottom_thickness + 0.1
+        outer_bottom = location[2] - hh
+        inner_bottom = inner_z - inner_height / 2.0
+        cyl_z_bottom = outer_bottom
+        cyl_z_top = inner_bottom + 0.5
+        cyl_height = cyl_z_top - cyl_z_bottom
+        cyl_z = (cyl_z_top + cyl_z_bottom) / 2.0
 
         corner_positions = [
             ( hole_cx,  hole_cy),
@@ -293,7 +297,8 @@ def create_hollow_shell_blender(name, width, depth, outer_height, bottom_thickne
             bpy.ops.object.join()
             cyl_objs = [bpy.context.active_object]
 
-        apply_boolean(inner, cyl_objs[0], operation='UNION')
+        apply_boolean(outer, cyl_objs[0], operation='DIFFERENCE')
+        apply_boolean(inner, cyl_objs[0], operation='DIFFERENCE')
         bpy.data.objects.remove(cyl_objs[0], do_unlink=True)
 
     apply_boolean(outer, inner, operation='DIFFERENCE')
@@ -397,9 +402,412 @@ def create_both_bottom_shells_scene():
     print("="*60)
 
 
+def bevel_box_bottom_edges(obj, height, fillet_radius, bevel_segments=4):
+    """对盒体所有底面边缘施加圆角（fillet），与C++ BRepFilletAPI_MakeFillet一致"""
+    if fillet_radius <= 0.001:
+        return
+
+    bpy.context.view_layer.objects.active = obj
+    obj.select_set(True)
+    bpy.ops.object.mode_set(mode='EDIT')
+
+    me = obj.data
+    bm = bmesh.from_edit_mesh(me)
+    bm.edges.ensure_lookup_table()
+
+    hh = height / 2.0
+
+    # 计算盒体最大半宽/半深
+    xs = [v.co.x for v in bm.verts]
+    ys = [v.co.y for v in bm.verts]
+    hw = max(abs(min(xs)), abs(max(xs)))
+    hd = max(abs(min(ys)), abs(max(ys)))
+
+    # 先溶解直壁上的多余顶点，使每条直壁底边合并为一条连续边
+    verts_to_dissolve = []
+    for v in bm.verts:
+        if abs(v.co.z + hh) > 0.02:
+            continue
+        # 只处理直壁上的顶点（在最大X或最大Y处）
+        on_straight = (abs(abs(v.co.x) - hw) < 0.05) or (abs(abs(v.co.y) - hd) < 0.05)
+        if not on_straight:
+            continue
+        # 检查是否连接两条直壁底边
+        straight_edge_count = 0
+        for e in v.link_edges:
+            other = e.other_vert(v)
+            if abs(other.co.z + hh) < 0.02:
+                other_on_straight = (abs(abs(other.co.x) - hw) < 0.05) or (abs(abs(other.co.y) - hd) < 0.05)
+                if other_on_straight:
+                    straight_edge_count += 1
+        # 溶解中间顶点（连接两条直壁边）
+        if straight_edge_count == 2:
+            verts_to_dissolve.append(v)
+
+    if verts_to_dissolve:
+        bmesh.ops.dissolve_verts(bm, verts=verts_to_dissolve, use_face_split=False, use_boundary_tear=False)
+        bm.edges.ensure_lookup_table()
+
+    # 收集所有底面垂直边缘（连接底面和侧壁的边）
+    bottom_edges = []
+    for edge in bm.edges:
+        v1, v2 = edge.verts
+        # 只选择垂直边缘：一个顶点在底面，另一个不在底面
+        v1_on_bottom = abs(v1.co.z + hh) < 0.02
+        v2_on_bottom = abs(v2.co.z + hh) < 0.02
+        if v1_on_bottom != v2_on_bottom:  # 一个在底面，一个不在
+            # 检查是否在边界上
+            v_on_boundary = (abs(abs(v1.co.x) - hw) < 0.05) or (abs(abs(v1.co.y) - hd) < 0.05)
+            v2_on_boundary = (abs(abs(v2.co.x) - hw) < 0.05) or (abs(abs(v2.co.y) - hd) < 0.05)
+            if v_on_boundary or v2_on_boundary:
+                bottom_edges.append(edge)
+
+    # 对所有底面外轮廓边施加圆角
+    edges_to_fillet = bottom_edges
+
+    if edges_to_fillet:
+        bmesh.ops.bevel(
+            bm,
+            geom=edges_to_fillet,
+            offset=fillet_radius,
+            offset_type='OFFSET',
+            segments=bevel_segments,
+            profile=0.5,
+            affect='EDGES',
+            clamp_overlap=True,
+            loop_slide=True
+        )
+
+    bmesh.update_edit_mesh(me)
+    bpy.ops.object.mode_set(mode='OBJECT')
+
+
+def create_filleted_shell_blender(name, width, depth, outer_height, bottom_thickness, wall_thickness, corner_radius, outer_fillet_radius, inner_fillet_radius, location=(0, 0, 0), segments=32):
+    """在Blender中创建带底面圆角的中空底壳：使用BMesh直接创建"""
+    import math
+
+    hw = width / 2.0
+    hd = depth / 2.0
+    hh = outer_height / 2.0
+    max_radius = min(hw, hd) * 0.99
+    corner_radius = min(corner_radius, max_radius)
+
+    # 生成外轮廓
+    outer_profile = []
+    for i in range(segments):
+        angle = (math.pi/2) * i / segments
+        x = hw - corner_radius + corner_radius * math.cos(angle)
+        y = hd - corner_radius + corner_radius * math.sin(angle)
+        outer_profile.append((x, y))
+    for i in range(segments):
+        t = i / segments
+        x = hw - corner_radius - t * (width - 2 * corner_radius)
+        y = hd
+        outer_profile.append((x, y))
+    for i in range(segments):
+        angle = math.pi/2 + (math.pi/2) * i / segments
+        x = -hw + corner_radius + corner_radius * math.cos(angle)
+        y = hd - corner_radius + corner_radius * math.sin(angle)
+        outer_profile.append((x, y))
+    for i in range(segments):
+        t = i / segments
+        x = -hw
+        y = hd - corner_radius - t * (depth - 2 * corner_radius)
+        outer_profile.append((x, y))
+    for i in range(segments):
+        angle = math.pi + (math.pi/2) * i / segments
+        x = -hw + corner_radius + corner_radius * math.cos(angle)
+        y = -hd + corner_radius + corner_radius * math.sin(angle)
+        outer_profile.append((x, y))
+    for i in range(segments):
+        t = i / segments
+        x = -hw + corner_radius + t * (width - 2 * corner_radius)
+        y = -hd
+        outer_profile.append((x, y))
+    for i in range(segments):
+        angle = 3*math.pi/2 + (math.pi/2) * i / segments
+        x = hw - corner_radius + corner_radius * math.cos(angle)
+        y = -hd + corner_radius + corner_radius * math.sin(angle)
+        outer_profile.append((x, y))
+    for i in range(segments):
+        t = i / segments
+        x = hw
+        y = -hd + corner_radius + t * (depth - 2 * corner_radius)
+        outer_profile.append((x, y))
+
+    # 内轮廓（与外轮廓相同的结构，但偏移wall_thickness）
+    inner_hw = hw - wall_thickness
+    inner_hd = hd - wall_thickness
+    inner_corner_r = max(corner_radius - wall_thickness, 1.0)
+    inner_profile = []
+    for i in range(segments):
+        angle = (math.pi/2) * i / segments
+        x = inner_hw - inner_corner_r + inner_corner_r * math.cos(angle)
+        y = inner_hd - inner_corner_r + inner_corner_r * math.sin(angle)
+        inner_profile.append((x, y))
+    for i in range(segments):
+        t = i / segments
+        x = inner_hw - inner_corner_r - t * (inner_hw * 2 - 2 * inner_corner_r)
+        y = inner_hd
+        inner_profile.append((x, y))
+    for i in range(segments):
+        angle = math.pi/2 + (math.pi/2) * i / segments
+        x = -inner_hw + inner_corner_r + inner_corner_r * math.cos(angle)
+        y = inner_hd - inner_corner_r + inner_corner_r * math.sin(angle)
+        inner_profile.append((x, y))
+    for i in range(segments):
+        t = i / segments
+        x = -inner_hw
+        y = inner_hd - inner_corner_r - t * (inner_hd * 2 - 2 * inner_corner_r)
+        inner_profile.append((x, y))
+    for i in range(segments):
+        angle = math.pi + (math.pi/2) * i / segments
+        x = -inner_hw + inner_corner_r + inner_corner_r * math.cos(angle)
+        y = -inner_hd + inner_corner_r + inner_corner_r * math.sin(angle)
+        inner_profile.append((x, y))
+    for i in range(segments):
+        t = i / segments
+        x = -inner_hw + inner_corner_r + t * (inner_hw * 2 - 2 * inner_corner_r)
+        y = -inner_hd
+        inner_profile.append((x, y))
+    for i in range(segments):
+        angle = 3*math.pi/2 + (math.pi/2) * i / segments
+        x = inner_hw - inner_corner_r + inner_corner_r * math.cos(angle)
+        y = -inner_hd + inner_corner_r + inner_corner_r * math.sin(angle)
+        inner_profile.append((x, y))
+    for i in range(segments):
+        t = i / segments
+        x = inner_hw
+        y = -inner_hd + inner_corner_r + t * (inner_hd * 2 - 2 * inner_corner_r)
+        inner_profile.append((x, y))
+
+    num_profile = len(outer_profile)
+    outer_bottom_z = -hh
+    outer_top_z = hh
+    inner_bottom_z = -hh + bottom_thickness
+    inner_top_z = hh
+
+    me = bpy.data.meshes.new(name=name)
+    bm = bmesh.new()
+
+    fillet_segments = 8
+
+    # 计算底面轮廓（向内收缩outer_fillet_radius）
+    bottom_profile = []
+    for i in range(num_profile):
+        x, y = outer_profile[i]
+        dist = math.sqrt(x*x + y*y)
+        if dist > 0.001:
+            nx = x / dist
+            ny = y / dist
+        else:
+            nx, ny = 1.0, 0.0
+        bx = x - nx * outer_fillet_radius
+        by = y - ny * outer_fillet_radius
+        bottom_profile.append((bx, by))
+
+    # 外底面（缩小后的底面）
+    outer_bottom_verts = [bm.verts.new((x, y, outer_bottom_z)) for x, y in bottom_profile]
+    outer_bottom_center = bm.verts.new((0, 0, outer_bottom_z))
+    for i in range(num_profile):
+        next_i = (i + 1) % num_profile
+        bm.faces.new([outer_bottom_center, outer_bottom_verts[i], outer_bottom_verts[next_i]])
+
+    # 外底面圆角过渡层（fillet）- 从缩小的底面平滑扩展到完整外轮廓
+    fillet_layers = []
+    for seg in range(1, fillet_segments + 1):
+        t = seg / fillet_segments
+        angle = math.pi/2 * t
+        # 圆角：从缩小的底面逐渐向外扩展到完整轮廓，同时向上
+        expand = outer_fillet_radius * math.sin(angle)  # 向外扩展量
+        rise = outer_fillet_radius * (1.0 - math.cos(angle))  # 向上抬升量
+        layer_verts = []
+        for i in range(num_profile):
+            bx, by = bottom_profile[i]
+            # 计算该点的法线方向（从中心指向外）
+            dist = math.sqrt(bx*bx + by*by)
+            if dist > 0.001:
+                nx = bx / dist
+                ny = by / dist
+            else:
+                nx, ny = 1.0, 0.0
+            # 沿法线方向扩展（向外）
+            fx = bx + nx * expand
+            fy = by + ny * expand
+            fz = outer_bottom_z + rise
+            layer_verts.append(bm.verts.new((fx, fy, fz)))
+        fillet_layers.append(layer_verts)
+
+    # 圆角面（连接底面边缘和第一层fillet）
+    for i in range(num_profile):
+        next_i = (i + 1) % num_profile
+        bm.faces.new([outer_bottom_verts[i], outer_bottom_verts[next_i], fillet_layers[0][next_i], fillet_layers[0][i]])
+
+    # 圆角面（fillet层之间）
+    for seg in range(len(fillet_layers) - 1):
+        for i in range(num_profile):
+            next_i = (i + 1) % num_profile
+            bm.faces.new([fillet_layers[seg][i], fillet_layers[seg][next_i], fillet_layers[seg+1][next_i], fillet_layers[seg+1][i]])
+
+    # 外壁（从最后一层fillet到顶面）- 最后一层应该接近完整外轮廓
+    outer_top_verts = [bm.verts.new((x, y, outer_top_z)) for x, y in outer_profile]
+    last_fillet = fillet_layers[-1]
+    for i in range(num_profile):
+        next_i = (i + 1) % num_profile
+        bm.faces.new([last_fillet[i], last_fillet[next_i], outer_top_verts[next_i], outer_top_verts[i]])
+
+    # 内底面（缩小后的底面，为内圆角留出空间）
+    inner_bottom_profile = []
+    for i in range(num_profile):
+        x, y = inner_profile[i]
+        dist = math.sqrt(x*x + y*y)
+        if dist > 0.001:
+            nx = x / dist
+            ny = y / dist
+        else:
+            nx, ny = 1.0, 0.0
+        bx = x - nx * inner_fillet_radius
+        by = y - ny * inner_fillet_radius
+        inner_bottom_profile.append((bx, by))
+
+    inner_bottom_verts = [bm.verts.new((x, y, inner_bottom_z)) for x, y in inner_bottom_profile]
+    inner_bottom_center = bm.verts.new((0, 0, inner_bottom_z))
+    for i in range(num_profile):
+        next_i = (i + 1) % num_profile
+        bm.faces.new([inner_bottom_center, inner_bottom_verts[next_i], inner_bottom_verts[i]])
+
+    # 内壁圆角过渡层（fillet）- 从缩小的内底面平滑扩展到完整内轮廓
+    inner_fillet_layers = []
+    for seg in range(1, fillet_segments + 1):
+        t = seg / fillet_segments
+        angle = math.pi/2 * t
+        expand = inner_fillet_radius * math.sin(angle)
+        rise = inner_fillet_radius * (1.0 - math.cos(angle))
+        layer_verts = []
+        for i in range(num_profile):
+            bx, by = inner_bottom_profile[i]
+            dist = math.sqrt(bx*bx + by*by)
+            if dist > 0.001:
+                nx = bx / dist
+                ny = by / dist
+            else:
+                nx, ny = 1.0, 0.0
+            fx = bx + nx * expand
+            fy = by + ny * expand
+            fz = inner_bottom_z + rise
+            layer_verts.append(bm.verts.new((fx, fy, fz)))
+        inner_fillet_layers.append(layer_verts)
+
+    # 内圆角面（连接内底面边缘和第一层fillet）
+    for i in range(num_profile):
+        next_i = (i + 1) % num_profile
+        bm.faces.new([inner_bottom_verts[i], inner_bottom_verts[next_i], inner_fillet_layers[0][next_i], inner_fillet_layers[0][i]])
+
+    # 内圆角面（fillet层之间）
+    for seg in range(len(inner_fillet_layers) - 1):
+        for i in range(num_profile):
+            next_i = (i + 1) % num_profile
+            bm.faces.new([inner_fillet_layers[seg][i], inner_fillet_layers[seg][next_i], inner_fillet_layers[seg+1][next_i], inner_fillet_layers[seg+1][i]])
+
+    # 内壁（从最后一层fillet到顶面）
+    inner_top_verts = [bm.verts.new((x, y, inner_top_z)) for x, y in inner_profile]
+    last_inner_fillet = inner_fillet_layers[-1]
+    for i in range(num_profile):
+        next_i = (i + 1) % num_profile
+        bm.faces.new([last_inner_fillet[i], last_inner_fillet[next_i], inner_top_verts[next_i], inner_top_verts[i]])
+
+    # 顶面（外顶面减去内顶面，形成环形）
+    for i in range(num_profile):
+        next_i = (i + 1) % num_profile
+        bm.faces.new([outer_top_verts[i], outer_top_verts[next_i], inner_top_verts[next_i], inner_top_verts[i]])
+
+    bm.to_mesh(me)
+    bm.free()
+
+    obj = bpy.data.objects.new(name, me)
+    bpy.context.collection.objects.link(obj)
+    bpy.context.view_layer.objects.active = obj
+    obj.select_set(True)
+    obj.location = location
+    bpy.ops.object.shade_smooth()
+
+    print(f"  Created filleted shell with {len(obj.data.vertices)} vertices")
+    return obj
+
+
+def create_filleted_bottom_shells_scene():
+    """生成带底面圆角的底壳（仅无孔），导出为完美STEP"""
+    print("\n" + "="*60)
+    print("Filleted Bottom Shell Generator (No Holes)")
+    print("="*60)
+
+    print("[1/3] Clearing scene...")
+    clear_scene()
+
+    width = 100.0
+    depth = 70.0
+    outer_height = 10.0
+    bottom_thickness = 2.0
+    wall_thickness = 2.0
+    corner_radius = 20.0
+    outer_fillet_radius = 3.0
+    inner_fillet_radius = 1.5
+
+    print("[2/3] Creating filleted bottom shell (Blender preview)...")
+    shell = create_filleted_shell_blender(
+        name="FilletedShell",
+        width=width,
+        depth=depth,
+        outer_height=outer_height,
+        bottom_thickness=bottom_thickness,
+        wall_thickness=wall_thickness,
+        corner_radius=corner_radius,
+        outer_fillet_radius=outer_fillet_radius,
+        inner_fillet_radius=inner_fillet_radius,
+        location=(0, 0, 0),
+        segments=32
+    )
+    add_material(shell, name="FilletedShellMaterial")
+    print(f"  [OK] Filleted bottom shell created")
+
+    for area in bpy.context.screen.areas:
+        if area.type == 'VIEW_3D':
+            for space in area.spaces:
+                if space.type == 'VIEW_3D':
+                    space.shading.type = 'SOLID'
+                    space.overlay.show_wireframes = False
+
+    print("[3/3] Exporting parametric STEP via C++ extension...")
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'lib'))
+    os.environ['PATH'] = os.path.join(os.path.dirname(__file__), '..', 'lib') + os.pathsep + os.environ.get('PATH', '')
+    if hasattr(os, 'add_dll_directory'):
+        os.add_dll_directory(os.path.join(os.path.dirname(__file__), '..', 'lib'))
+
+    import _step_exporter as cpp_exporter
+
+    output = os.path.join(os.path.dirname(__file__), 'bottom_shell_filleted.step')
+    result = cpp_exporter.export_bottom_shell_filleted_step(
+        output,
+        width, depth, outer_height,
+        bottom_thickness, wall_thickness, corner_radius,
+        outer_fillet_radius, inner_fillet_radius,
+        "AP214IS",
+        "MILLIMETER",
+        1,  # enable_logging
+    )
+    if result:
+        print(f"  [OK] Filleted bottom shell -> {output}")
+    else:
+        print(f"  [FAIL] Filleted bottom shell export failed")
+
+    print("\n" + "="*60)
+    print("[OK] Filleted bottom shell created and exported!")
+    print("="*60)
+
+
 if __name__ == "__main__":
     try:
-        create_both_bottom_shells_scene()
+        create_filleted_bottom_shells_scene()
     except Exception as e:
         print(f"\nError: {e}")
         import traceback

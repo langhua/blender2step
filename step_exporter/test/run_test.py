@@ -384,7 +384,9 @@ def main():
             exec(compile(code, create_script, 'exec'), script_globals)
             
             # 显式调用主函数
-            if 'create_bottom_shell_scene' in script_globals:
+            if 'create_filleted_bottom_shells_scene' in script_globals:
+                script_globals['create_filleted_bottom_shells_scene']()
+            elif 'create_bottom_shell_scene' in script_globals:
                 script_globals['create_bottom_shell_scene']()
             
             print("Bottom shell created successfully")
@@ -434,7 +436,16 @@ def main():
         print("=" * 60)
         print("Step 1: Exporting STEP file")
         print("=" * 60)
-        step_file = export_step(args)
+        
+        if args.bottom_shell:
+            # 底壳已经由create_bottom_shell.py使用参数化导出，直接使用
+            step_file = os.path.join(script_dir, 'bottom_shell_filleted.step')
+            if not os.path.exists(step_file):
+                print(f"ERROR: Parametric STEP file not found: {step_file}")
+                sys.exit(1)
+            print(f"Using parametric STEP file: {step_file}")
+        else:
+            step_file = export_step(args)
     else:
         # 如果跳过导出，使用现有的STEP文件
         step_file = os.path.join(args.output_dir, f'test{args.test_number}.step')

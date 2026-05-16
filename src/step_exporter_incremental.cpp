@@ -470,7 +470,6 @@ PyObject* finalize_incremental_export(PyObject* self, PyObject* args) {
         Py_RETURN_FALSE;
     }
 
-    // 融合所有形状为单一实体
     TopoDS_Shape fused_shape;
     if (g_incremental_shapes.size() == 1) {
         fused_shape = g_incremental_shapes[0];
@@ -479,76 +478,47 @@ PyObject* finalize_incremental_export(PyObject* self, PyObject* args) {
         }
     } else {
         if (g_incremental_enable_logging) {
-            LOG_INCREMENTAL("[STEP Exporter] Merging " << g_incremental_shapes.size() << " shapes via sewing...");
+            LOG_INCREMENTAL("[STEP Exporter] Creating compound of " << g_incremental_shapes.size() << " shapes...");
         }
         
-        // 使用BRepBuilderAPI_Sewing来缝合所有形状（处理共面情况比Fuse更好）
-        try {
-            BRepBuilderAPI_Sewing sewer(g_incremental_sew_tolerance);
-            for (size_t i = 0; i < g_incremental_shapes.size(); i++) {
-                sewer.Add(g_incremental_shapes[i]);
+        BRep_Builder builder;
+        TopoDS_Compound compound;
+        builder.MakeCompound(compound);
+        for (size_t i = 0; i < g_incremental_shapes.size(); i++) {
+            if (!g_incremental_shapes[i].IsNull()) {
+                builder.Add(compound, g_incremental_shapes[i]);
                 if (g_incremental_enable_logging) {
                     LOG_INCREMENTAL("[STEP Exporter]   Added shape " << (i+1) << "/" << g_incremental_shapes.size());
                 }
             }
-            sewer.Perform();
-            fused_shape = sewer.SewedShape();
-            
-            if (fused_shape.IsNull()) {
-                if (g_incremental_enable_logging) {
-                    LOG_INCREMENTAL("[STEP Exporter]   ⚠ Sewing produced null shape, using compound fallback");
-                }
-                // 回退到复合体
-                BRep_Builder builder;
-                TopoDS_Compound compound;
-                builder.MakeCompound(compound);
-                for (size_t i = 0; i < g_incremental_shapes.size(); i++) {
-                    builder.Add(compound, g_incremental_shapes[i]);
-                }
-                fused_shape = compound;
-            } else {
-                if (g_incremental_enable_logging) {
-                    LOG_INCREMENTAL("[STEP Exporter]   ✓ Sewing successful, shape type: " << fused_shape.ShapeType());
-                }
-            }
-        } catch (const Standard_Failure& e) {
-            if (g_incremental_enable_logging) {
-                LOG_INCREMENTAL("[STEP Exporter]   ⚠ Sewing exception: " << e.GetMessageString());
-            }
-            // 异常时使用复合体
-            BRep_Builder builder;
-            TopoDS_Compound compound;
-            builder.MakeCompound(compound);
-            for (size_t i = 0; i < g_incremental_shapes.size(); i++) {
-                builder.Add(compound, g_incremental_shapes[i]);
-            }
-            fused_shape = compound;
+        }
+        fused_shape = compound;
+        
+        if (g_incremental_enable_logging) {
+            LOG_INCREMENTAL("[STEP Exporter]   ✓ Compound created with " << g_incremental_shapes.size() << " shapes");
         }
     }
 
-    // 将缝合后的形状转换为实体（如果是SHELL）
     if (g_incremental_create_solid && fused_shape.ShapeType() == TopAbs_SHELL) {
         try {
             BRepBuilderAPI_MakeSolid solidMaker(TopoDS::Shell(fused_shape));
             if (solidMaker.IsDone()) {
                 fused_shape = solidMaker.Solid();
                 if (g_incremental_enable_logging) {
-                    LOG_INCREMENTAL("[STEP Exporter]   ✓ Sewed shell converted to solid");
+                    LOG_INCREMENTAL("[STEP Exporter]   ✓ Shell converted to solid");
                 }
             }
         } catch (...) {
             if (g_incremental_enable_logging) {
-                LOG_INCREMENTAL("[STEP Exporter]   ⚠ Failed to convert sewed shell to solid");
+                LOG_INCREMENTAL("[STEP Exporter]   ⚠ Failed to convert shell to solid");
             }
         }
     }
 
-    // 修复融合后的形状
     if (g_incremental_fix_geometry && !fused_shape.IsNull()) {
         fused_shape = fix_shape_enhanced(fused_shape, g_incremental_sew_tolerance);
     }
 
-    // 传输融合后的形状到STEP writer
     STEPControl_StepModelType transfer_mode = STEPControl_ManifoldSolidBrep;
     if (fused_shape.ShapeType() == TopAbs_SHELL) {
         transfer_mode = STEPControl_ManifoldSolidBrep;
@@ -583,7 +553,7 @@ PyObject* finalize_incremental_export(PyObject* self, PyObject* args) {
 
     if (success) {
         if (g_incremental_enable_logging) {
-            LOG_INCREMENTAL("[STEP Exporter] Successfully exported " << g_incremental_object_count << " object(s) as single fused solid");
+            LOG_INCREMENTAL("[STEP Exporter] Successfully exported " << g_incremental_object_count << " object(s) as compound");
             LOG_INCREMENTAL("[STEP Exporter] =========================================");
         }
     } else {

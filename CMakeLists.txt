@@ -20,8 +20,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # ====== 2. 查找 ZLIB (OpenCASCADE dependency) ======
 # Must be done BEFORE find_package(OpenCASCADE) because OpenCASCADE depends on ZLIB
-set(ZLIB_LIBRARY "f:/git/blender2step/vcpkg_installed/x64-windows/lib/zlib.lib" CACHE FILEPATH "ZLIB library path")
-set(ZLIB_INCLUDE_DIR "f:/git/blender2step/vcpkg_installed/x64-windows/include" CACHE PATH "ZLIB include path")
+set(ZLIB_LIBRARY "f:/git/blender2step/vcpkg_installed/x64-windows-release/lib/zlib.lib" CACHE FILEPATH "ZLIB library path")
+set(ZLIB_INCLUDE_DIR "f:/git/blender2step/vcpkg_installed/x64-windows-release/include" CACHE PATH "ZLIB include path")
 set(ZLIB_FOUND TRUE CACHE BOOL "ZLIB found")
 # Create imported target for ZLIB
 if(NOT TARGET ZLIB::ZLIB)
@@ -34,8 +34,9 @@ endif()
 
 # ====== 3. 查找 OpenCASCADE ======
 # 设置依赖库路径
-set(freetype_DIR "f:/git/blender2step/vcpkg_installed/x64-windows/share/freetype" CACHE PATH "freetype config dir")
-set(OpenCASCADE_DIR "f:/git/blender2step/vcpkg_installed/x64-windows/share/opencascade" CACHE PATH "Path to OpenCASCADE config")
+set(freetype_DIR "f:/git/blender2step/vcpkg_installed/x64-windows-release/share/freetype" CACHE PATH "freetype config dir")
+find_package(freetype CONFIG REQUIRED)
+set(OpenCASCADE_DIR "f:/git/blender2step/vcpkg_installed/x64-windows-release/share/opencascade" CACHE PATH "Path to OpenCASCADE config")
 # 优先使用静态库
 set(OpenCASCADE_USE_STATIC_LIBS ON)
 find_package(OpenCASCADE CONFIG REQUIRED)
@@ -126,6 +127,13 @@ set_target_properties(step_exporter PROPERTIES
     OUTPUT_NAME "_step_exporter"
     PREFIX ""
     SUFFIX ".pyd"
+)
+
+add_custom_command(TARGET step_exporter POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "$<TARGET_FILE:step_exporter>"
+        "${CMAKE_SOURCE_DIR}/step_exporter/lib/_step_exporter.pyd"
+    COMMENT "Copying _step_exporter.pyd to step_exporter/lib/"
 )
 
 # ====== 5. 链接库 ======

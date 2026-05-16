@@ -25,7 +25,7 @@ std::vector<CylinderCandidate> CylinderDetectorV2::detect(double radius_tol, dou
     double bbox_depth = bbox_ymax - bbox_ymin;
     // 最大合理圆柱半径：取包围盒宽度和深度中较大者的40%
     // 用于过滤平面侧壁（它们会被检测为半径非常大的"圆柱"）
-    double max_reasonable_radius = std::max(bbox_width, bbox_depth) * 0.4;
+    double max_reasonable_radius = std::max(bbox_width, bbox_depth) * 0.6;
     std::cout << "[STEP Exporter] [CylDet] BBox: " << bbox_width << "x" << bbox_depth << ", maxR=" << max_reasonable_radius << std::endl;
     
     std::vector<CylinderCandidate> results;
@@ -63,11 +63,7 @@ std::vector<CylinderCandidate> CylinderDetectorV2::detect(double radius_tol, dou
                 // 检查圆柱半径是否合理：过滤掉被误检测为圆柱的平面侧壁
                 if (cyl.radius > max_reasonable_radius) {
                     std::cout << "[STEP Exporter] [CylDet] Skipping false positive: R=" << cyl.radius << " > maxR=" << max_reasonable_radius << std::endl;
-                    // 仍然标记这些面为已使用，避免重复检测
-                    for (int fidx : cyl.face_indices) {
-                        m_usedFaces.insert(fidx);
-                    }
-                    found_new = true;  // 标记为已处理，让循环继续
+                    found_new = true;
                     continue;
                 }
                 
@@ -89,11 +85,7 @@ std::vector<CylinderCandidate> CylinderDetectorV2::detect(double radius_tol, dou
                     // 同样检查第二个圆柱的半径
                     if (cyl2.radius > max_reasonable_radius) {
                         std::cout << "[STEP Exporter] [CylDet] Skipping false positive (cyl2): R=" << cyl2.radius << " > maxR=" << max_reasonable_radius << std::endl;
-                        // 仍然标记这些面为已使用
-                        for (int fidx : cyl2.face_indices) {
-                            m_usedFaces.insert(fidx);
-                        }
-                        found_new = true;  // 标记为已处理
+                        found_new = true;
                     } else {
                         double radius_diff = fabs(cyl.radius - cyl2.radius) / ((cyl.radius + cyl2.radius) / 2);
                         if (radius_diff > 0.015) {

@@ -1,3 +1,5 @@
+# OpenCASCADE使用7.8.1版本，与FreeCAD的OpenCASCADE版本一致
+
 
 cd blender2step\build
 Remove-Item ..\CMakeCache.txt -ErrorAction SilentlyContinue

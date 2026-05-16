@@ -691,8 +691,37 @@ do_normal_clustering:
                 std::cout.flush();
                 return result;
             }
+            // 检查是否是均匀圆柱面（所有空间组大小相近）还是圆角矩形（某个组明显更大）
+            bool isUniformCylinder = false;
+            if (best_quadrant >= 0 && max_group_size > 0 && max_normal_variance > 0.01) {
+                int totalFacesInGroups = 0;
+                int minGroupSize = 1e9;
+                int maxGroupSize = 0;
+                int nonEmptyGroups = 0;
+                for (const auto& [q, indices] : angle_groups) {
+                    int sz = (int)indices.size();
+                    if (sz > 0) {
+                        totalFacesInGroups += sz;
+                        minGroupSize = std::min(minGroupSize, sz);
+                        maxGroupSize = std::max(maxGroupSize, sz);
+                        nonEmptyGroups++;
+                    }
+                }
+                // 如果所有非空组大小相近（最大/最小 < 3），且总面数分布在多个组中，
+                // 说明是均匀圆柱面而非圆角矩形
+                if (nonEmptyGroups >= 4 && minGroupSize > 0 && 
+                    (double)maxGroupSize / (double)minGroupSize < 3.0) {
+                    isUniformCylinder = true;
+                    std::cout << "[STEP Exporter] [CylDet] [WithExclude] Uniform cylinder detected: "
+                              << nonEmptyGroups << " groups, sizes " << minGroupSize << "-" << maxGroupSize
+                              << ", keeping all " << totalFacesInGroups << " faces" << std::endl;
+                    std::cout.flush();
+                }
+            }
+            
             // 如果空间聚类找到了法线变化组（圆角面），使用面法线精确计算圆角半径
-            if (best_quadrant >= 0 && max_group_size > 0 && max_normal_variance > 0.01 && max_group_size < result.face_indices.size()) {
+            // 但对于均匀圆柱面，保留所有面
+            if (!isUniformCylinder && best_quadrant >= 0 && max_group_size > 0 && max_normal_variance > 0.01 && max_group_size < result.face_indices.size()) {
                 const auto& best_group = angle_groups[best_quadrant];
                 
                 // 使用面法线计算圆角半径和圆心

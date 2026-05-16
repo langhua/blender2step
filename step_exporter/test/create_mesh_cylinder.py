@@ -697,7 +697,7 @@ def apply_top_fillet_to_mesh(obj, height, fillet_radius, fillet_segments=16):
         offset=fillet_radius,
         segments=fillet_segments,
         profile=0.5,
-        clamp_overlap=True,
+        clamp_overlap=False,
         affect='EDGES'
     )
 

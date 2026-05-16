@@ -363,6 +363,8 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
         }
         
         if (filtered_cylinders.size() >= 2) {
+            std::cout << "[STEP Exporter] DEBUG: Entering coaxial check, filtered=" << filtered_cylinders.size() << std::endl;
+            std::cout.flush();
             bool all_coaxial = true;
             double ref_z_min = filtered_cylinders[0].z_min;
             double ref_z_max = filtered_cylinders[0].z_max;
@@ -404,6 +406,20 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
             }
             
             if (all_coaxial) {
+                std::cout << "[STEP Exporter] DEBUG: all_coaxial=TRUE, entering coaxial block" << std::endl;
+                std::cout.flush();
+                std::ofstream dbg3("F:/git/blender2step/build/debug_coaxial.txt", std::ios::app);
+                dbg3 << "all_coaxial=true, filtered=" << filtered_cylinders.size() << std::endl;
+                for (size_t i = 0; i < filtered_cylinders.size(); i++) {
+                    const auto& c = filtered_cylinders[i];
+                    dbg3 << "  cyl[" << i << "]: R=" << c.radius << " z=[" << c.z_min << "," << c.z_max << "] is_cone=" << c.is_cone << " is_tapered_hollow=" << c.is_tapered_hollow << " faces=" << c.face_indices.size() << " radius_top=" << c.radius_top << " radius_bottom=" << c.radius_bottom << std::endl;
+                }
+                dbg3.close();
+                std::cout << "[STEP Exporter] DEBUG: all_coaxial=true, filtered=" << filtered_cylinders.size() << std::endl;
+                for (size_t i = 0; i < filtered_cylinders.size(); i++) {
+                    const auto& c = filtered_cylinders[i];
+                    std::cout << "[STEP Exporter] DEBUG:   cyl[" << i << "]: R=" << c.radius << " z=[" << c.z_min << "," << c.z_max << "] is_cone=" << c.is_cone << " is_tapered_hollow=" << c.is_tapered_hollow << " faces=" << c.face_indices.size() << " radius_top=" << c.radius_top << " radius_bottom=" << c.radius_bottom << std::endl;
+                }
                 bool hasTaperedFeatures = false;
                 for (const auto& cyl : filtered_cylinders) {
                     if (cyl.is_cone) {
@@ -421,6 +437,10 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                     }
                 }
                 
+                std::cout << "[STEP Exporter] DEBUG: hasTaperedFeatures=" << hasTaperedFeatures << " filtered=" << filtered_cylinders.size() << std::endl;
+                std::ofstream dbg4("F:/git/blender2step/build/debug_hasTapered.txt", std::ios::app);
+                dbg4 << "hasTaperedFeatures=" << hasTaperedFeatures << " filtered=" << filtered_cylinders.size() << std::endl;
+                dbg4.close();
                 if (!hasTaperedFeatures && filtered_cylinders.size() >= 3) {
                     double minR = 1e20, maxR = 0;
                     for (const auto& cyl : filtered_cylinders) {
@@ -440,8 +460,17 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                                 break;
                             }
                         }
+                        std::cout << "[STEP Exporter] DEBUG: allSimilarZ=" << allSimilarZ << " minR=" << minR << " maxR=" << maxR << " radiusDiffRatio=" << ((maxR - minR) / maxR) << std::endl;
                         if (!allSimilarZ) {
                             hasTaperedFeatures = true;
+                        } else {
+                            double innerR = minR, outerR = maxR;
+                            double rDiff = outerR - innerR;
+                            std::cout << "[STEP Exporter] DEBUG: allSimilarZ else branch, rDiff=" << rDiff << " innerR*0.1=" << (innerR * 0.1) << std::endl;
+                            if (rDiff > innerR * 0.1) {
+                                isHollowCylinder = true;
+                                std::cout << "[STEP Exporter] DEBUG: isHollowCylinder=true (allSimilarZ), rDiff=" << rDiff << " innerR=" << innerR << " outerR=" << outerR << " filtered=" << filtered_cylinders.size() << std::endl;
+                            }
                         }
                     }
                 }
@@ -453,8 +482,10 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                         if (cyl.radius > outerR) outerR = cyl.radius;
                     }
                     double rDiff = outerR - innerR;
+                    std::cout << "[STEP Exporter] DEBUG: hasTaperedFeatures path, rDiff=" << rDiff << " innerR=" << innerR << " outerR=" << outerR << " innerR*0.1=" << (innerR * 0.1) << " filtered=" << filtered_cylinders.size() << std::endl;
                     if (rDiff > innerR * 0.1 && filtered_cylinders.size() >= 3) {
                         isHollowCylinder = true;
+                        std::cout << "[STEP Exporter] DEBUG: isHollowCylinder=true (tapered), rDiff=" << rDiff << " innerR=" << innerR << " outerR=" << outerR << std::endl;
                     }
                 } else {
                     // 关键修复：在判定为空心圆柱前，检查是否是圆角圆柱
@@ -541,7 +572,12 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                     }
                 }
             } else {
+                std::cout << "[STEP Exporter] DEBUG: all_coaxial=FALSE, filtered=" << filtered_cylinders.size() << std::endl;
+                std::cout.flush();
             }
+        } else {
+            std::cout << "[STEP Exporter] DEBUG: filtered_cylinders.size() < 2, size=" << filtered_cylinders.size() << std::endl;
+            std::cout.flush();
         }
         
         int totalCylFaces = 0;
@@ -632,6 +668,7 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
         }
         
         if (isHollowCylinder && filtered_cylinders.size() >= 3) {
+            std::cout << "[STEP Exporter] DEBUG: Entering hollow+3 path, isHollowCylinder=" << isHollowCylinder << " filtered=" << filtered_cylinders.size() << std::endl;
             double overall_z_min = 1e20, overall_z_max = -1e20;
             double maxR = 0, minR = 1e20;
             
@@ -684,12 +721,28 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                     double outerZRange = outerZMax - outerZMin;
                     if (innerZRange > totalHeight * 0.4 && outerZRange > totalHeight * 0.4) {
                         isTrueHollow = true;
+                    } else {
+                        std::cout << "[STEP Exporter] DEBUG: isTrueHollow=FALSE, innerZRange=" << innerZRange << " outerZRange=" << outerZRange << " totalHeight*0.4=" << (totalHeight * 0.4) << " gap=" << gap << " midR*0.15=" << (midR * 0.15) << std::endl;
                     }
                 }
             }
             
             if (isTrueHollow) {
                 fprintf(stderr, "[DEBUG] isTrueHollow=TRUE, entering hollow path\n");
+                double _outerMinR = 1e20, _innerMaxR = 0;
+                double _innerZMin = 1e20, _innerZMax = -1e20;
+                double _outerZMin = 1e20, _outerZMax = -1e20;
+                for (auto* c : outerGroup) {
+                    if (c->radius < _outerMinR) _outerMinR = c->radius;
+                    if (c->z_min < _outerZMin) _outerZMin = c->z_min;
+                    if (c->z_max > _outerZMax) _outerZMax = c->z_max;
+                }
+                for (auto* c : innerGroup) {
+                    if (c->radius > _innerMaxR) _innerMaxR = c->radius;
+                    if (c->z_min < _innerZMin) _innerZMin = c->z_min;
+                    if (c->z_max > _innerZMax) _innerZMax = c->z_max;
+                }
+                std::cout << "[STEP Exporter] DEBUG: isTrueHollow=TRUE, gap=" << (_outerMinR - _innerMaxR) << " midR=" << midR << " innerZRange=" << (_innerZMax - _innerZMin) << " outerZRange=" << (_outerZMax - _outerZMin) << " totalHeight=" << totalHeight << std::endl;
                 double outerBottomR = 0, outerTopR = 0;
                 double innerBottomR = 0, innerTopR = 0;
                 double outerBottomZ = 1e20, outerTopZ = -1e20;
@@ -732,6 +785,8 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                 if (cntInnerBottom >= 6) innerBottomR = sumInnerBottomR / cntInnerBottom;
                 if (cntInnerTop >= 6) innerTopR = sumInnerTopR / cntInnerTop;
                 
+                std::cout << "[STEP Exporter] DEBUG: hollow+3 vertex refinement: cntOuterTop=" << cntOuterTop << " cntInnerTop=" << cntInnerTop << " cntOuterBottom=" << cntOuterBottom << " cntInnerBottom=" << cntInnerBottom << " outerTopR=" << outerTopR << " innerTopR=" << innerTopR << std::endl;
+                
                 double topFaceMinR = 1e20, topFaceMaxR = 0;
                 int topFaceCount = 0;
                 
@@ -743,7 +798,7 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                     
                     double vz_world = v[2];
                     
-                    if (fabs(vz_world - coneZMax) < coneHeight * 0.02) {
+                    if (fabs(vz_world - coneZMax) < coneHeight * 0.05) {
                         if (r < topFaceMinR) topFaceMinR = r;
                         if (r > topFaceMaxR) topFaceMaxR = r;
                         topFaceCount++;
@@ -751,23 +806,32 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                 }
                 
                 double filletROuter = 0, filletRInner = 0;
+                std::cout << "[STEP Exporter] DEBUG: hollow+3 topFaceCount=" << topFaceCount << " topFaceMinR=" << topFaceMinR << " topFaceMaxR=" << topFaceMaxR << " outerTopR=" << outerTopR << " innerTopR=" << innerTopR << std::endl;
+                
+                if (cntOuterTop < 6) outerTopR = topFaceMaxR;
+                if (cntInnerTop < 6) innerTopR = topFaceMinR;
+                std::cout << "[STEP Exporter] DEBUG: hollow+3 after fallback outerTopR=" << outerTopR << " innerTopR=" << innerTopR << std::endl;
+                
                 if (topFaceCount >= 6) {
-                    double topFaceZMax = -1e20;
+                    double wallZTolerance = coneHeight * 0.03;
+                    double wallRTolerance = (outerTopR - innerTopR) * 0.03;
+                    
+                    double actualTopZ = coneZMax;
                     for (const auto& v : vertices) {
                         double dx = v[0] - axisX;
                         double dy = v[1] - axisY;
                         double r = sqrt(dx*dx + dy*dy);
                         if (r < 0.1) continue;
                         double vz_world = v[2];
-                        if (fabs(vz_world - coneZMax) < coneHeight * 0.02) {
-                            if (vz_world > topFaceZMax) topFaceZMax = vz_world;
+                        if (fabs(vz_world - coneZMax) < coneHeight * 0.05) {
+                            if (vz_world > actualTopZ) actualTopZ = vz_world;
                         }
                     }
                     
-                    double flatTopRMin = 1e20, flatTopRMax = 0;
-                    double filletRMin = 1e20, filletRMax = 0;
-                    int flatTopCount = 0, filletCount = 0;
-                    double zSepThreshold = topFaceZMax - coneHeight * 0.01;
+                    double flatTopOuterR = 0;
+                    double flatTopInnerR = 1e20;
+                    int flatTopCount2 = 0;
+                    double flatTopZThreshold = actualTopZ - 0.5;
                     
                     for (const auto& v : vertices) {
                         double dx = v[0] - axisX;
@@ -775,25 +839,48 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                         double r = sqrt(dx*dx + dy*dy);
                         if (r < 0.1) continue;
                         double vz_world = v[2];
-                        if (fabs(vz_world - coneZMax) >= coneHeight * 0.02) continue;
-                        
-                        if (vz_world > zSepThreshold) {
-                            if (r < flatTopRMin) flatTopRMin = r;
-                            if (r > flatTopRMax) flatTopRMax = r;
-                            flatTopCount++;
-                        } else {
-                            if (r < filletRMin) filletRMin = r;
-                            if (r > filletRMax) filletRMax = r;
-                            filletCount++;
+                        if (vz_world > flatTopZThreshold) {
+                            bool isOuterEdge = fabs(r - outerTopR) < wallRTolerance;
+                            bool isInnerEdge = fabs(r - innerTopR) < wallRTolerance;
+                            if (!isOuterEdge && !isInnerEdge) {
+                                if (r > flatTopOuterR) flatTopOuterR = r;
+                                if (r < flatTopInnerR) flatTopInnerR = r;
+                                flatTopCount2++;
+                            }
                         }
                     }
                     
-                    if (flatTopCount >= 6 && filletCount >= 6) {
-                        filletROuter = filletRMax - flatTopRMax;
-                        filletRInner = flatTopRMin - filletRMin;
-                    } else {
-                        filletROuter = topFaceMaxR - outerTopR;
-                        filletRInner = innerTopR - topFaceMinR;
+                    double filletOuterR = 0;
+                    double filletInnerR = 1e20;
+                    int filletCount2 = 0;
+                    double filletZMin = 1e20;
+                    double filletZMax = 0;
+                    
+                    for (const auto& v : vertices) {
+                        double dx = v[0] - axisX;
+                        double dy = v[1] - axisY;
+                        double r = sqrt(dx*dx + dy*dy);
+                        if (r < 0.1) continue;
+                        double vz_world = v[2];
+                        if (vz_world <= flatTopZThreshold && vz_world > actualTopZ - wallZTolerance) {
+                            if (r > filletOuterR) filletOuterR = r;
+                            if (r < filletInnerR) filletInnerR = r;
+                            if (vz_world < filletZMin) filletZMin = vz_world;
+                            if (vz_world > filletZMax) filletZMax = vz_world;
+                            filletCount2++;
+                        }
+                    }
+                    
+                    double filletRFromZ = (filletCount2 >= 6) ? (actualTopZ - filletZMin) : 0;
+                    std::cout << "[STEP Exporter] DEBUG: hollow+3 flatTopCount2=" << flatTopCount2 << " flatTopOuterR=" << flatTopOuterR << " flatTopInnerR=" << flatTopInnerR << " filletCount2=" << filletCount2 << " filletOuterR=" << filletOuterR << " filletInnerR=" << filletInnerR << " filletZMin=" << filletZMin << " filletZMax=" << filletZMax << " filletRFromZ=" << filletRFromZ << " wallZTolerance=" << wallZTolerance << " wallRTolerance=" << wallRTolerance << std::endl;
+                    
+                    if (filletCount2 >= 6 && flatTopCount2 >= 6) {
+                        double filletRFromR = std::max(outerTopR - flatTopOuterR, flatTopInnerR - innerTopR);
+                        filletROuter = (filletRFromZ + filletRFromR) / 2.0;
+                        filletRInner = filletROuter;
+                    } else if (filletCount2 >= 6) {
+                        filletROuter = filletRFromZ;
+                        filletRInner = filletRFromZ;
                     }
                 }
                 
@@ -806,9 +893,12 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
                     detectedFilletR = filletRInner;
                 }
                 
+                std::cout << "[STEP Exporter] DEBUG: hollow+3 filletROuter=" << filletROuter << " filletRInner=" << filletRInner << " detectedFilletR=" << detectedFilletR << " coneHeight*0.01=" << (coneHeight * 0.01) << " coneHeight*0.3=" << (coneHeight * 0.3) << std::endl;
+                
                 if (detectedFilletR > coneHeight * 0.01 && detectedFilletR < coneHeight * 0.3) {
-                } else if (topFaceCount >= 6) {
-                    detectedFilletR = coneHeight * 0.025;
+                    std::cout << "[STEP Exporter] DEBUG: hollow+3 creating FILLETED shape, detectedFilletR=" << detectedFilletR << std::endl;
+                } else {
+                    std::cout << "[STEP Exporter] DEBUG: hollow+3 creating NON-FILLETED shape (cone cut)" << std::endl;
                 }
                 
                 if (detectedFilletR > coneHeight * 0.01 && detectedFilletR < coneHeight * 0.3) {
@@ -1072,6 +1162,7 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
         }
         
         // 特殊处理：如果是空心圆柱（普通空心圆柱，非锥形）
+        std::cout << "[STEP Exporter] DEBUG: Before hollow check, isHollowCylinder=" << isHollowCylinder << " filtered=" << filtered_cylinders.size() << std::endl;
         if (isHollowCylinder) {
             std::cout << "[STEP Exporter] Creating hollow cylinder..." << std::endl;
             

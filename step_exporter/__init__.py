@@ -437,6 +437,188 @@ def _get_curve_data_enhanced(obj, context, scale, apply_modifiers=True):
         'bevel_depth': float(curve.bevel_depth) * scale,
     }
 
+def _analyze_bottom_shell_from_mesh(obj, context, scale):
+    """
+    从 mesh 分析识别是否为底壳类型，并测量所有参数
+    
+    返回:
+        dict: 包含底壳参数的字典，如果不是底壳则返回 None
+    """
+    if obj.type != 'MESH':
+        return None
+    
+    import bmesh
+    from collections import defaultdict
+    
+    log_to_file(f"[STEP Exporter] Analyzing mesh for bottom shell: {obj.name}")
+    
+    depsgraph = context.evaluated_depsgraph_get()
+    eval_obj = obj.evaluated_get(depsgraph)
+    mesh_data = eval_obj.data
+    
+    bm = bmesh.new()
+    bm.from_mesh(mesh_data)
+    bm.verts.ensure_lookup_table()
+    
+    vertices = bm.verts
+    if len(vertices) < 100:
+        log_to_file(f"[STEP Exporter] Too few vertices ({len(vertices)}), not a bottom shell")
+        bm.free()
+        return None
+    
+    z_layers = defaultdict(list)
+    for v in vertices:
+        z_key = round(v.co.z / 0.01) * 0.01
+        z_layers[z_key].append(v)
+    
+    sorted_z_levels = sorted(z_layers.keys())
+    
+    if len(sorted_z_levels) < 5:
+        log_to_file(f"[STEP Exporter] Not enough z-levels ({len(sorted_z_levels)}), not a bottom shell")
+        bm.free()
+        return None
+    
+    min_z = sorted_z_levels[0]
+    max_z = sorted_z_levels[-1]
+    total_height = max_z - min_z
+    
+    log_to_file(f"[STEP Exporter] z=[{min_z:.3f}, {max_z:.3f}], height={total_height:.3f}, levels={len(sorted_z_levels)}")
+    
+    bottom_z = sorted_z_levels[0]
+    bottom_verts = z_layers[bottom_z]
+    top_z = sorted_z_levels[-1]
+    top_verts = z_layers[top_z]
+    
+    if len(bottom_verts) < 50 or len(top_verts) < 50:
+        log_to_file(f"[STEP Exporter] No clear bottom/top planes, not a bottom shell")
+        bm.free()
+        return None
+    
+    total_levels = len(sorted_z_levels)
+    outer_wall_start_z = None
+    
+    for i in range(1, len(sorted_z_levels)):
+        gap = sorted_z_levels[i] - sorted_z_levels[i-1]
+        levels_after = total_levels - i
+        if levels_after < total_levels * 0.25 and gap > 0.1:
+            outer_wall_start_z = sorted_z_levels[i-1]
+            break
+    
+    if outer_wall_start_z is None:
+        outer_wall_start_z = sorted_z_levels[-2] if len(sorted_z_levels) > 1 else sorted_z_levels[-1]
+    
+    outer_fillet_radius = outer_wall_start_z - bottom_z
+    
+    inner_bottom_z = None
+    max_vertex_count = 0
+    
+    for z_level in sorted_z_levels[1:]:
+        if z_level > bottom_z + 0.5 and z_level < outer_wall_start_z:
+            vertex_count = len(z_layers[z_level])
+            if vertex_count > max_vertex_count:
+                max_vertex_count = vertex_count
+                inner_bottom_z = z_level
+    
+    if inner_bottom_z is None:
+        log_to_file(f"[STEP Exporter] Could not find inner bottom, not a bottom shell")
+        bm.free()
+        return None
+    
+    inner_wall_start_z = None
+    max_gap = 0
+    
+    for i in range(1, len(sorted_z_levels)):
+        if sorted_z_levels[i-1] >= inner_bottom_z:
+            gap = sorted_z_levels[i] - sorted_z_levels[i-1]
+            if gap > max_gap:
+                max_gap = gap
+                inner_wall_start_z = sorted_z_levels[i-1]
+    
+    if inner_wall_start_z is None:
+        inner_wall_start_z = outer_wall_start_z
+    
+    inner_fillet_radius = inner_wall_start_z - inner_bottom_z
+    
+    outer_wall_verts = z_layers.get(outer_wall_start_z, bottom_verts)
+    outer_x_coords = [v.co.x for v in outer_wall_verts]
+    outer_y_coords = [v.co.y for v in outer_wall_verts]
+    
+    width = max(outer_x_coords) - min(outer_x_coords)
+    depth = max(outer_y_coords) - min(outer_y_coords)
+    outer_height = total_height
+    bottom_thickness = inner_bottom_z - bottom_z
+    
+    inner_bottom_verts = z_layers[inner_bottom_z]
+    center_nearby = [v for v in inner_bottom_verts if abs(v.co.x) < width * 0.1 and abs(v.co.y) < depth * 0.1]
+    if len(center_nearby) < 1:
+        log_to_file(f"[STEP Exporter] Inner bottom has no center vertices (ring, not face), not a bottom shell")
+        bm.free()
+        return None
+    
+    if inner_bottom_z > min_z + total_height * 0.4:
+        log_to_file(f"[STEP Exporter] Inner bottom too high (z={inner_bottom_z:.1f}, {inner_bottom_z - min_z:.1f}/{total_height:.1f}), not a bottom shell")
+        bm.free()
+        return None
+    
+    half_w = width / 2
+    half_d = depth / 2
+    
+    corner_radius = 0.0
+    corner_verts = [v for v in outer_wall_verts if abs(v.co.x) > half_w * 0.6 and abs(v.co.y) > half_d * 0.6]
+    if corner_verts:
+        for v in corner_verts:
+            dx = half_w - abs(v.co.x)
+            dy = half_d - abs(v.co.y)
+            if dx > 0 and dy > 0:
+                dist = math.sqrt(dx*dx + dy*dy)
+                if dist > corner_radius:
+                    corner_radius = dist
+        corner_radius = corner_radius * 1.05
+    if corner_radius < 1.0:
+        corner_radius = min(width, depth) * 0.2
+    
+    outer_dists = [math.sqrt(v.co.x**2 + v.co.y**2) for v in outer_wall_verts]
+    if outer_dists:
+        min_dist = min(outer_dists)
+        max_dist = max(outer_dists)
+        if max_dist > 0 and min_dist / max_dist > 0.85:
+            log_to_file(f"[STEP Exporter] Cross-section too circular (ratio={min_dist/max_dist:.2f}), not a bottom shell")
+            bm.free()
+            return None
+    
+    wall_thickness = 2.0
+    
+    top_verts = z_layers.get(max_z, [])
+    if top_verts:
+        flat_x_outer = max(abs(v.co.x) for v in top_verts if abs(v.co.y) < depth * 0.15)
+        flat_x_inner = max(abs(v.co.x) for v in top_verts if abs(v.co.y) < depth * 0.15 and abs(v.co.x) < half_w * 0.98)
+        flat_y_outer = max(abs(v.co.y) for v in top_verts if abs(v.co.x) < width * 0.15)
+        flat_y_inner = max(abs(v.co.y) for v in top_verts if abs(v.co.x) < width * 0.15 and abs(v.co.y) < half_d * 0.98)
+        
+        if flat_x_inner > 0 and flat_y_inner > 0:
+            wall_thickness_x = flat_x_outer - flat_x_inner
+            wall_thickness_y = flat_y_outer - flat_y_inner
+            wall_thickness = (wall_thickness_x + wall_thickness_y) / 2
+    
+    if wall_thickness < 0.5:
+        wall_thickness = 2.0
+    
+    log_to_file(f"[STEP Exporter] Detected bottom shell: {width:.1f}x{depth:.1f} h={outer_height:.1f} bt={bottom_thickness:.1f} wt={wall_thickness:.1f} cr={corner_radius:.1f} ofr={outer_fillet_radius:.1f} ifr={inner_fillet_radius:.1f}")
+    
+    bm.free()
+    
+    return {
+        'width': width,
+        'depth': depth,
+        'outer_height': outer_height,
+        'bottom_thickness': bottom_thickness,
+        'wall_thickness': wall_thickness,
+        'corner_radius': corner_radius,
+        'outer_fillet_radius': outer_fillet_radius,
+        'inner_fillet_radius': inner_fillet_radius,
+    }
+
+
 def _export_worker_timer():
     """导出工作器，在 timer 中运行，分阶段执行"""
     global _export_params, _export_stage, _export_objects, _export_objects_data, _export_current_index, _export_log_file
@@ -452,13 +634,11 @@ def _export_worker_timer():
         if _export_stage == 1:
             log_to_file(f"\n[STEP Exporter] Stage 1: Preparing data...")
             
-            # 根据选择的单位确定缩放值
             if params['unit'] == 'mm':
                 scale = 1000.0
             else:
                 scale = 1.0
             
-            # 一次性处理所有对象
             for idx, obj in enumerate(_export_objects):
                 log_to_file(f"[Python DEBUG] Processing object {idx}: '{obj.name}' (type: {obj.type})")
                 
@@ -471,14 +651,12 @@ def _export_worker_timer():
                 if obj_data:
                     _export_objects_data.append(obj_data)
                 
-                # 更新进度：Python 阶段（0-20%），基于对象数量
                 object_progress = ((idx + 1) / len(_export_objects)) * 20
                 update_progress(object_progress, f"正在处理对象 {idx+1}/{len(_export_objects)}", context)
             
-            # 所有对象处理完成，进入阶段 2
             _export_stage = 2
             log_to_file(f"[STEP Exporter] Data preparation complete: {len(_export_objects_data)} objects")
-            return 0.1  # 立即进入下一阶段
+            return 0.1
         
         # 阶段 2: 初始化增量导出
         elif _export_stage == 2:
@@ -769,6 +947,43 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
             scale = 1000.0
         else:
             scale = 1.0
+        
+        step_unit = 'MILLIMETER' if self.unit == 'mm' else 'METER'
+        
+        # 检测底壳对象，使用参数化导出（直接导出，不走timer）
+        bottom_shell_params = None
+        for obj in _export_objects:
+            if obj.type == 'MESH':
+                shell_params = _analyze_bottom_shell_from_mesh(obj, context, scale)
+                if shell_params:
+                    bottom_shell_params = shell_params
+                    break
+        
+        if bottom_shell_params:
+            log_to_file(f"[STEP Exporter] Found bottom shell, using parametric export")
+            update_progress(10, "检测到底壳，正在参数化导出...", context)
+            success = step_exporter.export_bottom_shell_filleted_step(
+                self.filepath,
+                bottom_shell_params['width'],
+                bottom_shell_params['depth'],
+                bottom_shell_params['outer_height'],
+                bottom_shell_params['bottom_thickness'],
+                bottom_shell_params['wall_thickness'],
+                bottom_shell_params['corner_radius'],
+                bottom_shell_params['outer_fillet_radius'],
+                bottom_shell_params['inner_fillet_radius'],
+                self.step_schema,
+                step_unit,
+                1 if self.enable_logging else 0
+            )
+            if success:
+                update_progress(100, "底壳导出完成", context)
+                self.report({'INFO'}, f"Parametric bottom shell exported to {self.filepath}")
+            else:
+                update_progress(100, "底壳导出失败", context)
+                self.report({'ERROR'}, "Parametric bottom shell export failed")
+            end_progress(context)
+            return {'FINISHED'} if success else {'CANCELLED'}
         
         _export_params = {
             'filepath': self.filepath,

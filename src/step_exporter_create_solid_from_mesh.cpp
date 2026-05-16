@@ -63,8 +63,12 @@ TopoDS_Shape create_solid_from_mesh(const std::vector<std::vector<double>>& vert
                 adjustedTolerance = maxReasonableTolerance;
                 std::cout << "[STEP Exporter] Reducing tolerance from " << tolerance << " to " << adjustedTolerance << " (exceeds mesh size)" << std::endl;
             } else {
-                // 使用用户指定的容差，不强制提升
+                // 否则，使用用户指定的容差，但确保不小于建议容差
+
                 adjustedTolerance = tolerance;
+                if (adjustedTolerance < suggestedTolerance) {
+                    adjustedTolerance = suggestedTolerance;
+                }
             }
             std::cout << "[STEP Exporter] Adjusted sewing tolerance to " << adjustedTolerance << std::endl;
         } else {

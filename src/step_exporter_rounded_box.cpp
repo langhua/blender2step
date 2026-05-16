@@ -454,3 +454,161 @@ TopoDS_Shape create_bottom_shell_with_corner_holes(double width, double depth, d
     std::cout << "[STEP Exporter] Bottom shell with corner holes created" << std::endl;
     return result;
 }
+
+static TopoDS_Shape apply_bottom_fillet_to_box(const TopoDS_Shape& boxShape, double fillet_radius, double bottom_z)
+{
+    if (fillet_radius <= 0.001) {
+        return boxShape;
+    }
+
+    TopoDS_Solid boxSolid;
+    if (boxShape.ShapeType() == TopAbs_SOLID) {
+        boxSolid = TopoDS::Solid(boxShape);
+    } else {
+        BRepBuilderAPI_MakeSolid solidMaker;
+        for (TopExp_Explorer exp(boxShape, TopAbs_SHELL); exp.More(); exp.Next()) {
+            solidMaker.Add(TopoDS::Shell(exp.Current()));
+        }
+        if (solidMaker.IsDone()) {
+            boxSolid = solidMaker.Solid();
+        } else {
+            std::cerr << "[STEP Exporter] Failed to convert shape to solid for filleting" << std::endl;
+            return boxShape;
+        }
+    }
+
+    BRepFilletAPI_MakeFillet filletMaker(boxSolid);
+    int filletCount = 0;
+
+    for (TopExp_Explorer exp(boxSolid, TopAbs_EDGE); exp.More(); exp.Next()) {
+        TopoDS_Edge edge = TopoDS::Edge(exp.Current());
+
+        BRepAdaptor_Curve curve(edge);
+        double u1 = curve.FirstParameter();
+        double u2 = curve.LastParameter();
+        gp_Pnt pFirst = curve.Value(u1);
+        gp_Pnt pLast = curve.Value(u2);
+
+        bool isHorizontal = fabs(pFirst.Z() - pLast.Z()) < Precision::Confusion();
+        bool isAtBottom = fabs(pFirst.Z() - bottom_z) < 0.01;
+
+        if (isHorizontal && isAtBottom) {
+            filletMaker.Add(fillet_radius, edge);
+            filletCount++;
+        }
+    }
+
+    if (filletCount == 0) {
+        std::cout << "[STEP Exporter] No bottom edges found for filleting at z=" << bottom_z << std::endl;
+        return boxSolid;
+    }
+
+    std::cout << "[STEP Exporter] Found " << filletCount << " bottom edges to fillet with radius=" << fillet_radius << std::endl;
+
+    filletMaker.Build();
+    if (!filletMaker.IsDone()) {
+        std::cerr << "[STEP Exporter] Bottom fillet operation failed" << std::endl;
+        return boxSolid;
+    }
+
+    return filletMaker.Shape();
+}
+
+TopoDS_Shape create_bottom_shell_filleted_solid(double width, double depth, double outer_height,
+                                                  double bottom_thickness, double wall_thickness,
+                                                  double corner_radius,
+                                                  double outer_fillet_radius, double inner_fillet_radius)
+{
+    std::cout << "[STEP Exporter] Creating filleted bottom shell: " << width << "x" << depth
+              << " outer_height=" << outer_height << " bottom=" << bottom_thickness
+              << " wall=" << wall_thickness << " corner_r=" << corner_radius
+              << " outer_fillet=" << outer_fillet_radius << " inner_fillet=" << inner_fillet_radius << std::endl;
+
+    TopoDS_Shape outerBox = create_rounded_box_solid(width, depth, outer_height, corner_radius);
+    if (outerBox.IsNull()) {
+        std::cerr << "[STEP Exporter] Failed to create outer box" << std::endl;
+        return TopoDS_Shape();
+    }
+
+    double outer_bottom_z = -outer_height / 2.0;
+    TopoDS_Shape outerFilleted = apply_bottom_fillet_to_box(outerBox, outer_fillet_radius, outer_bottom_z);
+
+    TopoDS_Solid outerSolid;
+    if (outerFilleted.ShapeType() == TopAbs_SOLID) {
+        outerSolid = TopoDS::Solid(outerFilleted);
+    } else if (outerFilleted.ShapeType() == TopAbs_COMPOUND || outerFilleted.ShapeType() == TopAbs_SHELL) {
+        BRepBuilderAPI_MakeSolid solidMaker;
+        for (TopExp_Explorer exp(outerFilleted, TopAbs_SHELL); exp.More(); exp.Next()) {
+            solidMaker.Add(TopoDS::Shell(exp.Current()));
+        }
+        if (solidMaker.IsDone()) {
+            outerSolid = solidMaker.Solid();
+        } else {
+            std::cerr << "[STEP Exporter] Failed to convert outer filleted box to solid" << std::endl;
+            return outerFilleted;
+        }
+    } else {
+        std::cerr << "[STEP Exporter] Outer filleted box is not a solid" << std::endl;
+        return outerFilleted;
+    }
+
+    double inner_width = width - 2.0 * wall_thickness;
+    double inner_depth = depth - 2.0 * wall_thickness;
+    double inner_height = outer_height - bottom_thickness + 1.0;
+    double inner_radius = std::max(0.0, corner_radius - wall_thickness);
+
+    if (inner_width <= 0 || inner_depth <= 0 || inner_height <= 0) {
+        std::cerr << "[STEP Exporter] Wall/bottom thickness too large, returning solid box" << std::endl;
+        return outerSolid;
+    }
+
+    std::cout << "[STEP Exporter] Inner cavity: " << inner_width << "x" << inner_depth
+              << "x" << inner_height << " radius=" << inner_radius << std::endl;
+
+    TopoDS_Shape innerBox = create_rounded_box_solid(inner_width, inner_depth, inner_height, inner_radius);
+    if (innerBox.IsNull()) {
+        std::cerr << "[STEP Exporter] Failed to create inner box" << std::endl;
+        return outerSolid;
+    }
+
+    double inner_z_offset = bottom_thickness / 2.0;
+    gp_Trsf innerTrsf;
+    innerTrsf.SetTranslation(gp_Vec(0, 0, inner_z_offset));
+    TopLoc_Location innerLoc(innerTrsf);
+    innerBox.Move(innerLoc);
+
+    double inner_bottom_z = -inner_height / 2.0 + inner_z_offset;
+    TopoDS_Shape innerFilleted = apply_bottom_fillet_to_box(innerBox, inner_fillet_radius, inner_bottom_z);
+
+    std::cout << "[STEP Exporter] Inner box shifted up by " << inner_z_offset
+              << ", bottom at z=" << inner_bottom_z << std::endl;
+
+    TopoDS_Solid innerSolid;
+    if (innerFilleted.ShapeType() == TopAbs_SOLID) {
+        innerSolid = TopoDS::Solid(innerFilleted);
+    } else if (innerFilleted.ShapeType() == TopAbs_COMPOUND || innerFilleted.ShapeType() == TopAbs_SHELL) {
+        BRepBuilderAPI_MakeSolid solidMaker;
+        for (TopExp_Explorer exp(innerFilleted, TopAbs_SHELL); exp.More(); exp.Next()) {
+            solidMaker.Add(TopoDS::Shell(exp.Current()));
+        }
+        if (solidMaker.IsDone()) {
+            innerSolid = solidMaker.Solid();
+        } else {
+            std::cerr << "[STEP Exporter] Failed to convert inner filleted box to solid" << std::endl;
+            return outerSolid;
+        }
+    } else {
+        std::cerr << "[STEP Exporter] Inner filleted box is not a solid" << std::endl;
+        return outerSolid;
+    }
+
+    BRepAlgoAPI_Cut cutMaker(outerSolid, innerSolid);
+    if (!cutMaker.IsDone()) {
+        std::cerr << "[STEP Exporter] Boolean cut for filleted shell failed" << std::endl;
+        return outerSolid;
+    }
+
+    TopoDS_Shape result = cutMaker.Shape();
+    std::cout << "[STEP Exporter] Filleted bottom shell created via boolean cut" << std::endl;
+    return result;
+}

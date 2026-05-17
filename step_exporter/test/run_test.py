@@ -399,42 +399,33 @@ def main():
         else:
             print(f"WARNING: create_bottom_shell.py not found at {create_script}")
     else:
-        # 创建测试圆柱体（检查场景中是否有圆柱体对象）
-        mesh_objects = [obj for obj in bpy.context.scene.objects if obj.type == 'MESH']
-        has_cylinders = any('Cylinder' in obj.name for obj in mesh_objects)
+        # 默认创建底壳
+        print("=" * 60)
+        print("Step 0: Creating bottom shell")
+        print("=" * 60)
         
-        if not has_cylinders:
-            print("=" * 60)
-            print("Step 0: Creating test cylinders")
-            print("=" * 60)
+        bpy.ops.object.select_all(action='SELECT')
+        bpy.ops.object.delete()
+        
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        create_script = os.path.join(script_dir, 'create_bottom_shell.py')
+        
+        if os.path.exists(create_script):
+            with open(create_script, 'r', encoding='utf-8') as f:
+                code = f.read()
             
-            # 删除默认对象
-            bpy.ops.object.select_all(action='SELECT')
-            bpy.ops.object.delete()
+            script_globals = {'__name__': '__main__', '__file__': create_script}
+            exec(compile(code, create_script, 'exec'), script_globals)
             
-            # 导入并运行create_mesh_cylinder.py
-            script_dir = os.path.dirname(os.path.abspath(__file__))
-            create_script = os.path.join(script_dir, 'create_mesh_cylinder.py')
+            if 'create_filleted_bottom_shells_scene' in script_globals:
+                script_globals['create_filleted_bottom_shells_scene']()
+            elif 'create_bottom_shell_scene' in script_globals:
+                script_globals['create_bottom_shell_scene']()
             
-            if os.path.exists(create_script):
-                # 读取并执行create_mesh_cylinder.py的内容
-                with open(create_script, 'r', encoding='utf-8') as f:
-                    code = f.read()
-                
-                # 创建一个命名空间来执行脚本
-                script_globals = {'__name__': '__main__', '__file__': create_script}
-                exec(compile(code, create_script, 'exec'), script_globals)
-                
-                # 显式调用主函数
-                if 'create_mechanical_demo_scene' in script_globals:
-                    script_globals['create_mechanical_demo_scene']()
-                
-                print("Test cylinders created successfully")
-                print(f"Created {len(bpy.context.scene.objects)} objects")
-            else:
-                print(f"WARNING: create_mesh_cylinder.py not found at {create_script}")
+            print("Bottom shell created successfully")
+            print(f"Created {len(bpy.context.scene.objects)} objects")
         else:
-            print(f"Found {len(mesh_objects)} mesh objects including cylinders")
+            print(f"WARNING: create_bottom_shell.py not found at {create_script}")
     
     # 步骤1: 导出STEP文件
     if not args.skip_export:
@@ -442,15 +433,12 @@ def main():
         print("Step 1: Exporting STEP file")
         print("=" * 60)
         
-        if args.bottom_shell:
-            # 底壳已经由create_bottom_shell.py使用参数化导出，直接使用
-            step_file = os.path.join(script_dir, 'bottom_shell_filleted.step')
-            if not os.path.exists(step_file):
-                print(f"ERROR: Parametric STEP file not found: {step_file}")
-                sys.exit(1)
-            print(f"Using parametric STEP file: {step_file}")
-        else:
-            step_file = export_step(args)
+        # 底壳已经由create_bottom_shell.py使用参数化导出，直接使用
+        step_file = os.path.join(script_dir, 'bottom_shell_filleted.step')
+        if not os.path.exists(step_file):
+            print(f"ERROR: Parametric STEP file not found: {step_file}")
+            sys.exit(1)
+        print(f"Using parametric STEP file: {step_file}")
     else:
         # 如果跳过导出，使用现有的STEP文件
         step_file = os.path.join(args.output_dir, f'test{args.test_number}.step')
@@ -461,17 +449,17 @@ def main():
     # 步骤2: 截图
     if not args.skip_screenshot:
         print("=" * 60)
-        if args.bottom_shell and not args.freecad_screenshot:
+        if not args.freecad_screenshot:
             print("Step 2: Taking screenshot with Blender")
         else:
             print("Step 2: Taking screenshot with FreeCAD")
         print("=" * 60)
         
-        if args.bottom_shell and not args.freecad_screenshot:
+        if not args.freecad_screenshot:
             # 底壳使用Blender内置渲染截图
             success = take_screenshot_blender(args, step_file)
         else:
-            # 其他测试或指定FreeCAD时使用FreeCAD截图
+            # 指定FreeCAD时使用FreeCAD截图
             success = take_screenshot(args, step_file)
         
         if success:

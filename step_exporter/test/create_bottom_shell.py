@@ -577,10 +577,11 @@ def create_both_bottom_shells_scene():
                     space.overlay.show_wireframes = False
 
     print("[4/4] Exporting perfect STEP via C++ extension...")
-    sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'lib'))
-    os.environ['PATH'] = os.path.join(os.path.dirname(__file__), '..', 'lib') + os.pathsep + os.environ.get('PATH', '')
+    lib_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'lib'))
+    sys.path.insert(0, lib_dir)
+    os.environ['PATH'] = lib_dir + os.pathsep + os.environ.get('PATH', '')
     if hasattr(os, 'add_dll_directory'):
-        os.add_dll_directory(os.path.join(os.path.dirname(__file__), '..', 'lib'))
+        os.add_dll_directory(lib_dir)
 
     import _step_exporter as cpp_exporter
 
@@ -693,8 +694,9 @@ def bevel_box_bottom_edges(obj, height, fillet_radius, bevel_segments=4):
     bpy.ops.object.mode_set(mode='OBJECT')
 
 
-def create_filleted_shell_blender(name, width, depth, outer_height, bottom_thickness, wall_thickness, corner_radius, outer_fillet_radius, inner_fillet_radius, location=(0, 0, 0), segments=32):
-    """在Blender中创建带底面圆角的中空底壳：使用BMesh直接创建"""
+def create_filleted_shell_blender(name, width, depth, outer_height, bottom_thickness, wall_thickness, corner_radius, outer_fillet_radius, inner_fillet_radius, location=(0, 0, 0), segments=32, step_height=1.0):
+    """在Blender中创建带底面圆角的中空底壳：使用BMesh直接创建
+    step_height: 顶部台阶高度，外侧壁比内侧壁低多少mm"""
     import math
 
     hw = width / 2.0
@@ -792,9 +794,55 @@ def create_filleted_shell_blender(name, width, depth, outer_height, bottom_thick
         y = -inner_hd + inner_corner_r + t * (inner_hd * 2 - 2 * inner_corner_r)
         inner_profile.append((x, y))
 
+    # 中间轮廓（外轮廓向内偏移1mm，用于两级台阶的第一级分割线）
+    mid_hw = hw - 1.0
+    mid_hd = hd - 1.0
+    mid_corner_r = max(corner_radius - 1.0, 1.0)
+    mid_profile = []
+    for i in range(segments):
+        angle = (math.pi/2) * i / segments
+        x = mid_hw - mid_corner_r + mid_corner_r * math.cos(angle)
+        y = mid_hd - mid_corner_r + mid_corner_r * math.sin(angle)
+        mid_profile.append((x, y))
+    for i in range(segments):
+        t = i / segments
+        x = mid_hw - mid_corner_r - t * (mid_hw * 2 - 2 * mid_corner_r)
+        y = mid_hd
+        mid_profile.append((x, y))
+    for i in range(segments):
+        angle = math.pi/2 + (math.pi/2) * i / segments
+        x = -mid_hw + mid_corner_r + mid_corner_r * math.cos(angle)
+        y = mid_hd - mid_corner_r + mid_corner_r * math.sin(angle)
+        mid_profile.append((x, y))
+    for i in range(segments):
+        t = i / segments
+        x = -mid_hw
+        y = mid_hd - mid_corner_r - t * (mid_hd * 2 - 2 * mid_corner_r)
+        mid_profile.append((x, y))
+    for i in range(segments):
+        angle = math.pi + (math.pi/2) * i / segments
+        x = -mid_hw + mid_corner_r + mid_corner_r * math.cos(angle)
+        y = -mid_hd + mid_corner_r + mid_corner_r * math.sin(angle)
+        mid_profile.append((x, y))
+    for i in range(segments):
+        t = i / segments
+        x = -mid_hw + mid_corner_r + t * (mid_hw * 2 - 2 * mid_corner_r)
+        y = -mid_hd
+        mid_profile.append((x, y))
+    for i in range(segments):
+        angle = 3*math.pi/2 + (math.pi/2) * i / segments
+        x = mid_hw - mid_corner_r + mid_corner_r * math.cos(angle)
+        y = -mid_hd + mid_corner_r + mid_corner_r * math.sin(angle)
+        mid_profile.append((x, y))
+    for i in range(segments):
+        t = i / segments
+        x = mid_hw
+        y = -mid_hd + mid_corner_r + t * (mid_hd * 2 - 2 * mid_corner_r)
+        mid_profile.append((x, y))
+
     num_profile = len(outer_profile)
     outer_bottom_z = -hh
-    outer_top_z = hh
+    outer_top_z = hh - step_height
     inner_bottom_z = -hh + bottom_thickness
     inner_top_z = hh
 
@@ -927,10 +975,25 @@ def create_filleted_shell_blender(name, width, depth, outer_height, bottom_thick
         next_i = (i + 1) % num_profile
         bm.faces.new([last_inner_fillet[i], last_inner_fillet[next_i], inner_top_verts[next_i], inner_top_verts[i]])
 
-    # 顶面（外顶面减去内顶面，形成环形）
+    # 两级台阶：第一级1mm宽（外壁→中间），第二级1mm宽（中间→内壁）
+    # 中间顶点（mid_profile位置，两个Z高度）
+    mid_outer_verts = [bm.verts.new((x, y, outer_top_z)) for x, y in mid_profile]
+    mid_inner_verts = [bm.verts.new((x, y, inner_top_z)) for x, y in mid_profile]
+
+    # 第一级水平台阶面（外壁 → 中间，1mm宽，同一Z高度）
     for i in range(num_profile):
         next_i = (i + 1) % num_profile
-        bm.faces.new([outer_top_verts[i], outer_top_verts[next_i], inner_top_verts[next_i], inner_top_verts[i]])
+        bm.faces.new([outer_top_verts[i], outer_top_verts[next_i], mid_outer_verts[next_i], mid_outer_verts[i]])
+
+    # 垂直台阶面（中间位置，从低Z到高Z，1mm高）
+    for i in range(num_profile):
+        next_i = (i + 1) % num_profile
+        bm.faces.new([mid_outer_verts[i], mid_outer_verts[next_i], mid_inner_verts[next_i], mid_inner_verts[i]])
+
+    # 第二级水平台阶面（中间 → 内壁，1mm宽，同一Z高度）
+    for i in range(num_profile):
+        next_i = (i + 1) % num_profile
+        bm.faces.new([mid_inner_verts[i], mid_inner_verts[next_i], inner_top_verts[next_i], inner_top_verts[i]])
 
     bm.to_mesh(me)
     bm.free()
@@ -978,7 +1041,8 @@ def create_filleted_bottom_shells_scene():
         outer_fillet_radius=outer_fillet_radius,
         inner_fillet_radius=inner_fillet_radius,
         location=(0, 0, 0),
-        segments=32
+        segments=32,
+        step_height=1.0
     )
     add_material(shell, name="FilletedShellMaterial")
     print(f"  [OK] Filleted bottom shell created")
@@ -1006,10 +1070,11 @@ def create_filleted_bottom_shells_scene():
         print(f"  [WARN] Could not measure inner fillet, using default: {inner_fillet_radius:.3f} mm")
 
     print("[4/4] Exporting parametric STEP via C++ extension...")
-    sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'lib'))
-    os.environ['PATH'] = os.path.join(os.path.dirname(__file__), '..', 'lib') + os.pathsep + os.environ.get('PATH', '')
+    lib_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'lib'))
+    sys.path.insert(0, lib_dir)
+    os.environ['PATH'] = lib_dir + os.pathsep + os.environ.get('PATH', '')
     if hasattr(os, 'add_dll_directory'):
-        os.add_dll_directory(os.path.join(os.path.dirname(__file__), '..', 'lib'))
+        os.add_dll_directory(lib_dir)
 
     import _step_exporter as cpp_exporter
 
@@ -1019,6 +1084,7 @@ def create_filleted_bottom_shells_scene():
         width, depth, outer_height,
         bottom_thickness, wall_thickness, corner_radius,
         outer_fillet_radius, inner_fillet_radius,
+        1.0,  # step_height
         "AP214IS",
         "MILLIMETER",
         1,  # enable_logging

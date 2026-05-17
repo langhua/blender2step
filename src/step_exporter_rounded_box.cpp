@@ -179,7 +179,7 @@ TopoDS_Shape create_bottom_shell_solid(double width, double depth, double outer_
         return outerSolid;
     }
 
-    double inner_z_offset = bottom_thickness / 2.0;
+    double inner_z_offset = bottom_thickness / 2.0 + 0.5;
     gp_Trsf innerTrsf;
     innerTrsf.SetTranslation(gp_Vec(0, 0, inner_z_offset));
     TopLoc_Location innerLoc(innerTrsf);
@@ -517,21 +517,60 @@ static TopoDS_Shape apply_bottom_fillet_to_box(const TopoDS_Shape& boxShape, dou
 TopoDS_Shape create_bottom_shell_filleted_solid(double width, double depth, double outer_height,
                                                   double bottom_thickness, double wall_thickness,
                                                   double corner_radius,
-                                                  double outer_fillet_radius, double inner_fillet_radius)
+                                                  double outer_fillet_radius, double inner_fillet_radius,
+                                                  double step_height)
 {
     std::cout << "[STEP Exporter] Creating filleted bottom shell: " << width << "x" << depth
               << " outer_height=" << outer_height << " bottom=" << bottom_thickness
               << " wall=" << wall_thickness << " corner_r=" << corner_radius
-              << " outer_fillet=" << outer_fillet_radius << " inner_fillet=" << inner_fillet_radius << std::endl;
+              << " outer_fillet=" << outer_fillet_radius << " inner_fillet=" << inner_fillet_radius
+              << " step_height=" << step_height << std::endl;
 
-    TopoDS_Shape outerBox = create_rounded_box_solid(width, depth, outer_height, corner_radius);
+    double outer_box_height = outer_height - step_height;
+    TopoDS_Shape outerBox = create_rounded_box_solid(width, depth, outer_box_height, corner_radius);
     if (outerBox.IsNull()) {
         std::cerr << "[STEP Exporter] Failed to create outer box" << std::endl;
         return TopoDS_Shape();
     }
 
+    double outer_shift_z = -step_height / 2.0;
+    gp_Trsf outerTrsf;
+    outerTrsf.SetTranslation(gp_Vec(0, 0, outer_shift_z));
+    TopLoc_Location outerLoc(outerTrsf);
+    outerBox.Move(outerLoc);
+    std::cout << "[STEP Exporter] Outer box height=" << outer_box_height
+              << ", shifted down by " << outer_shift_z << std::endl;
+
+    double mid_width = width - 2.0;
+    double mid_depth = depth - 2.0;
+    double mid_height = step_height;
+    double mid_radius = std::max(0.0, corner_radius - 1.0);
+
+    TopoDS_Shape midBox = create_rounded_box_solid(mid_width, mid_depth, mid_height, mid_radius);
+    if (midBox.IsNull()) {
+        std::cerr << "[STEP Exporter] Failed to create mid box" << std::endl;
+        return TopoDS_Shape();
+    }
+
+    double mid_z = outer_height / 2.0 - step_height / 2.0;
+    gp_Trsf midTrsf;
+    midTrsf.SetTranslation(gp_Vec(0, 0, mid_z));
+    TopLoc_Location midLoc(midTrsf);
+    midBox.Move(midLoc);
+    std::cout << "[STEP Exporter] Mid box " << mid_width << "x" << mid_depth
+              << "x" << mid_height << " r=" << mid_radius
+              << ", centered at z=" << mid_z << std::endl;
+
+    BRepAlgoAPI_Fuse fuseMaker(outerBox, midBox);
+    if (!fuseMaker.IsDone()) {
+        std::cerr << "[STEP Exporter] Fuse of outer and mid box failed" << std::endl;
+        return TopoDS_Shape();
+    }
+    TopoDS_Shape fusedBox = fuseMaker.Shape();
+    std::cout << "[STEP Exporter] Outer + mid box fused for two-level exterior step" << std::endl;
+
     double outer_bottom_z = -outer_height / 2.0;
-    TopoDS_Shape outerFilleted = apply_bottom_fillet_to_box(outerBox, outer_fillet_radius, outer_bottom_z);
+    TopoDS_Shape outerFilleted = apply_bottom_fillet_to_box(fusedBox, outer_fillet_radius, outer_bottom_z);
 
     TopoDS_Solid outerSolid;
     if (outerFilleted.ShapeType() == TopAbs_SOLID) {
@@ -571,7 +610,7 @@ TopoDS_Shape create_bottom_shell_filleted_solid(double width, double depth, doub
         return outerSolid;
     }
 
-    double inner_z_offset = bottom_thickness / 2.0;
+    double inner_z_offset = bottom_thickness / 2.0 + 0.5;
     gp_Trsf innerTrsf;
     innerTrsf.SetTranslation(gp_Vec(0, 0, inner_z_offset));
     TopLoc_Location innerLoc(innerTrsf);
@@ -609,6 +648,6 @@ TopoDS_Shape create_bottom_shell_filleted_solid(double width, double depth, doub
     }
 
     TopoDS_Shape result = cutMaker.Shape();
-    std::cout << "[STEP Exporter] Filleted bottom shell created via boolean cut" << std::endl;
+    std::cout << "[STEP Exporter] Filleted bottom shell with exterior step created" << std::endl;
     return result;
 }

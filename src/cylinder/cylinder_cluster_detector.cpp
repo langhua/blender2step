@@ -275,20 +275,19 @@ CylinderCandidate CylinderClusterDetector::detect_cluster(
             std::cout << "[STEP Exporter] [CylDet] [WithExclude] Collected " << result.face_indices.size() << " valid faces" << std::endl;
             std::cout.flush();
             
-            // 打印聚类中的面索引和距离
-            std::cout << "[STEP Exporter] [CylDet] [WithExclude] Cluster face details:";
-            std::cout.flush();
-            for (int idx : result.face_indices) {
-                if (idx >= 0 && idx < (int)faceInfos.size()) {
-                    const auto& fi = faceInfos[idx];
-                    double dist = point_line_distance(fi.center, centroid, axis);
-                    double dot_axis = fabs(fi.normal.Dot(axis));
-                    std::cout << " [" << idx << ":" << (int)(dist) << ":" << (int)(dot_axis*100) << "]";
-                    std::cout.flush();
+            // 打印聚类中的面索引和距离（仅当面数较少时打印，避免大量I/O）
+            if (result.face_indices.size() <= 50) {
+                std::cout << "[STEP Exporter] [CylDet] [WithExclude] Cluster face details:";
+                for (int idx : result.face_indices) {
+                    if (idx >= 0 && idx < (int)faceInfos.size()) {
+                        const auto& fi = faceInfos[idx];
+                        double dist = point_line_distance(fi.center, centroid, axis);
+                        double dot_axis = fabs(fi.normal.Dot(axis));
+                        std::cout << " [" << idx << ":" << (int)(dist) << ":" << (int)(dot_axis*100) << "]";
+                    }
                 }
+                std::cout << std::endl;
             }
-            std::cout << std::endl;
-            std::cout.flush();
             
             // 检查半径是否在合理范围内，避免对假阳性（侧壁）应用空间聚类
             if (max_radius > 0 && best_cluster_radius > max_radius) {

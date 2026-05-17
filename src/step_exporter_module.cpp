@@ -73,9 +73,10 @@ PyObject* export_rounded_box_step(PyObject* self, PyObject* args) {
             shape = fix_shape_enhanced(shape, 0.001);
         }
 
+        std::string logPath;
         const char* log_filename = nullptr;
         if (enable_logging) {
-            std::string logPath = std::string(filename) + ".log";
+            logPath = std::string(filename) + ".log";
             log_filename = logPath.c_str();
         }
 
@@ -128,22 +129,23 @@ PyObject* export_rounded_box_step(PyObject* self, PyObject* args) {
 PyObject* export_bottom_shell_filleted_step(PyObject* self, PyObject* args) {
     const char* filename;
     double width, depth, outer_height, bottom_thickness, wall_thickness, corner_radius;
-    double outer_fillet_radius, inner_fillet_radius;
+    double outer_fillet_radius, inner_fillet_radius, step_height = 1.0;
     const char* step_schema = "AP214IS";
     const char* unit = "MILLIMETER";
     int enable_logging = 1;
 
-    if (!PyArg_ParseTuple(args, "sdddddddd|ssi",
+    if (!PyArg_ParseTuple(args, "sdddddddd|dssi",
                           &filename,
                           &width, &depth, &outer_height,
                           &bottom_thickness, &wall_thickness, &corner_radius,
                           &outer_fillet_radius, &inner_fillet_radius,
+                          &step_height,
                           &step_schema, &unit, &enable_logging)) {
         PyErr_SetString(PyExc_TypeError,
             "export_bottom_shell_filleted_step() expected: filename, width, depth, outer_height, "
             "bottom_thickness, wall_thickness, corner_radius, "
             "outer_fillet_radius, inner_fillet_radius, "
-            "[step_schema], [unit], [enable_logging]");
+            "[step_height], [step_schema], [unit], [enable_logging]");
         return NULL;
     }
 
@@ -152,13 +154,15 @@ PyObject* export_bottom_shell_filleted_step(PyObject* self, PyObject* args) {
     std::cout << "[STEP Exporter] Parameters: " << width << "x" << depth
               << " outer_height=" << outer_height << " bottom=" << bottom_thickness
               << " wall=" << wall_thickness << " corner_r=" << corner_radius
-              << " outer_fillet=" << outer_fillet_radius << " inner_fillet=" << inner_fillet_radius << std::endl;
+              << " outer_fillet=" << outer_fillet_radius << " inner_fillet=" << inner_fillet_radius
+              << " step_height=" << step_height << std::endl;
 
     try {
         TopoDS_Shape shape = create_bottom_shell_filleted_solid(width, depth, outer_height,
                                                                   bottom_thickness, wall_thickness,
                                                                   corner_radius,
-                                                                  outer_fillet_radius, inner_fillet_radius);
+                                                                  outer_fillet_radius, inner_fillet_radius,
+                                                                  step_height);
         if (shape.IsNull()) {
             std::cerr << "[STEP Exporter] Failed to create filleted bottom shell shape" << std::endl;
             Py_RETURN_FALSE;
@@ -180,10 +184,11 @@ PyObject* export_bottom_shell_filleted_step(PyObject* self, PyObject* args) {
             shape = fix_shape_enhanced(shape, 0.001);
         }
 
+        std::string logPath2;
         const char* log_filename = nullptr;
         if (enable_logging) {
-            std::string logPath = std::string(filename) + ".log";
-            log_filename = logPath.c_str();
+            logPath2 = std::string(filename) + ".log";
+            log_filename = logPath2.c_str();
         }
 
         STEPControl_Writer writer;
@@ -284,10 +289,11 @@ PyObject* export_rounded_box_with_holes_step(PyObject* self, PyObject* args) {
             shape = fix_shape_enhanced(shape, 0.001);
         }
 
+        std::string logPath3;
         const char* log_filename = nullptr;
         if (enable_logging) {
-            std::string logPath = std::string(filename) + ".log";
-            log_filename = logPath.c_str();
+            logPath3 = std::string(filename) + ".log";
+            log_filename = logPath3.c_str();
         }
 
         STEPControl_Writer writer;
@@ -392,10 +398,11 @@ PyObject* export_bottom_shell_with_holes_step(PyObject* self, PyObject* args) {
             shape = fix_shape_enhanced(shape, 0.001);
         }
 
+        std::string logPath4;
         const char* log_filename = nullptr;
         if (enable_logging) {
-            std::string logPath = std::string(filename) + ".log";
-            log_filename = logPath.c_str();
+            logPath4 = std::string(filename) + ".log";
+            log_filename = logPath4.c_str();
         }
 
         STEPControl_Writer writer;

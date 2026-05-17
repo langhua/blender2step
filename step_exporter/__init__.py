@@ -39,6 +39,7 @@ _export_current_index = 0
 _cpp_progress = -1.0  # 存储 C++ 回调传递的进度
 _export_log_file = None  # 日志文件句柄
 _cpp_log_callback = None  # C++日志回调函数
+_bottom_shell_export_data = None  # 底壳参数化导出数据
 
 def log_to_file(msg):
     """输出到日志文件"""
@@ -588,12 +589,14 @@ def _analyze_bottom_shell_from_mesh(obj, context, scale):
     
     wall_thickness = 2.0
     
-    top_verts = z_layers.get(max_z, [])
-    if top_verts:
-        flat_x_outer = max(abs(v.co.x) for v in top_verts if abs(v.co.y) < depth * 0.15)
-        flat_x_inner = max(abs(v.co.x) for v in top_verts if abs(v.co.y) < depth * 0.15 and abs(v.co.x) < half_w * 0.98)
-        flat_y_outer = max(abs(v.co.y) for v in top_verts if abs(v.co.x) < width * 0.15)
-        flat_y_inner = max(abs(v.co.y) for v in top_verts if abs(v.co.x) < width * 0.15 and abs(v.co.y) < half_d * 0.98)
+    mid_z_target = min_z + total_height * 0.5
+    mid_z = min(sorted_z_levels, key=lambda z: abs(z - mid_z_target))
+    mid_verts = z_layers.get(mid_z, [])
+    if mid_verts:
+        flat_x_outer = max(abs(v.co.x) for v in mid_verts if abs(v.co.y) < depth * 0.15)
+        flat_x_inner = max(abs(v.co.x) for v in mid_verts if abs(v.co.y) < depth * 0.15 and abs(v.co.x) < half_w * 0.98)
+        flat_y_outer = max(abs(v.co.y) for v in mid_verts if abs(v.co.x) < width * 0.15)
+        flat_y_inner = max(abs(v.co.y) for v in mid_verts if abs(v.co.x) < width * 0.15 and abs(v.co.y) < half_d * 0.98)
         
         if flat_x_inner > 0 and flat_y_inner > 0:
             wall_thickness_x = flat_x_outer - flat_x_inner
@@ -616,7 +619,49 @@ def _analyze_bottom_shell_from_mesh(obj, context, scale):
         'corner_radius': corner_radius,
         'outer_fillet_radius': outer_fillet_radius,
         'inner_fillet_radius': inner_fillet_radius,
+        'step_height': 1.0,
     }
+
+
+def _export_bottom_shell_timer():
+    global _bottom_shell_export_data
+
+    if not _bottom_shell_export_data:
+        return None
+
+    data = _bottom_shell_export_data
+    context = data['context']
+    params = data['params']
+
+    log_to_file(f"[STEP Exporter] Bottom shell timer: calling C++ export...")
+    update_progress(15, "正在参数化导出底壳...", context)
+
+    success = step_exporter.export_bottom_shell_filleted_step(
+        data['filepath'],
+        params['width'],
+        params['depth'],
+        params['outer_height'],
+        params['bottom_thickness'],
+        params['wall_thickness'],
+        params['corner_radius'],
+        params['outer_fillet_radius'],
+        params['inner_fillet_radius'],
+        params.get('step_height', 1.0),
+        data['step_schema'],
+        data['step_unit'],
+        1 if data['enable_logging'] else 0
+    )
+
+    if success:
+        update_progress(100, "底壳导出完成", context)
+        log_to_file(f"[STEP Exporter] Parametric bottom shell exported successfully")
+    else:
+        update_progress(100, "底壳导出失败", context)
+        log_to_file(f"[STEP Exporter] Parametric bottom shell export failed")
+
+    end_progress(context)
+    _bottom_shell_export_data = None
+    return None
 
 
 def _export_worker_timer():
@@ -962,28 +1007,19 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
         if bottom_shell_params:
             log_to_file(f"[STEP Exporter] Found bottom shell, using parametric export")
             update_progress(10, "检测到底壳，正在参数化导出...", context)
-            success = step_exporter.export_bottom_shell_filleted_step(
-                self.filepath,
-                bottom_shell_params['width'],
-                bottom_shell_params['depth'],
-                bottom_shell_params['outer_height'],
-                bottom_shell_params['bottom_thickness'],
-                bottom_shell_params['wall_thickness'],
-                bottom_shell_params['corner_radius'],
-                bottom_shell_params['outer_fillet_radius'],
-                bottom_shell_params['inner_fillet_radius'],
-                self.step_schema,
-                step_unit,
-                1 if self.enable_logging else 0
-            )
-            if success:
-                update_progress(100, "底壳导出完成", context)
-                self.report({'INFO'}, f"Parametric bottom shell exported to {self.filepath}")
-            else:
-                update_progress(100, "底壳导出失败", context)
-                self.report({'ERROR'}, "Parametric bottom shell export failed")
-            end_progress(context)
-            return {'FINISHED'} if success else {'CANCELLED'}
+
+            global _bottom_shell_export_data
+            _bottom_shell_export_data = {
+                'filepath': self.filepath,
+                'params': bottom_shell_params,
+                'step_schema': self.step_schema,
+                'step_unit': step_unit,
+                'enable_logging': self.enable_logging,
+                'context': context,
+            }
+
+            bpy.app.timers.register(_export_bottom_shell_timer, first_interval=0.3)
+            return {'FINISHED'}
         
         _export_params = {
             'filepath': self.filepath,

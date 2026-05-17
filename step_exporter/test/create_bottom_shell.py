@@ -23,6 +23,15 @@ import os
 from collections import defaultdict
 
 
+def get_script_dir():
+    if __file__ and os.path.isfile(__file__):
+        return os.path.dirname(os.path.abspath(__file__))
+    for text in bpy.data.texts:
+        if text.filepath and os.path.isfile(text.filepath):
+            return os.path.dirname(os.path.abspath(text.filepath))
+    return os.getcwd()
+
+
 def measure_fillet_radius_from_mesh(obj, is_outer=True, tolerance=0.1):
     """
     从 mesh 测量底部圆倒角半径
@@ -234,12 +243,15 @@ def measure_shell_fillet_radii(obj):
 
 
 def clear_scene():
-    bpy.ops.object.select_all(action='SELECT')
-    bpy.ops.object.delete(use_global=False)
+    for obj in list(bpy.data.objects):
+        obj.modifiers.clear()
 
-    for data_block in list(bpy.data.meshes):
-        if data_block.users == 0:
-            bpy.data.meshes.remove(data_block)
+    for obj in list(bpy.data.objects):
+        bpy.data.objects.remove(obj, do_unlink=True)
+
+    for mesh in list(bpy.data.meshes):
+        if mesh.users == 0:
+            bpy.data.meshes.remove(mesh)
 
 
 def apply_boolean(obj, tool_obj, operation='DIFFERENCE'):
@@ -478,7 +490,7 @@ def create_hollow_shell_blender(name, width, depth, outer_height, bottom_thickne
         outer_bottom = location[2] - hh
         inner_bottom = inner_z - inner_height / 2.0
         cyl_z_bottom = outer_bottom
-        cyl_z_top = inner_bottom + 0.5
+        cyl_z_top = location[2] + hh + 2.0
         cyl_height = cyl_z_top - cyl_z_bottom
         cyl_z = (cyl_z_top + cyl_z_bottom) / 2.0
 
@@ -500,17 +512,25 @@ def create_hollow_shell_blender(name, width, depth, outer_height, bottom_thickne
             cyl_obj.name = f"{name}_HoleCyl_{i}"
             cyl_objs.append(cyl_obj)
 
-        if len(cyl_objs) > 1:
-            bpy.context.view_layer.objects.active = cyl_objs[0]
-            bpy.ops.object.select_all(action='DESELECT')
-            for c in cyl_objs:
-                c.select_set(True)
-            bpy.ops.object.join()
-            cyl_objs = [bpy.context.active_object]
+        for i, cyl_obj in enumerate(cyl_objs):
+            mod_o = outer.modifiers.new(name=f"Boolean_Hole_Outer_{i}", type='BOOLEAN')
+            mod_o.operation = 'DIFFERENCE'
+            mod_o.object = cyl_obj
+            mod_o.solver = 'FAST'
+            mod_i = inner.modifiers.new(name=f"Boolean_Hole_Inner_{i}", type='BOOLEAN')
+            mod_i.operation = 'DIFFERENCE'
+            mod_i.object = cyl_obj
+            mod_i.solver = 'FAST'
 
-        apply_boolean(outer, cyl_objs[0], operation='DIFFERENCE')
-        apply_boolean(inner, cyl_objs[0], operation='DIFFERENCE')
-        bpy.data.objects.remove(cyl_objs[0], do_unlink=True)
+        bpy.context.view_layer.objects.active = outer
+        for i in range(len(cyl_objs)):
+            bpy.ops.object.modifier_apply(modifier=f"Boolean_Hole_Outer_{i}")
+        bpy.context.view_layer.objects.active = inner
+        for i in range(len(cyl_objs)):
+            bpy.ops.object.modifier_apply(modifier=f"Boolean_Hole_Inner_{i}")
+
+        for cyl_obj in cyl_objs:
+            bpy.data.objects.remove(cyl_obj, do_unlink=True)
 
     apply_boolean(outer, inner, operation='DIFFERENCE')
     bpy.data.objects.remove(inner, do_unlink=True)
@@ -577,7 +597,8 @@ def create_both_bottom_shells_scene():
                     space.overlay.show_wireframes = False
 
     print("[4/4] Exporting perfect STEP via C++ extension...")
-    lib_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'lib'))
+    script_dir = get_script_dir()
+    lib_dir = os.path.abspath(os.path.join(script_dir, '..', 'lib'))
     sys.path.insert(0, lib_dir)
     os.environ['PATH'] = lib_dir + os.pathsep + os.environ.get('PATH', '')
     if hasattr(os, 'add_dll_directory'):
@@ -585,7 +606,7 @@ def create_both_bottom_shells_scene():
 
     import _step_exporter as cpp_exporter
 
-    output_no_holes = os.path.join(os.path.dirname(__file__), 'bottom_shell_no_holes.step')
+    output_no_holes = os.path.join(script_dir, 'bottom_shell_no_holes.step')
     result1 = cpp_exporter.export_rounded_box_step(
         output_no_holes,
         width, depth, outer_height,
@@ -596,7 +617,7 @@ def create_both_bottom_shells_scene():
     else:
         print(f"  [FAIL] Bottom shell (no holes) export failed")
 
-    output_with_holes = os.path.join(os.path.dirname(__file__), 'bottom_shell_with_holes.step')
+    output_with_holes = os.path.join(script_dir, 'bottom_shell_with_holes.step')
     result2 = cpp_exporter.export_bottom_shell_with_holes_step(
         output_with_holes,
         width, depth, outer_height,
@@ -694,7 +715,7 @@ def bevel_box_bottom_edges(obj, height, fillet_radius, bevel_segments=4):
     bpy.ops.object.mode_set(mode='OBJECT')
 
 
-def create_filleted_shell_blender(name, width, depth, outer_height, bottom_thickness, wall_thickness, corner_radius, outer_fillet_radius, inner_fillet_radius, location=(0, 0, 0), segments=32, step_height=1.0):
+def create_filleted_shell_blender(name, width, depth, outer_height, bottom_thickness, wall_thickness, corner_radius, outer_fillet_radius, inner_fillet_radius, location=(0, 0, 0), segments=32, step_height=1.0, holes=None):
     """在Blender中创建带底面圆角的中空底壳：使用BMesh直接创建
     step_height: 顶部台阶高度，外侧壁比内侧壁低多少mm"""
     import math
@@ -1005,6 +1026,52 @@ def create_filleted_shell_blender(name, width, depth, outer_height, bottom_thick
     obj.location = location
     bpy.ops.object.shade_smooth()
 
+    if holes:
+        hole_radius, hole_offset_x, hole_offset_y = holes
+        hw = width / 2.0
+        hd = depth / 2.0
+        hh = outer_height / 2.0
+        hole_cx = hw - hole_offset_x
+        hole_cy = hd - hole_offset_y
+        outer_bottom = location[2] - hh
+        inner_bottom = location[2] - hh + bottom_thickness
+        cyl_z_bottom = outer_bottom - 1.0
+        cyl_z_top = location[2] + hh + 2.0
+        cyl_height = cyl_z_top - cyl_z_bottom
+        cyl_z = (cyl_z_top + cyl_z_bottom) / 2.0
+
+        corner_positions = [
+            ( hole_cx,  hole_cy),
+            (-hole_cx,  hole_cy),
+            (-hole_cx, -hole_cy),
+            ( hole_cx, -hole_cy),
+        ]
+        cyl_objs = []
+        for i, (cx, cy) in enumerate(corner_positions):
+            bpy.ops.mesh.primitive_cylinder_add(
+                vertices=64,
+                radius=hole_radius,
+                depth=cyl_height,
+                location=(location[0] + cx, location[1] + cy, cyl_z),
+            )
+            cyl_obj = bpy.context.active_object
+            cyl_obj.name = f"{name}_HoleCyl_{i}"
+            cyl_objs.append(cyl_obj)
+
+        for i, cyl_obj in enumerate(cyl_objs):
+            mod = obj.modifiers.new(name=f"Boolean_Hole_{i}", type='BOOLEAN')
+            mod.operation = 'DIFFERENCE'
+            mod.object = cyl_obj
+            mod.solver = 'FAST'
+
+        bpy.context.view_layer.objects.active = obj
+        for i in range(len(cyl_objs)):
+            mod_name = f"Boolean_Hole_{i}"
+            bpy.ops.object.modifier_apply(modifier=mod_name)
+
+        for cyl_obj in cyl_objs:
+            bpy.data.objects.remove(cyl_obj, do_unlink=True)
+
     print(f"  Created filleted shell with {len(obj.data.vertices)} vertices")
     return obj
 
@@ -1070,7 +1137,8 @@ def create_filleted_bottom_shells_scene():
         print(f"  [WARN] Could not measure inner fillet, using default: {inner_fillet_radius:.3f} mm")
 
     print("[4/4] Exporting parametric STEP via C++ extension...")
-    lib_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'lib'))
+    script_dir = get_script_dir()
+    lib_dir = os.path.abspath(os.path.join(script_dir, '..', 'lib'))
     sys.path.insert(0, lib_dir)
     os.environ['PATH'] = lib_dir + os.pathsep + os.environ.get('PATH', '')
     if hasattr(os, 'add_dll_directory'):
@@ -1078,7 +1146,7 @@ def create_filleted_bottom_shells_scene():
 
     import _step_exporter as cpp_exporter
 
-    output = os.path.join(os.path.dirname(__file__), 'bottom_shell_filleted.step')
+    output = os.path.join(script_dir, 'bottom_shell_filleted.step')
     result = cpp_exporter.export_bottom_shell_filleted_step(
         output,
         width, depth, outer_height,
@@ -1099,9 +1167,137 @@ def create_filleted_bottom_shells_scene():
     print("="*60)
 
 
+def create_filleted_bottom_shells_with_holes_scene():
+    """生成带底面圆角的底壳（无孔+有孔），导出为完美STEP"""
+    print("\n" + "="*60)
+    print("Filleted Bottom Shell Generator (With & Without Holes)")
+    print("="*60)
+
+    print("[1/5] Clearing scene...")
+    clear_scene()
+
+    width = 100.0
+    depth = 70.0
+    outer_height = 10.0
+    bottom_thickness = 2.0
+    wall_thickness = 2.0
+    corner_radius = 20.0
+    outer_fillet_radius = 3.0
+    inner_fillet_radius = 1.5
+    hole_radius = 1.5
+    hole_offset_x = 13.0
+    hole_offset_y = 11.0
+
+    print("[2/5] Creating filleted bottom shell WITHOUT holes (Blender preview)...")
+    shell_no_holes = create_filleted_shell_blender(
+        name="FilletedShell_NoHoles",
+        width=width,
+        depth=depth,
+        outer_height=outer_height,
+        bottom_thickness=bottom_thickness,
+        wall_thickness=wall_thickness,
+        corner_radius=corner_radius,
+        outer_fillet_radius=outer_fillet_radius,
+        inner_fillet_radius=inner_fillet_radius,
+        location=(-60, 0, 0),
+        segments=32,
+        step_height=1.0
+    )
+    add_material(shell_no_holes, name="ShellNoHolesMaterial")
+    print(f"  [OK] Filleted bottom shell (no holes) created")
+
+    print("[3/5] Creating filleted bottom shell WITH holes (Blender preview)...")
+    shell_with_holes = create_filleted_shell_blender(
+        name="FilletedShell_WithHoles",
+        width=width,
+        depth=depth,
+        outer_height=outer_height,
+        bottom_thickness=bottom_thickness,
+        wall_thickness=wall_thickness,
+        corner_radius=corner_radius,
+        outer_fillet_radius=outer_fillet_radius,
+        inner_fillet_radius=inner_fillet_radius,
+        location=(60, 0, 0),
+        segments=32,
+        step_height=1.0,
+        holes=(hole_radius, hole_offset_x, hole_offset_y),
+    )
+    add_material(shell_with_holes, name="ShellWithHolesMaterial")
+    print(f"  [OK] Filleted bottom shell (with holes) created")
+
+    for area in bpy.context.screen.areas:
+        if area.type == 'VIEW_3D':
+            for space in area.spaces:
+                if space.type == 'VIEW_3D':
+                    space.shading.type = 'SOLID'
+                    space.overlay.show_wireframes = False
+
+    print("[4/5] Measuring fillet radii from mesh...")
+    measured_outer, measured_inner = measure_shell_fillet_radii(shell_no_holes)
+
+    if measured_outer is not None:
+        outer_fillet_radius = measured_outer
+        print(f"  [OK] Measured outer fillet radius: {outer_fillet_radius:.3f} mm")
+    else:
+        print(f"  [WARN] Could not measure outer fillet, using default: {outer_fillet_radius:.3f} mm")
+
+    if measured_inner is not None:
+        inner_fillet_radius = measured_inner
+        print(f"  [OK] Measured inner fillet radius: {inner_fillet_radius:.3f} mm")
+    else:
+        print(f"  [WARN] Could not measure inner fillet, using default: {inner_fillet_radius:.3f} mm")
+
+    print("[5/5] Exporting parametric STEP via C++ extension...")
+    script_dir = get_script_dir()
+    lib_dir = os.path.abspath(os.path.join(script_dir, '..', 'lib'))
+    sys.path.insert(0, lib_dir)
+    os.environ['PATH'] = lib_dir + os.pathsep + os.environ.get('PATH', '')
+    if hasattr(os, 'add_dll_directory'):
+        os.add_dll_directory(lib_dir)
+
+    import _step_exporter as cpp_exporter
+
+    output_no_holes = os.path.join(script_dir, 'bottom_shell_filleted.step')
+    result1 = cpp_exporter.export_bottom_shell_filleted_step(
+        output_no_holes,
+        width, depth, outer_height,
+        bottom_thickness, wall_thickness, corner_radius,
+        outer_fillet_radius, inner_fillet_radius,
+        1.0,
+        "AP214IS",
+        "MILLIMETER",
+        1,
+    )
+    if result1:
+        print(f"  [OK] Filleted bottom shell (no holes) -> {output_no_holes}")
+    else:
+        print(f"  [FAIL] Filleted bottom shell (no holes) export failed")
+
+    output_with_holes = os.path.join(script_dir, 'bottom_shell_filleted_with_holes.step')
+    result2 = cpp_exporter.export_bottom_shell_filleted_with_holes_step(
+        output_with_holes,
+        width, depth, outer_height,
+        bottom_thickness, wall_thickness, corner_radius,
+        outer_fillet_radius, inner_fillet_radius,
+        1.0,
+        hole_radius, hole_offset_x, hole_offset_y,
+        "AP214IS",
+        "MILLIMETER",
+        1,
+    )
+    if result2:
+        print(f"  [OK] Filleted bottom shell (with holes) -> {output_with_holes}")
+    else:
+        print(f"  [FAIL] Filleted bottom shell (with holes) export failed")
+
+    print("\n" + "="*60)
+    print("[OK] Both filleted bottom shells created and exported!")
+    print("="*60)
+
+
 if __name__ == "__main__":
     try:
-        create_filleted_bottom_shells_scene()
+        create_filleted_bottom_shells_with_holes_scene()
     except Exception as e:
         print(f"\nError: {e}")
         import traceback

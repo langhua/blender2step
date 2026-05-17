@@ -651,3 +651,132 @@ TopoDS_Shape create_bottom_shell_filleted_solid(double width, double depth, doub
     std::cout << "[STEP Exporter] Filleted bottom shell with exterior step created" << std::endl;
     return result;
 }
+
+TopoDS_Shape create_bottom_shell_filleted_with_holes_solid(double width, double depth, double outer_height,
+                                                             double bottom_thickness, double wall_thickness,
+                                                             double corner_radius,
+                                                             double outer_fillet_radius, double inner_fillet_radius,
+                                                             double step_height,
+                                                             double hole_radius, double hole_offset_x, double hole_offset_y)
+{
+    std::cout << "[STEP Exporter] Creating filleted bottom shell with corner holes: "
+              << width << "x" << depth << " outer_height=" << outer_height
+              << " bottom=" << bottom_thickness << " wall=" << wall_thickness
+              << " corner_r=" << corner_radius
+              << " outer_fillet=" << outer_fillet_radius << " inner_fillet=" << inner_fillet_radius
+              << " step_height=" << step_height
+              << " hole_r=" << hole_radius
+              << " hole_offset=(" << hole_offset_x << "," << hole_offset_y << ")" << std::endl;
+
+    TopoDS_Shape shell = create_bottom_shell_filleted_solid(width, depth, outer_height,
+                                                              bottom_thickness, wall_thickness,
+                                                              corner_radius,
+                                                              outer_fillet_radius, inner_fillet_radius,
+                                                              step_height);
+    if (shell.IsNull()) {
+        std::cerr << "[STEP Exporter] Failed to create filleted bottom shell" << std::endl;
+        return TopoDS_Shape();
+    }
+
+    TopoDS_Solid shellSolid;
+    if (shell.ShapeType() == TopAbs_SOLID) {
+        shellSolid = TopoDS::Solid(shell);
+    } else {
+        BRepBuilderAPI_MakeSolid solidMaker;
+        for (TopExp_Explorer exp(shell, TopAbs_SHELL); exp.More(); exp.Next()) {
+            solidMaker.Add(TopoDS::Shell(exp.Current()));
+        }
+        if (solidMaker.IsDone()) {
+            shellSolid = solidMaker.Solid();
+        } else {
+            std::cerr << "[STEP Exporter] Failed to convert shell to solid" << std::endl;
+            return shell;
+        }
+    }
+
+    double hw = width / 2.0;
+    double hd = depth / 2.0;
+    double hh = outer_height / 2.0;
+    double hole_cx = hw - hole_offset_x;
+    double hole_cy = hd - hole_offset_y;
+
+    double cyl_z_bottom = -hh - 2.0;
+    double cyl_z_top = hh + 2.0;
+    double cyl_height = cyl_z_top - cyl_z_bottom;
+    double cyl_z = (cyl_z_top + cyl_z_bottom) / 2.0;
+
+    double corner_positions[4][2] = {
+        { hole_cx,  hole_cy},
+        {-hole_cx,  hole_cy},
+        {-hole_cx, -hole_cy},
+        { hole_cx, -hole_cy}
+    };
+
+    TopoDS_Shape currentShape = shellSolid;
+    int successCount = 0;
+
+    for (int i = 0; i < 4; i++) {
+        double cx = corner_positions[i][0];
+        double cy = corner_positions[i][1];
+
+        std::cout << "[STEP Exporter] Creating hole " << i << " at (" << cx << "," << cy
+                  << ") z=[" << cyl_z_bottom << "," << cyl_z_top << "]" << std::endl;
+
+        gp_Ax2 cylAxes(gp_Pnt(0, 0, cyl_z), gp::DZ());
+        BRepPrimAPI_MakeCylinder cylMaker(cylAxes, hole_radius, cyl_height);
+        TopoDS_Shape holeShape = cylMaker.Shape();
+        if (holeShape.IsNull()) {
+            std::cerr << "[STEP Exporter] Failed to create cylinder for hole " << i << std::endl;
+            continue;
+        }
+
+        gp_Trsf holeTrsf;
+        holeTrsf.SetTranslation(gp_Vec(cx, cy, 0));
+        TopLoc_Location holeLoc(holeTrsf);
+        holeShape.Move(holeLoc);
+
+        TopoDS_Solid holeSolid;
+        if (holeShape.ShapeType() == TopAbs_SOLID) {
+            holeSolid = TopoDS::Solid(holeShape);
+        } else {
+            BRepBuilderAPI_MakeSolid solidMaker;
+            for (TopExp_Explorer exp(holeShape, TopAbs_SHELL); exp.More(); exp.Next()) {
+                solidMaker.Add(TopoDS::Shell(exp.Current()));
+            }
+            if (solidMaker.IsDone()) {
+                holeSolid = solidMaker.Solid();
+            } else {
+                std::cerr << "[STEP Exporter] Failed to convert hole to solid for hole " << i << std::endl;
+                continue;
+            }
+        }
+
+        TopoDS_Solid currentSolid;
+        if (currentShape.ShapeType() == TopAbs_SOLID) {
+            currentSolid = TopoDS::Solid(currentShape);
+        } else {
+            BRepBuilderAPI_MakeSolid solidMaker;
+            for (TopExp_Explorer exp(currentShape, TopAbs_SHELL); exp.More(); exp.Next()) {
+                solidMaker.Add(TopoDS::Shell(exp.Current()));
+            }
+            if (solidMaker.IsDone()) {
+                currentSolid = solidMaker.Solid();
+            } else {
+                std::cerr << "[STEP Exporter] Failed to convert shape to solid for hole " << i << std::endl;
+                continue;
+            }
+        }
+
+        BRepAlgoAPI_Cut cutMaker(currentSolid, holeSolid);
+        if (!cutMaker.IsDone()) {
+            std::cerr << "[STEP Exporter] Boolean cut failed for hole " << i << std::endl;
+            continue;
+        }
+
+        currentShape = cutMaker.Shape();
+        successCount++;
+    }
+
+    std::cout << "[STEP Exporter] Created " << successCount << " corner holes in filleted bottom shell" << std::endl;
+    return currentShape;
+}

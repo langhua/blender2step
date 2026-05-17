@@ -48,6 +48,12 @@ TopoDS_Shape create_bottom_shell_filleted_solid(double width, double depth, doub
                                                   double corner_radius,
                                                   double outer_fillet_radius, double inner_fillet_radius,
                                                   double step_height = 1.0);
+TopoDS_Shape create_bottom_shell_filleted_with_holes_solid(double width, double depth, double outer_height,
+                                                             double bottom_thickness, double wall_thickness,
+                                                             double corner_radius,
+                                                             double outer_fillet_radius, double inner_fillet_radius,
+                                                             double step_height,
+                                                             double hole_radius, double hole_offset_x, double hole_offset_y);
 
 // Python interface functions
 PyObject* get_version(PyObject* self, PyObject* args);

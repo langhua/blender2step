@@ -237,6 +237,123 @@ PyObject* export_bottom_shell_filleted_step(PyObject* self, PyObject* args) {
     }
 }
 
+PyObject* export_bottom_shell_filleted_with_holes_step(PyObject* self, PyObject* args) {
+    const char* filename;
+    double width, depth, outer_height, bottom_thickness, wall_thickness, corner_radius;
+    double outer_fillet_radius, inner_fillet_radius, step_height = 1.0;
+    double hole_radius, hole_offset_x, hole_offset_y;
+    const char* step_schema = "AP214IS";
+    const char* unit = "MILLIMETER";
+    int enable_logging = 1;
+
+    if (!PyArg_ParseTuple(args, "sddddddddd|dddssi",
+                          &filename,
+                          &width, &depth, &outer_height,
+                          &bottom_thickness, &wall_thickness, &corner_radius,
+                          &outer_fillet_radius, &inner_fillet_radius,
+                          &step_height,
+                          &hole_radius, &hole_offset_x, &hole_offset_y,
+                          &step_schema, &unit, &enable_logging)) {
+        PyErr_SetString(PyExc_TypeError,
+            "export_bottom_shell_filleted_with_holes_step() expected: filename, width, depth, outer_height, "
+            "bottom_thickness, wall_thickness, corner_radius, "
+            "outer_fillet_radius, inner_fillet_radius, step_height, "
+            "hole_radius, hole_offset_x, hole_offset_y, "
+            "[step_schema], [unit], [enable_logging]");
+        return NULL;
+    }
+
+    std::cout << "\n[STEP Exporter] =========================================" << std::endl;
+    std::cout << "[STEP Exporter] Exporting filleted bottom shell with holes to: " << filename << std::endl;
+    std::cout << "[STEP Exporter] Parameters: " << width << "x" << depth
+              << " outer_height=" << outer_height << " bottom=" << bottom_thickness
+              << " wall=" << wall_thickness << " corner_r=" << corner_radius
+              << " outer_fillet=" << outer_fillet_radius << " inner_fillet=" << inner_fillet_radius
+              << " step_height=" << step_height
+              << " hole_r=" << hole_radius
+              << " hole_offset=(" << hole_offset_x << "," << hole_offset_y << ")" << std::endl;
+
+    try {
+        TopoDS_Shape shape = create_bottom_shell_filleted_with_holes_solid(
+            width, depth, outer_height,
+            bottom_thickness, wall_thickness, corner_radius,
+            outer_fillet_radius, inner_fillet_radius, step_height,
+            hole_radius, hole_offset_x, hole_offset_y);
+
+        if (shape.IsNull()) {
+            std::cerr << "[STEP Exporter] Failed to create filleted bottom shell with holes" << std::endl;
+            Py_RETURN_FALSE;
+        }
+
+        int faceCount = 0;
+        for (TopExp_Explorer exp(shape, TopAbs_FACE); exp.More(); exp.Next()) faceCount++;
+        std::cout << "[STEP Exporter] Created shape with " << faceCount << " faces" << std::endl;
+
+        if (shape.ShapeType() == TopAbs_SOLID) {
+            GProp_GProps props;
+            BRepGProp::VolumeProperties(shape, props);
+            std::cout << "[STEP Exporter] Solid volume: " << props.Mass() << std::endl;
+        }
+
+        BRepCheck_Analyzer analyzer(shape);
+        if (!analyzer.IsValid()) {
+            std::cout << "[STEP Exporter] Shape has issues, attempting to fix..." << std::endl;
+            shape = fix_shape_enhanced(shape, 0.001);
+        }
+
+        std::string logPath3;
+        const char* log_filename = nullptr;
+        if (enable_logging) {
+            logPath3 = std::string(filename) + ".log";
+            log_filename = logPath3.c_str();
+        }
+
+        STEPControl_Writer writer;
+        StdoutRedirectState redirectState = setup_step_writer(writer, filename, step_schema, unit, 1, enable_logging, log_filename);
+
+        BRepBuilderAPI_MakeVertex vertexMaker(gp_Pnt(0, 0, 0));
+        if (vertexMaker.IsDone()) {
+            writer.Transfer(vertexMaker.Vertex(), STEPControl_AsIs);
+        }
+
+        IFSelect_ReturnStatus transferStatus = writer.Transfer(shape, STEPControl_AsIs);
+        if (transferStatus != IFSelect_RetDone) {
+            std::cerr << "[STEP Exporter] Failed to transfer shape to STEP writer" << std::endl;
+            if (redirectState.stdout_redirected && redirectState.log_file) {
+                _dup2(redirectState.saved_stdout_fd, _fileno(stdout));
+                fclose(redirectState.log_file);
+            }
+            Py_RETURN_FALSE;
+        }
+
+        std::cout << "[STEP Exporter] Writing STEP file..." << std::endl;
+        IFSelect_ReturnStatus writeStatus = writer.Write(filename);
+
+        if (redirectState.stdout_redirected && redirectState.log_file) {
+            _dup2(redirectState.saved_stdout_fd, _fileno(stdout));
+            fclose(redirectState.log_file);
+        }
+
+        if (writeStatus == IFSelect_RetDone) {
+            std::cout << "[STEP Exporter] Successfully exported filleted bottom shell with holes STEP file" << std::endl;
+            std::cout << "[STEP Exporter] =========================================\n" << std::endl;
+            Py_RETURN_TRUE;
+        } else {
+            std::cerr << "[STEP Exporter] Failed to write STEP file" << std::endl;
+            Py_RETURN_FALSE;
+        }
+    } catch (const Standard_Failure& e) {
+        std::cerr << "[STEP Exporter] OpenCASCADE error: " << e.GetMessageString() << std::endl;
+        Py_RETURN_FALSE;
+    } catch (const std::exception& e) {
+        std::cerr << "[STEP Exporter] Standard error: " << e.what() << std::endl;
+        Py_RETURN_FALSE;
+    } catch (...) {
+        std::cerr << "[STEP Exporter] Unknown error" << std::endl;
+        Py_RETURN_FALSE;
+    }
+}
+
 // 直接导出四角开圆孔的圆角矩形到STEP
 PyObject* export_rounded_box_with_holes_step(PyObject* self, PyObject* args) {
     const char* filename;
@@ -460,6 +577,7 @@ static PyMethodDef step_exporter_methods[] = {
     {"export_rounded_box_with_holes_step", export_rounded_box_with_holes_step, METH_VARARGS, "Export rounded box with corner holes directly to STEP"},
     {"export_bottom_shell_with_holes_step", export_bottom_shell_with_holes_step, METH_VARARGS, "Export bottom shell with corner holes directly to STEP"},
     {"export_bottom_shell_filleted_step", export_bottom_shell_filleted_step, METH_VARARGS, "Export bottom shell with bottom fillets directly to STEP"},
+    {"export_bottom_shell_filleted_with_holes_step", export_bottom_shell_filleted_with_holes_step, METH_VARARGS, "Export bottom shell with bottom fillets and corner holes directly to STEP"},
     {"init_incremental_export", init_incremental_export, METH_VARARGS, "Initialize incremental export"},
     {"add_object_to_export", add_object_to_export, METH_VARARGS, "Add single object to incremental export"},
     {"finalize_incremental_export", finalize_incremental_export, METH_NOARGS, "Finalize incremental export and write file"},

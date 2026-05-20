@@ -703,7 +703,6 @@ TopoDS_Shape create_bottom_shell_filleted_with_holes_solid(double width, double 
     double cyl_z_bottom = -hh - 2.0;
     double cyl_z_top = hh + 2.0;
     double cyl_height = cyl_z_top - cyl_z_bottom;
-    double cyl_z = (cyl_z_top + cyl_z_bottom) / 2.0;
 
     double corner_positions[4][2] = {
         { hole_cx,  hole_cy},
@@ -722,7 +721,7 @@ TopoDS_Shape create_bottom_shell_filleted_with_holes_solid(double width, double 
         std::cout << "[STEP Exporter] Creating hole " << i << " at (" << cx << "," << cy
                   << ") z=[" << cyl_z_bottom << "," << cyl_z_top << "]" << std::endl;
 
-        gp_Ax2 cylAxes(gp_Pnt(0, 0, cyl_z), gp::DZ());
+        gp_Ax2 cylAxes(gp_Pnt(0, 0, cyl_z_bottom), gp::DZ());
         BRepPrimAPI_MakeCylinder cylMaker(cylAxes, hole_radius, cyl_height);
         TopoDS_Shape holeShape = cylMaker.Shape();
         if (holeShape.IsNull()) {
@@ -767,6 +766,10 @@ TopoDS_Shape create_bottom_shell_filleted_with_holes_solid(double width, double 
             }
         }
 
+        // 调试：统计切割前后的面数
+        int facesBefore = 0;
+        for (TopExp_Explorer exp(currentSolid, TopAbs_FACE); exp.More(); exp.Next()) facesBefore++;
+
         BRepAlgoAPI_Cut cutMaker(currentSolid, holeSolid);
         if (!cutMaker.IsDone()) {
             std::cerr << "[STEP Exporter] Boolean cut failed for hole " << i << std::endl;
@@ -774,7 +777,14 @@ TopoDS_Shape create_bottom_shell_filleted_with_holes_solid(double width, double 
         }
 
         currentShape = cutMaker.Shape();
+        int facesAfter = 0;
+        for (TopExp_Explorer exp(currentShape, TopAbs_FACE); exp.More(); exp.Next()) facesAfter++;
+        std::cout << "[STEP Exporter] Hole " << i << ": faces before=" << facesBefore << ", after=" << facesAfter << std::endl;
         successCount++;
+
+        if (facesBefore == facesAfter) {
+            std::cout << "[STEP Exporter] WARNING: Hole " << i << " did not change face count - cut may be ineffective!" << std::endl;
+        }
     }
 
     std::cout << "[STEP Exporter] Created " << successCount << " corner holes in filleted bottom shell" << std::endl;

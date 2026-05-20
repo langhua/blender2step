@@ -1153,6 +1153,7 @@ def create_filleted_bottom_shells_scene():
         bottom_thickness, wall_thickness, corner_radius,
         outer_fillet_radius, inner_fillet_radius,
         1.0,  # step_height
+        0.0, 0.0, 0.0,  # pos_x, pos_y, pos_z
         "AP214IS",
         "MILLIMETER",
         1,  # enable_logging
@@ -1264,6 +1265,7 @@ def create_filleted_bottom_shells_with_holes_scene():
         bottom_thickness, wall_thickness, corner_radius,
         outer_fillet_radius, inner_fillet_radius,
         1.0,
+        0.0, 0.0, 0.0,  # pos_x, pos_y, pos_z
         "AP214IS",
         "MILLIMETER",
         1,
@@ -1281,6 +1283,7 @@ def create_filleted_bottom_shells_with_holes_scene():
         outer_fillet_radius, inner_fillet_radius,
         1.0,
         hole_radius, hole_offset_x, hole_offset_y,
+        0.0, 0.0, 0.0,  # pos_x, pos_y, pos_z
         "AP214IS",
         "MILLIMETER",
         1,

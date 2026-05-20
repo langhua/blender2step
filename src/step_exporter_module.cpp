@@ -3,6 +3,8 @@
 #include <STEPControl_Writer.hxx>
 #include <BRepBuilderAPI_MakeVertex.hxx>
 #include <gp_Pnt.hxx>
+#include <gp_Trsf.hxx>
+#include <BRepBuilderAPI_Transform.hxx>
 #include <BRepCheck_Analyzer.hxx>
 #include <BRepGProp.hxx>
 #include <GProp_GProps.hxx>
@@ -130,22 +132,24 @@ PyObject* export_bottom_shell_filleted_step(PyObject* self, PyObject* args) {
     const char* filename;
     double width, depth, outer_height, bottom_thickness, wall_thickness, corner_radius;
     double outer_fillet_radius, inner_fillet_radius, step_height = 1.0;
+    double pos_x = 0.0, pos_y = 0.0, pos_z = 0.0;
     const char* step_schema = "AP214IS";
     const char* unit = "MILLIMETER";
     int enable_logging = 1;
 
-    if (!PyArg_ParseTuple(args, "sdddddddd|dssi",
+    if (!PyArg_ParseTuple(args, "sdddddddd|ddddssi",
                           &filename,
                           &width, &depth, &outer_height,
                           &bottom_thickness, &wall_thickness, &corner_radius,
                           &outer_fillet_radius, &inner_fillet_radius,
                           &step_height,
+                          &pos_x, &pos_y, &pos_z,
                           &step_schema, &unit, &enable_logging)) {
         PyErr_SetString(PyExc_TypeError,
             "export_bottom_shell_filleted_step() expected: filename, width, depth, outer_height, "
             "bottom_thickness, wall_thickness, corner_radius, "
             "outer_fillet_radius, inner_fillet_radius, "
-            "[step_height], [step_schema], [unit], [enable_logging]");
+            "[step_height], [pos_x], [pos_y], [pos_z], [step_schema], [unit], [enable_logging]");
         return NULL;
     }
 
@@ -182,6 +186,14 @@ PyObject* export_bottom_shell_filleted_step(PyObject* self, PyObject* args) {
         if (!analyzer.IsValid()) {
             std::cout << "[STEP Exporter] Shape has issues, attempting to fix..." << std::endl;
             shape = fix_shape_enhanced(shape, 0.001);
+        }
+
+        // 平移 shape 到指定位置
+        if (pos_x != 0.0 || pos_y != 0.0 || pos_z != 0.0) {
+            std::cout << "[STEP Exporter] Translating shape to (" << pos_x << ", " << pos_y << ", " << pos_z << ")" << std::endl;
+            gp_Trsf trsf;
+            trsf.SetTranslation(gp_Vec(pos_x, pos_y, pos_z));
+            shape = BRepBuilderAPI_Transform(shape, trsf).Shape();
         }
 
         std::string logPath2;
@@ -242,24 +254,26 @@ PyObject* export_bottom_shell_filleted_with_holes_step(PyObject* self, PyObject*
     double width, depth, outer_height, bottom_thickness, wall_thickness, corner_radius;
     double outer_fillet_radius, inner_fillet_radius, step_height = 1.0;
     double hole_radius, hole_offset_x, hole_offset_y;
+    double pos_x = 0.0, pos_y = 0.0, pos_z = 0.0;
     const char* step_schema = "AP214IS";
     const char* unit = "MILLIMETER";
     int enable_logging = 1;
 
-    if (!PyArg_ParseTuple(args, "sddddddddd|dddssi",
+    if (!PyArg_ParseTuple(args, "sddddddddd|ddddddssi",
                           &filename,
                           &width, &depth, &outer_height,
                           &bottom_thickness, &wall_thickness, &corner_radius,
                           &outer_fillet_radius, &inner_fillet_radius,
                           &step_height,
                           &hole_radius, &hole_offset_x, &hole_offset_y,
+                          &pos_x, &pos_y, &pos_z,
                           &step_schema, &unit, &enable_logging)) {
         PyErr_SetString(PyExc_TypeError,
             "export_bottom_shell_filleted_with_holes_step() expected: filename, width, depth, outer_height, "
             "bottom_thickness, wall_thickness, corner_radius, "
             "outer_fillet_radius, inner_fillet_radius, step_height, "
             "hole_radius, hole_offset_x, hole_offset_y, "
-            "[step_schema], [unit], [enable_logging]");
+            "[pos_x], [pos_y], [pos_z], [step_schema], [unit], [enable_logging]");
         return NULL;
     }
 
@@ -299,6 +313,14 @@ PyObject* export_bottom_shell_filleted_with_holes_step(PyObject* self, PyObject*
         if (!analyzer.IsValid()) {
             std::cout << "[STEP Exporter] Shape has issues, attempting to fix..." << std::endl;
             shape = fix_shape_enhanced(shape, 0.001);
+        }
+
+        // 平移 shape 到指定位置
+        if (pos_x != 0.0 || pos_y != 0.0 || pos_z != 0.0) {
+            std::cout << "[STEP Exporter] Translating shape to (" << pos_x << ", " << pos_y << ", " << pos_z << ")" << std::endl;
+            gp_Trsf trsf;
+            trsf.SetTranslation(gp_Vec(pos_x, pos_y, pos_z));
+            shape = BRepBuilderAPI_Transform(shape, trsf).Shape();
         }
 
         std::string logPath3;

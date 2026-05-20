@@ -21,6 +21,8 @@ import math
 sys.path.append(os.path.abspath(os.path.dirname(__file__)))
 
 import bpy
+import bmesh
+from mathutils import Vector
 from bpy.types import Operator, Panel
 from bpy_extras.io_utils import ExportHelper
 from bpy.props import StringProperty, FloatProperty, BoolProperty, EnumProperty
@@ -608,9 +610,54 @@ def _analyze_bottom_shell_from_mesh(obj, context, scale):
     
     log_to_file(f"[STEP Exporter] Detected bottom shell: {width:.1f}x{depth:.1f} h={outer_height:.1f} bt={bottom_thickness:.1f} wt={wall_thickness:.1f} cr={corner_radius:.1f} ofr={outer_fillet_radius:.1f} ifr={inner_fillet_radius:.1f}")
     
+    # 检测螺丝孔：用射线在角落位置进行检测
+    # 孔在底壳的四个角落，距离边缘约 13mm(x) 和 11mm(y)
+    has_holes = False
+    hole_radius_detected = 1.5
+    hole_offset_x = 13.0
+    hole_offset_y = 11.0
+    
+    # 先释放 BMesh，用 Blender ray_cast
     bm.free()
     
-    return {
+    # 孔应该在距离角落一定距离的位置
+    corner_test_x = half_w * 0.74  # 约 37 for 100-wide box
+    corner_test_y = half_d * 0.69  # 约 24 for 70-deep box
+    
+    depsgraph = context.evaluated_depsgraph_get()
+    obj_eval = obj.evaluated_get(depsgraph)
+    ray_dir = Vector((0, 0, 1))
+    
+    corner_positions = [
+        (corner_test_x, corner_test_y),
+        (-corner_test_x, corner_test_y),
+        (-corner_test_x, -corner_test_y),
+        (corner_test_x, -corner_test_y),
+    ]
+    
+    ray_holes = 0
+    for cx, cy in corner_positions:
+        ray_start = Vector((cx, cy, bottom_z - 1.0))
+        hit, location, normal, face_idx = obj_eval.ray_cast(ray_start, ray_dir, distance=total_height + 2.0)
+        if hit:
+            # 检查命中点的 z - 如果命中在底面下方就是真正的底面
+            if location.z > bottom_z + bottom_thickness * 0.7:
+                ray_holes += 1
+        else:
+            ray_holes += 1
+    
+    log_to_file(f"[STEP Exporter] Hole detection: ray_holes={ray_holes}/4")
+    
+    # 判断：如果4个角落有2个以上位置检测到孔，说明有孔
+    if ray_holes >= 2:
+        has_holes = True
+        hole_offset_x = half_w - corner_test_x
+        hole_offset_y = half_d - corner_test_y
+        log_to_file(f"[STEP Exporter] Has holes detected (ray_holes={ray_holes}/4)")
+    else:
+        log_to_file(f"[STEP Exporter] No holes detected")
+    
+    params = {
         'width': width,
         'depth': depth,
         'outer_height': outer_height,
@@ -620,7 +667,138 @@ def _analyze_bottom_shell_from_mesh(obj, context, scale):
         'outer_fillet_radius': outer_fillet_radius,
         'inner_fillet_radius': inner_fillet_radius,
         'step_height': 1.0,
+        'pos_x': obj.location.x,
+        'pos_y': obj.location.y,
+        'pos_z': obj.location.z,
     }
+    
+    if has_holes:
+        params['has_holes'] = True
+        params['hole_radius'] = hole_radius_detected
+        params['hole_offset_x'] = hole_offset_x
+        params['hole_offset_y'] = hole_offset_y
+    
+    return params
+
+
+def _export_bottom_shells_sync(filepath, shells, step_schema, step_unit, enable_logging, context):
+    """同步导出底壳（非计时器版本，直接在 execute 中调用）"""
+    import _step_exporter as cpp_exporter
+    
+    if not shells:
+        log_to_file(f"[STEP Exporter] No bottom shells to export")
+        return
+    
+    log_to_file(f"[STEP Exporter] Exporting {len(shells)} shell(s) synchronously...")
+    
+    all_success = True
+    total_shells = len(shells)
+    temp_files = []
+    
+    # 导出每个底壳到临时文件
+    for idx, params in enumerate(shells):
+        has_holes = params.get('has_holes', False)
+        shell_desc = f"with_holes" if has_holes else "no_holes"
+        log_to_file(f"[STEP Exporter]   Exporting shell {idx+1}/{total_shells} ({shell_desc})...")
+        
+        temp_file = filepath + f".temp{idx}.step"
+        temp_files.append(temp_file)
+        
+        if has_holes:
+            success = cpp_exporter.export_bottom_shell_filleted_with_holes_step(
+                temp_file,
+                params['width'],
+                params['depth'],
+                params['outer_height'],
+                params['bottom_thickness'],
+                params['wall_thickness'],
+                params['corner_radius'],
+                params['outer_fillet_radius'],
+                params['inner_fillet_radius'],
+                params.get('step_height', 1.0),
+                params.get('hole_radius', 1.5),
+                params.get('hole_offset_x', 13.0),
+                params.get('hole_offset_y', 11.0),
+                params.get('pos_x', 0.0),
+                params.get('pos_y', 0.0),
+                params.get('pos_z', 0.0),
+                step_schema,
+                step_unit,
+                1 if enable_logging else 0
+            )
+        else:
+            success = cpp_exporter.export_bottom_shell_filleted_step(
+                temp_file,
+                params['width'],
+                params['depth'],
+                params['outer_height'],
+                params['bottom_thickness'],
+                params['wall_thickness'],
+                params['corner_radius'],
+                params['outer_fillet_radius'],
+                params['inner_fillet_radius'],
+                params.get('step_height', 1.0),
+                params.get('pos_x', 0.0),
+                params.get('pos_y', 0.0),
+                params.get('pos_z', 0.0),
+                step_schema,
+                step_unit,
+                1 if enable_logging else 0
+            )
+        
+        if not success:
+            all_success = False
+            log_to_file(f"[STEP Exporter]   FAILED to export shell {idx+1}")
+        else:
+            log_to_file(f"[STEP Exporter]   Shell {idx+1} exported successfully")
+    
+    # 合并或复制最终文件
+    if all_success and total_shells > 1:
+        try:
+            _merge_step_files(filepath, temp_files)
+            log_to_file(f"[STEP Exporter] Merged {total_shells} shells into {filepath}")
+        except Exception as merge_err:
+            log_to_file(f"[STEP Exporter] Failed to merge STEP files: {merge_err}")
+            import traceback
+            log_to_file(traceback.format_exc())
+            # 合并失败时至少保留第一个文件
+            if os.path.exists(temp_files[0]):
+                try:
+                    import shutil
+                    shutil.copy2(temp_files[0], filepath)
+                except:
+                    pass
+        finally:
+            # 清理临时文件及其日志
+            for tf in temp_files:
+                for ext in ('', '.log'):
+                    try:
+                        if os.path.exists(tf + ext):
+                            os.remove(tf + ext)
+                    except:
+                        pass
+    elif all_success and total_shells == 1:
+        try:
+            os.replace(temp_files[0], filepath)
+        except:
+            import shutil
+            shutil.copy2(temp_files[0], filepath)
+        finally:
+            for ext in ('', '.log'):
+                try:
+                    if os.path.exists(temp_files[0] + ext):
+                        os.remove(temp_files[0] + ext)
+                except:
+                    pass
+    else:
+        log_to_file(f"[STEP Exporter] Some shells failed to export, no output written")
+    
+    if all_success:
+        update_progress(100, "底壳导出完成", context)
+        log_to_file(f"[STEP Exporter] All {total_shells} bottom shell(s) exported successfully")
+    else:
+        update_progress(100, "部分底壳导出失败", context)
+        log_to_file(f"[STEP Exporter] Some bottom shells failed to export")
 
 
 def _export_bottom_shell_timer():
@@ -629,39 +807,240 @@ def _export_bottom_shell_timer():
     if not _bottom_shell_export_data:
         return None
 
-    data = _bottom_shell_export_data
-    context = data['context']
-    params = data['params']
+    try:
+        data = _bottom_shell_export_data
+        context = data['context']
+        shells = data.get('shells', [])
+        
+        if not shells:
+            log_to_file(f"[STEP Exporter] No bottom shells to export")
+            end_progress(context)
+            _bottom_shell_export_data = None
+            return None
 
-    log_to_file(f"[STEP Exporter] Bottom shell timer: calling C++ export...")
-    update_progress(15, "正在参数化导出底壳...", context)
+        log_to_file(f"[STEP Exporter] Bottom shell timer: exporting {len(shells)} shell(s)...")
+        
+        import _step_exporter as cpp_exporter
+        
+        all_success = True
+        total_shells = len(shells)
+        temp_files = []
+        
+        # 导出每个底壳到临时文件
+        for idx, params in enumerate(shells):
+            has_holes = params.get('has_holes', False)
+            shell_desc = f"with_holes" if has_holes else "no_holes"
+            log_to_file(f"[STEP Exporter]   Exporting shell {idx+1}/{total_shells} ({shell_desc})...")
+            
+            temp_file = data['filepath'] + f".temp{idx}.step"
+            temp_files.append(temp_file)
+            
+            if has_holes:
+                success = cpp_exporter.export_bottom_shell_filleted_with_holes_step(
+                    temp_file,
+                    params['width'],
+                    params['depth'],
+                    params['outer_height'],
+                    params['bottom_thickness'],
+                    params['wall_thickness'],
+                    params['corner_radius'],
+                    params['outer_fillet_radius'],
+                    params['inner_fillet_radius'],
+                    params.get('step_height', 1.0),
+                    params.get('hole_radius', 1.5),
+                    params.get('hole_offset_x', 13.0),
+                    params.get('hole_offset_y', 11.0),
+                    params.get('pos_x', 0.0),
+                    params.get('pos_y', 0.0),
+                    params.get('pos_z', 0.0),
+                    data['step_schema'],
+                    data['step_unit'],
+                    1 if data['enable_logging'] else 0
+                )
+            else:
+                success = cpp_exporter.export_bottom_shell_filleted_step(
+                    temp_file,
+                    params['width'],
+                    params['depth'],
+                    params['outer_height'],
+                    params['bottom_thickness'],
+                    params['wall_thickness'],
+                    params['corner_radius'],
+                    params['outer_fillet_radius'],
+                    params['inner_fillet_radius'],
+                    params.get('step_height', 1.0),
+                    params.get('pos_x', 0.0),
+                    params.get('pos_y', 0.0),
+                    params.get('pos_z', 0.0),
+                    data['step_schema'],
+                    data['step_unit'],
+                    1 if data['enable_logging'] else 0
+                )
+            
+            if not success:
+                all_success = False
+                log_to_file(f"[STEP Exporter]   FAILED to export shell {idx+1}")
+            else:
+                log_to_file(f"[STEP Exporter]   Shell {idx+1} exported successfully")
+        
+        # 合并所有临时文件到最终的 STEP 文件
+        if all_success and total_shells > 1:
+            try:
+                _merge_step_files(data['filepath'], temp_files)
+                log_to_file(f"[STEP Exporter] Merged {total_shells} shells into {data['filepath']}")
+            except Exception as merge_err:
+                log_to_file(f"[STEP Exporter] Failed to merge STEP files: {merge_err}")
+                import traceback
+                log_to_file(traceback.format_exc())
+                # 合并失败时至少保留第一个文件
+                if os.path.exists(temp_files[0]):
+                    try:
+                        import shutil
+                        shutil.copy2(temp_files[0], data['filepath'])
+                    except:
+                        pass
+            finally:
+                # 清理临时文件及其日志
+                for tf in temp_files:
+                    for ext in ('', '.log'):
+                        try:
+                            if os.path.exists(tf + ext):
+                                os.remove(tf + ext)
+                        except:
+                            pass
+        elif all_success and total_shells == 1:
+            try:
+                os.replace(temp_files[0], data['filepath'])
+            except:
+                import shutil
+                shutil.copy2(temp_files[0], data['filepath'])
+            finally:
+                for ext in ('', '.log'):
+                    try:
+                        if os.path.exists(temp_files[0] + ext):
+                            os.remove(temp_files[0] + ext)
+                    except:
+                        pass
+        
+        if all_success:
+            update_progress(100, "底壳导出完成", context)
+            log_to_file(f"[STEP Exporter] All {total_shells} bottom shell(s) exported successfully")
+        else:
+            update_progress(100, "部分底壳导出失败", context)
+            log_to_file(f"[STEP Exporter] Some bottom shells failed to export")
 
-    success = step_exporter.export_bottom_shell_filleted_step(
-        data['filepath'],
-        params['width'],
-        params['depth'],
-        params['outer_height'],
-        params['bottom_thickness'],
-        params['wall_thickness'],
-        params['corner_radius'],
-        params['outer_fillet_radius'],
-        params['inner_fillet_radius'],
-        params.get('step_height', 1.0),
-        data['step_schema'],
-        data['step_unit'],
-        1 if data['enable_logging'] else 0
-    )
+        end_progress(context)
+    except Exception as e:
+        log_to_file(f"[STEP Exporter] CRITICAL ERROR in timer: {e}")
+        import traceback
+        log_to_file(traceback.format_exc())
+        try:
+            end_progress(context)
+        except:
+            pass
+    finally:
+        _bottom_shell_export_data = None
+        # 关闭日志文件
+        global _export_log_file
+        if _export_log_file and not _export_log_file.closed:
+            try:
+                _export_log_file.close()
+            except:
+                pass
+        return None
 
-    if success:
-        update_progress(100, "底壳导出完成", context)
-        log_to_file(f"[STEP Exporter] Parametric bottom shell exported successfully")
-    else:
-        update_progress(100, "底壳导出失败", context)
-        log_to_file(f"[STEP Exporter] Parametric bottom shell export failed")
 
-    end_progress(context)
-    _bottom_shell_export_data = None
-    return None
+def _merge_step_files(output_path, temp_files):
+    """将多个 STEP 文件合并为一个，重新编号实体 ID"""
+    import re
+    
+    header = None
+    all_data_sections = []
+    max_entity_id = 0
+    
+    # 实体 ID 匹配: #12345=... 
+    entity_re = re.compile(r'^#(\d+)\s*=(.*)$')
+    entity_ref_re = re.compile(r'#(\d+)')
+    
+    for filepath in temp_files:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        # 分离 HEADER 和 DATA
+        parts = content.split('DATA;')
+        if len(parts) < 2:
+            raise ValueError(f"Invalid STEP file: {filepath}")
+        
+        data_part = parts[1]
+        ends_index = data_part.rfind('ENDSEC;')
+        if ends_index == -1:
+            raise ValueError(f"No ENDSEC found in {filepath}")
+        
+        data_content = data_part[:ends_index].strip()
+        
+        if header is None:
+            header = parts[0] + 'DATA;'
+        
+        all_data_sections.append(data_content)
+    
+    # 收集所有实体，重新编号
+    merged_entities = []
+    for section in all_data_sections:
+        # 分割实体（以分号结尾，后面跟换行或下一个 #）
+        # 更简单的方法：按 #\d+= 分割
+        entities = []
+        current_entity = None
+        current_id = None
+        
+        for line in section.replace('\r', '').split('\n'):
+            m = entity_re.match(line.strip())
+            if m:
+                # 保存上一个实体
+                if current_entity is not None:
+                    entities.append((current_id, current_entity))
+                current_id = int(m.group(1))
+                current_entity = line.strip()
+            else:
+                if current_entity is not None:
+                    current_entity += '\n' + line.strip()
+        
+        # 保存最后一个实体
+        if current_entity is not None:
+            entities.append((current_id, current_entity))
+        
+        # 重新编号这个 section 的实体
+        # 需要先计算偏移量
+        id_shift = max_entity_id
+        
+        for old_id, entity_text in entities:
+            new_id = old_id + id_shift
+            max_entity_id = max(max_entity_id, new_id)
+            
+            # 替换实体自身的 ID: #old_id ␣= -> #new_id ␣=
+            eq_pos = entity_text.find('=')
+            # entity_text 格式: "#_{old_id}_=_REST"
+            # 精确保留 '=' 之后的空格/字符，只替换 ID 部分
+            entity_text = f'#{new_id}' + entity_text[eq_pos:]
+            
+            # 替换引用中的 #N（在 '=' 之后的部分）
+            def replace_ref(match):
+                ref_id = int(match.group(1))
+                return f'#{ref_id + id_shift}'
+            
+            rest = entity_text[eq_pos + 1:]
+            rest = entity_ref_re.sub(replace_ref, rest)
+            entity_text = entity_text[:eq_pos + 1] + rest
+            
+            merged_entities.append((new_id, entity_text))
+    
+    # 写入合并后的文件
+    with open(output_path, 'w', encoding='utf-8') as f:
+        f.write(header + '\n')
+        for _, entity in merged_entities:
+            if not entity.endswith(';'):
+                entity += ';'
+            f.write(entity + '\n')
+        f.write('ENDSEC;\nEND-ISO-10303-21;\n')
 
 
 def _export_worker_timer():
@@ -996,29 +1375,49 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
         step_unit = 'MILLIMETER' if self.unit == 'mm' else 'METER'
         
         # 检测底壳对象，使用参数化导出（直接导出，不走timer）
-        bottom_shell_params = None
+        bottom_shells = []
         for obj in _export_objects:
             if obj.type == 'MESH':
+                print(f"[STEP Exporter] Checking: {obj.name}")
                 shell_params = _analyze_bottom_shell_from_mesh(obj, context, scale)
                 if shell_params:
-                    bottom_shell_params = shell_params
-                    break
+                    bottom_shells.append(shell_params)
+                    hh = shell_params.get('has_holes', False)
+                    print(f"[STEP Exporter]   -> Bottom shell! has_holes={hh}")
+                    log_to_file(f"[STEP Exporter] Found bottom shell: {obj.name} (has_holes={shell_params.get('has_holes', False)})")
+                else:
+                    print(f"[STEP Exporter]   -> NOT a bottom shell")
         
-        if bottom_shell_params:
-            log_to_file(f"[STEP Exporter] Found bottom shell, using parametric export")
+        print(f"[STEP Exporter] Total objects: {len(_export_objects)}, bottom shells: {len(bottom_shells)}")
+        log_to_file(f"[STEP Exporter] Total objects: {len(_export_objects)}, bottom shells: {len(bottom_shells)}")
+        
+        if bottom_shells:
+            log_to_file(f"[STEP Exporter] Found {len(bottom_shells)} bottom shell(s), using parametric export")
             update_progress(10, "检测到底壳，正在参数化导出...", context)
+
+            # 确保日志文件已打开
+            global _export_log_file
+            if _export_log_file is None or _export_log_file.closed:
+                try:
+                    log_path = self.filepath + ".log"
+                    _export_log_file = open(log_path, 'w', encoding='utf-8')
+                    log_to_file(f"[STEP Exporter] Log file opened for bottom shell export")
+                except:
+                    pass
 
             global _bottom_shell_export_data
             _bottom_shell_export_data = {
                 'filepath': self.filepath,
-                'params': bottom_shell_params,
+                'shells': bottom_shells,
                 'step_schema': self.step_schema,
                 'step_unit': step_unit,
                 'enable_logging': self.enable_logging,
                 'context': context,
             }
 
-            bpy.app.timers.register(_export_bottom_shell_timer, first_interval=0.3)
+            timer_handle = bpy.app.timers.register(_export_bottom_shell_timer, first_interval=0.3)
+            log_to_file(f"[STEP Exporter] Timer registered: {timer_handle}")
+            self.report({'INFO'}, f"检测到 {len(bottom_shells)} 个底壳，正在导出...")
             return {'FINISHED'}
         
         _export_params = {

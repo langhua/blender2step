@@ -3567,7 +3567,7 @@ TopoDS_Shape create_solid_from_mesh_with_cylinders(
         
         // 缝合
         double diag = compute_bounding_diagonal(vertices);
-        double sewTol = std::max(diag * 0.002, 0.5);  // 更大的容差
+        double sewTol = std::min(std::max(diag * 0.002, 0.5), 10.0);  // cap at 10 to prevent slow sewing
         fprintf(stdout, "[STEP Exporter] Sewing with tolerance=%f diag=%f\n", sewTol, diag);
         
         BRepBuilderAPI_Sewing sewer(sewTol);

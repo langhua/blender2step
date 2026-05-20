@@ -383,7 +383,7 @@ PyObject* add_object_to_export(PyObject* self, PyObject* args) {
                     }
                 }
 
-                shape = create_solid_from_mesh_with_cylinders(vertices, faces, g_incremental_sew_tolerance, g_incremental_create_solid, false, g_incremental_scale);
+                shape = create_solid_from_mesh(vertices, faces, g_incremental_sew_tolerance, g_incremental_create_solid, g_incremental_scale);
             }
         }
 
@@ -395,9 +395,15 @@ PyObject* add_object_to_export(PyObject* self, PyObject* args) {
             Py_RETURN_FALSE;
         }
 
-        // 修复几何
+        // 修复几何（面数过多的形状推迟到finalize处理，使用UnifySameDomain更高效）
         if (g_incremental_fix_geometry) {
-            shape = fix_shape_enhanced(shape, g_incremental_sew_tolerance);
+            int objFaces = 0;
+            for (TopExp_Explorer exp(shape, TopAbs_FACE); exp.More(); exp.Next()) objFaces++;
+            if (objFaces < 1000) {
+                shape = fix_shape_enhanced(shape, g_incremental_sew_tolerance);
+            } else if (g_incremental_enable_logging) {
+                LOG_INCREMENTAL("[STEP Exporter]   High-poly model (" << objFaces << " faces), deferring fix to finalize.");
+            }
         }
 
         // 创建实体
@@ -516,7 +522,149 @@ PyObject* finalize_incremental_export(PyObject* self, PyObject* args) {
     }
 
     if (g_incremental_fix_geometry && !fused_shape.IsNull()) {
-        fused_shape = fix_shape_enhanced(fused_shape, g_incremental_sew_tolerance);
+        int totalFaces = 0;
+        for (TopExp_Explorer exp(fused_shape, TopAbs_FACE); exp.More(); exp.Next()) totalFaces++;
+        
+        if (totalFaces >= 1000) {
+            if (g_incremental_enable_logging) {
+                LOG_INCREMENTAL("[STEP Exporter]   Finalize: skipping fix_shape_enhanced (" << totalFaces << " faces), using Unify instead");
+            }
+            try {
+                // 从形状中提取所有FACE，构建成SHELL
+                TopTools_ListOfShape allFaces;
+                for (TopExp_Explorer fexp(fused_shape, TopAbs_FACE); fexp.More(); fexp.Next()) {
+                    allFaces.Append(fexp.Current());
+                }
+                
+                if (allFaces.Extent() > 0) {
+                    if (g_incremental_enable_logging) {
+                        LOG_INCREMENTAL("[STEP Exporter]   Building SHELL from " << allFaces.Extent() << " faces...");
+                    }
+                    
+                    TopoDS_Shell resultShell;
+                    BRep_Builder sb;
+                    sb.MakeShell(resultShell);
+                    for (TopTools_ListIteratorOfListOfShape fit(allFaces); fit.More(); fit.Next()) {
+                        sb.Add(resultShell, TopoDS::Face(fit.Value()));
+                    }
+                    
+                    if (g_incremental_enable_logging) {
+                        LOG_INCREMENTAL("[STEP Exporter]   SHELL created (faces still connected via existing topology). Unifying...");
+                    }
+                    
+                    // 对于面数超过5000的模型，使用分块Unify策略
+                    if (totalFaces > 5000) {
+                        if (g_incremental_enable_logging) {
+                            LOG_INCREMENTAL("[STEP Exporter]   High-poly model (" << totalFaces << " faces), using chunked UnifySameDomain...");
+                        }
+                        
+                        // 分块处理：每2000个face一个子SHELL，分别Unify后合并
+                        const int CHUNK_SIZE = 2000;
+                        TopoDS_Shell combinedShell;
+                        BRep_Builder cb;
+                        cb.MakeShell(combinedShell);
+                        int remaining = totalFaces;
+                        int faceIdx = 0;
+                        TopTools_ListOfShape::Iterator fit(allFaces);
+                        
+                        while (remaining > 0) {
+                            int chunkSize = std::min(CHUNK_SIZE, remaining);
+                            TopoDS_Shell chunkShell;
+                            BRep_Builder chunkBuilder;
+                            chunkBuilder.MakeShell(chunkShell);
+                            
+                            for (int i = 0; i < chunkSize && fit.More(); i++, fit.Next()) {
+                                chunkBuilder.Add(chunkShell, TopoDS::Face(fit.Value()));
+                                faceIdx++;
+                            }
+                            
+                            // 统一当前块的面
+                            BRepLib::EncodeRegularity(chunkShell, 0.02);
+                            Handle(ShapeUpgrade_UnifySameDomain) chunkUnify = new ShapeUpgrade_UnifySameDomain;
+                            chunkUnify->Initialize(chunkShell, Standard_True, Standard_True, Standard_True);
+                            chunkUnify->SetLinearTolerance(0.01);
+                            chunkUnify->SetAngularTolerance(0.02);
+                            chunkUnify->Build();
+                            
+                            int chunkFacesBefore = chunkSize;
+                            int chunkFacesAfter = chunkSize;
+                            TopoDS_Shape unifiedChunk = chunkUnify->Shape();
+                            if (!unifiedChunk.IsNull()) {
+                                chunkFacesAfter = 0;
+                                for (TopExp_Explorer uexp(unifiedChunk, TopAbs_FACE); uexp.More(); uexp.Next()) chunkFacesAfter++;
+                                
+                                // 添加到合并SHELL
+                                for (TopExp_Explorer uexp(unifiedChunk, TopAbs_FACE); uexp.More(); uexp.Next()) {
+                                    cb.Add(combinedShell, TopoDS::Face(uexp.Current()));
+                                }
+                            } else {
+                                // 失败则添加原始face
+                                for (TopExp_Explorer uexp(chunkShell, TopAbs_FACE); uexp.More(); uexp.Next()) {
+                                    cb.Add(combinedShell, TopoDS::Face(uexp.Current()));
+                                }
+                            }
+                            
+                            if (g_incremental_enable_logging) {
+                                LOG_INCREMENTAL("[STEP Exporter]   Chunk " << (totalFaces - remaining + 1) << "-" << (totalFaces - remaining + chunkSize) 
+                                    << ": " << chunkFacesBefore << " -> " << chunkFacesAfter << " faces");
+                            }
+                            
+                            remaining -= chunkSize;
+                        }
+                        
+                        int finalAfter = 0;
+                        for (TopExp_Explorer uexp(combinedShell, TopAbs_FACE); uexp.More(); uexp.Next()) finalAfter++;
+                        fused_shape = combinedShell;
+                        if (g_incremental_enable_logging) {
+                            LOG_INCREMENTAL("[STEP Exporter]   Total: " << totalFaces << " -> " << finalAfter << " (reduced " << (totalFaces - finalAfter) << ")");
+                        }
+                    } else {
+                        // 尝试合并共面
+                        BRepLib::EncodeRegularity(resultShell, 0.02);
+                        Handle(ShapeUpgrade_UnifySameDomain) unify = new ShapeUpgrade_UnifySameDomain;
+                        unify->Initialize(resultShell, Standard_True, Standard_True, Standard_True);
+                        unify->SetLinearTolerance(0.01);
+                        unify->SetAngularTolerance(0.02);
+                        unify->Build();
+                        
+                        if (!unify->Shape().IsNull()) {
+                            int after = 0;
+                            for (TopExp_Explorer uexp(unify->Shape(), TopAbs_FACE); uexp.More(); uexp.Next()) after++;
+                            if (after < totalFaces) {
+                                fused_shape = unify->Shape();
+                                if (g_incremental_enable_logging) {
+                                    LOG_INCREMENTAL("[STEP Exporter]   Faces: " << totalFaces << " -> " << after << " (reduced " << (totalFaces - after) << ")");
+                                }
+                            } else {
+                                fused_shape = resultShell;
+                                if (g_incremental_enable_logging) {
+                                    LOG_INCREMENTAL("[STEP Exporter]   Unify didn't reduce faces, keeping SHELL with " << totalFaces << " faces");
+                                }
+                            }
+                        } else {
+                            fused_shape = resultShell;
+                            if (g_incremental_enable_logging) {
+                                LOG_INCREMENTAL("[STEP Exporter]   Unify returned null, keeping SHELL with " << totalFaces << " faces");
+                            }
+                        }
+                    }
+                }
+            } catch (const Standard_Failure& e) {
+                if (g_incremental_enable_logging) {
+                    LOG_INCREMENTAL("[STEP Exporter]   Unification failed: " << e.GetMessageString());
+                }
+            } catch (const std::exception& e) {
+                if (g_incremental_enable_logging) {
+                    LOG_INCREMENTAL("[STEP Exporter]   Unification std exception: " << e.what());
+                }
+            } catch (...) {
+                if (g_incremental_enable_logging) {
+                    LOG_INCREMENTAL("[STEP Exporter]   Unification failed (unknown exception), keeping original shape");
+                }
+            }
+        } else {
+            fused_shape = fix_shape_enhanced(fused_shape, g_incremental_sew_tolerance);
+        }
     }
 
     STEPControl_StepModelType transfer_mode = STEPControl_ManifoldSolidBrep;

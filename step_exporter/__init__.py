@@ -40,17 +40,25 @@ _export_objects_data = []
 _export_current_index = 0
 _cpp_progress = -1.0  # 存储 C++ 回调传递的进度
 _export_log_file = None  # 日志文件句柄
+_log_buffer = []  # 日志缓冲区（文件打开前的消息暂存于此）
 _cpp_log_callback = None  # C++日志回调函数
 _bottom_shell_export_data = None  # 底壳参数化导出数据
 
 def log_to_file(msg):
-    """输出到日志文件"""
+    """输出到日志文件和console（同步输出）"""
+    if not msg.endswith("\n"):
+        msg = msg + "\n"
+    
+    # 始终输出到console
+    print(msg, end='')
+    
+    # 同时写入step日志文件
     if _export_log_file and not _export_log_file.closed:
-        if not msg.endswith("\n"):
-            _export_log_file.write(msg + "\n")
-        else:
-            _export_log_file.write(msg)
+        _export_log_file.write(msg)
         _export_log_file.flush()
+    else:
+        # 文件未打开，暂存到缓冲区
+        _log_buffer.append(msg)
 
 # ====================== C++ 模块加载检查 ======================
 
@@ -70,7 +78,7 @@ try:
     lib_path = os.path.join(script_dir, "lib")
     if os.path.exists(lib_path):
         os.environ["PATH"] = lib_path + ";" + os.environ.get("PATH", "")
-        print(f"[STEP Exporter] Added lib path to system PATH: {lib_path}")
+        log_to_file(f"[STEP Exporter] Added lib path to system PATH: {lib_path}")
     
     # 优先从 lib 子目录导入
     try:
@@ -81,16 +89,16 @@ try:
         
         if hasattr(step_exporter, 'get_version'):
             module_version = step_exporter.get_version()
-            print(f"[STEP Exporter] [OK] C++ extension module loaded successfully (from lib)")
-            print(f"[STEP Exporter] Module version: {module_version}")
+            log_to_file(f"[STEP Exporter] [OK] C++ extension module loaded successfully (from lib)")
+            log_to_file(f"[STEP Exporter] Module version: {module_version}")
             CPP_MODULE_LOADED = True
         else:
             MODULE_LOAD_ERROR = "C++ module from lib missing required functions"
-            print(f"[STEP Exporter] ✗ C++ module from lib missing functions")
+            log_to_file(f"[STEP Exporter] [WARN] C++ module from lib missing functions")
             
     except ImportError as e2:
         MODULE_LOAD_ERROR = f"ImportError from lib: {str(e2)}"
-        print(f"[STEP Exporter] ✗ Failed to import C++ module from lib: {e2}")
+        log_to_file(f"[STEP Exporter] [ERROR] Failed to import C++ module from lib: {e2}")
         
         # 尝试直接导入作为后备
         try:
@@ -99,20 +107,20 @@ try:
             
             if hasattr(step_exporter, 'get_version'):
                 module_version = step_exporter.get_version()
-                print(f"[STEP Exporter] [OK] C++ extension module loaded successfully (direct import)")
-                print(f"[STEP Exporter] Module version: {module_version}")
+                log_to_file(f"[STEP Exporter] [OK] C++ extension module loaded successfully (direct import)")
+                log_to_file(f"[STEP Exporter] Module version: {module_version}")
                 CPP_MODULE_LOADED = True
             else:
                 MODULE_LOAD_ERROR = "C++ module missing required functions"
-                print(f"[STEP Exporter] [ERROR] C++ module loaded but missing functions")
+                log_to_file(f"[STEP Exporter] [ERROR] C++ module loaded but missing functions")
                 
         except ImportError as e:
             MODULE_LOAD_ERROR = f"ImportError: {str(e)}"
-            print(f"[STEP Exporter] [ERROR] Failed to import C++ module directly: {e}")
+            log_to_file(f"[STEP Exporter] [ERROR] Failed to import C++ module directly: {e}")
             
 except Exception as e:
     MODULE_LOAD_ERROR = f"Unexpected error: {str(e)}"
-    print(f"[STEP Exporter] ✗ Unexpected error loading C++ module: {e}")
+    log_to_file(f"[STEP Exporter] [ERROR] Unexpected error loading C++ module: {e}")
 
 # ====================== 导出工作器函数 ======================
 
@@ -476,7 +484,7 @@ def _analyze_bottom_shell_from_mesh(obj, context, scale):
     
     sorted_z_levels = sorted(z_layers.keys())
     
-    if len(sorted_z_levels) < 5:
+    if len(sorted_z_levels) < 2:
         log_to_file(f"[STEP Exporter] Not enough z-levels ({len(sorted_z_levels)}), not a bottom shell")
         bm.free()
         return None
@@ -498,8 +506,20 @@ def _analyze_bottom_shell_from_mesh(obj, context, scale):
         return None
     
     total_levels = len(sorted_z_levels)
-    outer_wall_start_z = None
     
+    # 从底部顶点计算物体中心和尺寸
+    bottom_x_coords = [v.co.x for v in bottom_verts]
+    bottom_y_coords = [v.co.y for v in bottom_verts]
+    obj_center_x = (max(bottom_x_coords) + min(bottom_x_coords)) / 2.0
+    obj_center_y = (max(bottom_y_coords) + min(bottom_y_coords)) / 2.0
+    width = max(bottom_x_coords) - min(bottom_x_coords)
+    depth = max(bottom_y_coords) - min(bottom_y_coords)
+    half_w = width / 2.0
+    half_d = depth / 2.0
+    log_to_file(f"[STEP Exporter] Shell center=({obj_center_x:.1f},{obj_center_y:.1f}), size={width:.1f}x{depth:.1f}")
+    
+    # 找到外层垂直壁开始的位置（外圆角结束处）
+    outer_wall_start_z = None
     for i in range(1, len(sorted_z_levels)):
         gap = sorted_z_levels[i] - sorted_z_levels[i-1]
         levels_after = total_levels - i
@@ -511,151 +531,320 @@ def _analyze_bottom_shell_from_mesh(obj, context, scale):
         outer_wall_start_z = sorted_z_levels[-2] if len(sorted_z_levels) > 1 else sorted_z_levels[-1]
     
     outer_fillet_radius = outer_wall_start_z - bottom_z
+    log_to_file(f"[STEP Exporter] outer_wall_start_z={outer_wall_start_z:.2f}, outer_fillet={outer_fillet_radius:.2f}")
     
+    # ===== 提取外壁顶点坐标用于后续分析（然后释放 bmesh）=====
+    try:
+        outer_wall_verts_coords = [(v.co.x, v.co.y, v.co.z) for v in z_layers.get(outer_wall_start_z, bottom_verts)]
+        log_to_file(f"[STEP Exporter] outer_wall_verts at z={outer_wall_start_z:.2f}: {len(outer_wall_verts_coords)} vertices")
+    except Exception as e:
+        log_to_file(f"[STEP Exporter] ERROR extracting outer wall coords: {e}")
+        return None
+    
+    # ===== 找到具有最大外轮廓的z层用于角点检测 =====
+    # 在底壳模型中，底部因圆角（fillet）而收缩，真正的全尺寸外轮廓在更高的z层
+    # 扫描所有z层，找到顶点到中心距离最大的层（即外轮廓最完整的层）
+    corner_detect_verts_coords = None
+    corner_detect_z = None
+    max_outer_dist_overall = 0.0
+    for z_level in sorted_z_levels:
+        verts_at_z = z_layers.get(z_level, [])
+        if len(verts_at_z) < 20:
+            continue
+        coords = [(v.co.x, v.co.y, v.co.z) for v in verts_at_z]
+        dists = [math.sqrt((x - obj_center_x)**2 + (y - obj_center_y)**2) for x, y, z in coords]
+        if dists:
+            max_d_at_z = max(dists)
+            if max_d_at_z > max_outer_dist_overall:
+                max_outer_dist_overall = max_d_at_z
+                corner_detect_verts_coords = coords
+                corner_detect_z = z_level
+    if corner_detect_verts_coords is None:
+        corner_detect_verts_coords = [(v.co.x, v.co.y, v.co.z) for v in bottom_verts]
+        corner_detect_z = bottom_z
+    log_to_file(f"[STEP Exporter] Corner detect z-level: z={corner_detect_z:.2f}, max_outer_dist={max_outer_dist_overall:.1f}, verts={len(corner_detect_verts_coords)}")
+    
+    # ===== 从最大外轮廓顶点重新计算宽度和深度 =====
+    # half_w/half_d 应从全尺寸外轮廓计算，而非收缩的底部
+    max_contour_x = max(x for x, y, z in corner_detect_verts_coords)
+    min_contour_x = min(x for x, y, z in corner_detect_verts_coords)
+    max_contour_y = max(y for x, y, z in corner_detect_verts_coords)
+    min_contour_y = min(y for x, y, z in corner_detect_verts_coords)
+    full_width = max_contour_x - min_contour_x
+    full_depth = max_contour_y - min_contour_y
+    half_w_corner = full_width / 2.0
+    half_d_corner = full_depth / 2.0
+    log_to_file(f"[STEP Exporter] Contour dimensions from full profile: {full_width:.1f}x{full_depth:.1f} (vs bottom: {width:.1f}x{depth:.1f})")
+    
+    # 用全尺寸更新 width/depth（后续传递给C++）
+    width = full_width
+    depth = full_depth
+    half_w = half_w_corner
+    half_d = half_d_corner
+    
+    # 中间层顶点用于壁厚检测
+    mid_z_target = bottom_z + total_height * 0.5
+    mid_z = min(sorted_z_levels, key=lambda z: abs(z - mid_z_target))
+    mid_verts_coords = [(v.co.x, v.co.y, v.co.z) for v in z_layers.get(mid_z, [])]
+    
+    # ===== Z层分析找内腔底部 =====
+    # 在底部z层和外部壁起始z层之间，找顶点数最多的z层作为内腔底面
     inner_bottom_z = None
-    max_vertex_count = 0
+    bottom_thickness = 2.0
     
-    for z_level in sorted_z_levels[1:]:
-        if z_level > bottom_z + 0.5 and z_level < outer_wall_start_z:
-            vertex_count = len(z_layers[z_level])
-            if vertex_count > max_vertex_count:
-                max_vertex_count = vertex_count
+    search_upper_z = outer_wall_start_z if outer_wall_start_z else max_z
+    
+    max_inner_vert_count = 0
+    for z_level in sorted_z_levels:
+        if z_level > bottom_z + 0.3 and z_level < search_upper_z - 0.3:
+            count = len(z_layers[z_level])
+            if count > max_inner_vert_count and count >= 20:
+                max_inner_vert_count = count
                 inner_bottom_z = z_level
     
-    if inner_bottom_z is None:
-        log_to_file(f"[STEP Exporter] Could not find inner bottom, not a bottom shell")
-        bm.free()
-        return None
+    if inner_bottom_z is not None:
+        bottom_thickness = inner_bottom_z - bottom_z
+        log_to_file(f"[STEP Exporter] Inner bottom via Z-layer: z={inner_bottom_z:.2f}, bottom_thickness={bottom_thickness:.2f}, verts={max_inner_vert_count}")
+    else:
+        # Z层分析失败（布尔运算后的2层网格），使用默认底部厚度
+        log_to_file(f"[STEP Exporter] Inner bottom not found via Z-layer (levels={len(sorted_z_levels)}), using default bottom_thickness={bottom_thickness:.1f}")
+        inner_bottom_z = bottom_z + bottom_thickness
     
-    inner_wall_start_z = None
-    max_gap = 0
+    # 保存底部顶点数，用于后续孔检测
+    bottom_vert_count_before_free = len(bottom_verts)
+    bottom_vert_coords = [(v.co.x, v.co.y, v.co.z) for v in bottom_verts]
     
-    for i in range(1, len(sorted_z_levels)):
-        if sorted_z_levels[i-1] >= inner_bottom_z:
-            gap = sorted_z_levels[i] - sorted_z_levels[i-1]
-            if gap > max_gap:
-                max_gap = gap
-                inner_wall_start_z = sorted_z_levels[i-1]
+    # ===== 圆形检测：如果底部外轮廓是圆形，说明是圆柱/空心圆柱，不是底壳 =====
+    # 底壳底部是圆角矩形（拐角处半径小，边长处半径大），std/mean 较大
+    # 圆柱/空心圆柱底部是正圆，外轮廓所有顶点到中心距离相同，std/mean 很小
+    bottom_all_dists = [math.sqrt((x - obj_center_x)**2 + (y - obj_center_y)**2) 
+                        for x, y, z in bottom_vert_coords]
+    if bottom_all_dists:
+        max_bd = max(bottom_all_dists)
+        # 仅保留外圈顶点（最外层 15%），排除内孔顶点
+        outer_bottom_dists = [d for d in bottom_all_dists if d > max_bd * 0.85]
+        if len(outer_bottom_dists) >= 8:
+            mean_obd = sum(outer_bottom_dists) / len(outer_bottom_dists)
+            std_obd = math.sqrt(sum((d - mean_obd)**2 for d in outer_bottom_dists) / len(outer_bottom_dists))
+            circularity = std_obd / mean_obd if mean_obd > 0 else 1.0
+            log_to_file(f"[STEP Exporter] Bottom circularity check: circ={circularity:.4f} (n_outer={len(outer_bottom_dists)})")
+            if circularity < 0.02:
+                log_to_file(f"[STEP Exporter] Bottom outer contour is circular, not a bottom shell -> skipping to cylinder detection")
+                bm.free()
+                return None
     
-    if inner_wall_start_z is None:
-        inner_wall_start_z = outer_wall_start_z
+    # 释放 BMesh（所有 z_layers 中的 BMVert 引用现在无效）
+    bm.free()
     
-    inner_fillet_radius = inner_wall_start_z - inner_bottom_z
+    # outer_height = 使用实际网格Z向高度 (top_z, bottom_z 已在前面定义)
+    outer_height = max(top_z - bottom_z, 8.0)
     
-    outer_wall_verts = z_layers.get(outer_wall_start_z, bottom_verts)
-    outer_x_coords = [v.co.x for v in outer_wall_verts]
-    outer_y_coords = [v.co.y for v in outer_wall_verts]
+    if outer_fillet_radius > outer_height * 0.5:
+        outer_fillet_radius = 0.0
     
-    width = max(outer_x_coords) - min(outer_x_coords)
-    depth = max(outer_y_coords) - min(outer_y_coords)
-    outer_height = total_height
-    bottom_thickness = inner_bottom_z - bottom_z
+    inner_fillet_radius = 0.0
     
-    inner_bottom_verts = z_layers[inner_bottom_z]
-    center_nearby = [v for v in inner_bottom_verts if abs(v.co.x) < width * 0.1 and abs(v.co.y) < depth * 0.1]
-    if len(center_nearby) < 1:
-        log_to_file(f"[STEP Exporter] Inner bottom has no center vertices (ring, not face), not a bottom shell")
-        bm.free()
-        return None
-    
-    if inner_bottom_z > min_z + total_height * 0.4:
-        log_to_file(f"[STEP Exporter] Inner bottom too high (z={inner_bottom_z:.1f}, {inner_bottom_z - min_z:.1f}/{total_height:.1f}), not a bottom shell")
-        bm.free()
-        return None
-    
-    half_w = width / 2
-    half_d = depth / 2
-    
+    # ===== 角圆角检测（用最大外轮廓层的坐标）=====
     corner_radius = 0.0
-    corner_verts = [v for v in outer_wall_verts if abs(v.co.x) > half_w * 0.6 and abs(v.co.y) > half_d * 0.6]
+    
+    # 过滤到仅最外层轮廓顶点（排除内轮廓和填充顶点）
+    outer_dists = [math.sqrt((x - obj_center_x)**2 + (y - obj_center_y)**2) 
+                   for x, y, z in corner_detect_verts_coords]
+    if outer_dists:
+        max_d = max(outer_dists)
+        # 仅保留距离中心最远的顶点（外轮廓），排除内侧墙壁顶点
+        outer_contour_only = [(x, y) for (x, y, z), d in zip(corner_detect_verts_coords, outer_dists) 
+                             if d > max_d * 0.85]
+        log_to_file(f"[STEP Exporter] Outer contour filter: {len(outer_contour_only)}/{len(corner_detect_verts_coords)} vertices (max_d={max_d:.1f})")
+    else:
+        outer_contour_only = [(x, y) for x, y, z in corner_detect_verts_coords]
+    
+    corner_verts = [(x, y) for x, y in outer_contour_only 
+                    if abs(x - obj_center_x) > half_w * 0.6 
+                    and abs(y - obj_center_y) > half_d * 0.6]
+    log_to_file(f"[STEP Exporter] corner_verts filter: hw={half_w:.1f} hd={half_d:.1f} found={len(corner_verts)} from {len(outer_contour_only)}")
     if corner_verts:
-        for v in corner_verts:
-            dx = half_w - abs(v.co.x)
-            dy = half_d - abs(v.co.y)
+        radii = []
+        for cx, cy in corner_verts:
+            dx = half_w - abs(cx - obj_center_x)
+            dy = half_d - abs(cy - obj_center_y)
             if dx > 0 and dy > 0:
-                dist = math.sqrt(dx*dx + dy*dy)
-                if dist > corner_radius:
-                    corner_radius = dist
-        corner_radius = corner_radius * 1.05
+                # 圆角半径精确公式：对于圆角矩形角弧上的点，
+                # R = dx + dy + sqrt(2*dx*dy)
+                r = dx + dy + math.sqrt(2 * dx * dy)
+                radii.append(r)
+        if radii:
+            radii.sort()
+            log_to_file(f"[STEP Exporter] Raw corner radii: min={radii[0]:.2f} max={radii[-1]:.2f} median={radii[len(radii)//2]:.2f}")
+            # 使用中位数代替75%分位数，外轮廓顶点产生的值应一致
+            corner_radius = radii[len(radii) // 2]
+            log_to_file(f"[STEP Exporter] Corner radius computed from {len(radii)} verts (median): {corner_radius:.2f}")
     if corner_radius < 1.0:
         corner_radius = min(width, depth) * 0.2
+        log_to_file(f"[STEP Exporter] Corner radius fallback: {corner_radius:.2f}")
     
-    outer_dists = [math.sqrt(v.co.x**2 + v.co.y**2) for v in outer_wall_verts]
+    # ===== 圆形截面检查 =====
+    outer_dists = [math.sqrt((x - obj_center_x)**2 + (y - obj_center_y)**2) for x, y, z in corner_detect_verts_coords]
     if outer_dists:
-        min_dist = min(outer_dists)
-        max_dist = max(outer_dists)
-        if max_dist > 0 and min_dist / max_dist > 0.85:
-            log_to_file(f"[STEP Exporter] Cross-section too circular (ratio={min_dist/max_dist:.2f}), not a bottom shell")
-            bm.free()
+        min_d, max_d = min(outer_dists), max(outer_dists)
+        if max_d > 0 and min_d / max_d > 0.85:
+            log_to_file(f"[STEP Exporter] Cross-section too circular, not a bottom shell")
             return None
     
+    # ===== 壁厚检测 =====
     wall_thickness = 2.0
-    
-    mid_z_target = min_z + total_height * 0.5
-    mid_z = min(sorted_z_levels, key=lambda z: abs(z - mid_z_target))
-    mid_verts = z_layers.get(mid_z, [])
-    if mid_verts:
-        flat_x_outer = max(abs(v.co.x) for v in mid_verts if abs(v.co.y) < depth * 0.15)
-        flat_x_inner = max(abs(v.co.x) for v in mid_verts if abs(v.co.y) < depth * 0.15 and abs(v.co.x) < half_w * 0.98)
-        flat_y_outer = max(abs(v.co.y) for v in mid_verts if abs(v.co.x) < width * 0.15)
-        flat_y_inner = max(abs(v.co.y) for v in mid_verts if abs(v.co.x) < width * 0.15 and abs(v.co.y) < half_d * 0.98)
+    if mid_verts_coords:
+        flat_x_outer_vals = [abs(x - obj_center_x) for x, y, z in mid_verts_coords 
+                            if abs(y - obj_center_y) < depth * 0.15]
+        flat_x_inner_vals = [abs(x - obj_center_x) for x, y, z in mid_verts_coords 
+                            if abs(y - obj_center_y) < depth * 0.15 
+                            and abs(x - obj_center_x) < half_w * 0.98]
+        flat_y_outer_vals = [abs(y - obj_center_y) for x, y, z in mid_verts_coords 
+                            if abs(x - obj_center_x) < width * 0.15]
+        flat_y_inner_vals = [abs(y - obj_center_y) for x, y, z in mid_verts_coords 
+                            if abs(x - obj_center_x) < width * 0.15 
+                            and abs(y - obj_center_y) < half_d * 0.98]
         
-        if flat_x_inner > 0 and flat_y_inner > 0:
-            wall_thickness_x = flat_x_outer - flat_x_inner
-            wall_thickness_y = flat_y_outer - flat_y_inner
-            wall_thickness = (wall_thickness_x + wall_thickness_y) / 2
+        fxo = max(flat_x_outer_vals) if flat_x_outer_vals else 0
+        fxi = max(flat_x_inner_vals) if flat_x_inner_vals else 0
+        fyo = max(flat_y_outer_vals) if flat_y_outer_vals else 0
+        fyi = max(flat_y_inner_vals) if flat_y_inner_vals else 0
+        
+        if fxi > 0 and fyi > 0:
+            wall_thickness = ((fxo - fxi) + (fyo - fyi)) / 2
     
     if wall_thickness < 0.5:
         wall_thickness = 2.0
     
     log_to_file(f"[STEP Exporter] Detected bottom shell: {width:.1f}x{depth:.1f} h={outer_height:.1f} bt={bottom_thickness:.1f} wt={wall_thickness:.1f} cr={corner_radius:.1f} ofr={outer_fillet_radius:.1f} ifr={inner_fillet_radius:.1f}")
     
-    # 检测螺丝孔：用射线在角落位置进行检测
-    # 孔在底壳的四个角落，距离边缘约 13mm(x) 和 11mm(y)
+    # ===== 检测螺丝孔：用底层顶点数判断 =====
+    # 带孔的底壳在底部z层有大量额外顶点（孔边界三角化产生），无孔底壳底部顶点较少
     has_holes = False
     hole_radius_detected = 1.5
-    hole_offset_x = 13.0
-    hole_offset_y = 11.0
+    hole_offset_x = 25.0
+    hole_offset_y = 20.0
     
-    # 先释放 BMesh，用 Blender ray_cast
-    bm.free()
+    bottom_vert_count = bottom_vert_count_before_free
     
-    # 孔应该在距离角落一定距离的位置
-    corner_test_x = half_w * 0.74  # 约 37 for 100-wide box
-    corner_test_y = half_d * 0.69  # 约 24 for 70-deep box
-    
-    depsgraph = context.evaluated_depsgraph_get()
-    obj_eval = obj.evaluated_get(depsgraph)
-    ray_dir = Vector((0, 0, 1))
-    
-    corner_positions = [
-        (corner_test_x, corner_test_y),
-        (-corner_test_x, corner_test_y),
-        (-corner_test_x, -corner_test_y),
-        (corner_test_x, -corner_test_y),
-    ]
-    
-    ray_holes = 0
-    for cx, cy in corner_positions:
-        ray_start = Vector((cx, cy, bottom_z - 1.0))
-        hit, location, normal, face_idx = obj_eval.ray_cast(ray_start, ray_dir, distance=total_height + 2.0)
-        if hit:
-            # 检查命中点的 z - 如果命中在底面下方就是真正的底面
-            if location.z > bottom_z + bottom_thickness * 0.7:
-                ray_holes += 1
-        else:
-            ray_holes += 1
-    
-    log_to_file(f"[STEP Exporter] Hole detection: ray_holes={ray_holes}/4")
-    
-    # 判断：如果4个角落有2个以上位置检测到孔，说明有孔
-    if ray_holes >= 2:
+    # 无孔底壳约257顶点，带孔约636顶点。用阈值300区分
+    if bottom_vert_count > 400:
         has_holes = True
-        hole_offset_x = half_w - corner_test_x
-        hole_offset_y = half_d - corner_test_y
-        log_to_file(f"[STEP Exporter] Has holes detected (ray_holes={ray_holes}/4)")
+        log_to_file(f"[STEP Exporter] Has holes detected (bottom_verts={bottom_vert_count})")
+        
+        # 自动检测孔位置：分析底部顶点在四个象限的聚簇分布
+        ocx, ocy = obj_center_x, obj_center_y
+        q_pp, q_pn, q_np, q_nn = [], [], [], []
+        for bx, by, bz in bottom_vert_coords:
+            dx = bx - ocx
+            dy = by - ocy
+            if dx > 0 and dy > 0:
+                q_pp.append((dx, dy))
+            elif dx > 0 and dy < 0:
+                q_pn.append((dx, dy))
+            elif dx < 0 and dy > 0:
+                q_np.append((dx, dy))
+            elif dx < 0 and dy < 0:
+                q_nn.append((dx, dy))
+        
+        hole_cx_vals = []
+        hole_cy_vals = []
+        hole_radius_vals = []
+        
+        for q in [q_pp, q_pn, q_np, q_nn]:
+            if len(q) < 10:
+                continue
+            # 按距离中心排序
+            q_radii = sorted([(math.sqrt(x*x + y*y), x, y) for x, y in q])
+            
+            # ===== 方法1: 间隙检测（内外簇之间的最大间隙）=====
+            best_gap = 0
+            best_idx = len(q_radii) // 2
+            search_start = max(1, len(q_radii) // 4)
+            search_end = min(len(q_radii) - 1, 3 * len(q_radii) // 4)
+            for i in range(search_start, search_end):
+                gap = q_radii[i][0] - q_radii[i-1][0]
+                if gap > best_gap:
+                    best_gap = gap
+                    best_idx = i
+            
+            gap_detected = best_gap > 2.0
+            
+            if gap_detected:
+                # 间隙检测成功：内簇为孔边界顶点
+                inner = [(x, y) for r, x, y in q_radii[:best_idx]]
+                if inner:
+                    hole_cx_vals.append(abs(sum(x for x, y in inner) / len(inner)))
+                    hole_cy_vals.append(abs(sum(y for x, y in inner) / len(inner)))
+                    cx_q = sum(x for x, y in inner) / len(inner)
+                    cy_q = sum(y for x, y in inner) / len(inner)
+                    r_q = sum(math.sqrt((x - cx_q)**2 + (y - cy_q)**2) for x, y in inner) / len(inner)
+                    hole_radius_vals.append(r_q)
+            else:
+                # ===== 方法2: 滑动窗口密度聚类（间隙检测失败时）=====
+                # 滑动窗口找空间最紧凑的簇（最小位置方差），而非最短半径
+                # 孔边界顶点形成一个紧密的圆形簇，内部三角化点分散但半径更小
+                window_size = max(4, min(len(q_radii) // 6, 12))
+                best_cluster = None
+                best_variance = float('inf')
+                for i in range(len(q_radii) - window_size + 1):
+                    window_pts = [(x, y) for r, x, y in q_radii[i:i+window_size]]
+                    cx_w = sum(x for x, y in window_pts) / window_size
+                    cy_w = sum(y for x, y in window_pts) / window_size
+                    variance = sum((x - cx_w)**2 + (y - cy_w)**2 for x, y in window_pts) / window_size
+                    if variance < best_variance:
+                        best_variance = variance
+                        best_cluster = window_pts
+                
+                if best_cluster and best_variance < 25.0:
+                    hole_cx_vals.append(abs(sum(x for x, y in best_cluster) / len(best_cluster)))
+                    hole_cy_vals.append(abs(sum(y for x, y in best_cluster) / len(best_cluster)))
+                    log_to_file(f"[STEP Exporter] Quadrant gap detection failed (best_gap={best_gap:.2f}), density cluster found (variance={best_variance:.2f})")
+                else:
+                    log_to_file(f"[STEP Exporter] Quadrant gap/cluster detection both failed (best_gap={best_gap:.2f}, best_variance={best_variance:.2f})")
+        
+        if hole_cx_vals and hole_cy_vals:
+            hole_cx = sum(hole_cx_vals) / len(hole_cx_vals)
+            hole_cy = sum(hole_cy_vals) / len(hole_cy_vals)
+            hole_offset_x = half_w - hole_cx
+            hole_offset_y = half_d - hole_cy
+            if hole_radius_vals:
+                hole_radius_detected = sum(hole_radius_vals) / len(hole_radius_vals)
+            log_to_file(f"[STEP Exporter] Auto-detected hole positions: cx={hole_cx:.1f}, cy={hole_cy:.1f}, r={hole_radius_detected:.2f}, offset=({hole_offset_x:.1f},{hole_offset_y:.1f})")
+            
+            # ===== 检测结果质量验证：簇半径过大说明检测到了错误的内簇 =====
+            # 孔半径通常 ≤ 4.0mm，如果检测到的簇半径 > 6.0，则间隙检测可能包含了桥接顶点
+            if hole_radius_detected > 6.0:
+                log_to_file(f"[STEP Exporter] WARNING: Detected cluster radius ({hole_radius_detected:.2f}) too large, detection likely wrong. Discarding.")
+                hole_cx_vals = []
+                hole_cy_vals = []
+        
+        # ===== 合理性检查：检测到的孔偏移必须在合理范围内 =====
+        # hole_offset_x 应满足: 5.0 <= offset <= half_w - 5.0 (孔不能太靠边或太靠中心)
+        # hole_offset_y 应满足: 5.0 <= offset <= half_d - 5.0
+        fallback_offset_x = max(5.0, min(half_w * 0.5, half_w - 5.0))
+        fallback_offset_y = max(5.0, min(half_d * 0.5, half_d - 5.0))
+        log_to_file(f"[STEP Exporter] Fallback hole offsets: ({fallback_offset_x:.1f}, {fallback_offset_y:.1f}) based on half_w={half_w:.1f}, half_d={half_d:.1f}")
+        
+        if not hole_cx_vals or not hole_cy_vals:
+            # 检测完全失败，使用尺寸比例回退值
+            hole_offset_x = fallback_offset_x
+            hole_offset_y = fallback_offset_y
+            log_to_file(f"[STEP Exporter] Hole detection failed, using fallback offsets: ({hole_offset_x:.1f}, {hole_offset_y:.1f})")
+        else:
+            # 独立检查每个偏移量（不用 elif 链，确保两个都修正）
+            x_fixed = False
+            y_fixed = False
+            if hole_offset_x < 5.0 or hole_offset_x > half_w - 5.0:
+                hole_offset_x = fallback_offset_x
+                x_fixed = True
+            if hole_offset_y < 5.0 or hole_offset_y > half_d - 5.0:
+                hole_offset_y = fallback_offset_y
+                y_fixed = True
+            if x_fixed or y_fixed:
+                log_to_file(f"[STEP Exporter] Hole offset out of range corrected: x={x_fixed} y={y_fixed}, final=({hole_offset_x:.1f},{hole_offset_y:.1f})")
     else:
-        log_to_file(f"[STEP Exporter] No holes detected")
+        log_to_file(f"[STEP Exporter] No holes detected (bottom_verts={bottom_vert_count})")
     
     params = {
         'width': width,
@@ -677,8 +866,615 @@ def _analyze_bottom_shell_from_mesh(obj, context, scale):
         params['hole_radius'] = hole_radius_detected
         params['hole_offset_x'] = hole_offset_x
         params['hole_offset_y'] = hole_offset_y
+        log_to_file(f"[STEP Exporter] Final hole params: radius={hole_radius_detected:.2f}, offset=({hole_offset_x:.1f},{hole_offset_y:.1f}), half_w={half_w:.1f}, half_d={half_d:.1f}")
     
     return params
+
+
+def _analyze_cylinder_from_mesh(obj, context, scale):
+    """
+    从 mesh 分析识别是否为圆柱/圆锥/空心圆柱类型，并测量所有参数
+    
+    返回:
+        dict: 包含圆柱参数的字典，如果不是圆柱则返回 None
+        {
+            'type': 'cylinder' | 'cone' | 'hollow_cylinder' | 'hollow_cone',
+            'radius': float,          # 圆柱体半径
+            'height': float,          # 高度
+            'bottom_radius': float,   # 圆锥底部半径
+            'top_radius': float,      # 圆锥顶部半径
+            'outer_radius': float,    # 空心圆柱外半径
+            'inner_radius': float,    # 空心圆柱内半径
+            'pos_x': float,
+            'pos_y': float,
+            'pos_z': float,
+        }
+    """
+    if obj.type != 'MESH':
+        return None
+    
+    import bmesh
+    import math
+    from collections import defaultdict
+    
+    log_to_file(f"[STEP Exporter] Analyzing mesh for cylinder: {obj.name}")
+    
+    depsgraph = context.evaluated_depsgraph_get()
+    eval_obj = obj.evaluated_get(depsgraph)
+    mesh_data = eval_obj.data
+    
+    bm = bmesh.new()
+    bm.from_mesh(mesh_data)
+    bm.verts.ensure_lookup_table()
+    
+    vertices = bm.verts
+    if len(vertices) < 20:
+        log_to_file(f"[STEP Exporter] Too few vertices ({len(vertices)}), not a cylinder")
+        bm.free()
+        return None
+    
+    # 收集所有顶点的原始坐标
+    all_verts = [(v.co.x, v.co.y, v.co.z) for v in vertices]
+    
+    # 按 Z 坐标分组
+    z_layers = defaultdict(list)
+    for x, y, z in all_verts:
+        z_key = round(z / 0.05) * 0.05
+        z_layers[z_key].append((x, y))
+    
+    sorted_z = sorted(z_layers.keys())
+    if len(sorted_z) < 2:
+        log_to_file(f"[STEP Exporter] Not enough z-levels ({len(sorted_z)}), not a cylinder")
+        bm.free()
+        return None
+    
+    # 过滤掉包含顶点数过少的层（如中心点）
+    filtered_sorted_z = [zl for zl in sorted_z if len(z_layers[zl]) >= 4]
+    if len(filtered_sorted_z) < 2:
+        log_to_file(f"[STEP Exporter] Not enough rich z-levels ({len(filtered_sorted_z)}), not a cylinder")
+        bm.free()
+        return None
+    
+    sorted_z = filtered_sorted_z
+    
+    min_z = sorted_z[0]
+    max_z = sorted_z[-1]
+    height = max_z - min_z
+    
+    # 计算中心轴 - 使用底层（最干净的切面）来计算中心
+    # 这样即使顶部有倒角/圆角也不影响中心计算
+    bottom_z = sorted_z[0]
+    top_z = sorted_z[-1]
+    
+    bottom_pts = z_layers[bottom_z]
+    center_x = sum(p[0] for p in bottom_pts) / len(bottom_pts)
+    center_y = sum(p[1] for p in bottom_pts) / len(bottom_pts)
+    
+    # 分析每层的半径分布
+    
+    def compute_radii(layer_pts):
+        """计算层内各点到中心的距离"""
+        return [math.sqrt((p[0] - center_x)**2 + (p[1] - center_y)**2) for p in layer_pts]
+    
+    bottom_radii = compute_radii(z_layers[bottom_z])
+    top_radii = compute_radii(z_layers[top_z])
+    
+    if len(bottom_radii) < 4 or len(top_radii) < 4:
+        log_to_file(f"[STEP Exporter] Too few points at bottom/top")
+        bm.free()
+        return None
+    
+    # 使用中位数作为半径估计（比均值更抗噪）
+    bottom_radii_sorted = sorted(bottom_radii)
+    top_radii_sorted = sorted(top_radii)
+    
+    mid_idx_b = len(bottom_radii_sorted) // 2
+    mid_idx_t = len(top_radii_sorted) // 2
+    
+    bottom_radius = bottom_radii_sorted[mid_idx_b]
+    top_radius = top_radii_sorted[mid_idx_t]
+    
+    # 提前检测是否为空心结构（两圈顶点：外圈+内圈）
+    # 如果半径分布有两簇，说明是空心圆柱
+    def has_two_clusters(radii_sorted):
+        n = len(radii_sorted)
+        if n < 16:
+            return False, radii_sorted
+        # 检查最大值和最小值之间是否有明显 gap
+        min_r = radii_sorted[0]
+        max_r = radii_sorted[-1]
+        if max_r - min_r < max_r * 0.15:
+            return False, radii_sorted
+        # 找最佳分割点：在半径排序序列中找最大 gap
+        best_gap = 0
+        best_split = n // 2
+        for i in range(n // 4, 3 * n // 4):
+            gap = radii_sorted[i] - radii_sorted[i - 1]
+            if gap > best_gap:
+                best_gap = gap
+                best_split = i
+        if best_gap > max_r * 0.08:
+            return True, radii_sorted[best_split:]  # 返回外圈（较大的值）
+        return False, radii_sorted
+    
+    bottom_is_hollow, bottom_outer_radii = has_two_clusters(bottom_radii_sorted)
+    top_is_hollow, top_outer_radii = has_two_clusters(top_radii_sorted)
+    might_be_hollow = bottom_is_hollow or top_is_hollow
+    
+    # 如果是空心结构，用外圈半径重新计算
+    if might_be_hollow:
+        bo_sorted = sorted(bottom_outer_radii)
+        to_sorted = sorted(top_outer_radii)
+        bottom_radius = bo_sorted[len(bo_sorted) // 2]
+        top_radius = to_sorted[len(to_sorted) // 2]
+    
+    # 修复：当底部有清晰两簇但顶部因地貌/倒角失去了簇结构时，
+    # 从顶部向下扫描，找到最靠近bevel的两簇层来修正top_radius
+    # （向下扫描找到的第一个两簇层最接近bevel底部，半径最准）
+    if bottom_is_hollow and not top_is_hollow:
+        for scan_idx in range(len(sorted_z) - 2, len(sorted_z) // 3, -1):
+            scan_zl = sorted_z[scan_idx]
+            scan_radii = sorted(compute_radii(z_layers[scan_zl]))
+            scan_is_cluster, scan_outer = has_two_clusters(scan_radii)
+            if scan_is_cluster:
+                so_sorted = sorted(scan_outer)
+                top_radius = so_sorted[len(so_sorted) // 2]
+                top_outer_radii = scan_outer  # 同时更新用于后续STD检查
+                top_is_hollow = True  # 标记为已找到簇，避免STD检查用错数据
+                log_to_file(f"[STEP Exporter] Corrected top_radius via cluster scan at z={scan_zl:.2f}: {top_radius:.3f}")
+                break
+    
+    # 半径标准差判断是否为规则圆形
+    def radius_std(radii):
+        mean_r = sum(radii) / len(radii)
+        variance = sum((r - mean_r)**2 for r in radii) / len(radii)
+        return math.sqrt(variance)
+    
+    # 用外圈半径计算标准差（如果空心）
+    std_b = radius_std(bottom_outer_radii if might_be_hollow else bottom_radii)
+    std_t = radius_std(top_outer_radii if might_be_hollow else top_radii)
+    
+    # 标准差不大于平均半径的 15% 才认为是规则圆柱
+    if std_b > bottom_radius * 0.15 or std_t > top_radius * 0.15:
+        log_to_file(f"[STEP Exporter] Radius variance too high: std_b={std_b:.3f} std_t={std_t:.3f}")
+        bm.free()
+        return None
+    
+    # 半径不能太小
+    if bottom_radius < 0.1 or top_radius < 0.1:
+        log_to_file(f"[STEP Exporter] Radius too small: b={bottom_radius:.3f} t={top_radius:.3f}")
+        bm.free()
+        return None
+    
+    # 高度不能太小
+    if height < 0.5:
+        log_to_file(f"[STEP Exporter] Height too small: {height:.3f}")
+        bm.free()
+        return None
+    
+    log_to_file(f"[STEP Exporter] Detected: center=({center_x:.3f},{center_y:.3f}), "
+                f"bottom_r={bottom_radius:.3f} top_r={top_radius:.3f}, height={height:.3f}")
+    
+    # 判断圆柱类型
+    radius_ratio = top_radius / bottom_radius if bottom_radius > 0 else 1.0
+    
+    # 检查是否为空心（在内壁也有顶点层）
+    is_hollow = False
+    inner_radius = 0.0
+    inner_top_radius = 0.0
+    
+    # 预先计算中段层的范围（两个分支都要用）
+    hmid_start = max(0, len(sorted_z) // 4)
+    hmid_end = min(len(sorted_z), 3 * len(sorted_z) // 4)
+    if hmid_end - hmid_start < 2:
+        hmid_start = 0
+        hmid_end = len(sorted_z)
+    
+    # 如果底部或顶部已检测到两簇结构，直接确认空心
+    if might_be_hollow or bottom_is_hollow or top_is_hollow:
+        # 从底层和顶层分别提取内外半径
+        def layer_inner_outer_radii(zl):
+            pts = z_layers[zl]
+            radii = sorted(compute_radii(pts))
+            is_cluster, outer = has_two_clusters(radii)
+            if is_cluster:
+                n = len(radii)
+                inner = radii[:n - len(outer)]
+                inner_r = sorted(inner)[len(inner)//2] if inner else 0
+                outer_r = sorted(outer)[len(outer)//2] if outer else 0
+                return inner_r, outer_r
+            else:
+                return 0.0, sorted(radii)[len(radii)//2]
+        
+        # 底部内外半径
+        inner_b, outer_b = layer_inner_outer_radii(sorted_z[0])
+        # 顶部内外半径
+        inner_t, outer_t = layer_inner_outer_radii(sorted_z[-1])
+        
+        if inner_b > 0.01 and inner_t > 0.01:
+            inner_radius = inner_b
+            inner_top_radius = inner_t
+            outer_radius = max(outer_b, outer_t)
+            is_hollow = True
+            log_to_file(f"[STEP Exporter] Hollow detected: inner_r(bottom)={inner_b:.3f} inner_r(top)={inner_t:.3f} outer_r={outer_radius:.3f}")
+        elif inner_b > 0.01 and bottom_is_hollow:
+            # 底部有清晰两簇，但顶部没有（因倒角/圆角破坏了顶部簇结构）
+            # 从顶部向下扫描，找到最靠近bevel的两簇层
+            for scan_idx in range(len(sorted_z) - 2, len(sorted_z) // 3, -1):
+                scan_zl = sorted_z[scan_idx]
+                scan_radii = sorted(compute_radii(z_layers[scan_zl]))
+                scan_is_cluster, scan_outer = has_two_clusters(scan_radii)
+                if scan_is_cluster:
+                    n_sc = len(scan_radii)
+                    scan_inner = scan_radii[:n_sc - len(scan_outer)]
+                    inner_t = sorted(scan_inner)[len(scan_inner)//2] if scan_inner else 0.0
+                    outer_t = sorted(scan_outer)[len(scan_outer)//2] if scan_outer else 0.0
+                    if inner_t > 0.01:
+                        inner_radius = inner_b
+                        inner_top_radius = inner_t
+                        outer_radius = max(outer_b, outer_t)
+                        is_hollow = True
+                        log_to_file(f"[STEP Exporter] Hollow detected (scan near wall): inner_r(bottom)={inner_b:.3f} inner_r(top)={inner_t:.3f} outer_r={outer_radius:.3f} at z={scan_zl:.2f}")
+                        break
+    else:
+        # 外层检测未发现两簇，再检查中间层
+        hollow_evidence = 0
+        
+        for i in range(hmid_start, hmid_end):
+            zl = sorted_z[i]
+            pts = z_layers[zl]
+            if len(pts) < 8:
+                continue
+            all_radii = sorted(compute_radii(pts))
+            min_r = all_radii[0]
+            max_r = all_radii[-1]
+            if max_r - min_r > max_r * 0.2 and max_r > 3.0:
+                hollow_evidence += 1
+        
+        if hollow_evidence >= 2:
+            all_mid_radii = []
+            for i in range(hmid_start, hmid_end):
+                all_mid_radii.extend(compute_radii(z_layers[sorted_z[i]]))
+            all_mid_radii_sorted = sorted(all_mid_radii)
+            
+            gap_idx = len(all_mid_radii_sorted) // 2
+            inner_vals = all_mid_radii_sorted[:gap_idx]
+            outer_vals = all_mid_radii_sorted[gap_idx:]
+            
+            inner_radius = sorted(inner_vals)[len(inner_vals)//2]
+            outer_radius = sorted(outer_vals)[len(outer_vals)//2]
+            inner_top_radius = inner_radius * radius_ratio if (radius_ratio < 0.99 or radius_ratio > 1.01) else inner_radius
+            is_hollow = True
+            log_to_file(f"[STEP Exporter] Hollow detected (mid-layer): inner_r={inner_radius:.3f} outer_r={outer_radius:.3f}")
+    
+    # ==== Chamfer/Fillet 过渡检测 ====
+    # 策略：
+    #   Blender标准圆柱体仅有顶部/底部顶点，中间无分层。
+    #   关键判断: 该物体是圆柱本体(大面积恒定半径)还是圆锥本体？
+    #     - 圆柱本体: >60%的高度内半径恒定 → 查找顶部/底部过渡
+    #     - 圆锥本体: 半径线性变化 → 不检测过渡(锥形就是其本体形状)
+    #   过渡区至少2层才分析(chamfer: 过渡起点+终点, fillet: 多种半径层)
+    top_feature = None
+    top_feature_size = 0.0
+    bottom_feature = None
+    bottom_feature_size = 0.0
+    body_radius = bottom_radius
+    
+    def _layer_outer_radius(pts):
+        radii = sorted(compute_radii(pts))
+        n = len(radii)
+        if n < 4:
+            return None
+        if n >= 16:
+            is_cluster, outer_vals = has_two_clusters(radii)
+            if is_cluster:
+                return sorted(outer_vals)[len(outer_vals)//2]
+        return sum(radii[n - n//4:]) / max(1, n//4)
+    
+    # 逐层计算半径
+    z_radius_data = {}
+    for zl in sorted_z:
+        r = _layer_outer_radius(z_layers[zl])
+        if r is not None:
+            z_radius_data[zl] = r
+    
+    # 1. 从底部向上找恒定半径区域 → 判断是否为圆柱本体
+    body_end_z = sorted_z[0]
+    for zl in sorted_z:
+        r = z_radius_data.get(zl)
+        if r is None:
+            continue
+        if abs(r - bottom_radius) / max(bottom_radius, 0.01) < 0.01:
+            body_end_z = zl
+        else:
+            break
+    
+    body_portion = (body_end_z - sorted_z[0]) / height if height > 0 else 0
+    cylindrical_body = body_portion > 0.6
+    
+    # 同时也检查顶部向下是否有恒定半径区域
+    if not cylindrical_body:
+        body_start_z = sorted_z[-1]
+        for zl in reversed(sorted_z):
+            r = z_radius_data.get(zl)
+            if r is None:
+                continue
+            if abs(r - top_radius) / max(top_radius, 0.01) < 0.01:
+                body_start_z = zl
+            else:
+                break
+        top_body_portion = (sorted_z[-1] - body_start_z) / height if height > 0 else 0
+        if top_body_portion > 0.6:
+            cylindrical_body = True
+            body_radius = top_radius
+            # swap direction: body is at top, transition at bottom
+            body_end_z = body_start_z
+    
+    if cylindrical_body:
+        body_radius = sorted([z_radius_data.get(zl, body_radius) for zl in sorted_z 
+                               if abs(z_radius_data.get(zl, body_radius) - body_radius) / max(body_radius, 0.01) < 0.01
+                               and zl in z_radius_data]) or [body_radius]
+        body_radius = body_radius[len(body_radius)//2] if isinstance(body_radius, list) else body_radius
+        
+        # 顶部过渡：body_end_z 以上的所有层
+        top_transition_zls = [zl for zl in sorted_z if zl > body_end_z and zl in z_radius_data]
+        
+        # 如果过渡层不足2层但顶部半径明显偏离，添加上一个本体层作为过渡起点
+        if len(top_transition_zls) < 2:
+            top_r = z_radius_data.get(sorted_z[-1])
+            if top_r is not None and abs(top_r - body_radius) / max(body_radius, 0.01) > 0.01:
+                # 找到本体与过渡的分界层
+                for i in range(len(sorted_z) - 2, -1, -1):
+                    zl = sorted_z[i]
+                    if zl not in z_radius_data:
+                        continue
+                    if abs(z_radius_data[zl] - body_radius) / max(body_radius, 0.01) <= 0.01:
+                        top_transition_zls = [sorted_z[j] for j in range(i, len(sorted_z)) if sorted_z[j] in z_radius_data]
+                        break
+        
+        # 底部过渡：body_end_z 以下的层（如果有底部倒角）
+        if len(sorted_z) >= 2 and sorted_z[0] < body_end_z:
+            bottom_transition_zls = [zl for zl in sorted_z if zl < sorted_z[0] and zl in z_radius_data]
+        else:
+            bottom_transition_zls = []
+    else:
+        # 圆锥本体：用线性拟合检测过渡
+        # 当Z层稀疏时（中间区域无层），以高度比例分区判断
+        top_transition_zls = []
+        bottom_transition_zls = []
+        fit_zls = None  # will be set if mid-zone fitting is applicable
+        valid_zls = [zl for zl in sorted_z if zl in z_radius_data]
+        if len(valid_zls) >= 4:
+            height = sorted_z[-1] - sorted_z[0]
+            # 按高度分区：底15%，中70%，顶15%
+            cut_bot = sorted_z[0] + height * 0.15
+            cut_top = sorted_z[-1] - height * 0.15
+            
+            bot_zls = [zl for zl in valid_zls if zl < cut_bot]
+            mid_zls = [zl for zl in valid_zls if cut_bot <= zl <= cut_top]
+            top_zls = [zl for zl in valid_zls if zl > cut_top]
+            
+            # 判断：中间足够多层 → 正常锥体；否则 → 只有过渡区有层
+            fit_done = False
+            if len(mid_zls) >= 3:
+                # 正常锥体：用中间层拟合，检测两端偏离
+                fit_zls = mid_zls
+            elif len(bot_zls) >= 1 and len(top_zls) >= 1:
+                # 只有过渡区有层：取底部最上层和顶部最下层作为本体端点
+                body_bot_z = bot_zls[-1]  # chamfer顶部
+                body_top_z = top_zls[0]   # fillet底部
+                body_bot_r = z_radius_data[body_bot_z]
+                body_top_r = z_radius_data[body_top_z]
+                
+                # 本体线性：r = a*z + b
+                dz = body_top_z - body_bot_z
+                if dz > 0.01:
+                    a = (body_top_r - body_bot_r) / dz
+                    b = body_bot_r - a * body_bot_z
+                    
+                    deviation_thresh = max(abs(a) * height * 0.02 + 0.1, 0.3)
+                    
+                    # 底部过渡检测：任一级别偏离，整个底区视为过渡
+                    any_bot_deviation = False
+                    for zl in bot_zls:
+                        expected_r = a * zl + b
+                        actual_r = z_radius_data[zl]
+                        if abs(actual_r - expected_r) > deviation_thresh:
+                            any_bot_deviation = True
+                            break
+                    
+                    if any_bot_deviation:
+                        bottom_transition_zls = bot_zls
+                    elif len(bot_zls) >= 2:
+                        bot_slope = (z_radius_data[bot_zls[-1]] - z_radius_data[bot_zls[0]]) / (bot_zls[-1] - bot_zls[0])
+                        if abs(bot_slope - a) > max(abs(a) * 0.3, 0.05):
+                            bottom_transition_zls = bot_zls
+                    
+                    # 顶部过渡检测：任一级别偏离，整个顶区视为过渡
+                    any_top_deviation = False
+                    for zl in top_zls:
+                        expected_r = a * zl + b
+                        actual_r = z_radius_data[zl]
+                        if abs(actual_r - expected_r) > deviation_thresh:
+                            any_top_deviation = True
+                            break
+                    
+                    if any_top_deviation:
+                        top_transition_zls = top_zls
+                    elif len(top_zls) >= 2:
+                        top_slope = (z_radius_data[top_zls[-1]] - z_radius_data[top_zls[0]]) / (top_zls[-1] - top_zls[0])
+                        if abs(top_slope - a) > max(abs(a) * 0.3, 0.05):
+                            top_transition_zls = top_zls
+                fit_done = True
+            else:
+                # 中间有层但不足3层：仍用中间层拟合（如果有的话）
+                if len(mid_zls) >= 1:
+                    fit_zls = mid_zls
+                
+            if not fit_done and fit_zls is not None and len(fit_zls) >= 3:
+                # Linear regression r = a*z + b on fit_zls
+                sum_z = sum(zl for zl in fit_zls)
+                sum_r = sum(z_radius_data[zl] for zl in fit_zls)
+                sz = sum_z / len(fit_zls)
+                sr = sum_r / len(fit_zls)
+                s_zz = sum((zl - sz) * (zl - sz) for zl in fit_zls)
+                s_zr = sum((zl - sz) * (z_radius_data[zl] - sr) for zl in fit_zls)
+                
+                if s_zz > 0.0001:
+                    a = s_zr / s_zz
+                    b = sr - a * sz
+                    deviation_thresh = max(abs(a) * height * 0.02 + 0.1, 0.3)
+                    
+                    deviating_top = []
+                    deviating_bot = []
+                    for zl in valid_zls:
+                        expected_r = a * zl + b
+                        actual_r = z_radius_data[zl]
+                        dev = abs(actual_r - expected_r)
+                        if dev > deviation_thresh:
+                            if zl > fit_zls[-1]:
+                                deviating_top.append(zl)
+                            elif zl < fit_zls[0]:
+                                deviating_bot.append(zl)
+                    
+                    top_transition_zls = deviating_top or top_transition_zls
+                    bottom_transition_zls = deviating_bot or bottom_transition_zls
+    
+    # 2. 分析过渡区类型
+    def _classify_transition(transition_zls):
+        if len(transition_zls) < 2:
+            return None, 0.0
+        _radii = [(zl, z_radius_data[zl]) for zl in transition_zls if z_radius_data.get(zl) is not None]
+        if len(_radii) < 2:
+            return None, 0.0
+        
+        dr = _radii[-1][1] - _radii[0][1]
+        threshold = max(body_radius * 0.01, 0.05)
+        if abs(dr) < threshold:
+            return None, 0.0
+        
+        slopes = []
+        for j in range(1, len(_radii)):
+            dz = _radii[j][0] - _radii[j-1][0]
+            ds = _radii[j][1] - _radii[j-1][1]
+            if dz > 0.0001:
+                slopes.append(ds / dz)
+        
+        if len(slopes) < 1:
+            return None, 0.0
+        
+        avg_slope = abs(sum(slopes) / len(slopes))
+        if avg_slope < 0.005:
+            return None, 0.0
+        
+        if len(slopes) >= 3:
+            accels = [slopes[j] - slopes[j-1] for j in range(1, len(slopes))]
+            avg_accel = sum(abs(a) for a in accels) / len(accels)
+        else:
+            avg_accel = 0
+        
+        if avg_accel < max(avg_slope * 0.12, 0.02):
+            feature_type = 'chamfer'
+            feature_size = abs(dr)
+        else:
+            feature_type = 'fillet'
+            feature_size = (transition_zls[-1] - transition_zls[0]) * 0.8
+            if feature_size < 0.5:
+                feature_size = abs(dr)
+        
+        return feature_type, feature_size
+    
+    top_feature, top_feature_size = _classify_transition(top_transition_zls)
+    bottom_feature, bottom_feature_size = _classify_transition(bottom_transition_zls)
+    
+    # 对于圆柱本体有过渡 → 修正 radius 为 body_radius
+    if cylindrical_body and (top_feature or bottom_feature):
+        bottom_radius = body_radius
+        top_radius = body_radius
+    
+    bm.free()
+    
+    pos_x = obj.location.x
+    pos_y = obj.location.y
+    pos_z = obj.location.z
+    
+    # 构建返回参数
+    if is_hollow:
+        if bottom_radius * 0.98 <= top_radius <= bottom_radius * 1.02:
+            obj_type = 'hollow_cylinder'
+            if top_feature == 'fillet':
+                obj_type = 'hollow_cylinder_fillet'
+            return {
+                'obj_type': obj_type,
+                'outer_radius': max(bottom_radius, top_radius),
+                'inner_radius': inner_radius,
+                'height': height,
+                'pos_x': pos_x,
+                'pos_y': pos_y,
+                'pos_z': pos_z,
+                'top_feature': top_feature,
+                'top_feature_size': top_feature_size,
+                'bottom_feature': bottom_feature,
+                'bottom_feature_size': bottom_feature_size,
+            }
+        else:
+            obj_type = 'hollow_cone'
+            if top_feature == 'fillet':
+                obj_type = 'hollow_cone_fillet'
+            return {
+                'obj_type': obj_type,
+                'outer_bottom_radius': bottom_radius,
+                'outer_top_radius': top_radius,
+                'inner_bottom_radius': inner_radius,
+                'inner_top_radius': inner_top_radius,
+                'height': height,
+                'pos_x': pos_x,
+                'pos_y': pos_y,
+                'pos_z': pos_z,
+                'top_feature': top_feature,
+                'top_feature_size': top_feature_size,
+                'bottom_feature': bottom_feature,
+                'bottom_feature_size': bottom_feature_size,
+            }
+    else:
+        if bottom_radius * 0.98 <= top_radius <= bottom_radius * 1.02:
+            avg_radius = (bottom_radius + top_radius) / 2.0
+            obj_type = 'cylinder'
+            if top_feature == 'chamfer':
+                obj_type = 'cylinder_chamfer'
+            elif top_feature == 'fillet':
+                obj_type = 'cylinder_fillet'
+            return {
+                'obj_type': obj_type,
+                'radius': avg_radius,
+                'height': height,
+                'pos_x': pos_x,
+                'pos_y': pos_y,
+                'pos_z': pos_z,
+                'top_feature': top_feature,
+                'top_feature_size': top_feature_size,
+                'bottom_feature': bottom_feature,
+                'bottom_feature_size': bottom_feature_size,
+            }
+        else:
+            obj_type = 'cone'
+            if top_feature and bottom_feature:
+                obj_type = 'cone_chamfer_fillet'
+            elif top_feature:
+                obj_type = 'cone_fillet'
+            return {
+                'obj_type': obj_type,
+                'bottom_radius': body_radius if bottom_feature else bottom_radius,
+                'top_radius': top_radius,
+                'height': height,
+                'pos_x': pos_x,
+                'pos_y': pos_y,
+                'pos_z': pos_z,
+                'top_feature': top_feature,
+                'top_feature_size': top_feature_size,
+                'bottom_feature': bottom_feature,
+                'bottom_feature_size': bottom_feature_size,
+            }
 
 
 def _export_bottom_shells_sync(filepath, shells, step_schema, step_unit, enable_logging, context):
@@ -717,8 +1513,8 @@ def _export_bottom_shells_sync(filepath, shells, step_schema, step_unit, enable_
                 params['inner_fillet_radius'],
                 params.get('step_height', 1.0),
                 params.get('hole_radius', 1.5),
-                params.get('hole_offset_x', 13.0),
-                params.get('hole_offset_y', 11.0),
+                params.get('hole_offset_x', 25.0),
+                params.get('hole_offset_y', 20.0),
                 params.get('pos_x', 0.0),
                 params.get('pos_y', 0.0),
                 params.get('pos_z', 0.0),
@@ -811,29 +1607,32 @@ def _export_bottom_shell_timer():
         data = _bottom_shell_export_data
         context = data['context']
         shells = data.get('shells', [])
+        cylinders = data.get('cylinders', [])
         
-        if not shells:
-            log_to_file(f"[STEP Exporter] No bottom shells to export")
+        if not shells and not cylinders:
+            log_to_file(f"[STEP Exporter] No parametric objects to export")
             end_progress(context)
             _bottom_shell_export_data = None
             return None
 
-        log_to_file(f"[STEP Exporter] Bottom shell timer: exporting {len(shells)} shell(s)...")
+        total_objects = len(shells) + len(cylinders)
+        log_to_file(f"[STEP Exporter] Parametric timer: exporting {len(shells)} shell(s) + {len(cylinders)} cylinder(s)...")
         
         import _step_exporter as cpp_exporter
         
         all_success = True
-        total_shells = len(shells)
         temp_files = []
+        temp_idx = 0
         
         # 导出每个底壳到临时文件
         for idx, params in enumerate(shells):
             has_holes = params.get('has_holes', False)
             shell_desc = f"with_holes" if has_holes else "no_holes"
-            log_to_file(f"[STEP Exporter]   Exporting shell {idx+1}/{total_shells} ({shell_desc})...")
+            log_to_file(f"[STEP Exporter]   Exporting shell {idx+1}/{len(shells)} ({shell_desc})...")
             
-            temp_file = data['filepath'] + f".temp{idx}.step"
+            temp_file = data['filepath'] + f".temp{temp_idx}.step"
             temp_files.append(temp_file)
+            temp_idx += 1
             
             if has_holes:
                 success = cpp_exporter.export_bottom_shell_filleted_with_holes_step(
@@ -848,8 +1647,8 @@ def _export_bottom_shell_timer():
                     params['inner_fillet_radius'],
                     params.get('step_height', 1.0),
                     params.get('hole_radius', 1.5),
-                    params.get('hole_offset_x', 13.0),
-                    params.get('hole_offset_y', 11.0),
+                    params.get('hole_offset_x', 25.0),
+                    params.get('hole_offset_y', 20.0),
                     params.get('pos_x', 0.0),
                     params.get('pos_y', 0.0),
                     params.get('pos_z', 0.0),
@@ -883,11 +1682,153 @@ def _export_bottom_shell_timer():
             else:
                 log_to_file(f"[STEP Exporter]   Shell {idx+1} exported successfully")
         
+        # 导出每个圆柱体/圆锥体到临时文件
+        for idx, cparams in enumerate(cylinders):
+            obj_type = cparams.get('obj_type', 'cylinder')
+            log_to_file(f"[STEP Exporter]   Exporting {obj_type} {idx+1}/{len(cylinders)}...")
+            
+            temp_file = data['filepath'] + f".temp{temp_idx}.step"
+            temp_files.append(temp_file)
+            temp_idx += 1
+            
+            px = cparams.get('pos_x', 0.0)
+            py = cparams.get('pos_y', 0.0)
+            pz = cparams.get('pos_z', 0.0)
+            
+            if obj_type == 'cylinder':
+                success = cpp_exporter.export_cylinder_step(
+                    temp_file,
+                    cparams['radius'],
+                    cparams['height'],
+                    px, py, pz,
+                    data['step_schema'],
+                    data['step_unit'],
+                    1 if data['enable_logging'] else 0
+                )
+            elif obj_type == 'cone':
+                success = cpp_exporter.export_cone_step(
+                    temp_file,
+                    cparams['bottom_radius'],
+                    cparams['top_radius'],
+                    cparams['height'],
+                    px, py, pz,
+                    data['step_schema'],
+                    data['step_unit'],
+                    1 if data['enable_logging'] else 0
+                )
+            elif obj_type == 'hollow_cylinder':
+                success = cpp_exporter.export_hollow_cylinder_step(
+                    temp_file,
+                    cparams['outer_radius'],
+                    cparams['inner_radius'],
+                    cparams['height'],
+                    px, py, pz,
+                    data['step_schema'],
+                    data['step_unit'],
+                    1 if data['enable_logging'] else 0
+                )
+            elif obj_type == 'hollow_cone':
+                success = cpp_exporter.export_hollow_cone_step(
+                    temp_file,
+                    cparams['outer_bottom_radius'],
+                    cparams['outer_top_radius'],
+                    cparams['inner_bottom_radius'],
+                    cparams['inner_top_radius'],
+                    cparams['height'],
+                    px, py, pz,
+                    data['step_schema'],
+                    data['step_unit'],
+                    1 if data['enable_logging'] else 0
+                )
+            elif obj_type == 'cylinder_chamfer':
+                success = cpp_exporter.export_cylinder_chamfer_step(
+                    temp_file,
+                    cparams['radius'],
+                    cparams['height'],
+                    cparams.get('top_feature_size', 0),
+                    px, py, pz,
+                    data['step_schema'],
+                    data['step_unit'],
+                    1 if data['enable_logging'] else 0
+                )
+            elif obj_type == 'cylinder_fillet':
+                success = cpp_exporter.export_cylinder_fillet_step(
+                    temp_file,
+                    cparams['radius'],
+                    cparams['height'],
+                    cparams.get('top_feature_size', 0),
+                    px, py, pz,
+                    data['step_schema'],
+                    data['step_unit'],
+                    1 if data['enable_logging'] else 0
+                )
+            elif obj_type == 'cone_chamfer_fillet':
+                success = cpp_exporter.export_cone_chamfer_fillet_step(
+                    temp_file,
+                    cparams.get('bottom_radius', cparams.get('radius', 0)),
+                    cparams.get('top_radius', 0),
+                    cparams['height'],
+                    cparams.get('bottom_feature_size', 0),
+                    cparams.get('top_feature_size', 0),
+                    px, py, pz,
+                    data['step_schema'],
+                    data['step_unit'],
+                    1 if data['enable_logging'] else 0
+                )
+            elif obj_type == 'hollow_cone_fillet':
+                success = cpp_exporter.export_hollow_cone_fillet_step(
+                    temp_file,
+                    cparams.get('outer_bottom_radius', cparams.get('outer_radius', 0)),
+                    cparams.get('outer_top_radius', cparams.get('outer_radius', 0)),
+                    cparams.get('inner_bottom_radius', cparams.get('inner_radius', 0)),
+                    cparams.get('inner_top_radius', cparams.get('inner_radius', 0)),
+                    cparams['height'],
+                    cparams.get('top_feature_size', 0),
+                    px, py, pz,
+                    data['step_schema'],
+                    data['step_unit'],
+                    1 if data['enable_logging'] else 0
+                )
+            elif obj_type == 'cone_fillet':
+                success = cpp_exporter.export_cone_chamfer_fillet_step(
+                    temp_file,
+                    cparams.get('bottom_radius', 0),
+                    cparams.get('top_radius', 0),
+                    cparams['height'],
+                    0.0,  # no chamfer
+                    cparams.get('top_feature_size', 0),
+                    px, py, pz,
+                    data['step_schema'],
+                    data['step_unit'],
+                    1 if data['enable_logging'] else 0
+                )
+            elif obj_type == 'hollow_cylinder_fillet':
+                success = cpp_exporter.export_hollow_cylinder_fillet_step(
+                    temp_file,
+                    cparams.get('outer_radius', 0),
+                    cparams.get('inner_radius', 0),
+                    cparams['height'],
+                    cparams.get('top_feature_size', 0),
+                    px, py, pz,
+                    data['step_schema'],
+                    data['step_unit'],
+                    1 if data['enable_logging'] else 0
+                )
+            else:
+                log_to_file(f"[STEP Exporter]   Unknown cylinder type: {obj_type}")
+                success = False
+            
+            if not success:
+                all_success = False
+                log_to_file(f"[STEP Exporter]   FAILED to export {obj_type} {idx+1}")
+            else:
+                log_to_file(f"[STEP Exporter]   {obj_type} {idx+1} exported successfully")
+        
         # 合并所有临时文件到最终的 STEP 文件
-        if all_success and total_shells > 1:
+        if all_success and total_objects > 1:
             try:
                 _merge_step_files(data['filepath'], temp_files)
-                log_to_file(f"[STEP Exporter] Merged {total_shells} shells into {data['filepath']}")
+                log_to_file(f"[STEP Exporter] Merged {total_objects} objects into {data['filepath']}")
             except Exception as merge_err:
                 log_to_file(f"[STEP Exporter] Failed to merge STEP files: {merge_err}")
                 import traceback
@@ -900,6 +1841,11 @@ def _export_bottom_shell_timer():
                     except:
                         pass
             finally:
+                # 合并C++子进程产出的log文件（在清理前）
+                try:
+                    _merge_log_files(os.path.dirname(data['filepath']), data['filepath'])
+                except:
+                    pass
                 # 清理临时文件及其日志
                 for tf in temp_files:
                     for ext in ('', '.log'):
@@ -908,13 +1854,18 @@ def _export_bottom_shell_timer():
                                 os.remove(tf + ext)
                         except:
                             pass
-        elif all_success and total_shells == 1:
+        elif all_success and total_objects == 1:
             try:
                 os.replace(temp_files[0], data['filepath'])
             except:
                 import shutil
                 shutil.copy2(temp_files[0], data['filepath'])
             finally:
+                # 合并C++子进程产出的log文件（在清理前）
+                try:
+                    _merge_log_files(os.path.dirname(data['filepath']), data['filepath'])
+                except:
+                    pass
                 for ext in ('', '.log'):
                     try:
                         if os.path.exists(temp_files[0] + ext):
@@ -923,11 +1874,11 @@ def _export_bottom_shell_timer():
                         pass
         
         if all_success:
-            update_progress(100, "底壳导出完成", context)
-            log_to_file(f"[STEP Exporter] All {total_shells} bottom shell(s) exported successfully")
+            update_progress(100, "参数化导出完成", context)
+            log_to_file(f"[STEP Exporter] All {total_objects} parametric object(s) exported successfully")
         else:
-            update_progress(100, "部分底壳导出失败", context)
-            log_to_file(f"[STEP Exporter] Some bottom shells failed to export")
+            update_progress(100, "部分对象导出失败", context)
+            log_to_file(f"[STEP Exporter] Some parametric objects failed to export")
 
         end_progress(context)
     except Exception as e:
@@ -1041,6 +1992,43 @@ def _merge_step_files(output_path, temp_files):
                 entity += ';'
             f.write(entity + '\n')
         f.write('ENDSEC;\nEND-ISO-10303-21;\n')
+
+
+def _merge_log_files(output_dir, output_path):
+    """将同目录下其他 .step.log 文件中的 [STEP Exporter] 行合并到主日志文件"""
+    import re
+    
+    if not _export_log_file or _export_log_file.closed:
+        return
+    
+    try:
+        log_dir = os.path.dirname(output_path)
+        main_log_basename = os.path.basename(output_path) + ".log"
+        
+        # 查找同目录下所有 .step.log 文件
+        for fname in sorted(os.listdir(log_dir)):
+            if fname == main_log_basename:
+                continue
+            if not fname.endswith('.step.log') and not fname.endswith('.step.log.temp'):
+                continue
+            
+            log_path = os.path.join(log_dir, fname)
+            try:
+                with open(log_path, 'r', encoding='utf-8', errors='ignore') as lf:
+                    content = lf.read()
+                # 提取 [STEP Exporter] 开头的行
+                step_lines = re.findall(r'\[STEP Exporter\].*', content)
+                if step_lines:
+                    _export_log_file.write(f"\n--- Merged from {fname} ---\n")
+                    for line in step_lines:
+                        if not line.endswith('\n'):
+                            line += '\n'
+                        _export_log_file.write(line)
+                    _export_log_file.flush()
+            except:
+                pass
+    except:
+        pass
 
 
 def _export_worker_timer():
@@ -1170,6 +2158,12 @@ def _export_worker_timer():
             else:
                 log_to_file(f"[STEP Exporter] Export failed")
             
+            # 合并C++子进程产出的log文件
+            try:
+                _merge_log_files(os.path.dirname(filepath), filepath)
+            except:
+                pass
+            
             # 关闭日志文件
             if _export_log_file and not _export_log_file.closed:
                 _export_log_file.close()
@@ -1183,7 +2177,7 @@ def _export_worker_timer():
             try:
                 _export_log_file = open(log_filepath, 'w', encoding='utf-8')
             except Exception as e:
-                print(f"[STEP Exporter] Failed to open log file: {e}")
+                log_to_file(f"[STEP Exporter] Failed to open log file: {e}")
                 _export_log_file = None
             
             _export_stage = 1
@@ -1334,6 +2328,21 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
             self.report({'ERROR'}, "C++ extension module '_step_exporter' not loaded. Check console for details.")
             return {'CANCELLED'}
         
+        # 尽早打开日志文件，确保所有 [STEP Exporter] 日志都写入 .step.log
+        global _export_log_file, _log_buffer
+        if _export_log_file is None or _export_log_file.closed:
+            try:
+                log_path = self.filepath + ".log"
+                _export_log_file = open(log_path, 'w', encoding='utf-8')
+                # 将之前缓冲的消息写入日志文件
+                if _log_buffer:
+                    for buf_msg in _log_buffer:
+                        _export_log_file.write(buf_msg)
+                    _export_log_file.flush()
+                    _log_buffer = []
+            except:
+                pass
+        
         # 启动进度条显示
         log_to_file(f"[STEP Exporter] === Calling start_progress ===")
         start_progress(context)
@@ -1358,7 +2367,7 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
             log_to_file(f"[STEP Exporter] ERROR: bpy.ops.step_exporter does NOT exist!")
         
         # 将导出参数存储到全局变量
-        global _export_params, _export_stage, _export_objects, _export_objects_data, _export_current_index, _export_log_file
+        global _export_params, _export_stage, _export_objects, _export_objects_data, _export_current_index
         
         # 确定要导出的对象列表
         if self.use_selected and context.selected_objects:
@@ -1374,41 +2383,51 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
         
         step_unit = 'MILLIMETER' if self.unit == 'mm' else 'METER'
         
-        # 检测底壳对象，使用参数化导出（直接导出，不走timer）
+        # 检测底壳和圆柱对象，使用参数化导出
         bottom_shells = []
+        cylinder_objects = []
+        regular_export_objects = []
+        
         for obj in _export_objects:
             if obj.type == 'MESH':
-                print(f"[STEP Exporter] Checking: {obj.name}")
+                log_to_file(f"[STEP Exporter] Checking: {obj.name}")
+                
+                # 先检测底壳
                 shell_params = _analyze_bottom_shell_from_mesh(obj, context, scale)
                 if shell_params:
                     bottom_shells.append(shell_params)
                     hh = shell_params.get('has_holes', False)
-                    print(f"[STEP Exporter]   -> Bottom shell! has_holes={hh}")
+                    log_to_file(f"[STEP Exporter]   -> Bottom shell! has_holes={hh}")
                     log_to_file(f"[STEP Exporter] Found bottom shell: {obj.name} (has_holes={shell_params.get('has_holes', False)})")
-                else:
-                    print(f"[STEP Exporter]   -> NOT a bottom shell")
+                    continue
+                
+                # 再检测圆柱/圆锥
+                cyl_params = _analyze_cylinder_from_mesh(obj, context, scale)
+                if cyl_params:
+                    cylinder_objects.append(cyl_params)
+                    log_to_file(f"[STEP Exporter]   -> {cyl_params['obj_type']}! r={cyl_params.get('radius', cyl_params.get('bottom_radius', '?'))} h={cyl_params['height']}")
+                    log_to_file(f"[STEP Exporter] Found {cyl_params['obj_type']}: {obj.name}")
+                    continue
+                
+                log_to_file(f"[STEP Exporter]   -> NOT a parametric object")
+                regular_export_objects.append(obj)
+            elif obj.type == 'CURVE':
+                regular_export_objects.append(obj)
         
-        print(f"[STEP Exporter] Total objects: {len(_export_objects)}, bottom shells: {len(bottom_shells)}")
-        log_to_file(f"[STEP Exporter] Total objects: {len(_export_objects)}, bottom shells: {len(bottom_shells)}")
+        total_parametric = len(bottom_shells) + len(cylinder_objects)
+        log_to_file(f"[STEP Exporter] Total objects: {len(_export_objects)}, shells: {len(bottom_shells)}, cylinders: {len(cylinder_objects)}, regular: {len(regular_export_objects)}")
         
-        if bottom_shells:
-            log_to_file(f"[STEP Exporter] Found {len(bottom_shells)} bottom shell(s), using parametric export")
-            update_progress(10, "检测到底壳，正在参数化导出...", context)
+        if bottom_shells or cylinder_objects:
+            log_to_file(f"[STEP Exporter] Found {total_parametric} parametric object(s), using parametric export")
+            update_progress(10, "检测到参数化对象，正在导出...", context)
 
-            # 确保日志文件已打开
-            global _export_log_file
-            if _export_log_file is None or _export_log_file.closed:
-                try:
-                    log_path = self.filepath + ".log"
-                    _export_log_file = open(log_path, 'w', encoding='utf-8')
-                    log_to_file(f"[STEP Exporter] Log file opened for bottom shell export")
-                except:
-                    pass
+            # 日志文件已在 execute() 开头打开，此处确保可用即可
 
             global _bottom_shell_export_data
             _bottom_shell_export_data = {
                 'filepath': self.filepath,
                 'shells': bottom_shells,
+                'cylinders': cylinder_objects,
                 'step_schema': self.step_schema,
                 'step_unit': step_unit,
                 'enable_logging': self.enable_logging,
@@ -1417,7 +2436,7 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
 
             timer_handle = bpy.app.timers.register(_export_bottom_shell_timer, first_interval=0.3)
             log_to_file(f"[STEP Exporter] Timer registered: {timer_handle}")
-            self.report({'INFO'}, f"检测到 {len(bottom_shells)} 个底壳，正在导出...")
+            self.report({'INFO'}, f"检测到 {total_parametric} 个参数化对象（{len(bottom_shells)}底壳 + {len(cylinder_objects)}圆柱），正在导出...")
             return {'FINISHED'}
         
         _export_params = {
@@ -1439,6 +2458,10 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
         _export_stage = 0
         _export_objects_data = []
         _export_current_index = 0
+        
+        # 关闭日志文件（非参数化路径）
+        if _export_log_file and not _export_log_file.closed:
+            _export_log_file.close()
         _export_log_file = None
         
         log_to_file(f"[STEP Exporter] === Registering timer ===")
@@ -1957,7 +2980,7 @@ def register():
     # 添加到导出菜单
     bpy.types.TOPBAR_MT_file_export.append(menu_func_export_enhanced)
     
-    print("[STEP Exporter] Enhanced plugin registered successfully")
+    log_to_file("[STEP Exporter] Enhanced plugin registered successfully")
 
 def unregister():
     # 从导出菜单移除
@@ -1976,7 +2999,7 @@ def unregister():
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)
     
-    print("[STEP Exporter] Plugin unregistered")
+    log_to_file("[STEP Exporter] Plugin unregistered")
 
 # 直接运行时的测试
 if __name__ == "__main__":

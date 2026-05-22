@@ -114,6 +114,8 @@ add_library(step_exporter SHARED
     src/cylinder/cylinder_geometry.cpp
     src/cylinder/cylinder_utils.cpp
     src/step_exporter_cylinder_reconstruct.cpp
+    # Parametric cylinder/cone/hollow creation
+    src/step_exporter_cylinder_parametric.cpp
 )
 
 # 设置 Python 头文件路径（使用 Blender 自带的 Python 3.11 头文件）

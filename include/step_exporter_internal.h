@@ -55,6 +55,23 @@ TopoDS_Shape create_bottom_shell_filleted_with_holes_solid(double width, double 
                                                              double step_height,
                                                              double hole_radius, double hole_offset_x, double hole_offset_y);
 
+// 参数化圆柱/圆锥/空心实体创建
+TopoDS_Shape create_cylinder_solid_parametric(double radius, double height);
+TopoDS_Shape create_cone_solid_parametric(double bottom_radius, double top_radius, double height);
+TopoDS_Shape create_hollow_cylinder_solid_parametric(double outer_radius, double inner_radius, double height);
+TopoDS_Shape create_hollow_cone_solid_parametric(double outer_bottom_radius, double outer_top_radius,
+                                                  double inner_bottom_radius, double inner_top_radius,
+                                                  double height);
+TopoDS_Shape create_cylinder_chamfer_solid_parametric(double radius, double height, double chamfer_size);
+TopoDS_Shape create_cylinder_fillet_solid_parametric(double radius, double height, double fillet_radius);
+TopoDS_Shape create_cone_chamfer_fillet_solid_parametric(double bottom_radius, double top_radius, double height,
+                                                          double chamfer_size, double fillet_radius);
+TopoDS_Shape create_hollow_cone_fillet_solid_parametric(double outer_bottom_radius, double outer_top_radius,
+                                                         double inner_bottom_radius, double inner_top_radius,
+                                                         double height, double fillet_radius);
+TopoDS_Shape create_hollow_cylinder_fillet_solid_parametric(double outer_radius, double inner_radius,
+                                                             double height, double fillet_radius);
+
 // Python interface functions
 PyObject* get_version(PyObject* self, PyObject* args);
 PyObject* export_step(PyObject* self, PyObject* args);

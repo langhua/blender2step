@@ -590,6 +590,551 @@ PyObject* export_bottom_shell_with_holes_step(PyObject* self, PyObject* args) {
     }
 }
 
+// 参数化导出：圆柱体
+PyObject* export_cylinder_step(PyObject* self, PyObject* args) {
+    const char* filename;
+    double radius, height;
+    double pos_x = 0.0, pos_y = 0.0, pos_z = 0.0;
+    const char* step_schema = "AP214IS";
+    const char* unit = "MILLIMETER";
+    int enable_logging = 1;
+
+    if (!PyArg_ParseTuple(args, "sdd|dddssi",
+                          &filename,
+                          &radius, &height,
+                          &pos_x, &pos_y, &pos_z,
+                          &step_schema, &unit, &enable_logging)) {
+        PyErr_SetString(PyExc_TypeError,
+            "export_cylinder_step() expected: filename, radius, height, "
+            "[pos_x], [pos_y], [pos_z], [step_schema], [unit], [enable_logging]");
+        return NULL;
+    }
+
+    try {
+        std::cout << "[STEP Exporter] Exporting parametric cylinder: r=" << radius << " h=" << height << std::endl;
+        TopoDS_Shape shape = create_cylinder_solid_parametric(radius, height);
+        if (shape.IsNull()) {
+            std::cerr << "[STEP Exporter] Failed to create cylinder" << std::endl;
+            Py_RETURN_FALSE;
+        }
+
+        // 平移
+        if (pos_x != 0.0 || pos_y != 0.0 || pos_z != 0.0) {
+            gp_Trsf trsf;
+            trsf.SetTranslation(gp_Vec(pos_x, pos_y, pos_z));
+            shape = BRepBuilderAPI_Transform(shape, trsf).Shape();
+        }
+
+        // 验证并修复 shape
+        BRepCheck_Analyzer analyzer(shape);
+        if (!analyzer.IsValid()) {
+            std::cout << "[STEP Exporter] Cylinder shape has issues, attempting to fix..." << std::endl;
+            shape = fix_shape_enhanced(shape, 0.001);
+        }
+
+        // 写入STEP
+        STEPControl_Writer writer;
+        Interface_Static::SetCVal("write.step.schema", step_schema);
+        IFSelect_ReturnStatus status = writer.Transfer(shape, STEPControl_AsIs);
+        if (status != IFSelect_RetDone) {
+            std::cerr << "[STEP Exporter] Failed to transfer cylinder to STEP" << std::endl;
+            Py_RETURN_FALSE;
+        }
+        if (writer.Write(filename) != IFSelect_RetDone) {
+            std::cerr << "[STEP Exporter] Failed to write cylinder STEP file" << std::endl;
+            Py_RETURN_FALSE;
+        }
+
+        int faceCount = 0;
+        for (TopExp_Explorer exp(shape, TopAbs_FACE); exp.More(); exp.Next()) faceCount++;
+        std::cout << "[STEP Exporter] Successfully exported parametric cylinder: " << faceCount << " faces" << std::endl;
+        Py_RETURN_TRUE;
+    } catch (Standard_Failure& e) {
+        std::cerr << "[STEP Exporter] OCC error: " << e.GetMessageString() << std::endl;
+        Py_RETURN_FALSE;
+    } catch (...) {
+        std::cerr << "[STEP Exporter] Unknown error" << std::endl;
+        Py_RETURN_FALSE;
+    }
+}
+
+// 参数化导出：圆锥体
+PyObject* export_cone_step(PyObject* self, PyObject* args) {
+    const char* filename;
+    double bottom_radius, top_radius, height;
+    double pos_x = 0.0, pos_y = 0.0, pos_z = 0.0;
+    const char* step_schema = "AP214IS";
+    const char* unit = "MILLIMETER";
+    int enable_logging = 1;
+
+    if (!PyArg_ParseTuple(args, "sddd|dddssi",
+                          &filename,
+                          &bottom_radius, &top_radius, &height,
+                          &pos_x, &pos_y, &pos_z,
+                          &step_schema, &unit, &enable_logging)) {
+        PyErr_SetString(PyExc_TypeError,
+            "export_cone_step() expected: filename, bottom_radius, top_radius, height, "
+            "[pos_x], [pos_y], [pos_z], [step_schema], [unit], [enable_logging]");
+        return NULL;
+    }
+
+    try {
+        std::cout << "[STEP Exporter] Exporting parametric cone: bR=" << bottom_radius << " tR=" << top_radius << " h=" << height << std::endl;
+        TopoDS_Shape shape = create_cone_solid_parametric(bottom_radius, top_radius, height);
+        if (shape.IsNull()) {
+            std::cerr << "[STEP Exporter] Failed to create cone" << std::endl;
+            Py_RETURN_FALSE;
+        }
+
+        if (pos_x != 0.0 || pos_y != 0.0 || pos_z != 0.0) {
+            gp_Trsf trsf;
+            trsf.SetTranslation(gp_Vec(pos_x, pos_y, pos_z));
+            shape = BRepBuilderAPI_Transform(shape, trsf).Shape();
+        }
+
+        // 验证并修复 shape
+        BRepCheck_Analyzer conAnalyzer(shape);
+        if (!conAnalyzer.IsValid()) {
+            std::cout << "[STEP Exporter] Cone shape has issues, attempting to fix..." << std::endl;
+            shape = fix_shape_enhanced(shape, 0.001);
+        }
+
+        STEPControl_Writer writer;
+        Interface_Static::SetCVal("write.step.schema", step_schema);
+        if (writer.Transfer(shape, STEPControl_AsIs) != IFSelect_RetDone) {
+            std::cerr << "[STEP Exporter] Failed to transfer cone to STEP" << std::endl;
+            Py_RETURN_FALSE;
+        }
+        if (writer.Write(filename) != IFSelect_RetDone) {
+            std::cerr << "[STEP Exporter] Failed to write cone STEP file" << std::endl;
+            Py_RETURN_FALSE;
+        }
+
+        int faceCount = 0;
+        for (TopExp_Explorer exp(shape, TopAbs_FACE); exp.More(); exp.Next()) faceCount++;
+        std::cout << "[STEP Exporter] Successfully exported parametric cone: " << faceCount << " faces" << std::endl;
+        Py_RETURN_TRUE;
+    } catch (Standard_Failure& e) {
+        std::cerr << "[STEP Exporter] OCC error: " << e.GetMessageString() << std::endl;
+        Py_RETURN_FALSE;
+    } catch (...) {
+        std::cerr << "[STEP Exporter] Unknown error" << std::endl;
+        Py_RETURN_FALSE;
+    }
+}
+
+// 参数化导出：空心圆柱体
+PyObject* export_hollow_cylinder_step(PyObject* self, PyObject* args) {
+    const char* filename;
+    double outer_radius, inner_radius, height;
+    double pos_x = 0.0, pos_y = 0.0, pos_z = 0.0;
+    const char* step_schema = "AP214IS";
+    const char* unit = "MILLIMETER";
+    int enable_logging = 1;
+
+    if (!PyArg_ParseTuple(args, "sddd|dddssi",
+                          &filename,
+                          &outer_radius, &inner_radius, &height,
+                          &pos_x, &pos_y, &pos_z,
+                          &step_schema, &unit, &enable_logging)) {
+        PyErr_SetString(PyExc_TypeError,
+            "export_hollow_cylinder_step() expected: filename, outer_radius, inner_radius, height, "
+            "[pos_x], [pos_y], [pos_z], [step_schema], [unit], [enable_logging]");
+        return NULL;
+    }
+
+    try {
+        std::cout << "[STEP Exporter] Exporting parametric hollow cylinder: oR=" << outer_radius << " iR=" << inner_radius << " h=" << height << std::endl;
+        TopoDS_Shape shape = create_hollow_cylinder_solid_parametric(outer_radius, inner_radius, height);
+        if (shape.IsNull()) {
+            std::cerr << "[STEP Exporter] Failed to create hollow cylinder" << std::endl;
+            Py_RETURN_FALSE;
+        }
+
+        if (pos_x != 0.0 || pos_y != 0.0 || pos_z != 0.0) {
+            gp_Trsf trsf;
+            trsf.SetTranslation(gp_Vec(pos_x, pos_y, pos_z));
+            shape = BRepBuilderAPI_Transform(shape, trsf).Shape();
+        }
+
+        // 验证并修复 shape
+        BRepCheck_Analyzer hcylAnalyzer(shape);
+        if (!hcylAnalyzer.IsValid()) {
+            std::cout << "[STEP Exporter] Hollow cylinder shape has issues, attempting to fix..." << std::endl;
+            shape = fix_shape_enhanced(shape, 0.001);
+        }
+
+        STEPControl_Writer writer;
+        Interface_Static::SetCVal("write.step.schema", step_schema);
+        if (writer.Transfer(shape, STEPControl_AsIs) != IFSelect_RetDone) {
+            std::cerr << "[STEP Exporter] Failed to transfer hollow cylinder to STEP" << std::endl;
+            Py_RETURN_FALSE;
+        }
+        if (writer.Write(filename) != IFSelect_RetDone) {
+            std::cerr << "[STEP Exporter] Failed to write hollow cylinder STEP file" << std::endl;
+            Py_RETURN_FALSE;
+        }
+
+        int faceCount = 0;
+        for (TopExp_Explorer exp(shape, TopAbs_FACE); exp.More(); exp.Next()) faceCount++;
+        std::cout << "[STEP Exporter] Successfully exported parametric hollow cylinder: " << faceCount << " faces" << std::endl;
+        Py_RETURN_TRUE;
+    } catch (Standard_Failure& e) {
+        std::cerr << "[STEP Exporter] OCC error: " << e.GetMessageString() << std::endl;
+        Py_RETURN_FALSE;
+    } catch (...) {
+        std::cerr << "[STEP Exporter] Unknown error" << std::endl;
+        Py_RETURN_FALSE;
+    }
+}
+
+// 参数化导出：空心圆锥体
+PyObject* export_hollow_cone_step(PyObject* self, PyObject* args) {
+    const char* filename;
+    double outer_bottom_radius, outer_top_radius, inner_bottom_radius, inner_top_radius, height;
+    double pos_x = 0.0, pos_y = 0.0, pos_z = 0.0;
+    const char* step_schema = "AP214IS";
+    const char* unit = "MILLIMETER";
+    int enable_logging = 1;
+
+    if (!PyArg_ParseTuple(args, "sddddd|dddssi",
+                          &filename,
+                          &outer_bottom_radius, &outer_top_radius,
+                          &inner_bottom_radius, &inner_top_radius,
+                          &height,
+                          &pos_x, &pos_y, &pos_z,
+                          &step_schema, &unit, &enable_logging)) {
+        PyErr_SetString(PyExc_TypeError,
+            "export_hollow_cone_step() expected: filename, outer_bottom_radius, outer_top_radius, "
+            "inner_bottom_radius, inner_top_radius, height, "
+            "[pos_x], [pos_y], [pos_z], [step_schema], [unit], [enable_logging]");
+        return NULL;
+    }
+
+    try {
+        std::cout << "[STEP Exporter] Exporting parametric hollow cone: oBR=" << outer_bottom_radius
+                  << " oTR=" << outer_top_radius << " iBR=" << inner_bottom_radius
+                  << " iTR=" << inner_top_radius << " h=" << height << std::endl;
+        TopoDS_Shape shape = create_hollow_cone_solid_parametric(
+            outer_bottom_radius, outer_top_radius,
+            inner_bottom_radius, inner_top_radius, height);
+        if (shape.IsNull()) {
+            std::cerr << "[STEP Exporter] Failed to create hollow cone" << std::endl;
+            Py_RETURN_FALSE;
+        }
+
+        if (pos_x != 0.0 || pos_y != 0.0 || pos_z != 0.0) {
+            gp_Trsf trsf;
+            trsf.SetTranslation(gp_Vec(pos_x, pos_y, pos_z));
+            shape = BRepBuilderAPI_Transform(shape, trsf).Shape();
+        }
+
+        // 验证并修复 shape
+        BRepCheck_Analyzer hconeAnalyzer(shape);
+        if (!hconeAnalyzer.IsValid()) {
+            std::cout << "[STEP Exporter] Hollow cone shape has issues, attempting to fix..." << std::endl;
+            shape = fix_shape_enhanced(shape, 0.001);
+        }
+
+        STEPControl_Writer writer;
+        Interface_Static::SetCVal("write.step.schema", step_schema);
+        if (writer.Transfer(shape, STEPControl_AsIs) != IFSelect_RetDone) {
+            std::cerr << "[STEP Exporter] Failed to transfer hollow cone to STEP" << std::endl;
+            Py_RETURN_FALSE;
+        }
+        if (writer.Write(filename) != IFSelect_RetDone) {
+            std::cerr << "[STEP Exporter] Failed to write hollow cone STEP file" << std::endl;
+            Py_RETURN_FALSE;
+        }
+
+        int faceCount = 0;
+        for (TopExp_Explorer exp(shape, TopAbs_FACE); exp.More(); exp.Next()) faceCount++;
+        std::cout << "[STEP Exporter] Successfully exported parametric hollow cone: " << faceCount << " faces" << std::endl;
+        Py_RETURN_TRUE;
+    } catch (Standard_Failure& e) {
+        std::cerr << "[STEP Exporter] OCC error: " << e.GetMessageString() << std::endl;
+        Py_RETURN_FALSE;
+    } catch (...) {
+        std::cerr << "[STEP Exporter] Unknown error" << std::endl;
+        Py_RETURN_FALSE;
+    }
+}
+
+// 参数化导出：带顶部倒角的圆柱体
+PyObject* export_cylinder_chamfer_step(PyObject* self, PyObject* args) {
+    const char* filename;
+    double radius, height, chamfer_size;
+    double pos_x = 0.0, pos_y = 0.0, pos_z = 0.0;
+    const char* step_schema = "AP214IS";
+    const char* unit = "MILLIMETER";
+    int enable_logging = 1;
+
+    if (!PyArg_ParseTuple(args, "sddd|dddssi",
+                          &filename,
+                          &radius, &height, &chamfer_size,
+                          &pos_x, &pos_y, &pos_z,
+                          &step_schema, &unit, &enable_logging)) {
+        PyErr_SetString(PyExc_TypeError,
+            "export_cylinder_chamfer_step() expected: filename, radius, height, chamfer_size, "
+            "[pos_x], [pos_y], [pos_z], [step_schema], [unit], [enable_logging]");
+        return NULL;
+    }
+
+    try {
+        TopoDS_Shape shape = create_cylinder_chamfer_solid_parametric(radius, height, chamfer_size);
+        if (shape.IsNull()) { Py_RETURN_FALSE; }
+
+        if (pos_x != 0.0 || pos_y != 0.0 || pos_z != 0.0) {
+            gp_Trsf trsf;
+            trsf.SetTranslation(gp_Vec(pos_x, pos_y, pos_z));
+            shape = BRepBuilderAPI_Transform(shape, trsf).Shape();
+        }
+
+        // 验证并修复 shape
+        BRepCheck_Analyzer paramAnalyzer(shape);
+        if (!paramAnalyzer.IsValid()) {
+            std::cout << "[STEP Exporter] Parametric shape has issues, attempting to fix..." << std::endl;
+            shape = fix_shape_enhanced(shape, 0.001);
+        }
+
+        STEPControl_Writer writer;
+        Interface_Static::SetCVal("write.step.schema", step_schema);
+        if (writer.Transfer(shape, STEPControl_AsIs) != IFSelect_RetDone) { Py_RETURN_FALSE; }
+        if (writer.Write(filename) != IFSelect_RetDone) { Py_RETURN_FALSE; }
+
+        Py_RETURN_TRUE;
+    } catch (Standard_Failure& e) {
+        std::cerr << "[STEP Exporter] OCC error: " << e.GetMessageString() << std::endl;
+        Py_RETURN_FALSE;
+    } catch (...) {
+        std::cerr << "[STEP Exporter] Unknown error" << std::endl;
+        Py_RETURN_FALSE;
+    }
+}
+
+// 参数化导出：带顶部圆角的圆柱体
+PyObject* export_cylinder_fillet_step(PyObject* self, PyObject* args) {
+    const char* filename;
+    double radius, height, fillet_radius;
+    double pos_x = 0.0, pos_y = 0.0, pos_z = 0.0;
+    const char* step_schema = "AP214IS";
+    const char* unit = "MILLIMETER";
+    int enable_logging = 1;
+
+    if (!PyArg_ParseTuple(args, "sddd|dddssi",
+                          &filename,
+                          &radius, &height, &fillet_radius,
+                          &pos_x, &pos_y, &pos_z,
+                          &step_schema, &unit, &enable_logging)) {
+        PyErr_SetString(PyExc_TypeError,
+            "export_cylinder_fillet_step() expected: filename, radius, height, fillet_radius, "
+            "[pos_x], [pos_y], [pos_z], [step_schema], [unit], [enable_logging]");
+        return NULL;
+    }
+
+    try {
+        TopoDS_Shape shape = create_cylinder_fillet_solid_parametric(radius, height, fillet_radius);
+        if (shape.IsNull()) { Py_RETURN_FALSE; }
+
+        if (pos_x != 0.0 || pos_y != 0.0 || pos_z != 0.0) {
+            gp_Trsf trsf;
+            trsf.SetTranslation(gp_Vec(pos_x, pos_y, pos_z));
+            shape = BRepBuilderAPI_Transform(shape, trsf).Shape();
+        }
+
+        // 验证并修复 shape
+        BRepCheck_Analyzer paramAnalyzer(shape);
+        if (!paramAnalyzer.IsValid()) {
+            std::cout << "[STEP Exporter] Parametric shape has issues, attempting to fix..." << std::endl;
+            shape = fix_shape_enhanced(shape, 0.001);
+        }
+
+        STEPControl_Writer writer;
+        Interface_Static::SetCVal("write.step.schema", step_schema);
+        if (writer.Transfer(shape, STEPControl_AsIs) != IFSelect_RetDone) { Py_RETURN_FALSE; }
+        if (writer.Write(filename) != IFSelect_RetDone) { Py_RETURN_FALSE; }
+
+        Py_RETURN_TRUE;
+    } catch (Standard_Failure& e) {
+        std::cerr << "[STEP Exporter] OCC error: " << e.GetMessageString() << std::endl;
+        Py_RETURN_FALSE;
+    } catch (...) {
+        std::cerr << "[STEP Exporter] Unknown error" << std::endl;
+        Py_RETURN_FALSE;
+    }
+}
+
+// 参数化导出：带底部倒角和顶部圆角的锥体
+PyObject* export_cone_chamfer_fillet_step(PyObject* self, PyObject* args) {
+    const char* filename;
+    double bottom_radius, top_radius, height;
+    double chamfer_size, fillet_radius;
+    double pos_x = 0.0, pos_y = 0.0, pos_z = 0.0;
+    const char* step_schema = "AP214IS";
+    const char* unit = "MILLIMETER";
+    int enable_logging = 1;
+
+    if (!PyArg_ParseTuple(args, "sddddd|dddssi",
+                          &filename,
+                          &bottom_radius, &top_radius, &height,
+                          &chamfer_size, &fillet_radius,
+                          &pos_x, &pos_y, &pos_z,
+                          &step_schema, &unit, &enable_logging)) {
+        PyErr_SetString(PyExc_TypeError,
+            "export_cone_chamfer_fillet_step() expected: filename, bottom_radius, top_radius, height, "
+            "chamfer_size, fillet_radius, "
+            "[pos_x], [pos_y], [pos_z], [step_schema], [unit], [enable_logging]");
+        return NULL;
+    }
+
+    try {
+        TopoDS_Shape shape = create_cone_chamfer_fillet_solid_parametric(
+            bottom_radius, top_radius, height, chamfer_size, fillet_radius);
+        if (shape.IsNull()) { Py_RETURN_FALSE; }
+
+        if (pos_x != 0.0 || pos_y != 0.0 || pos_z != 0.0) {
+            gp_Trsf trsf;
+            trsf.SetTranslation(gp_Vec(pos_x, pos_y, pos_z));
+            shape = BRepBuilderAPI_Transform(shape, trsf).Shape();
+        }
+
+        // 验证并修复 shape
+        BRepCheck_Analyzer paramAnalyzer(shape);
+        if (!paramAnalyzer.IsValid()) {
+            std::cout << "[STEP Exporter] Parametric shape has issues, attempting to fix..." << std::endl;
+            shape = fix_shape_enhanced(shape, 0.001);
+        }
+
+        STEPControl_Writer writer;
+        Interface_Static::SetCVal("write.step.schema", step_schema);
+        if (writer.Transfer(shape, STEPControl_AsIs) != IFSelect_RetDone) { Py_RETURN_FALSE; }
+        if (writer.Write(filename) != IFSelect_RetDone) { Py_RETURN_FALSE; }
+
+        Py_RETURN_TRUE;
+    } catch (Standard_Failure& e) {
+        std::cerr << "[STEP Exporter] OCC error: " << e.GetMessageString() << std::endl;
+        Py_RETURN_FALSE;
+    } catch (...) {
+        std::cerr << "[STEP Exporter] Unknown error" << std::endl;
+        Py_RETURN_FALSE;
+    }
+}
+
+// 参数化导出：带顶部圆角的空心锥体
+PyObject* export_hollow_cone_fillet_step(PyObject* self, PyObject* args) {
+    const char* filename;
+    double outer_bottom_radius, outer_top_radius, inner_bottom_radius, inner_top_radius, height;
+    double fillet_radius;
+    double pos_x = 0.0, pos_y = 0.0, pos_z = 0.0;
+    const char* step_schema = "AP214IS";
+    const char* unit = "MILLIMETER";
+    int enable_logging = 1;
+
+    if (!PyArg_ParseTuple(args, "sdddddd|dddssi",
+                          &filename,
+                          &outer_bottom_radius, &outer_top_radius,
+                          &inner_bottom_radius, &inner_top_radius,
+                          &height, &fillet_radius,
+                          &pos_x, &pos_y, &pos_z,
+                          &step_schema, &unit, &enable_logging)) {
+        PyErr_SetString(PyExc_TypeError,
+            "export_hollow_cone_fillet_step() expected: filename, "
+            "outer_bottom_radius, outer_top_radius, inner_bottom_radius, inner_top_radius, "
+            "height, fillet_radius, "
+            "[pos_x], [pos_y], [pos_z], [step_schema], [unit], [enable_logging]");
+        return NULL;
+    }
+
+    try {
+        TopoDS_Shape shape = create_hollow_cone_fillet_solid_parametric(
+            outer_bottom_radius, outer_top_radius,
+            inner_bottom_radius, inner_top_radius, height,
+            fillet_radius);
+        if (shape.IsNull()) { Py_RETURN_FALSE; }
+
+        if (pos_x != 0.0 || pos_y != 0.0 || pos_z != 0.0) {
+            gp_Trsf trsf;
+            trsf.SetTranslation(gp_Vec(pos_x, pos_y, pos_z));
+            shape = BRepBuilderAPI_Transform(shape, trsf).Shape();
+        }
+
+        // 验证并修复 shape
+        BRepCheck_Analyzer paramAnalyzer(shape);
+        if (!paramAnalyzer.IsValid()) {
+            std::cout << "[STEP Exporter] Parametric shape has issues, attempting to fix..." << std::endl;
+            shape = fix_shape_enhanced(shape, 0.001);
+        }
+
+        STEPControl_Writer writer;
+        Interface_Static::SetCVal("write.step.schema", step_schema);
+        if (writer.Transfer(shape, STEPControl_AsIs) != IFSelect_RetDone) { Py_RETURN_FALSE; }
+        if (writer.Write(filename) != IFSelect_RetDone) { Py_RETURN_FALSE; }
+
+        Py_RETURN_TRUE;
+    } catch (Standard_Failure& e) {
+        std::cerr << "[STEP Exporter] OCC error: " << e.GetMessageString() << std::endl;
+        Py_RETURN_FALSE;
+    } catch (...) {
+        std::cerr << "[STEP Exporter] Unknown error" << std::endl;
+        Py_RETURN_FALSE;
+    }
+}
+
+// 参数化导出：带顶部圆角的空心圆柱体
+PyObject* export_hollow_cylinder_fillet_step(PyObject* self, PyObject* args) {
+    const char* filename;
+    double outer_radius, inner_radius, height;
+    double fillet_radius;
+    double pos_x = 0.0, pos_y = 0.0, pos_z = 0.0;
+    const char* step_schema = "AP214IS";
+    const char* unit = "MILLIMETER";
+    int enable_logging = 1;
+
+    if (!PyArg_ParseTuple(args, "sdddd|dddssi",
+                          &filename,
+                          &outer_radius, &inner_radius, &height, &fillet_radius,
+                          &pos_x, &pos_y, &pos_z,
+                          &step_schema, &unit, &enable_logging)) {
+        PyErr_SetString(PyExc_TypeError,
+            "export_hollow_cylinder_fillet_step() expected: filename, "
+            "outer_radius, inner_radius, height, fillet_radius, "
+            "[pos_x], [pos_y], [pos_z], [step_schema], [unit], [enable_logging]");
+        return NULL;
+    }
+
+    try {
+        TopoDS_Shape shape = create_hollow_cylinder_fillet_solid_parametric(
+            outer_radius, inner_radius, height, fillet_radius);
+        if (shape.IsNull()) { Py_RETURN_FALSE; }
+
+        if (pos_x != 0.0 || pos_y != 0.0 || pos_z != 0.0) {
+            gp_Trsf trsf;
+            trsf.SetTranslation(gp_Vec(pos_x, pos_y, pos_z));
+            shape = BRepBuilderAPI_Transform(shape, trsf).Shape();
+        }
+
+        // 验证并修复 shape
+        BRepCheck_Analyzer paramAnalyzer(shape);
+        if (!paramAnalyzer.IsValid()) {
+            std::cout << "[STEP Exporter] Parametric shape has issues, attempting to fix..." << std::endl;
+            shape = fix_shape_enhanced(shape, 0.001);
+        }
+
+        STEPControl_Writer writer;
+        Interface_Static::SetCVal("write.step.schema", step_schema);
+        if (writer.Transfer(shape, STEPControl_AsIs) != IFSelect_RetDone) { Py_RETURN_FALSE; }
+        if (writer.Write(filename) != IFSelect_RetDone) { Py_RETURN_FALSE; }
+
+        Py_RETURN_TRUE;
+    } catch (Standard_Failure& e) {
+        std::cerr << "[STEP Exporter] OCC error: " << e.GetMessageString() << std::endl;
+        Py_RETURN_FALSE;
+    } catch (...) {
+        std::cerr << "[STEP Exporter] Unknown error" << std::endl;
+        Py_RETURN_FALSE;
+    }
+}
+
 // 模块方法定义表
 static PyMethodDef step_exporter_methods[] = {
     {"export_step", export_step, METH_VARARGS, "Export simple shape to STEP"},
@@ -600,6 +1145,15 @@ static PyMethodDef step_exporter_methods[] = {
     {"export_bottom_shell_with_holes_step", export_bottom_shell_with_holes_step, METH_VARARGS, "Export bottom shell with corner holes directly to STEP"},
     {"export_bottom_shell_filleted_step", export_bottom_shell_filleted_step, METH_VARARGS, "Export bottom shell with bottom fillets directly to STEP"},
     {"export_bottom_shell_filleted_with_holes_step", export_bottom_shell_filleted_with_holes_step, METH_VARARGS, "Export bottom shell with bottom fillets and corner holes directly to STEP"},
+    {"export_cylinder_step", export_cylinder_step, METH_VARARGS, "Export parametric cylinder to STEP"},
+    {"export_cone_step", export_cone_step, METH_VARARGS, "Export parametric cone to STEP"},
+    {"export_hollow_cylinder_step", export_hollow_cylinder_step, METH_VARARGS, "Export parametric hollow cylinder to STEP"},
+    {"export_hollow_cone_step", export_hollow_cone_step, METH_VARARGS, "Export parametric hollow cone to STEP"},
+    {"export_cylinder_chamfer_step", export_cylinder_chamfer_step, METH_VARARGS, "Export parametric cylinder with top chamfer to STEP"},
+    {"export_cylinder_fillet_step", export_cylinder_fillet_step, METH_VARARGS, "Export parametric cylinder with top fillet to STEP"},
+    {"export_cone_chamfer_fillet_step", export_cone_chamfer_fillet_step, METH_VARARGS, "Export parametric cone with bottom chamfer and top fillet to STEP"},
+    {"export_hollow_cone_fillet_step", export_hollow_cone_fillet_step, METH_VARARGS, "Export parametric hollow cone with top fillet to STEP"},
+    {"export_hollow_cylinder_fillet_step", export_hollow_cylinder_fillet_step, METH_VARARGS, "Export parametric hollow cylinder with top fillet to STEP"},
     {"init_incremental_export", init_incremental_export, METH_VARARGS, "Initialize incremental export"},
     {"add_object_to_export", add_object_to_export, METH_VARARGS, "Add single object to incremental export"},
     {"finalize_incremental_export", finalize_incremental_export, METH_NOARGS, "Finalize incremental export and write file"},

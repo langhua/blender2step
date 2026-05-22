@@ -22,6 +22,12 @@ import sys
 import os
 from collections import defaultdict
 
+# 尝试导入step_exporter模块的log_to_file函数
+try:
+    from step_exporter import log_to_file
+except ImportError:
+    log_to_file = print
+
 
 def get_script_dir():
     if __file__ and os.path.isfile(__file__):
@@ -1078,9 +1084,9 @@ def create_filleted_shell_blender(name, width, depth, outer_height, bottom_thick
 
 def create_filleted_bottom_shells_scene():
     """生成带底面圆角的底壳（仅无孔），导出为完美STEP"""
-    print("\n" + "="*60)
-    print("Filleted Bottom Shell Generator (No Holes)")
-    print("="*60)
+    log_to_file("\n" + "="*60)
+    log_to_file("Filleted Bottom Shell Generator (No Holes)")
+    log_to_file("="*60)
 
     print("[1/4] Clearing scene...")
     clear_scene()
@@ -1170,9 +1176,9 @@ def create_filleted_bottom_shells_scene():
 
 def create_filleted_bottom_shells_with_holes_scene():
     """生成带底面圆角的底壳（无孔+有孔），导出为完美STEP"""
-    print("\n" + "="*60)
-    print("Filleted Bottom Shell Generator (With & Without Holes)")
-    print("="*60)
+    log_to_file("\n" + "="*60)
+    log_to_file("Filleted Bottom Shell Generator (With & Without Holes)")
+    log_to_file("="*60)
 
     print("[1/5] Clearing scene...")
     clear_scene()

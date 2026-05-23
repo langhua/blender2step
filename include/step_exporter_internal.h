@@ -71,6 +71,11 @@ TopoDS_Shape create_hollow_cone_fillet_solid_parametric(double outer_bottom_radi
                                                          double height, double fillet_radius);
 TopoDS_Shape create_hollow_cylinder_fillet_solid_parametric(double outer_radius, double inner_radius,
                                                              double height, double fillet_radius);
+TopoDS_Shape create_hollow_cone_fillet_with_groove_parametric(double outer_bottom_radius, double outer_top_radius,
+                                                               double inner_bottom_radius, double inner_top_radius,
+                                                               double height, double fillet_radius,
+                                                               double groove_depth, double groove_bottom_width,
+                                                               double groove_top_width, double groove_extrusion_length);
 
 // Python interface functions
 PyObject* get_version(PyObject* self, PyObject* args);

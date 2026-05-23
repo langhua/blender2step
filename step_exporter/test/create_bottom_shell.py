@@ -602,42 +602,43 @@ def create_both_bottom_shells_scene():
                     space.shading.type = 'SOLID'
                     space.overlay.show_wireframes = False
 
-    print("[4/4] Exporting perfect STEP via C++ extension...")
-    script_dir = get_script_dir()
-    lib_dir = os.path.abspath(os.path.join(script_dir, '..', 'lib'))
-    sys.path.insert(0, lib_dir)
-    os.environ['PATH'] = lib_dir + os.pathsep + os.environ.get('PATH', '')
-    if hasattr(os, 'add_dll_directory'):
-        os.add_dll_directory(lib_dir)
-
-    import _step_exporter as cpp_exporter
-
-    output_no_holes = os.path.join(script_dir, 'bottom_shell_no_holes.step')
-    result1 = cpp_exporter.export_rounded_box_step(
-        output_no_holes,
-        width, depth, outer_height,
-        bottom_thickness, wall_thickness, corner_radius,
-    )
-    if result1:
-        print(f"  [OK] Bottom shell (no holes) -> {output_no_holes}")
-    else:
-        print(f"  [FAIL] Bottom shell (no holes) export failed")
-
-    output_with_holes = os.path.join(script_dir, 'bottom_shell_with_holes.step')
-    result2 = cpp_exporter.export_bottom_shell_with_holes_step(
-        output_with_holes,
-        width, depth, outer_height,
-        bottom_thickness, wall_thickness,
-        corner_radius, hole_radius,
-        hole_offset_x, hole_offset_y,
-    )
-    if result2:
-        print(f"  [OK] Bottom shell (with holes) -> {output_with_holes}")
-    else:
-        print(f"  [FAIL] Bottom shell (with holes) export failed")
+    # 自动导出 STEP（已禁用，请在 Blender 菜单中手动导出）
+    # print("[4/4] Exporting perfect STEP via C++ extension...")
+    # script_dir = get_script_dir()
+    # lib_dir = os.path.abspath(os.path.join(script_dir, '..', 'lib'))
+    # sys.path.insert(0, lib_dir)
+    # os.environ['PATH'] = lib_dir + os.pathsep + os.environ.get('PATH', '')
+    # if hasattr(os, 'add_dll_directory'):
+    #     os.add_dll_directory(lib_dir)
+    #
+    # import _step_exporter as cpp_exporter
+    #
+    # output_no_holes = os.path.join(script_dir, 'bottom_shell_no_holes.step')
+    # result1 = cpp_exporter.export_rounded_box_step(
+    #     output_no_holes,
+    #     width, depth, outer_height,
+    #     bottom_thickness, wall_thickness, corner_radius,
+    # )
+    # if result1:
+    #     print(f"  [OK] Bottom shell (no holes) -> {output_no_holes}")
+    # else:
+    #     print(f"  [FAIL] Bottom shell (no holes) export failed")
+    #
+    # output_with_holes = os.path.join(script_dir, 'bottom_shell_with_holes.step')
+    # result2 = cpp_exporter.export_bottom_shell_with_holes_step(
+    #     output_with_holes,
+    #     width, depth, outer_height,
+    #     bottom_thickness, wall_thickness,
+    #     corner_radius, hole_radius,
+    #     hole_offset_x, hole_offset_y,
+    # )
+    # if result2:
+    #     print(f"  [OK] Bottom shell (with holes) -> {output_with_holes}")
+    # else:
+    #     print(f"  [FAIL] Bottom shell (with holes) export failed")
 
     print("\n" + "="*60)
-    print("[OK] Both bottom shells created and exported!")
+    print("[OK] Both bottom shells created!")
     print("="*60)
 
 
@@ -1142,35 +1143,36 @@ def create_filleted_bottom_shells_scene():
     else:
         print(f"  [WARN] Could not measure inner fillet, using default: {inner_fillet_radius:.3f} mm")
 
-    print("[4/4] Exporting parametric STEP via C++ extension...")
-    script_dir = get_script_dir()
-    lib_dir = os.path.abspath(os.path.join(script_dir, '..', 'lib'))
-    sys.path.insert(0, lib_dir)
-    os.environ['PATH'] = lib_dir + os.pathsep + os.environ.get('PATH', '')
-    if hasattr(os, 'add_dll_directory'):
-        os.add_dll_directory(lib_dir)
-
-    import _step_exporter as cpp_exporter
-
-    output = os.path.join(script_dir, 'bottom_shell_filleted.step')
-    result = cpp_exporter.export_bottom_shell_filleted_step(
-        output,
-        width, depth, outer_height,
-        bottom_thickness, wall_thickness, corner_radius,
-        outer_fillet_radius, inner_fillet_radius,
-        1.0,  # step_height
-        0.0, 0.0, 0.0,  # pos_x, pos_y, pos_z
-        "AP214IS",
-        "MILLIMETER",
-        1,  # enable_logging
-    )
-    if result:
-        print(f"  [OK] Filleted bottom shell -> {output}")
-    else:
-        print(f"  [FAIL] Filleted bottom shell export failed")
+    # 自动导出 STEP（已禁用，请在 Blender 菜单中手动导出）
+    # print("[4/4] Exporting parametric STEP via C++ extension...")
+    # script_dir = get_script_dir()
+    # lib_dir = os.path.abspath(os.path.join(script_dir, '..', 'lib'))
+    # sys.path.insert(0, lib_dir)
+    # os.environ['PATH'] = lib_dir + os.pathsep + os.environ.get('PATH', '')
+    # if hasattr(os, 'add_dll_directory'):
+    #     os.add_dll_directory(lib_dir)
+    #
+    # import _step_exporter as cpp_exporter
+    #
+    # output = os.path.join(script_dir, 'bottom_shell_filleted.step')
+    # result = cpp_exporter.export_bottom_shell_filleted_step(
+    #     output,
+    #     width, depth, outer_height,
+    #     bottom_thickness, wall_thickness, corner_radius,
+    #     outer_fillet_radius, inner_fillet_radius,
+    #     1.0,  # step_height
+    #     0.0, 0.0, 0.0,  # pos_x, pos_y, pos_z
+    #     "AP214IS",
+    #     "MILLIMETER",
+    #     1,  # enable_logging
+    # )
+    # if result:
+    #     print(f"  [OK] Filleted bottom shell -> {output}")
+    # else:
+    #     print(f"  [FAIL] Filleted bottom shell export failed")
 
     print("\n" + "="*60)
-    print("[OK] Filleted bottom shell created and exported!")
+    print("[OK] Filleted bottom shell created!")
     print("="*60)
 
 
@@ -1254,53 +1256,54 @@ def create_filleted_bottom_shells_with_holes_scene():
     else:
         print(f"  [WARN] Could not measure inner fillet, using default: {inner_fillet_radius:.3f} mm")
 
-    print("[5/5] Exporting parametric STEP via C++ extension...")
-    script_dir = get_script_dir()
-    lib_dir = os.path.abspath(os.path.join(script_dir, '..', 'lib'))
-    sys.path.insert(0, lib_dir)
-    os.environ['PATH'] = lib_dir + os.pathsep + os.environ.get('PATH', '')
-    if hasattr(os, 'add_dll_directory'):
-        os.add_dll_directory(lib_dir)
-
-    import _step_exporter as cpp_exporter
-
-    output_no_holes = os.path.join(script_dir, 'bottom_shell_filleted.step')
-    result1 = cpp_exporter.export_bottom_shell_filleted_step(
-        output_no_holes,
-        width, depth, outer_height,
-        bottom_thickness, wall_thickness, corner_radius,
-        outer_fillet_radius, inner_fillet_radius,
-        1.0,
-        0.0, 0.0, 0.0,  # pos_x, pos_y, pos_z
-        "AP214IS",
-        "MILLIMETER",
-        1,
-    )
-    if result1:
-        print(f"  [OK] Filleted bottom shell (no holes) -> {output_no_holes}")
-    else:
-        print(f"  [FAIL] Filleted bottom shell (no holes) export failed")
-
-    output_with_holes = os.path.join(script_dir, 'bottom_shell_filleted_with_holes.step')
-    result2 = cpp_exporter.export_bottom_shell_filleted_with_holes_step(
-        output_with_holes,
-        width, depth, outer_height,
-        bottom_thickness, wall_thickness, corner_radius,
-        outer_fillet_radius, inner_fillet_radius,
-        1.0,
-        hole_radius, hole_offset_x, hole_offset_y,
-        0.0, 0.0, 0.0,  # pos_x, pos_y, pos_z
-        "AP214IS",
-        "MILLIMETER",
-        1,
-    )
-    if result2:
-        print(f"  [OK] Filleted bottom shell (with holes) -> {output_with_holes}")
-    else:
-        print(f"  [FAIL] Filleted bottom shell (with holes) export failed")
+    # 自动导出 STEP（已禁用，请在 Blender 菜单中手动导出）
+    # print("[5/5] Exporting parametric STEP via C++ extension...")
+    # script_dir = get_script_dir()
+    # lib_dir = os.path.abspath(os.path.join(script_dir, '..', 'lib'))
+    # sys.path.insert(0, lib_dir)
+    # os.environ['PATH'] = lib_dir + os.pathsep + os.environ.get('PATH', '')
+    # if hasattr(os, 'add_dll_directory'):
+    #     os.add_dll_directory(lib_dir)
+    #
+    # import _step_exporter as cpp_exporter
+    #
+    # output_no_holes = os.path.join(script_dir, 'bottom_shell_filleted.step')
+    # result1 = cpp_exporter.export_bottom_shell_filleted_step(
+    #     output_no_holes,
+    #     width, depth, outer_height,
+    #     bottom_thickness, wall_thickness, corner_radius,
+    #     outer_fillet_radius, inner_fillet_radius,
+    #     1.0,
+    #     0.0, 0.0, 0.0,  # pos_x, pos_y, pos_z
+    #     "AP214IS",
+    #     "MILLIMETER",
+    #     1,
+    # )
+    # if result1:
+    #     print(f"  [OK] Filleted bottom shell (no holes) -> {output_no_holes}")
+    # else:
+    #     print(f"  [FAIL] Filleted bottom shell (no holes) export failed")
+    #
+    # output_with_holes = os.path.join(script_dir, 'bottom_shell_filleted_with_holes.step')
+    # result2 = cpp_exporter.export_bottom_shell_filleted_with_holes_step(
+    #     output_with_holes,
+    #     width, depth, outer_height,
+    #     bottom_thickness, wall_thickness, corner_radius,
+    #     outer_fillet_radius, inner_fillet_radius,
+    #     1.0,
+    #     hole_radius, hole_offset_x, hole_offset_y,
+    #     0.0, 0.0, 0.0,  # pos_x, pos_y, pos_z
+    #     "AP214IS",
+    #     "MILLIMETER",
+    #     1,
+    # )
+    # if result2:
+    #     print(f"  [OK] Filleted bottom shell (with holes) -> {output_with_holes}")
+    # else:
+    #     print(f"  [FAIL] Filleted bottom shell (with holes) export failed")
 
     print("\n" + "="*60)
-    print("[OK] Both filleted bottom shells created and exported!")
+    print("[OK] Both filleted bottom shells created!")
     print("="*60)
 
 

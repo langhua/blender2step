@@ -21,6 +21,7 @@
 
 import bpy
 import math
+import os
 
 
 def clear_scene():
@@ -650,6 +651,94 @@ def create_hollow_cylinder(name, center, outer_radius, inner_radius, height, seg
         return None
 
 
+def create_trapezoid_prism_cutter(name, z_center, radius, groove_depth,
+                                   bottom_width, top_width, extrusion_length):
+    """
+    创建一个横截面为等边梯形的长方体棱柱（用于布尔切割直槽凹槽）
+
+    使用 Cube 基元 + 顶点变形，确保面法线正确。
+
+    横截面（XZ 平面，沿 Y 轴挤出）：
+    
+         Z (height)
+         ^
+         |      top_width（凹槽底部，较窄）
+         |      <-->
+         |  P2----------P3     <- groove bottom (X = radius - groove_depth)
+         |   \          /      <- 等边梯形斜边
+         |    \        /
+         |  P1----------P0     <- cylinder surface (X = radius + epsilon)
+         |    <-------->
+         |     bottom_width（圆柱表面，较宽）
+         |
+         +------------------> X (radial direction)
+
+    Args:
+        name: 棱柱名称
+        z_center: 凹槽中心的 Z 坐标
+        radius: 圆柱在凹槽位置的表面半径（X 坐标）
+        groove_depth: 凹槽深度（径向切削量）
+        bottom_width: 梯形在圆柱表面的宽度（较宽边，沿 Z 方向）
+        top_width: 梯形在凹槽底部的宽度（较窄边，沿 Z 方向）
+        extrusion_length: 沿 Y 轴的挤出长度（凹槽的纵向宽度）
+
+    Returns:
+        棱柱网格对象
+    """
+    import bmesh
+
+    R_surface = radius + 1.5
+    r_inner = R_surface - groove_depth
+    hb = bottom_width / 2.0
+    ht = top_width / 2.0
+    half_ext = extrusion_length / 2.0
+
+    # 使用 Cube 基元创建，保证法线正确
+    bpy.ops.mesh.primitive_cube_add(
+        size=1.0,
+        location=(0, 0, 0),
+    )
+    obj = bpy.context.active_object
+    obj.name = name
+
+    # 进入编辑模式，用 bmesh 移动8个顶点到梯形棱柱位置
+    bpy.ops.object.mode_set(mode='EDIT')
+    bm = bmesh.from_edit_mesh(obj.data)
+
+    # Cube 的 8 个顶点在 (±0.5, ±0.5, ±0.5)，需要映射到梯形棱柱顶点
+    # 目标: X 方向 = 径向（inner/outer），Y = 挤出方向（±half_ext），Z = 高度（±hb/±ht）
+    # 
+    # 顶点映射（按 Cube 的局部坐标符号）:
+    # Y+ 面(前):   X+ X-  ×  Z+ Z-  = 4个顶点
+    # Y- 面(后):   X+ X-  ×  Z+ Z-  = 4个顶点
+
+    for v in bm.verts:
+        x_sign = 1 if v.co.x > 0 else -1
+        z_sign = 1 if v.co.z > 0 else -1
+
+        # Y 坐标：根据符号映射到 ±half_ext
+        new_y = half_ext if v.co.y > 0 else -half_ext
+
+        # X 坐标：+X → 外表面(R_surface)，-X → 内表面(r_inner)
+        new_x = R_surface if x_sign > 0 else r_inner
+
+        # Z 坐标：+Z → 根据 X 位置使用 hb 或 ht
+        #  外表面(X+)的 Z 范围: z_center ± hb
+        #  内表面(X-)的 Z 范围: z_center ± ht
+        if x_sign > 0:
+            new_z = z_center + hb if z_sign > 0 else z_center - hb
+        else:
+            new_z = z_center + ht if z_sign > 0 else z_center - ht
+
+        v.co = (new_x, new_y, new_z)
+
+    bmesh.update_edit_mesh(obj.data)
+    bpy.ops.object.mode_set(mode='OBJECT')
+
+    print(f"     -> Prism cutter: {len(obj.data.vertices)} verts, {len(obj.data.polygons)} faces")
+    return obj
+
+
 def apply_top_fillet_to_mesh(obj, height, fillet_radius, fillet_segments=16):
     """
     对网格对象的顶部边缘应用圆倒角（包括外边缘和内边缘）
@@ -863,7 +952,7 @@ def create_mechanical_demo_scene():
     else:
         print("   [FAIL] Failed to create tapered hollow cylinder")
 
-    print("\n[5f/6] 创建带顶部倒角的锥形螺柱（外圆和内圆顶部均有倒角）...")
+    print("\n[5f/7] 创建带顶部倒角的锥形空心螺柱...")
     tapered_hollow_chamfer = create_tapered_hollow_cylinder(
         "Cylinder_Tapered_Hollow_Chamfer",
         [180, 80, 0],
@@ -876,15 +965,14 @@ def create_mechanical_demo_scene():
     )
     if tapered_hollow_chamfer:
         apply_top_fillet_to_mesh(tapered_hollow_chamfer, 60, 1.5, fillet_segments=16)
-        print("   [OK] Tapered hollow cylinder with top fillet")
+        print("   [OK] Tapered hollow cylinder with top fillet (no groove)")
         print("     -> Outer: bottom 25mm, top 20mm (smaller top, larger bottom)")
         print("     -> Inner: bottom 8mm, top 12mm (larger top, smaller bottom)")
         print("     -> Height: 60mm, Top fillet: R1.5mm (outer + inner edges)")
-        print("     -> Should export as cone with tapered hole and top fillets")
     else:
         print("   [FAIL] Failed to create tapered hollow cylinder with chamfer")
     
-    print("\n[6/6] 创建带 2°斜率的参考圆柱...")
+    print("\n[6/7] 创建带 2°斜率的参考圆柱...")
     slope_rad = math.radians(2)
     top_radius = bottom_radius - height * math.tan(slope_rad)
     
@@ -899,9 +987,79 @@ def create_mechanical_demo_scene():
     print(f"   [OK] Tapered cylinder with 2 degree slope (reference)")
     print(f"     -> Bottom radius: {bottom_radius}mm, Top radius: {top_radius:.2f}mm")
     
+    print("\n[7/7] 创建带梯形凹槽的锥形空心螺柱...")
+    groove_cylinder = create_tapered_hollow_cylinder(
+        "Cylinder_Tapered_Hollow_Chamfer_Grooved",
+        [300, 80, 0],
+        25,  # 外柱底部半径
+        20,  # 外柱顶部半径（上小下大）
+        8,   # 内孔底部半径
+        12,  # 内孔顶部半径（上大下小）
+        60,  # 高度
+        segments=64
+    )
+    if groove_cylinder:
+        apply_top_fillet_to_mesh(groove_cylinder, 60, 1.5, fillet_segments=16)
+        print("   [OK] Tapered hollow cylinder with top fillet")
+        print("     -> Outer: bottom 25mm, top 20mm (smaller top, larger bottom)")
+        print("     -> Inner: bottom 8mm, top 12mm (larger top, smaller bottom)")
+        print("     -> Height: 60mm, Top fillet: R1.5mm (outer + inner edges)")
+
+        # 在中间位置切割等边梯形凹槽（长方体式直槽）
+        print("     -> Cutting isosceles trapezoid groove at middle (straight slot)...")
+        try:
+            mid_outer_radius = (25.0 + 20.0) / 2.0  # 22.5mm at z=0
+            
+            groove_cutter = create_trapezoid_prism_cutter(
+                "Temp_Trapezoid_Prism",
+                z_center=0.0,
+                radius=mid_outer_radius,
+                groove_depth=5.0,       # 径向切削深度
+                bottom_width=16.0,      # 圆柱表面宽度（较宽）
+                top_width=10.0,         # 凹槽底部宽度（较窄）
+                extrusion_length=50.0,  # 沿 Y 轴的槽宽
+            )
+            if groove_cutter is None or len(groove_cutter.data.vertices) == 0:
+                raise RuntimeError("Prism cutter mesh is empty")
+
+            # 棱柱放置于圆柱中心（X 正方向指向圆柱表面）
+            groove_cutter.location = (300, 80, 0)
+
+            # 布尔运算：从圆柱中减去梯形棱柱
+            bpy.ops.object.select_all(action='DESELECT')
+            groove_cylinder.select_set(True)
+            bpy.context.view_layer.objects.active = groove_cylinder
+
+            bool_mod = groove_cylinder.modifiers.new(
+                name="TrapezoidGroove", type='BOOLEAN'
+            )
+            bool_mod.operation = 'DIFFERENCE'
+            bool_mod.object = groove_cutter
+            bpy.ops.object.modifier_apply(modifier=bool_mod.name)
+
+            # 删除 cutter
+            bpy.data.objects.remove(groove_cutter, do_unlink=True)
+            print("     [OK] Straight trapezoid groove: depth=5mm, surface_width=16mm, bottom_width=10mm, slot_width=50mm")
+            # 设置凹槽参数到自定义属性，供 STEP 导出器使用
+            groove_cylinder['step_groove_depth'] = 5.0
+            groove_cylinder['step_groove_bottom_width'] = 16.0
+            groove_cylinder['step_groove_top_width'] = 10.0
+            groove_cylinder['step_groove_extrusion_length'] = 50.0
+        except Exception as groove_err:
+            print(f"     [WARN] Trapezoid groove cutting failed: {groove_err}")
+            import traceback
+            traceback.print_exc()
+            # 清理
+            cutter = bpy.data.objects.get("Temp_Trapezoid_Prism")
+            if cutter:
+                bpy.data.objects.remove(cutter, do_unlink=True)
+            print("     -> Continuing without groove (cylinder still created)")
+    else:
+        print("   [FAIL] Failed to create grooved cylinder")
+    
     print("\n" + "="*60)
     print("[OK] Mechanical parts created! (Mesh version)")
-    print("  Total 12 objects, all MESH type:")
+    print("  Total 13 objects, all MESH type:")
     print("  1. Solid cylinder - exports as analytical cylinder")
     print("  2. 3-degree tapered cylinder - exports as analytical cone")
     print("  3. 4-degree tapered cylinder - exports as analytical cone")
@@ -914,6 +1072,7 @@ def create_mechanical_demo_scene():
     print("  10. Tapered hollow cylinder - exports as cone with tapered hole")
     print("  11. Tapered hollow cylinder with top fillet - exports as cone with tapered hole and fillets")
     print("  12. 2-degree tapered reference cylinder - exports as analytical cone")
+    print("  13. Tapered hollow cylinder with top fillet and trapezoid straight groove - exports as grooved cone")
     print("="*60)
     print("\nNext: File -> Export -> STEP (Enhanced)")
     print("Verify in FreeCAD:")
@@ -925,8 +1084,29 @@ def create_mechanical_demo_scene():
 
 if __name__ == "__main__":
     try:
+        print("\n" + "="*60)
+        print("Starting create_mesh_cylinder.py...")
+        print("="*60)
         create_mechanical_demo_scene()
+
+        # 自动导出 STEP（已禁用，请在 Blender 菜单中手动导出）
+        # try:
+        #     # 获取脚本所在目录（兼容Blender文本编辑器中__file__未定义）
+        #     try:
+        #         script_dir = os.path.dirname(os.path.abspath(__file__))
+        #     except (NameError, TypeError):
+        #         fallback = bpy.data.filepath if bpy.data.filepath else os.getcwd()
+        #         script_dir = os.path.dirname(fallback) if fallback else os.getcwd()
+        #     step_output = os.path.join(script_dir, "test28.step")
+        #     print(f"\nExporting STEP: {step_output}")
+        #     bpy.ops.export_scene.step_enhanced(filepath=step_output)
+        #     print(f"[OK] STEP exported: {step_output}")
+        #     print(f"     Log file: {step_output}.log")
+        # except Exception as export_err:
+        #     print(f"[WARN] STEP export failed: {export_err}")
+        #     print("       Objects are still created in the scene.")
+
     except Exception as e:
-        print(f"\nError executing: {e}")
+        print(f"\n[ERROR] Script failed: {e}")
         import traceback
         traceback.print_exc()

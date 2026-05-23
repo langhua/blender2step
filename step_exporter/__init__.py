@@ -1052,6 +1052,58 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
         bm.free()
         return None
     
+    # 检查中间区域是否存在非圆形特征（排除被凹槽/切割/布尔运算修改过的圆柱）
+    # 策略: 合并中间高度范围内所有顶点的半径（无论每层顶点多少），
+    #        避免因凹槽产生的稀疏层（每层 <4 顶点）被过滤掉
+    z_mid_low = min_z + height * 0.20
+    z_mid_high = max_z - height * 0.20
+    
+    # 如果有凹槽定制属性，提前提取凹槽参数（不依赖中间层检测结果）
+    has_groove_custom = obj.get('step_groove_depth') is not None
+    groove_params = {}
+    if has_groove_custom:
+        groove_params = {
+            'groove_depth': obj['step_groove_depth'],
+            'groove_bottom_width': obj.get('step_groove_bottom_width', 0),
+            'groove_top_width': obj.get('step_groove_top_width', 0),
+            'groove_extrusion_length': obj.get('step_groove_extrusion_length', 0),
+        }
+    
+    mid_all_radii = []
+    for zl_key in z_layers:
+        if z_mid_low <= zl_key <= z_mid_high and len(z_layers[zl_key]) >= 1:
+            mid_all_radii.extend(compute_radii(z_layers[zl_key]))
+    
+    if len(mid_all_radii) >= 16:
+        mid_sorted = sorted(mid_all_radii)
+        # 空心结构: 外圈递归检测子簇（凹槽底面 vs 圆柱表面）
+        if might_be_hollow:
+            is_cluster, outer_radii = has_two_clusters(mid_sorted)
+            if is_cluster and len(outer_radii) >= 8:
+                outer_sorted = sorted(outer_radii)
+                sub_cluster, _ = has_two_clusters(outer_sorted)
+                if sub_cluster:
+                    if has_groove_custom:
+                        log_to_file(f"[STEP Exporter] Middle region has sub-clusters (groove), "
+                                    f"using custom groove parameters for parametric export")
+                    else:
+                        log_to_file(f"[STEP Exporter] Middle region outer ring has sub-clusters, "
+                                    f"mesh has cuts/grooves")
+                        bm.free()
+                        return None
+                mid_sorted = outer_radii
+        mean_r = sum(mid_sorted) / len(mid_sorted)
+        range_r = max(mid_sorted) - min(mid_sorted)
+        if range_r > mean_r * 0.08:
+            if has_groove_custom:
+                log_to_file(f"[STEP Exporter] Middle region not cleanly circular (groove detected), "
+                            f"using custom groove parameters for parametric export")
+            else:
+                log_to_file(f"[STEP Exporter] Middle region not cleanly circular "
+                            f"(range={range_r:.3f} > {mean_r*0.08:.3f}), mesh has cuts/grooves")
+                bm.free()
+                return None
+    
     log_to_file(f"[STEP Exporter] Detected: center=({center_x:.3f},{center_y:.3f}), "
                 f"bottom_r={bottom_radius:.3f} top_r={top_radius:.3f}, height={height:.3f}")
     
@@ -1378,7 +1430,7 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
             feature_size = abs(dr)
         else:
             feature_type = 'fillet'
-            feature_size = (transition_zls[-1] - transition_zls[0]) * 0.8
+            feature_size = (transition_zls[-1] - transition_zls[0]) * 1.0
             if feature_size < 0.5:
                 feature_size = abs(dr)
         
@@ -1421,7 +1473,9 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
             obj_type = 'hollow_cone'
             if top_feature == 'fillet':
                 obj_type = 'hollow_cone_fillet'
-            return {
+            if groove_params:
+                obj_type = 'hollow_cone_fillet_grooved'
+            result = {
                 'obj_type': obj_type,
                 'outer_bottom_radius': bottom_radius,
                 'outer_top_radius': top_radius,
@@ -1436,6 +1490,9 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                 'bottom_feature': bottom_feature,
                 'bottom_feature_size': bottom_feature_size,
             }
+            if groove_params:
+                result.update(groove_params)
+            return result
     else:
         if bottom_radius * 0.98 <= top_radius <= bottom_radius * 1.02:
             avg_radius = (bottom_radius + top_radius) / 2.0
@@ -1608,15 +1665,16 @@ def _export_bottom_shell_timer():
         context = data['context']
         shells = data.get('shells', [])
         cylinders = data.get('cylinders', [])
+        regular_objects = data.get('regular_objects', [])
         
-        if not shells and not cylinders:
-            log_to_file(f"[STEP Exporter] No parametric objects to export")
+        if not shells and not cylinders and not regular_objects:
+            log_to_file(f"[STEP Exporter] No objects to export")
             end_progress(context)
             _bottom_shell_export_data = None
             return None
 
-        total_objects = len(shells) + len(cylinders)
-        log_to_file(f"[STEP Exporter] Parametric timer: exporting {len(shells)} shell(s) + {len(cylinders)} cylinder(s)...")
+        total_objects = len(shells) + len(cylinders) + len(regular_objects)
+        log_to_file(f"[STEP Exporter] Parametric timer: exporting {len(shells)} shell(s) + {len(cylinders)} cylinder(s) + {len(regular_objects)} mesh(es)...")
         
         import _step_exporter as cpp_exporter
         
@@ -1789,6 +1847,24 @@ def _export_bottom_shell_timer():
                     data['step_unit'],
                     1 if data['enable_logging'] else 0
                 )
+            elif obj_type == 'hollow_cone_fillet_grooved':
+                success = cpp_exporter.export_hollow_cone_fillet_with_groove_step(
+                    temp_file,
+                    cparams.get('outer_bottom_radius', cparams.get('outer_radius', 0)),
+                    cparams.get('outer_top_radius', cparams.get('outer_radius', 0)),
+                    cparams.get('inner_bottom_radius', cparams.get('inner_radius', 0)),
+                    cparams.get('inner_top_radius', cparams.get('inner_radius', 0)),
+                    cparams['height'],
+                    cparams.get('top_feature_size', 0),
+                    cparams.get('groove_depth', 0),
+                    cparams.get('groove_bottom_width', 0),
+                    cparams.get('groove_top_width', 0),
+                    cparams.get('groove_extrusion_length', 0),
+                    px, py, pz,
+                    data['step_schema'],
+                    data['step_unit'],
+                    1 if data['enable_logging'] else 0
+                )
             elif obj_type == 'cone_fillet':
                 success = cpp_exporter.export_cone_chamfer_fillet_step(
                     temp_file,
@@ -1823,6 +1899,52 @@ def _export_bottom_shell_timer():
                 log_to_file(f"[STEP Exporter]   FAILED to export {obj_type} {idx+1}")
             else:
                 log_to_file(f"[STEP Exporter]   {obj_type} {idx+1} exported successfully")
+        
+        # 导出每个常规 mesh 对象到临时文件（使用 incremental API）
+        for idx, obj in enumerate(regular_objects):
+            log_to_file(f"[STEP Exporter]   Exporting mesh obj {idx+1}/{len(regular_objects)}: {obj.name}...")
+            
+            temp_file = data['filepath'] + f".temp{temp_idx}.step"
+            temp_files.append(temp_file)
+            temp_idx += 1
+            
+            try:
+                obj_data = _get_mesh_data_enhanced(obj, context, scale=1000.0)
+                if obj_data is None:
+                    raise RuntimeError("_get_mesh_data_enhanced returned None")
+                
+                # 设置日志回调供 C++ 使用
+                global _cpp_log_callback
+                _cpp_log_callback = lambda msg: log_to_file(msg)
+                
+                # 使用 incremental API 导出单个 mesh
+                init_ok = cpp_exporter.init_incremental_export(
+                    temp_file, 1, 1000.0,
+                    1 if data['fix_geometry'] else 0,
+                    1 if data['create_solid'] else 0,
+                    1 if data['advanced_brep'] else 0,
+                    data['step_schema'],
+                    data['step_unit'],
+                    1 if data['enable_logging'] else 0,
+                    data.get('sew_tolerance', 0.001),
+                    _cpp_log_callback
+                )
+                if init_ok:
+                    add_ok = cpp_exporter.add_object_to_export(obj_data, None)
+                    cpp_exporter.finalize_incremental_export()
+                    if add_ok:
+                        log_to_file(f"[STEP Exporter]   Mesh {obj.name} exported ({len(obj_data['vertices'])} verts, {len(obj_data['faces'])} tris)")
+                    else:
+                        all_success = False
+                        log_to_file(f"[STEP Exporter]   FAILED to add mesh object {obj.name}")
+                else:
+                    all_success = False
+                    log_to_file(f"[STEP Exporter]   FAILED to init incremental export for {obj.name}")
+            except Exception as mesh_exp_err:
+                all_success = False
+                log_to_file(f"[STEP Exporter]   ERROR exporting mesh {obj.name}: {mesh_exp_err}")
+                import traceback
+                log_to_file(traceback.format_exc())
         
         # 合并所有临时文件到最终的 STEP 文件
         if all_success and total_objects > 1:
@@ -2418,7 +2540,7 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
         log_to_file(f"[STEP Exporter] Total objects: {len(_export_objects)}, shells: {len(bottom_shells)}, cylinders: {len(cylinder_objects)}, regular: {len(regular_export_objects)}")
         
         if bottom_shells or cylinder_objects:
-            log_to_file(f"[STEP Exporter] Found {total_parametric} parametric object(s), using parametric export")
+            log_to_file(f"[STEP Exporter] Found {total_parametric} parametric object(s) (+ {len(regular_export_objects)} regular), using parametric export")
             update_progress(10, "检测到参数化对象，正在导出...", context)
 
             # 日志文件已在 execute() 开头打开，此处确保可用即可
@@ -2428,9 +2550,14 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
                 'filepath': self.filepath,
                 'shells': bottom_shells,
                 'cylinders': cylinder_objects,
+                'regular_objects': regular_export_objects,
                 'step_schema': self.step_schema,
                 'step_unit': step_unit,
                 'enable_logging': self.enable_logging,
+                'fix_geometry': self.fix_geometry,
+                'create_solid': self.create_solid,
+                'advanced_brep': self.advanced_brep,
+                'sew_tolerance': self.sew_tolerance,
                 'context': context,
             }
 

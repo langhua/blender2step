@@ -23,6 +23,9 @@
 #include <BRepCheck_Analyzer.hxx>
 #include <Precision.hxx>
 #include <Standard_Failure.hxx>
+#include <BRepBuilderAPI_MakeFace.hxx>
+#include <BRepBuilderAPI_MakePolygon.hxx>
+#include <BRepPrimAPI_MakePrism.hxx>
 #include <iostream>
 #include <vector>
 #include <cmath>
@@ -474,5 +477,125 @@ TopoDS_Shape create_hollow_cylinder_fillet_solid_parametric(
     }
     
     std::cout << "[STEP Exporter] Created hollow cylinder (fillet skipped): oR=" << outer_radius << std::endl;
+    return solid;
+}
+
+// ====================== 带凹槽的空心锥体（梯形直槽切割） ======================
+
+TopoDS_Shape create_hollow_cone_fillet_with_groove_parametric(
+    double outer_bottom_radius, double outer_top_radius,
+    double inner_bottom_radius, double inner_top_radius,
+    double height, double fillet_radius,
+    double groove_depth, double groove_bottom_width,
+    double groove_top_width, double groove_extrusion_length)
+{
+    // Step 1: Create hollow cone solid (without fillet - apply fillet after groove cut)
+    TopoDS_Shape coneShape = create_hollow_cone_solid_parametric(
+        outer_bottom_radius, outer_top_radius,
+        inner_bottom_radius, inner_top_radius, height);
+    if (coneShape.IsNull()) {
+        std::cerr << "[STEP Exporter] Failed to create hollow cone base shape" << std::endl;
+        return TopoDS_Shape();
+    }
+
+    TopoDS_Solid solid;
+    if (coneShape.ShapeType() == TopAbs_SOLID) {
+        solid = TopoDS::Solid(coneShape);
+    } else {
+        BRepBuilderAPI_MakeSolid sm;
+        for (TopExp_Explorer exp(coneShape, TopAbs_SHELL); exp.More(); exp.Next())
+            sm.Add(TopoDS::Shell(exp.Current()));
+        if (sm.IsDone()) solid = sm.Solid();
+        else {
+            std::cerr << "[STEP Exporter] Failed to convert cone to solid" << std::endl;
+            return TopoDS_Shape();
+        }
+    }
+
+    // Step 2: Create trapezoid prism cutter for the groove
+    // Groove is at mid-height (z=0) of the cone, centered in Y
+    // The cross-section is in the XZ plane, extruded along Y axis
+    double mid_outer_radius = (outer_bottom_radius + outer_top_radius) / 2.0;
+    double R_surface = mid_outer_radius + 1.5;   // surface overcut margin (same as Blender script)
+    double r_inner = R_surface - groove_depth;
+    double hb = groove_bottom_width / 2.0;        // Z half-extent at surface (wider)
+    double ht = groove_top_width / 2.0;           // Z half-extent at groove bottom (narrower)
+    double half_ext = groove_extrusion_length / 2.0; // Y half-extent
+
+    // Base face at Y = -half_ext, cross-section in XZ plane
+    // Trapezoid vertices (counter-clockwise when viewed from Y+):
+    //   p0: (R_surface, +hb) - outer/top
+    //   p3: (R_surface, -hb) - outer/bottom
+    //   p2: (r_inner, -ht) - inner/bottom
+    //   p1: (r_inner, +ht) - inner/top
+    gp_Pnt p0(R_surface, -half_ext, +hb);
+    gp_Pnt p1(r_inner,  -half_ext, +ht);
+    gp_Pnt p2(r_inner,  -half_ext, -ht);
+    gp_Pnt p3(R_surface, -half_ext, -hb);
+
+    BRepBuilderAPI_MakePolygon wireMaker;
+    wireMaker.Add(p0);
+    wireMaker.Add(p1);
+    wireMaker.Add(p2);
+    wireMaker.Add(p3);
+    wireMaker.Close();
+
+    if (!wireMaker.IsDone()) {
+        std::cerr << "[STEP Exporter] Failed to create cutter wire" << std::endl;
+        // Fall through: return cone without groove (apply fillet below)
+    } else {
+        TopoDS_Wire wire = wireMaker.Wire();
+        TopoDS_Face face = BRepBuilderAPI_MakeFace(wire);
+
+        gp_Vec extrudeVec(0, groove_extrusion_length, 0);
+        BRepPrimAPI_MakePrism prismMaker(face, extrudeVec);
+        if (prismMaker.IsDone()) {
+            TopoDS_Shape prism = prismMaker.Shape();
+
+            // Step 3: Boolean cut - subtract prism from cone
+            BRepAlgoAPI_Cut cutMaker(solid, prism);
+            if (cutMaker.IsDone() && !cutMaker.Shape().IsNull()) {
+                TopoDS_Shape result = cutMaker.Shape();
+                if (result.ShapeType() == TopAbs_SOLID) {
+                    solid = TopoDS::Solid(result);
+                } else {
+                    BRepBuilderAPI_MakeSolid sm;
+                    for (TopExp_Explorer exp(result, TopAbs_SHELL); exp.More(); exp.Next())
+                        sm.Add(TopoDS::Shell(exp.Current()));
+                    if (sm.IsDone()) solid = sm.Solid();
+                    else std::cerr << "[STEP Exporter] Boolean cut result is not a solid, falling back" << std::endl;
+                }
+                std::cout << "[STEP Exporter] Boolean groove cut applied successfully" << std::endl;
+            } else {
+                std::cerr << "[STEP Exporter] Boolean cut failed, returning cone without groove" << std::endl;
+            }
+        } else {
+            std::cerr << "[STEP Exporter] Failed to create cutter prism" << std::endl;
+        }
+    }
+
+    // Step 4: Apply fillet to top edges
+    std::vector<TopoDS_Edge> topEdges, bottomEdges;
+    find_circular_edges(solid, topEdges, bottomEdges);
+
+    if (fillet_radius > 0.001 && !topEdges.empty()) {
+        BRepFilletAPI_MakeFillet filletMaker(solid);
+        for (const auto& edge : topEdges) {
+            filletMaker.Add(fillet_radius, edge);
+        }
+        filletMaker.Build();
+        if (filletMaker.IsDone()) {
+            std::cout << "[STEP Exporter] Created hollow cone with top fillet and groove: "
+                      << "oBR=" << outer_bottom_radius << " oTR=" << outer_top_radius
+                      << " iBR=" << inner_bottom_radius << " iTR=" << inner_top_radius
+                      << " h=" << height << " fillet=" << fillet_radius
+                      << " groove_depth=" << groove_depth
+                      << " groove_width=" << groove_extrusion_length << std::endl;
+            return filletMaker.Shape();
+        }
+    }
+
+    std::cout << "[STEP Exporter] Created hollow cone with groove (fillet skipped): "
+              << "oBR=" << outer_bottom_radius << " oTR=" << outer_top_radius << std::endl;
     return solid;
 }

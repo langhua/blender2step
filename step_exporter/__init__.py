@@ -898,7 +898,41 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
     from collections import defaultdict
     
     log_to_file(f"[STEP Exporter] Analyzing mesh for cylinder: {obj.name}")
-    
+
+    # 如果有台阶内孔定制属性，使用定制参数直接返回（跳过 mesh 分析）
+    if obj.get('step_stepped_hole'):
+        log_to_file(f"[STEP Exporter]   -> stepped hole custom property detected, using direct params")
+        try:
+            out_br = obj.get('step_outer_bottom_radius', 25.0)
+            out_tr = obj.get('step_outer_top_radius', 22.91)
+            h = obj.get('step_height', 60.0)
+            sh_r = obj.get('step_small_hole_radius', 2.0)
+            sh_h = obj.get('step_small_hole_height', 2.0)
+            taper_deg = obj.get('step_inner_taper_deg', 2.0)
+            inner_tr = sh_r  # inner top = small hole radius
+            inner_br = inner_tr + (h - sh_h) * math.tan(math.radians(taper_deg))
+            return {
+                'obj_type': 'cone_stepped_hole',
+                'outer_bottom_radius': out_br,
+                'outer_top_radius': out_tr,
+                'height': h,
+                'small_hole_radius': sh_r,
+                'small_hole_height': sh_h,
+                'inner_taper_deg': taper_deg,
+                'inner_min_diameter': obj.get('step_inner_min_diameter', 4.0),
+                'inner_bottom_radius': inner_br,
+                'inner_top_radius': inner_tr,
+                'pos_x': obj.location.x,
+                'pos_y': obj.location.y,
+                'pos_z': obj.location.z,
+                'top_feature': None,
+                'top_feature_size': 0.0,
+                'bottom_feature': None,
+                'bottom_feature_size': 0.0,
+            }
+        except Exception as e:
+            log_to_file(f"[STEP Exporter]   -> stepped hole param error: {e}, falling through to mesh analysis")
+
     depsgraph = context.evaluated_depsgraph_get()
     eval_obj = obj.evaluated_get(depsgraph)
     mesh_data = eval_obj.data
@@ -1067,6 +1101,17 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
             'groove_bottom_width': obj.get('step_groove_bottom_width', 0),
             'groove_top_width': obj.get('step_groove_top_width', 0),
             'groove_extrusion_length': obj.get('step_groove_extrusion_length', 0),
+        }
+
+    # 如果有台阶内孔定制属性，提前提取参数
+    has_stepped_hole_custom = obj.get('step_stepped_hole') is not None
+    stepped_hole_params = {}
+    if has_stepped_hole_custom:
+        stepped_hole_params = {
+            'small_hole_radius': obj.get('step_small_hole_radius', 0),
+            'small_hole_height': obj.get('step_small_hole_height', 0),
+            'inner_taper_deg': obj.get('step_inner_taper_deg', 2.0),
+            'inner_min_diameter': obj.get('step_inner_min_diameter', 4.0),
         }
     
     mid_all_radii = []
@@ -1475,6 +1520,11 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                 obj_type = 'hollow_cone_fillet'
             if groove_params:
                 obj_type = 'hollow_cone_fillet_grooved'
+            if stepped_hole_params:
+                obj_type = 'cone_stepped_hole'
+                # 计算内锥孔底部半径：顶部直孔 r=small_hole_radius, 下部 2° 锥度
+                inner_top_r = stepped_hole_params['small_hole_radius']
+                inner_bottom_r = inner_top_r + (height - stepped_hole_params['small_hole_height']) * math.tan(math.radians(stepped_hole_params['inner_taper_deg']))
             result = {
                 'obj_type': obj_type,
                 'outer_bottom_radius': bottom_radius,
@@ -1492,6 +1542,10 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
             }
             if groove_params:
                 result.update(groove_params)
+            if stepped_hole_params:
+                result.update(stepped_hole_params)
+                result['inner_bottom_radius'] = inner_bottom_r
+                result['inner_top_radius'] = inner_top_r
             return result
     else:
         if bottom_radius * 0.98 <= top_radius <= bottom_radius * 1.02:
@@ -1860,6 +1914,21 @@ def _export_bottom_shell_timer():
                     cparams.get('groove_bottom_width', 0),
                     cparams.get('groove_top_width', 0),
                     cparams.get('groove_extrusion_length', 0),
+                    px, py, pz,
+                    data['step_schema'],
+                    data['step_unit'],
+                    1 if data['enable_logging'] else 0
+                )
+            elif obj_type == 'cone_stepped_hole':
+                success = cpp_exporter.export_cone_stepped_hole_step(
+                    temp_file,
+                    cparams.get('outer_bottom_radius', cparams.get('outer_radius', 0)),
+                    cparams.get('outer_top_radius', cparams.get('outer_radius', 0)),
+                    cparams['height'],
+                    cparams.get('small_hole_radius', 0),
+                    cparams.get('small_hole_height', 0),
+                    cparams.get('inner_bottom_radius', cparams.get('inner_radius', 0)),
+                    cparams.get('inner_top_radius', cparams.get('inner_radius', 0)),
                     px, py, pz,
                     data['step_schema'],
                     data['step_unit'],

@@ -651,6 +651,145 @@ def create_hollow_cylinder(name, center, outer_radius, inner_radius, height, seg
         return None
 
 
+def create_tapered_stepped_hole_cylinder(name, center, bottom_radius, top_radius,
+                                          small_hole_radius, small_hole_height,
+                                          large_hole_radius, height, segments=64):
+    """
+    创建带台阶内孔的锥形圆柱体
+
+    台阶内孔结构：
+        TOP
+    ┌────────────┐  ← small hole (small_hole_radius, height=small_hole_height)
+    │  ┌──────┐  │
+    │  │      │  │
+    │  │      │  │
+    │  └──────┘  │  ← step transition
+    │  ┌────────┐│
+    │  │        ││  ← large hole (large_hole_radius, remaining height)
+    │  │        ││
+    │  └────────┘│
+    └────────────┘
+        BOTTOM
+
+    Args:
+        name: 物体名称
+        center: 中心位置 (x, y, z)
+        bottom_radius: 外锥底部半径
+        top_radius: 外锥顶部半径
+        small_hole_radius: 顶部小孔半径
+        small_hole_height: 顶部小孔高度 (mm)
+        large_hole_radius: 其余大孔半径
+        height: 总高度
+        segments: 圆周分段数
+
+    Returns:
+        带台阶内孔的锥形圆柱体网格对象
+    """
+    import math
+
+    try:
+        # 1. 创建外锥形圆柱体
+        bpy.ops.mesh.primitive_cylinder_add(
+            radius=bottom_radius,
+            depth=height,
+            location=[0, 0, 0],
+            vertices=segments
+        )
+        outer_obj = bpy.context.active_object
+        outer_obj.name = f"{name}_outer"
+
+        # 缩放顶部面形成锥形
+        bpy.ops.object.mode_set(mode='EDIT')
+        bpy.ops.mesh.select_all(action='DESELECT')
+        bpy.ops.object.mode_set(mode='OBJECT')
+        for vertex in outer_obj.data.vertices:
+            if abs(vertex.co.z - height / 2) < 0.001:
+                vertex.select = True
+        bpy.ops.object.mode_set(mode='EDIT')
+        scale_factor = top_radius / bottom_radius
+        bpy.ops.transform.resize(value=(scale_factor, scale_factor, 1.0))
+        bpy.ops.object.mode_set(mode='OBJECT')
+
+        # 2. 创建台阶内孔切割工具
+        # 锥形大孔：从底部到台阶位置，2°锥度，顶部最小孔径 4mm (r=2mm)
+        large_hole_h = height - small_hole_height
+        inner_bottom_r = small_hole_radius + large_hole_h * math.tan(math.radians(2))
+        bpy.ops.mesh.primitive_cylinder_add(
+            radius=inner_bottom_r,
+            depth=large_hole_h + 2,  # 稍微穿透，确保布尔完整
+            location=[0, 0, -(height / 2) + large_hole_h / 2],
+            vertices=segments
+        )
+        large_hole_obj = bpy.context.active_object
+        large_hole_obj.name = f"{name}_large_hole"
+
+        # 缩放顶部面形成内锥形 (top radius = small_hole_radius)
+        bpy.ops.object.mode_set(mode='EDIT')
+        bpy.ops.mesh.select_all(action='DESELECT')
+        bpy.ops.object.mode_set(mode='OBJECT')
+        for vertex in large_hole_obj.data.vertices:
+            if abs(vertex.co.z - (large_hole_h / 2)) < 0.001:
+                vertex.select = True
+        bpy.ops.object.mode_set(mode='EDIT')
+        inner_scale = small_hole_radius / inner_bottom_r
+        bpy.ops.transform.resize(value=(inner_scale, inner_scale, 1.0))
+        bpy.ops.object.mode_set(mode='OBJECT')
+
+        # 小孔：顶部通孔，从台阶位置延伸到顶部以上，半径 = small_hole_radius
+        bpy.ops.mesh.primitive_cylinder_add(
+            radius=small_hole_radius,
+            depth=small_hole_height + 4,  # 向上多延伸，确保切穿顶面
+            location=[0, 0, (height / 2) - small_hole_height / 2 + 2],
+            vertices=segments
+        )
+        small_hole_obj = bpy.context.active_object
+        small_hole_obj.name = f"{name}_small_hole"
+
+        # 3. 执行布尔差集（分两步，避免两个孔圆柱交叉导致闭合面）
+        # 第一步：切除大孔
+        bpy.ops.object.select_all(action='DESELECT')
+        outer_obj.select_set(True)
+        bpy.context.view_layer.objects.active = outer_obj
+        bool_mod1 = outer_obj.modifiers.new(name="LargeHole", type='BOOLEAN')
+        bool_mod1.operation = 'DIFFERENCE'
+        bool_mod1.object = large_hole_obj
+        bpy.ops.object.modifier_apply(modifier=bool_mod1.name)
+        bpy.data.objects.remove(large_hole_obj, do_unlink=True)
+
+        # 第二步：切除顶部小孔
+        bool_mod2 = outer_obj.modifiers.new(name="SmallHole", type='BOOLEAN')
+        bool_mod2.operation = 'DIFFERENCE'
+        bool_mod2.object = small_hole_obj
+        bpy.ops.object.modifier_apply(modifier=bool_mod2.name)
+        bpy.data.objects.remove(small_hole_obj, do_unlink=True)
+
+        # 重命名
+        outer_obj.name = name
+
+        # 移动到指定位置
+        outer_obj.location = center
+
+        # 添加材质
+        if not outer_obj.data.materials:
+            mat = bpy.data.materials.new(name=f"{name}_Material")
+            mat.use_nodes = True
+            principled = mat.node_tree.nodes.get('Principled BSDF')
+            if principled:
+                principled.inputs['Base Color'].default_value = (0.8, 0.8, 0.8, 1.0)
+            outer_obj.data.materials.append(mat)
+
+        outer_obj.update_tag()
+        bpy.context.view_layer.update()
+
+        return outer_obj
+
+    except Exception as e:
+        print(f"创建台阶内孔锥形圆柱失败：{e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+
 def create_trapezoid_prism_cutter(name, z_center, radius, groove_depth,
                                    bottom_width, top_width, extrusion_length):
     """
@@ -1057,9 +1196,48 @@ def create_mechanical_demo_scene():
     else:
         print("   [FAIL] Failed to create grooved cylinder")
     
+    # ============================================================
+    # [8/8] 2°锥形台阶内孔圆柱
+    # ============================================================
+    print("\n[8/8] 创建2°锥形台阶内孔圆柱...")
+    slope_2deg = math.radians(2)
+    stepped_outer_bottom_r = 25.0
+    stepped_outer_top_r = stepped_outer_bottom_r - 60.0 * math.tan(slope_2deg)
+    stepped_cylinder = create_tapered_stepped_hole_cylinder(
+        "Cylinder_Tapered_Stepped_Hole",
+        [300, -80, 0],
+        stepped_outer_bottom_r,   # 外锥底部半径
+        stepped_outer_top_r,      # 外锥顶部半径
+        2.0,   # 顶部小孔半径 (2mm)
+        2.0,   # 小孔高度 (2mm)
+        4.0,   # 大孔参考半径（实际底部半径由2°锥度自动计算）
+        60,    # 总高度
+        segments=64
+    )
+    if stepped_cylinder:
+        # 标记为台阶内孔锥形圆柱，供 STEP 导出器参数化识别
+        stepped_cylinder['step_stepped_hole'] = True
+        stepped_cylinder['step_height'] = 60.0
+        stepped_cylinder['step_outer_bottom_radius'] = stepped_outer_bottom_r
+        stepped_cylinder['step_outer_top_radius'] = stepped_outer_top_r
+        stepped_cylinder['step_outer_taper_deg'] = 2.0
+        stepped_cylinder['step_inner_taper_deg'] = 2.0
+        stepped_cylinder['step_small_hole_radius'] = 2.0
+        stepped_cylinder['step_small_hole_height'] = 2.0
+        stepped_cylinder['step_inner_min_diameter'] = 4.0  # 最小孔径 4mm
+        print("   [OK] Tapered cylinder with stepped inner hole")
+        print(f"     -> Outer: bottom {stepped_outer_bottom_r:.0f}mm, top {stepped_outer_top_r:.2f}mm, "
+              f"2\u00b0 taper")
+        inner_bot = 2.0 + 58.0 * math.tan(math.radians(2))
+        print(f"     -> Inner: top 2mm straight hole r2mm + "
+              f"58mm 2\u00b0 tapered hole (r{2.0:.1f} -> r{inner_bot:.1f}mm)")
+        print(f"     -> Inner hole min diameter: 4mm at top")
+    else:
+        print("   [FAIL] Failed to create stepped hole tapered cylinder")
+    
     print("\n" + "="*60)
     print("[OK] Mechanical parts created! (Mesh version)")
-    print("  Total 13 objects, all MESH type:")
+    print("  Total 14 objects, all MESH type:")
     print("  1. Solid cylinder - exports as analytical cylinder")
     print("  2. 3-degree tapered cylinder - exports as analytical cone")
     print("  3. 4-degree tapered cylinder - exports as analytical cone")
@@ -1073,6 +1251,7 @@ def create_mechanical_demo_scene():
     print("  11. Tapered hollow cylinder with top fillet - exports as cone with tapered hole and fillets")
     print("  12. 2-degree tapered reference cylinder - exports as analytical cone")
     print("  13. Tapered hollow cylinder with top fillet and trapezoid straight groove - exports as grooved cone")
+    print("  14. Tapered cylinder with stepped inner hole (top r2mm h2mm, bottom r4mm)")
     print("="*60)
     print("\nNext: File -> Export -> STEP (Enhanced)")
     print("Verify in FreeCAD:")

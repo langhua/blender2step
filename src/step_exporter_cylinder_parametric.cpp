@@ -26,6 +26,7 @@
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_MakePolygon.hxx>
 #include <BRepPrimAPI_MakePrism.hxx>
+#include <BRepPrimAPI_MakeRevol.hxx>
 #include <iostream>
 #include <vector>
 #include <cmath>
@@ -598,4 +599,103 @@ TopoDS_Shape create_hollow_cone_fillet_with_groove_parametric(
     std::cout << "[STEP Exporter] Created hollow cone with groove (fillet skipped): "
               << "oBR=" << outer_bottom_radius << " oTR=" << outer_top_radius << std::endl;
     return solid;
+}
+
+// ====================== 锥形外壁 + 台阶内孔（顶部直孔 + 下部锥孔） ======================
+
+TopoDS_Shape create_cone_stepped_hole_parametric(
+    double outer_bottom_radius, double outer_top_radius,
+    double height,
+    double small_hole_radius, double small_hole_height,
+    double inner_bottom_radius, double inner_top_radius)
+{
+    try {
+        double half_h = height / 2.0;
+
+        std::cout << "[STEP Exporter] cone_stepped_hole: start, h=" << height
+                  << " oBR=" << outer_bottom_radius << " oTR=" << outer_top_radius
+                  << " shR=" << small_hole_radius << " shH=" << small_hole_height
+                  << " iBR=" << inner_bottom_radius << " iTR=" << inner_top_radius << std::endl;
+
+        // Build cross-section half-profile in XZ plane, revolve around Z axis
+        // Profile vertices (X=R, Z):
+        //   A: (inner_bottom_radius, -half_h)     - 内孔底部
+        //   B: (outer_bottom_radius, -half_h)     - 外壁底部
+        //   C: (outer_top_radius, +half_h)        - 外壁顶部
+        //   D: (small_hole_radius, +half_h)       - 内孔顶部
+        //   E: (small_hole_radius, +half_h - small_hole_height)  - 台阶处
+        // Back to A (close)
+
+        double step_z = half_h - small_hole_height;
+
+        gp_Pnt pa(inner_bottom_radius, 0, -half_h);
+        gp_Pnt pb(outer_bottom_radius, 0, -half_h);
+        gp_Pnt pc(outer_top_radius, 0, half_h);
+        gp_Pnt pd(small_hole_radius, 0, half_h);
+        gp_Pnt pe(small_hole_radius, 0, step_z);
+
+        // Create edges
+        TopoDS_Edge e_ab = BRepBuilderAPI_MakeEdge(pa, pb);
+        TopoDS_Edge e_bc = BRepBuilderAPI_MakeEdge(pb, pc);
+        TopoDS_Edge e_cd = BRepBuilderAPI_MakeEdge(pc, pd);
+        TopoDS_Edge e_de = BRepBuilderAPI_MakeEdge(pd, pe);
+        TopoDS_Edge e_ea = BRepBuilderAPI_MakeEdge(pe, pa);
+
+        // Assemble wire
+        BRepBuilderAPI_MakeWire wireMaker;
+        wireMaker.Add(e_ab);
+        wireMaker.Add(e_bc);
+        wireMaker.Add(e_cd);
+        wireMaker.Add(e_de);
+        wireMaker.Add(e_ea);
+        if (!wireMaker.IsDone()) {
+            std::cout << "[STEP Exporter] Failed to create wire" << std::endl;
+            return TopoDS_Shape();
+        }
+        TopoDS_Wire wire = wireMaker.Wire();
+        std::cout << "[STEP Exporter] cone_stepped_hole: wire OK" << std::endl;
+
+        // Create face from wire
+        BRepBuilderAPI_MakeFace faceMaker(wire);
+        if (!faceMaker.IsDone()) {
+            std::cout << "[STEP Exporter] Failed to create face" << std::endl;
+            return TopoDS_Shape();
+        }
+        TopoDS_Face face = faceMaker.Face();
+        std::cout << "[STEP Exporter] cone_stepped_hole: face OK" << std::endl;
+
+        // Revolve face around Z axis
+        gp_Ax1 zAxis(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1));
+        BRepPrimAPI_MakeRevol revol(face, zAxis);
+        if (!revol.IsDone()) {
+            std::cout << "[STEP Exporter] Failed to revolve" << std::endl;
+            return TopoDS_Shape();
+        }
+        TopoDS_Shape shape = revol.Shape();
+        std::cout << "[STEP Exporter] cone_stepped_hole: revolve OK, type=" << shape.ShapeType() << std::endl;
+
+        if (shape.ShapeType() == TopAbs_SOLID) {
+            std::cout << "[STEP Exporter] Created cone with stepped hole (revolve)" << std::endl;
+            return TopoDS::Solid(shape);
+        }
+
+        // Try to extract solid from compound
+        BRepBuilderAPI_MakeSolid sm;
+        for (TopExp_Explorer exp(shape, TopAbs_SHELL); exp.More(); exp.Next())
+            sm.Add(TopoDS::Shell(exp.Current()));
+        if (sm.IsDone()) {
+            std::cout << "[STEP Exporter] Created cone with stepped hole (shell->solid)" << std::endl;
+            return sm.Solid();
+        }
+
+        std::cout << "[STEP Exporter] Revolve result cannot be made solid, type=" << shape.ShapeType() << std::endl;
+        return TopoDS_Shape();
+
+    } catch (Standard_Failure& e) {
+        std::cout << "[STEP Exporter] OCC error: " << e.GetMessageString() << std::endl;
+        return TopoDS_Shape();
+    } catch (...) {
+        std::cout << "[STEP Exporter] Unknown error" << std::endl;
+        return TopoDS_Shape();
+    }
 }

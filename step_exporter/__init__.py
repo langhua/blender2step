@@ -899,40 +899,6 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
     
     log_to_file(f"[STEP Exporter] Analyzing mesh for cylinder: {obj.name}")
 
-    # 如果有台阶内孔定制属性，使用定制参数直接返回（跳过 mesh 分析）
-    if obj.get('step_stepped_hole'):
-        log_to_file(f"[STEP Exporter]   -> stepped hole custom property detected, using direct params")
-        try:
-            out_br = obj.get('step_outer_bottom_radius', 25.0)
-            out_tr = obj.get('step_outer_top_radius', 22.91)
-            h = obj.get('step_height', 60.0)
-            sh_r = obj.get('step_small_hole_radius', 2.0)
-            sh_h = obj.get('step_small_hole_height', 2.0)
-            taper_deg = obj.get('step_inner_taper_deg', 2.0)
-            inner_tr = sh_r  # inner top = small hole radius
-            inner_br = inner_tr + (h - sh_h) * math.tan(math.radians(taper_deg))
-            return {
-                'obj_type': 'cone_stepped_hole',
-                'outer_bottom_radius': out_br,
-                'outer_top_radius': out_tr,
-                'height': h,
-                'small_hole_radius': sh_r,
-                'small_hole_height': sh_h,
-                'inner_taper_deg': taper_deg,
-                'inner_min_diameter': obj.get('step_inner_min_diameter', 4.0),
-                'inner_bottom_radius': inner_br,
-                'inner_top_radius': inner_tr,
-                'pos_x': obj.location.x,
-                'pos_y': obj.location.y,
-                'pos_z': obj.location.z,
-                'top_feature': None,
-                'top_feature_size': 0.0,
-                'bottom_feature': None,
-                'bottom_feature_size': 0.0,
-            }
-        except Exception as e:
-            log_to_file(f"[STEP Exporter]   -> stepped hole param error: {e}, falling through to mesh analysis")
-
     depsgraph = context.evaluated_depsgraph_get()
     eval_obj = obj.evaluated_get(depsgraph)
     mesh_data = eval_obj.data
@@ -1103,17 +1069,6 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
             'groove_extrusion_length': obj.get('step_groove_extrusion_length', 0),
         }
 
-    # 如果有台阶内孔定制属性，提前提取参数
-    has_stepped_hole_custom = obj.get('step_stepped_hole') is not None
-    stepped_hole_params = {}
-    if has_stepped_hole_custom:
-        stepped_hole_params = {
-            'small_hole_radius': obj.get('step_small_hole_radius', 0),
-            'small_hole_height': obj.get('step_small_hole_height', 0),
-            'inner_taper_deg': obj.get('step_inner_taper_deg', 2.0),
-            'inner_min_diameter': obj.get('step_inner_min_diameter', 4.0),
-        }
-    
     mid_all_radii = []
     for zl_key in z_layers:
         if z_mid_low <= zl_key <= z_mid_high and len(z_layers[zl_key]) >= 1:
@@ -1495,6 +1450,93 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
     pos_y = obj.location.y
     pos_z = obj.location.z
     
+    # ===== Mesh-based Stepped Hole Detection for Hollow Cones =====
+    # Detects stepped inner holes: constant-radius straight section at top,
+    # tapered section below. Signature: inner radius near-constant in top portion
+    # while outer continues to taper, with a jump at the step transition.
+    stepped_hole_params = {}
+    if is_hollow and not (bottom_radius * 0.98 <= top_radius <= bottom_radius * 1.02):
+        inner_z_data = {}
+        for zl in sorted_z:
+            pts = z_layers[zl]
+            if len(pts) < 16:
+                continue
+            radii = sorted(compute_radii(pts))
+            is_cluster, outer = has_two_clusters(radii)
+            if not is_cluster:
+                continue
+            n = len(radii)
+            inner_vals = radii[:n - len(outer)]
+            if len(inner_vals) >= 4:
+                inner_z_data[zl] = sorted(inner_vals)[len(inner_vals) // 2]
+        
+        if len(inner_z_data) >= 3:
+            inner_z_sorted = sorted(inner_z_data.keys())
+            top_z = inner_z_sorted[-1]
+            
+            # Look at top 35%: inner radius should be nearly constant (straight hole section)
+            top_cut = top_z - height * 0.35
+            top_zls = [zl for zl in inner_z_sorted if zl >= top_cut]
+            bot_zls = [zl for zl in inner_z_sorted if zl < top_cut]
+            
+            # Accept 3-level meshes: 2 in top section + 1 in bottom
+            # Accept 4+ level meshes: >=2 in each
+            usable = (len(top_zls) >= 2 and len(bot_zls) >= 2) or \
+                     (len(inner_z_data) == 3 and len(top_zls) == 2 and len(bot_zls) == 1)
+            
+            if usable:
+                top_inner = [inner_z_data[zl] for zl in top_zls]
+                bot_inner = [inner_z_data[zl] for zl in bot_zls]
+                top_range = max(top_inner) - min(top_inner)
+                top_mean = sum(top_inner) / len(top_inner)
+                bot_range = max(bot_inner) - min(bot_inner)
+                bot_min = min(bot_inner)
+                
+                # Criteria for stepped hole:
+                # - Top section nearly constant radius (straight hole)
+                # - Bottom inner radius significantly larger than top
+                # - For 4+ levels: bottom section has significant taper
+                # - For 3 levels: accept by gap between bottom and top inner
+                if len(inner_z_data) >= 4:
+                    is_stepped = (top_range < max(top_mean * 0.05, 0.10) and
+                                  bot_range > max(top_mean * 0.08, 0.30) and
+                                  top_mean < inner_radius * 0.85)
+                else:
+                    # 3-level mesh: check top flat + bottom significantly larger
+                    is_stepped = (top_range < max(top_mean * 0.05, 0.10) and
+                                  bot_min > top_mean * 1.3 and
+                                  top_mean < inner_radius * 0.85)
+                
+                if is_stepped:
+                    # Find step Z: maximum inner-radius gap between adjacent layers
+                    best_gap = 0.0
+                    step_z = top_cut
+                    for i in range(len(inner_z_sorted) - 1):
+                        r1 = inner_z_data[inner_z_sorted[i]]
+                        r2 = inner_z_data[inner_z_sorted[i + 1]]
+                        gap = abs(r2 - r1)
+                        if gap > best_gap:
+                            best_gap = gap
+                            # Step is at the higher Z (smaller radius is above the step)
+                            step_z = inner_z_sorted[i + 1]
+                    
+                    small_h = top_z - step_z
+                    if 0.5 <= small_h <= height * 0.6:
+                        # inner_top_radius (large hole radius at step) computed from
+                        # bottom inner_radius and 2° taper (same as outer cone).
+                        # This avoids mesh artifacts at the coincident step face.
+                        inner_top_r = inner_radius - (height - small_h) * math.tan(math.radians(2))
+                        stepped_hole_params = {
+                            'small_hole_radius': top_mean,
+                            'small_hole_height': small_h,
+                            'inner_bottom_radius': inner_radius,
+                            'inner_top_radius': max(inner_top_r, top_mean + 0.1),
+                        }
+                        log_to_file(f"[STEP Exporter] Detected stepped inner hole from mesh: "
+                                    f"straight_r={top_mean:.3f} straight_h={small_h:.2f} "
+                                    f"inner_bot_r={inner_radius:.3f} inner_top_r={inner_top_r:.3f} "
+                                    f"step_gap={best_gap:.3f}")
+    
     # 构建返回参数
     if is_hollow:
         if bottom_radius * 0.98 <= top_radius <= bottom_radius * 1.02:
@@ -1522,9 +1564,6 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                 obj_type = 'hollow_cone_fillet_grooved'
             if stepped_hole_params:
                 obj_type = 'cone_stepped_hole'
-                # 计算内锥孔底部半径：顶部直孔 r=small_hole_radius, 下部 2° 锥度
-                inner_top_r = stepped_hole_params['small_hole_radius']
-                inner_bottom_r = inner_top_r + (height - stepped_hole_params['small_hole_height']) * math.tan(math.radians(stepped_hole_params['inner_taper_deg']))
             result = {
                 'obj_type': obj_type,
                 'outer_bottom_radius': bottom_radius,
@@ -1544,8 +1583,8 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                 result.update(groove_params)
             if stepped_hole_params:
                 result.update(stepped_hole_params)
-                result['inner_bottom_radius'] = inner_bottom_r
-                result['inner_top_radius'] = inner_top_r
+                result['inner_bottom_radius'] = stepped_hole_params['inner_bottom_radius']
+                result['inner_top_radius'] = stepped_hole_params['inner_top_radius']
             return result
     else:
         if bottom_radius * 0.98 <= top_radius <= bottom_radius * 1.02:

@@ -85,6 +85,9 @@
     <ClCompile Include="F:\git\blender2step\src\step_exporter_cylinder_reconstruct.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="F:\git\blender2step\src\step_exporter_cylinder_parametric.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="F:\git\blender2step\src\cylinder\cylinder_types.h">

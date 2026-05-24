@@ -5,6 +5,9 @@
 #include <BRepPrimAPI_MakeCone.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
 #include <BRepAlgoAPI_Fuse.hxx>
+#include <BRepAlgoAPI_Common.hxx>
+#include <BRepPrimAPI_MakeHalfSpace.hxx>
+#include <BRep_Builder.hxx>
 #include <BRepBuilderAPI_Transform.hxx>
 #include <BRepFilletAPI_MakeChamfer.hxx>
 #include <BRepFilletAPI_MakeFillet.hxx>
@@ -16,13 +19,18 @@
 #include <gp_Vec.hxx>
 #include <gp_Trsf.hxx>
 #include <gp_Ax2.hxx>
+#include <gp_Ax3.hxx>
+#include <gp_Ax1.hxx>
 #include <gp_Dir.hxx>
+#include <gp_Pln.hxx>
 #include <BRepBuilderAPI_MakeSolid.hxx>
 #include <TopoDS_Shell.hxx>
 #include <TopoDS_Vertex.hxx>
 #include <BRepCheck_Analyzer.hxx>
 #include <Precision.hxx>
 #include <Standard_Failure.hxx>
+#include <Geom_Plane.hxx>
+#include <Geom_Surface.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_MakePolygon.hxx>
 #include <BRepPrimAPI_MakePrism.hxx>
@@ -611,85 +619,98 @@ TopoDS_Shape create_cone_stepped_hole_parametric(
 {
     try {
         double half_h = height / 2.0;
+        double step_z = half_h - small_hole_height;
+        double lower_h = step_z + half_h;  // height of lower (tapered) portion
+        double upper_h = half_h - step_z;  // height of upper (straight) portion
 
         std::cout << "[STEP Exporter] cone_stepped_hole: start, h=" << height
                   << " oBR=" << outer_bottom_radius << " oTR=" << outer_top_radius
                   << " shR=" << small_hole_radius << " shH=" << small_hole_height
-                  << " iBR=" << inner_bottom_radius << " iTR=" << inner_top_radius << std::endl;
+                  << " iBR=" << inner_bottom_radius << " iTR=" << inner_top_radius
+                  << " step_z=" << step_z << " lower_h=" << lower_h << std::endl;
 
-        // Build cross-section half-profile in XZ plane, revolve around Z axis
-        // Profile vertices (X=R, Z):
-        //   A: (inner_bottom_radius, -half_h)     - 内孔底部
-        //   B: (outer_bottom_radius, -half_h)     - 外壁底部
-        //   C: (outer_top_radius, +half_h)        - 外壁顶部
-        //   D: (small_hole_radius, +half_h)       - 内孔顶部
-        //   E: (small_hole_radius, +half_h - small_hole_height)  - 台阶处
-        // Back to A (close)
-
-        double step_z = half_h - small_hole_height;
-
-        gp_Pnt pa(inner_bottom_radius, 0, -half_h);
-        gp_Pnt pb(outer_bottom_radius, 0, -half_h);
-        gp_Pnt pc(outer_top_radius, 0, half_h);
-        gp_Pnt pd(small_hole_radius, 0, half_h);
-        gp_Pnt pe(small_hole_radius, 0, step_z);
-
-        // Create edges
-        TopoDS_Edge e_ab = BRepBuilderAPI_MakeEdge(pa, pb);
-        TopoDS_Edge e_bc = BRepBuilderAPI_MakeEdge(pb, pc);
-        TopoDS_Edge e_cd = BRepBuilderAPI_MakeEdge(pc, pd);
-        TopoDS_Edge e_de = BRepBuilderAPI_MakeEdge(pd, pe);
-        TopoDS_Edge e_ea = BRepBuilderAPI_MakeEdge(pe, pa);
-
-        // Assemble wire
-        BRepBuilderAPI_MakeWire wireMaker;
-        wireMaker.Add(e_ab);
-        wireMaker.Add(e_bc);
-        wireMaker.Add(e_cd);
-        wireMaker.Add(e_de);
-        wireMaker.Add(e_ea);
-        if (!wireMaker.IsDone()) {
-            std::cout << "[STEP Exporter] Failed to create wire" << std::endl;
+        // ===== 1. Create SINGLE continuous outer cone (from z=-half_h to z=half_h) =====
+        TopoDS_Shape outerShape = create_cone_solid_parametric(outer_bottom_radius, outer_top_radius, height);
+        if (outerShape.IsNull()) {
+            std::cout << "[STEP Exporter] cone_stepped_hole: Failed to create outer cone" << std::endl;
             return TopoDS_Shape();
         }
-        TopoDS_Wire wire = wireMaker.Wire();
-        std::cout << "[STEP Exporter] cone_stepped_hole: wire OK" << std::endl;
-
-        // Create face from wire
-        BRepBuilderAPI_MakeFace faceMaker(wire);
-        if (!faceMaker.IsDone()) {
-            std::cout << "[STEP Exporter] Failed to create face" << std::endl;
-            return TopoDS_Shape();
+        TopoDS_Solid outer_cone;
+        if (outerShape.ShapeType() == TopAbs_SOLID) {
+            outer_cone = TopoDS::Solid(outerShape);
+        } else {
+            BRepBuilderAPI_MakeSolid sm;
+            for (TopExp_Explorer exp(outerShape, TopAbs_SHELL); exp.More(); exp.Next())
+                sm.Add(TopoDS::Shell(exp.Current()));
+            if (sm.IsDone()) outer_cone = sm.Solid();
+            else return TopoDS_Shape();
         }
-        TopoDS_Face face = faceMaker.Face();
-        std::cout << "[STEP Exporter] cone_stepped_hole: face OK" << std::endl;
+        std::cout << "[STEP Exporter] cone_stepped_hole: outer cone OK" << std::endl;
 
-        // Revolve face around Z axis
-        gp_Ax1 zAxis(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1));
-        BRepPrimAPI_MakeRevol revol(face, zAxis);
-        if (!revol.IsDone()) {
-            std::cout << "[STEP Exporter] Failed to revolve" << std::endl;
-            return TopoDS_Shape();
+        // ===== 2. Build fused inner cutter (cone + cylinder) =====
+        // Extend both cutters slightly to ensure solid overlap for fusion
+        double extend_bot = 1.0;
+        double extend_top = 1.0;
+
+        // Inner tapered cone: from z=-half_h-extend_bot to z=step_z (only extend bottom)
+        {
+            double cone_h = lower_h + extend_bot;  // extend bottom only, top at step
+            double delta_r = (inner_top_radius - inner_bottom_radius) / lower_h;
+            double cutter_bot_r = inner_bottom_radius - delta_r * extend_bot;
+
+            gp_Ax2 cone_axis(gp_Pnt(0, 0, -half_h - extend_bot), gp::DZ());
+            BRepPrimAPI_MakeCone cone_cut_maker(cone_axis, cutter_bot_r, inner_top_radius, cone_h);
+            TopoDS_Solid cone_cutter = cone_cut_maker.Solid();
+
+            // Inner straight cylinder (small hole): r=small_hole_radius, extends below step for fusion overlap
+            double cyl_h = upper_h + extend_top + extend_top;
+            gp_Ax2 cyl_axis(gp_Pnt(0, 0, step_z - extend_top), gp_Dir(0, 0, 1));
+            BRepPrimAPI_MakeCylinder cyl_maker(cyl_axis, small_hole_radius, cyl_h);
+            TopoDS_Solid cyl_cutter = cyl_maker.Solid();
+
+            // Fuse cone + cylinder into a single cutter
+            BRepAlgoAPI_Fuse fuse_maker(cone_cutter, cyl_cutter);
+            if (!fuse_maker.IsDone()) {
+                std::cout << "[STEP Exporter] cone_stepped_hole: Fuse cone+cylinder FAILED" << std::endl;
+                return TopoDS_Shape();
+            }
+            TopoDS_Shape fused = fuse_maker.Shape();
+            std::cout << "[STEP Exporter] cone_stepped_hole: fused cutter type="
+                      << fused.ShapeType() << std::endl;
+
+            // ===== 3. Single cut: outer_cone - fused_cutter =====
+            BRepAlgoAPI_Cut cut_maker(outer_cone, fused);
+            if (!cut_maker.IsDone()) {
+                std::cout << "[STEP Exporter] cone_stepped_hole: Cut FAILED" << std::endl;
+                return TopoDS_Shape();
+            }
+
+            TopoDS_Solid result = shape_to_solid(cut_maker.Shape());
+            if (result.IsNull()) {
+                std::cout << "[STEP Exporter] cone_stepped_hole: Cut result null" << std::endl;
+                return TopoDS_Shape();
+            }
+
+            // Analyze result faces
+            int nfaces = 0, nplanar = 0;
+            double z_min = 1e10, z_max = -1e10;
+            for (TopExp_Explorer fe(result, TopAbs_FACE); fe.More(); fe.Next()) {
+                nfaces++;
+                Handle(Geom_Surface) surf = BRep_Tool::Surface(TopoDS::Face(fe.Current()));
+                if (surf->DynamicType() == STANDARD_TYPE(Geom_Plane)) {
+                    nplanar++;
+                    // Check planar face Z-level
+                    Handle(Geom_Plane) plane = Handle(Geom_Plane)::DownCast(surf);
+                    gp_Pnt loc = plane->Location();
+                    if (abs(loc.Z() - step_z) < 0.01) {
+                        std::cout << "[STEP Exporter] cone_stepped_hole:   STEP face at z=" << loc.Z() << std::endl;
+                    }
+                }
+            }
+            std::cout << "[STEP Exporter] cone_stepped_hole: done, faces=" << nfaces
+                      << " planar=" << nplanar << std::endl;
+            return result;
         }
-        TopoDS_Shape shape = revol.Shape();
-        std::cout << "[STEP Exporter] cone_stepped_hole: revolve OK, type=" << shape.ShapeType() << std::endl;
-
-        if (shape.ShapeType() == TopAbs_SOLID) {
-            std::cout << "[STEP Exporter] Created cone with stepped hole (revolve)" << std::endl;
-            return TopoDS::Solid(shape);
-        }
-
-        // Try to extract solid from compound
-        BRepBuilderAPI_MakeSolid sm;
-        for (TopExp_Explorer exp(shape, TopAbs_SHELL); exp.More(); exp.Next())
-            sm.Add(TopoDS::Shell(exp.Current()));
-        if (sm.IsDone()) {
-            std::cout << "[STEP Exporter] Created cone with stepped hole (shell->solid)" << std::endl;
-            return sm.Solid();
-        }
-
-        std::cout << "[STEP Exporter] Revolve result cannot be made solid, type=" << shape.ShapeType() << std::endl;
-        return TopoDS_Shape();
 
     } catch (Standard_Failure& e) {
         std::cout << "[STEP Exporter] OCC error: " << e.GetMessageString() << std::endl;

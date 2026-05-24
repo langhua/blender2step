@@ -1176,9 +1176,11 @@ PyObject* export_cone_stepped_hole_step(PyObject* self, PyObject* args) {
         }
 
         BRepCheck_Analyzer paramAnalyzer(shape);
-        if (!paramAnalyzer.IsValid()) {
+        if (!paramAnalyzer.IsValid() && shape.ShapeType() != TopAbs_COMPOUND) {
             std::cout << "[STEP Exporter] Parametric shape has issues, attempting to fix..." << std::endl;
             shape = fix_shape_enhanced(shape, 0.001);
+        } else if (shape.ShapeType() == TopAbs_COMPOUND) {
+            std::cout << "[STEP Exporter] Shape is COMPOUND, skipping fix to preserve faces" << std::endl;
         }
 
         STEPControl_Writer writer;

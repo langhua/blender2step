@@ -710,36 +710,47 @@ def create_tapered_stepped_hole_cylinder(name, center, bottom_radius, top_radius
         bpy.ops.transform.resize(value=(scale_factor, scale_factor, 1.0))
         bpy.ops.object.mode_set(mode='OBJECT')
 
-        # 2. 创建台阶内孔切割工具
-        # 锥形大孔：从底部到台阶位置，2°锥度，顶部最小孔径 4mm (r=2mm)
+        # 2. 创建台阶内孔切割工具（均以原点为中心，确保同心）
+        # 大孔：2°锥形圆柱（与外锥平行），底部r由台阶处large_hole_radius按2°外推
+        # 小孔：直圆柱，r=small_hole_radius
+        # 微量偏移避免两个切割体在台阶处共面导致布尔运算失败
         large_hole_h = height - small_hole_height
-        inner_bottom_r = small_hole_radius + large_hole_h * math.tan(math.radians(2))
+        inner_bottom_r = large_hole_radius + large_hole_h * math.tan(math.radians(2))
+        offset = 0.01
+        bottom_z = -(height / 2) - 1
+        top_z = -(height / 2) + large_hole_h + offset  # 延伸到台阶上0.01mm
+        depth_val = top_z - bottom_z
+        loc_z = (bottom_z + top_z) / 2
         bpy.ops.mesh.primitive_cylinder_add(
             radius=inner_bottom_r,
-            depth=large_hole_h + 2,  # 稍微穿透，确保布尔完整
-            location=[0, 0, -(height / 2) + large_hole_h / 2],
+            depth=depth_val,
+            location=[0, 0, loc_z],
             vertices=segments
         )
         large_hole_obj = bpy.context.active_object
         large_hole_obj.name = f"{name}_large_hole"
 
-        # 缩放顶部面形成内锥形 (top radius = small_hole_radius)
+        # 缩放顶部面形成内锥形（2°锥度，与外锥平行，台阶处半径=large_hole_radius）
+        local_top_z = depth_val / 2
         bpy.ops.object.mode_set(mode='EDIT')
         bpy.ops.mesh.select_all(action='DESELECT')
         bpy.ops.object.mode_set(mode='OBJECT')
         for vertex in large_hole_obj.data.vertices:
-            if abs(vertex.co.z - (large_hole_h / 2)) < 0.001:
+            if abs(vertex.co.z - local_top_z) < 0.001:
                 vertex.select = True
         bpy.ops.object.mode_set(mode='EDIT')
-        inner_scale = small_hole_radius / inner_bottom_r
+        inner_scale = large_hole_radius / inner_bottom_r
         bpy.ops.transform.resize(value=(inner_scale, inner_scale, 1.0))
         bpy.ops.object.mode_set(mode='OBJECT')
 
-        # 小孔：顶部通孔，从台阶位置延伸到顶部以上，半径 = small_hole_radius
+        # 小孔：顶部通孔，从台阶下方延伸到顶部以上，半径 = small_hole_radius
+        small_bottom_z = -(height / 2) + large_hole_h - offset  # 延伸到台阶下0.01mm
+        small_depth = (height / 2) + 2 - small_bottom_z  # 向上多延伸确保切穿顶面
+        small_loc_z = (small_bottom_z + (height / 2) + 2) / 2
         bpy.ops.mesh.primitive_cylinder_add(
             radius=small_hole_radius,
-            depth=small_hole_height + 4,  # 向上多延伸，确保切穿顶面
-            location=[0, 0, (height / 2) - small_hole_height / 2 + 2],
+            depth=small_depth,
+            location=[0, 0, small_loc_z],
             vertices=segments
         )
         small_hole_obj = bpy.context.active_object
@@ -1215,16 +1226,7 @@ def create_mechanical_demo_scene():
         segments=64
     )
     if stepped_cylinder:
-        # 标记为台阶内孔锥形圆柱，供 STEP 导出器参数化识别
-        stepped_cylinder['step_stepped_hole'] = True
-        stepped_cylinder['step_height'] = 60.0
-        stepped_cylinder['step_outer_bottom_radius'] = stepped_outer_bottom_r
-        stepped_cylinder['step_outer_top_radius'] = stepped_outer_top_r
-        stepped_cylinder['step_outer_taper_deg'] = 2.0
-        stepped_cylinder['step_inner_taper_deg'] = 2.0
-        stepped_cylinder['step_small_hole_radius'] = 2.0
-        stepped_cylinder['step_small_hole_height'] = 2.0
-        stepped_cylinder['step_inner_min_diameter'] = 4.0  # 最小孔径 4mm
+        # 几何参数由 STEP 导出器从 mesh 自动识别，无需自定义属性
         print("   [OK] Tapered cylinder with stepped inner hole")
         print(f"     -> Outer: bottom {stepped_outer_bottom_r:.0f}mm, top {stepped_outer_top_r:.2f}mm, "
               f"2\u00b0 taper")

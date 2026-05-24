@@ -615,7 +615,8 @@ TopoDS_Shape create_cone_stepped_hole_parametric(
     double outer_bottom_radius, double outer_top_radius,
     double height,
     double small_hole_radius, double small_hole_height,
-    double inner_bottom_radius, double inner_top_radius)
+    double inner_bottom_radius, double inner_top_radius,
+    double top_fillet_radius)
 {
     try {
         double half_h = height / 2.0;
@@ -627,6 +628,7 @@ TopoDS_Shape create_cone_stepped_hole_parametric(
                   << " oBR=" << outer_bottom_radius << " oTR=" << outer_top_radius
                   << " shR=" << small_hole_radius << " shH=" << small_hole_height
                   << " iBR=" << inner_bottom_radius << " iTR=" << inner_top_radius
+                  << " fillet=" << top_fillet_radius
                   << " step_z=" << step_z << " lower_h=" << lower_h << std::endl;
 
         // ===== 1. Create SINGLE continuous outer cone (from z=-half_h to z=half_h) =====
@@ -709,6 +711,36 @@ TopoDS_Shape create_cone_stepped_hole_parametric(
             }
             std::cout << "[STEP Exporter] cone_stepped_hole: done, faces=" << nfaces
                       << " planar=" << nplanar << std::endl;
+
+            // Apply top fillet to outer edge if requested
+            if (top_fillet_radius > 0.001) {
+                std::vector<TopoDS_Edge> topEdges, bottomEdges;
+                find_circular_edges(result, topEdges, bottomEdges);
+                if (!topEdges.empty()) {
+                    // Only fillet the outer top edge (largest radius)
+                    TopoDS_Edge outer_edge = topEdges[0];
+                    double max_r = 0.0;
+                    for (const auto& edge : topEdges) {
+                        TopoDS_Vertex v = TopExp::FirstVertex(edge, true);
+                        gp_Pnt p = BRep_Tool::Pnt(v);
+                        double r = sqrt(p.X() * p.X() + p.Y() * p.Y());
+                        if (r > max_r) { max_r = r; outer_edge = edge; }
+                    }
+                    BRepFilletAPI_MakeFillet filletMaker(result);
+                    filletMaker.Add(top_fillet_radius, outer_edge);
+                    filletMaker.Build();
+                    if (filletMaker.IsDone()) {
+                        result = shape_to_solid(filletMaker.Shape());
+                        std::cout << "[STEP Exporter] cone_stepped_hole: applied top outer fillet r="
+                                  << top_fillet_radius << std::endl;
+                    } else {
+                        std::cout << "[STEP Exporter] cone_stepped_hole: fillet build FAILED" << std::endl;
+                    }
+                } else {
+                    std::cout << "[STEP Exporter] cone_stepped_hole: no top edges found for fillet" << std::endl;
+                }
+            }
+
             return result;
         }
 

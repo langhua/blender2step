@@ -1324,35 +1324,33 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                     a = (body_top_r - body_bot_r) / dz
                     b = body_bot_r - a * body_bot_z
                     
-                    deviation_thresh = max(abs(a) * height * 0.02 + 0.1, 0.3)
+                    deviation_thresh = max(abs(a) * height * 0.02 + 0.1, 0.15)
                     
-                    # 底部过渡检测：任一级别偏离，整个底区视为过渡
-                    any_bot_deviation = False
+                    # 底部过渡检测：只收集偏离拟合线的层级
+                    deviating_bot = []
                     for zl in bot_zls:
                         expected_r = a * zl + b
                         actual_r = z_radius_data[zl]
                         if abs(actual_r - expected_r) > deviation_thresh:
-                            any_bot_deviation = True
-                            break
+                            deviating_bot.append(zl)
                     
-                    if any_bot_deviation:
-                        bottom_transition_zls = bot_zls
+                    if deviating_bot:
+                        bottom_transition_zls = deviating_bot
                     elif len(bot_zls) >= 2:
                         bot_slope = (z_radius_data[bot_zls[-1]] - z_radius_data[bot_zls[0]]) / (bot_zls[-1] - bot_zls[0])
                         if abs(bot_slope - a) > max(abs(a) * 0.3, 0.05):
                             bottom_transition_zls = bot_zls
                     
-                    # 顶部过渡检测：任一级别偏离，整个顶区视为过渡
-                    any_top_deviation = False
+                    # 顶部过渡检测：只收集偏离拟合线的层级
+                    deviating_top = []
                     for zl in top_zls:
                         expected_r = a * zl + b
                         actual_r = z_radius_data[zl]
                         if abs(actual_r - expected_r) > deviation_thresh:
-                            any_top_deviation = True
-                            break
+                            deviating_top.append(zl)
                     
-                    if any_top_deviation:
-                        top_transition_zls = top_zls
+                    if deviating_top:
+                        top_transition_zls = deviating_top
                     elif len(top_zls) >= 2:
                         top_slope = (z_radius_data[top_zls[-1]] - z_radius_data[top_zls[0]]) / (top_zls[-1] - top_zls[0])
                         if abs(top_slope - a) > max(abs(a) * 0.3, 0.05):
@@ -1375,7 +1373,7 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                 if s_zz > 0.0001:
                     a = s_zr / s_zz
                     b = sr - a * sz
-                    deviation_thresh = max(abs(a) * height * 0.02 + 0.1, 0.3)
+                    deviation_thresh = max(abs(a) * height * 0.02 + 0.1, 0.15)
                     
                     deviating_top = []
                     deviating_bot = []
@@ -1419,20 +1417,25 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
         if avg_slope < 0.005:
             return None, 0.0
         
-        if len(slopes) >= 3:
+        if len(slopes) >= 2:
             accels = [slopes[j] - slopes[j-1] for j in range(1, len(slopes))]
             avg_accel = sum(abs(a) for a in accels) / len(accels)
-        else:
-            avg_accel = 0
-        
-        if avg_accel < max(avg_slope * 0.12, 0.02):
-            feature_type = 'chamfer'
-            feature_size = abs(dr)
-        else:
-            feature_type = 'fillet'
-            feature_size = (transition_zls[-1] - transition_zls[0]) * 1.0
-            if feature_size < 0.5:
+            if avg_accel < max(avg_slope * 0.12, 0.02):
+                feature_type = 'chamfer'
                 feature_size = abs(dr)
+            else:
+                feature_type = 'fillet'
+                # Fillet radius: Z-span captures the tangent-to-tangent range but may
+                # underestimate when bottom portion deviates less than threshold.
+                # Use max(Z-span, |dr|) as robust estimate (both should equal R for 90°
+                # fillets on cylinders; on tapered cones they converge to same value).
+                z_span = (transition_zls[-1] - transition_zls[0]) * 1.0
+                feature_size = max(z_span, abs(dr))
+        else:
+            # Too few layers for curvature analysis, default to fillet
+            feature_type = 'fillet'
+            z_span = (transition_zls[-1] - transition_zls[0]) * 1.0
+            feature_size = max(z_span, abs(dr))
         
         return feature_type, feature_size
     
@@ -1959,6 +1962,11 @@ def _export_bottom_shell_timer():
                     1 if data['enable_logging'] else 0
                 )
             elif obj_type == 'cone_stepped_hole':
+                top_fr = cparams.get('top_feature_size', 0.0) if cparams.get('top_feature') == 'fillet' else 0.0
+                log_to_file(f"[STEP Exporter] cone_stepped_hole export: "
+                            f"top_feature={cparams.get('top_feature')} "
+                            f"top_feature_size={cparams.get('top_feature_size')} "
+                            f"top_fr={top_fr}")
                 success = cpp_exporter.export_cone_stepped_hole_step(
                     temp_file,
                     cparams.get('outer_bottom_radius', cparams.get('outer_radius', 0)),
@@ -1968,6 +1976,7 @@ def _export_bottom_shell_timer():
                     cparams.get('small_hole_height', 0),
                     cparams.get('inner_bottom_radius', cparams.get('inner_radius', 0)),
                     cparams.get('inner_top_radius', cparams.get('inner_radius', 0)),
+                    top_fr,
                     px, py, pz,
                     data['step_schema'],
                     data['step_unit'],

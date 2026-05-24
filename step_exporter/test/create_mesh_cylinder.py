@@ -1237,9 +1237,74 @@ def create_mechanical_demo_scene():
     else:
         print("   [FAIL] Failed to create stepped hole tapered cylinder")
     
+    # ============================================================
+    # [9/9] 2°锥形台阶内孔圆柱 + 顶部外环圆倒角
+    # ============================================================
+    print("\n[9/9] 创建2°锥形台阶内孔圆柱 + 顶部外环圆倒角...")
+    fillet_r = 1.5
+    fillet_stepped_cylinder = create_tapered_stepped_hole_cylinder(
+        "Cylinder_Tapered_Stepped_Hole_Fillet",
+        [390, -80, 0],
+        stepped_outer_bottom_r,
+        stepped_outer_top_r,
+        2.0,   # small_hole_radius
+        2.0,   # small_hole_height
+        4.0,   # large_hole_radius
+        60,
+        segments=64
+    )
+    if fillet_stepped_cylinder:
+        # Apply fillet to outer top edge only (skip inner hole edge)
+        bpy.ops.object.select_all(action='DESELECT')
+        fillet_stepped_cylinder.select_set(True)
+        bpy.context.view_layer.objects.active = fillet_stepped_cylinder
+        
+        # Clean up mesh
+        bpy.ops.object.mode_set(mode='EDIT')
+        bpy.ops.mesh.select_all(action='SELECT')
+        bpy.ops.mesh.remove_doubles(threshold=0.0001)
+        bpy.ops.mesh.dissolve_limited(angle_limit=math.radians(1.0))
+        bpy.ops.mesh.select_all(action='DESELECT')
+        bpy.ops.object.mode_set(mode='OBJECT')
+        
+        # Select only top outer edges (radius > inner limit)
+        top_z = 60 / 2.0
+        inner_limit = 2.0 + fillet_r + 0.5  # small_hole_r + fillet margin
+        selected = 0
+        for edge in fillet_stepped_cylinder.data.edges:
+            v1 = fillet_stepped_cylinder.data.vertices[edge.vertices[0]]
+            v2 = fillet_stepped_cylinder.data.vertices[edge.vertices[1]]
+            r1 = math.sqrt(v1.co.x ** 2 + v1.co.y ** 2)
+            r2 = math.sqrt(v2.co.x ** 2 + v2.co.y ** 2)
+            if (abs(v1.co.z - top_z) < 0.001 and abs(v2.co.z - top_z) < 0.001
+                    and r1 > inner_limit and r2 > inner_limit):
+                edge.select = True
+                selected += 1
+        
+        bpy.ops.object.mode_set(mode='EDIT')
+        bpy.ops.mesh.bevel(
+            offset=fillet_r,
+            segments=16,
+            profile=0.5,
+            clamp_overlap=False,
+            affect='EDGES'
+        )
+        bpy.ops.object.mode_set(mode='OBJECT')
+        fillet_stepped_cylinder.update_tag()
+        bpy.context.view_layer.update()
+        
+        print(f"   [OK] Tapered stepped-hole cylinder with top outer fillet (r={fillet_r}mm)")
+        print(f"     -> Outer: bottom {stepped_outer_bottom_r:.0f}mm, top {stepped_outer_top_r:.2f}mm, "
+              f"2\u00b0 taper")
+        inner_bot_f = 2.0 + 58.0 * math.tan(math.radians(2))
+        print(f"     -> Inner: top 2mm straight hole r2mm + "
+              f"58mm 2\u00b0 tapered hole (r{2.0:.1f} -> r{inner_bot_f:.1f}mm)")
+    else:
+        print("   [FAIL] Failed to create fillet stepped hole tapered cylinder")
+    
     print("\n" + "="*60)
     print("[OK] Mechanical parts created! (Mesh version)")
-    print("  Total 14 objects, all MESH type:")
+    print("  Total 15 objects, all MESH type:")
     print("  1. Solid cylinder - exports as analytical cylinder")
     print("  2. 3-degree tapered cylinder - exports as analytical cone")
     print("  3. 4-degree tapered cylinder - exports as analytical cone")
@@ -1254,6 +1319,7 @@ def create_mechanical_demo_scene():
     print("  12. 2-degree tapered reference cylinder - exports as analytical cone")
     print("  13. Tapered hollow cylinder with top fillet and trapezoid straight groove - exports as grooved cone")
     print("  14. Tapered cylinder with stepped inner hole (top r2mm h2mm, bottom r4mm)")
+    print("  15. Tapered cylinder with stepped inner hole + top outer fillet r=1.5mm")
     print("="*60)
     print("\nNext: File -> Export -> STEP (Enhanced)")
     print("Verify in FreeCAD:")

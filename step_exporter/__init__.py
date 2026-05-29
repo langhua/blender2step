@@ -30,6 +30,7 @@ from bpy.props import StringProperty, FloatProperty, BoolProperty, EnumProperty
 # 进度报告系统
 from .progress_report import (
                              start_progress, update_progress, end_progress,
+                             set_operator, clear_operator,
                              register as register_progress, unregister as unregister_progress)
 
 # 全局变量，用于存储导出参数和状态
@@ -43,6 +44,16 @@ _export_log_file = None  # 日志文件句柄
 _log_buffer = []  # 日志缓冲区（文件打开前的消息暂存于此）
 _cpp_log_callback = None  # C++日志回调函数
 _bottom_shell_export_data = None  # 底壳参数化导出数据
+_export_complete = False  # 异步导出完成标志
+_export_success = False   # 异步导出成功标志
+_export_start_time = 0.0  # 导出开始时间
+_stage_start_time = 0.0   # 阶段开始时间
+# 参数化异步导出状态（分阶段，每个对象一个timer tick）
+_parametric_export_stage = 0
+_parametric_export_idx = 0
+_parametric_temp_files = []
+_parametric_progress_val = 0.0
+_parametric_temp_success_count = 0
 
 def log_to_file(msg):
     """输出到日志文件和console（同步输出）"""
@@ -448,6 +459,249 @@ def _get_curve_data_enhanced(obj, context, scale, apply_modifiers=True):
         'bevel_depth': float(curve.bevel_depth) * scale,
     }
 
+def _analyze_top_shell_from_mesh(obj, context, scale):
+    """
+    从 mesh 分析识别是否为顶壳类型（锥形/渐变截面），并测量所有参数
+    顶壳特征：顶部面顶点数显著少于底部开口（vratio < 0.75）
+    
+    返回:
+        dict: 包含顶壳参数的字典，如果不是顶壳则返回 None
+    """
+    if obj.type != 'MESH':
+        return None
+    
+    import bmesh
+    from collections import defaultdict
+    
+    log_to_file(f"[STEP Exporter] Analyzing mesh for TOP shell: {obj.name}")
+    
+    depsgraph = context.evaluated_depsgraph_get()
+    eval_obj = obj.evaluated_get(depsgraph)
+    mesh_data = eval_obj.data
+    
+    bm = bmesh.new()
+    bm.from_mesh(mesh_data)
+    bm.verts.ensure_lookup_table()
+    
+    vertices = bm.verts
+    if len(vertices) < 100:
+        log_to_file(f"[STEP Exporter] Too few vertices ({len(vertices)}), not a top shell")
+        bm.free()
+        return None
+    
+    # Z层分析
+    z_layers = defaultdict(list)
+    for v in vertices:
+        z_key = round(v.co.z / 0.01) * 0.01
+        z_layers[z_key].append(v)
+    
+    sorted_z_levels = sorted(z_layers.keys())
+    if len(sorted_z_levels) < 2:
+        log_to_file(f"[STEP Exporter] Not enough z-levels, not a top shell")
+        bm.free()
+        return None
+    
+    min_z = sorted_z_levels[0]
+    max_z = sorted_z_levels[-1]
+    bottom_z = min_z
+    top_z = max_z
+    outer_height = top_z - bottom_z
+    
+    bottom_verts = z_layers[bottom_z]
+    top_verts = z_layers[top_z]
+    
+    if len(bottom_verts) < 50 or len(top_verts) < 8:
+        log_to_file(f"[STEP Exporter] No clear bottom/top planes, not a top shell")
+        bm.free()
+        return None
+    
+    # 关键判断：top面顶点应显著少于bottom（因为top面内收，面积小）
+    top_vcount = len(top_verts)
+    bot_vcount = len(bottom_verts)
+    vratio = top_vcount / max(bot_vcount, 1)
+    log_to_file(f"[STEP Exporter] Vertex count: top={top_vcount}, bottom={bot_vcount}, ratio={vratio:.3f}")
+    
+    if vratio >= 0.75:
+        log_to_file(f"[STEP Exporter] Top-face vertex ratio >= 0.75 → NOT a top shell")
+        bm.free()
+        return None
+    
+    log_to_file(f"[STEP Exporter] Top-face has fewer vertices → TOP shell candidate")
+    
+    # === 计算底部（开口端）的外轮廓尺寸 ===
+    bottom_coords = [(v.co.x, v.co.y, v.co.z) for v in bottom_verts]
+    bottom_x_vals = [x for x, y, z in bottom_coords]
+    bottom_y_vals = [y for x, y, z in bottom_coords]
+    bot_width = max(bottom_x_vals) - min(bottom_x_vals)
+    bot_depth = max(bottom_y_vals) - min(bottom_y_vals)
+    bot_cx = (max(bottom_x_vals) + min(bottom_x_vals)) / 2.0
+    bot_cy = (max(bottom_y_vals) + min(bottom_y_vals)) / 2.0
+
+    log_to_file(f"[STEP Exporter] Bottom contour: {bot_width:.1f}x{bot_depth:.1f}, center=({bot_cx:.1f},{bot_cy:.1f})")
+
+    # === 计算顶部（封闭面）的轮廓尺寸 ===
+    top_coords = [(v.co.x, v.co.y, v.co.z) for v in top_verts]
+
+    if top_coords:
+        top_x_vals = [x for x, y, z in top_coords]
+        top_y_vals = [y for x, y, z in top_coords]
+        top_width = max(top_x_vals) - min(top_x_vals)
+        top_depth = max(top_y_vals) - min(top_y_vals)
+        top_cx = (max(top_x_vals) + min(top_x_vals)) / 2.0
+        top_cy = (max(top_y_vals) + min(top_y_vals)) / 2.0
+    else:
+        top_width = 0
+        top_depth = 0
+        top_cx = bot_cx
+        top_cy = bot_cy
+
+    # 顶壳经过 180° X 翻转后，宽面可能在顶部(max_z)，窄面在底部(min_z)
+    # 确保 width/depth 取自宽面（外壳轮廓），top_width/top_depth 取自窄面
+    if bot_width < top_width:
+        log_to_file(f"[STEP Exporter] Bottom is narrow face, top is wide face -> swapping")
+        width, depth, cx, cy = top_width, top_depth, top_cx, top_cy
+        top_width, top_depth, top_cx, top_cy = bot_width, bot_depth, bot_cx, bot_cy
+    else:
+        width, depth, cx, cy = bot_width, bot_depth, bot_cx, bot_cy
+
+    half_w = width / 2.0
+    half_d = depth / 2.0
+    log_to_file(f"[STEP Exporter] Outer (wide) contour: {width:.1f}x{depth:.1f}, center=({cx:.1f},{cy:.1f})")
+    log_to_file(f"[STEP Exporter] Inner (narrow) contour: {top_width:.1f}x{top_depth:.1f}, center=({top_cx:.1f},{top_cy:.1f})")
+
+    if top_coords:
+        top_recess_x = (width - top_width) / 2.0
+        top_recess_y = (depth - top_depth) / 2.0
+        top_recess = max(top_recess_x, top_recess_y)
+        top_offset_y = cy - top_cy  # 正值表示顶部后移
+        
+        log_to_file(f"[STEP Exporter] Top recess={top_recess:.1f}, Y offset={top_offset_y:.1f}")
+    else:
+        top_recess = 10.0
+        top_offset_y = 0.0
+    
+    # === 顶壁厚度分析 ===
+    top_thickness = 1.5
+    # 找顶部Z层群（top面及其下方的填充层）
+    top_z_layer_verts = []
+    for z_level in sorted_z_levels:
+        if z_level > top_z - 2.0:
+            top_z_layer_verts.extend([(v.co.x, v.co.y, v.co.z) for v in z_layers[z_level]])
+    
+    if top_z_layer_verts:
+        z_vals = [z for x, y, z in top_z_layer_verts]
+        if min(z_vals) < top_z:
+            top_thickness = top_z - min(z_vals)
+            if top_thickness < 0.5:
+                top_thickness = 1.5
+    log_to_file(f"[STEP Exporter] Top thickness: {top_thickness:.2f}")
+    
+    # === 壁厚分析（使用中层顶点） ===
+    wall_thickness = 2.0
+    mid_z_target = bottom_z + outer_height * 0.5
+    mid_z = min(sorted_z_levels, key=lambda z: abs(z - mid_z_target))
+    mid_verts = z_layers.get(mid_z, [])
+    
+    if mid_verts:
+        mid_coords = [(v.co.x, v.co.y, v.co.z) for v in mid_verts]
+        # 区分外壁和内壁
+        mid_dists = [math.sqrt((x - cx)**2 + (y - cy)**2) for x, y, z in mid_coords]
+        if mid_dists:
+            max_mid = max(mid_dists)
+            outer_mid = sorted(mid_dists, reverse=True)
+            inner_mid = sorted(mid_dists)
+            
+            # 外壁前20%平均
+            n = max(20, len(outer_mid) // 5)
+            outer_avg = sum(outer_mid[:n]) / n if outer_mid else 0
+            # 内壁前20%平均
+            inner_avg = sum(inner_mid[:n]) / n if inner_mid else 0
+            
+            if outer_avg > inner_avg:
+                wall_thickness = outer_avg - inner_avg
+    wall_thickness = max(1.0, min(10.0, wall_thickness))
+    log_to_file(f"[STEP Exporter] Wall thickness: {wall_thickness:.2f}")
+    
+    # === 角圆角分析 ===
+    # 用底部顶点包围盒
+    corner_radius = 0.0
+    corner_verts = [(x, y) for x, y, z in bottom_coords
+                    if abs(x - cx) > half_w * 0.6 and abs(y - cy) > half_d * 0.6]
+    if corner_verts:
+        radii = []
+        for vx, vy in corner_verts:
+            dx = half_w - abs(vx - cx)
+            dy = half_d - abs(vy - cy)
+            if dx > 0 and dy > 0:
+                r = dx + dy + math.sqrt(2 * dx * dy)
+                radii.append(r)
+        if radii:
+            radii.sort()
+            corner_radius = radii[len(radii) // 2]
+    if corner_radius < 1.0:
+        corner_radius = min(width, depth) * 0.1
+    log_to_file(f"[STEP Exporter] Corner radius: {corner_radius:.2f}")
+    
+    # === 圆角半径分析 ===
+    # 底部圆角：找底部Z层群，测Z差值
+    outer_fillet_radius = 0.0
+    bottom_z_layer_verts = []
+    for z_level in sorted_z_levels:
+        if z_level < bottom_z + 3.0:
+            bottom_z_layer_verts.extend([(v.co.x, v.co.y, v.co.z) for v in z_layers[z_level]])
+    
+    if bottom_z_layer_verts:
+        bottom_z_vals = [z for x, y, z in bottom_z_layer_verts]
+        if max(bottom_z_vals) > bottom_z + 0.5:
+            outer_fillet_radius = max(bottom_z_vals) - bottom_z
+    outer_fillet_radius = max(0.0, min(outer_fillet_radius, outer_height * 0.2))
+    inner_fillet_radius = max(0.1, min(outer_fillet_radius * 0.6, 3.0))  # 内圆角基于外圆角估算
+    
+    # === 顶部窗口检测 ===
+    # 检查top面是否有缺口（开窗特征）
+    window_len = 0.0
+    window_wid = 0.0
+    if top_coords and len(top_coords) > 30:
+        # 有开窗的顶面通常有更多顶点（窗口边界产生额外三角化）
+        # 分析顶面Z层是否有内孔
+        top_z_layer_coords = [(v.co.x, v.co.y) for v in top_verts]
+        top_dists = [math.sqrt((x - cx)**2 + (y - cy)**2) for x, y in top_z_layer_coords]
+        if top_dists:
+            max_top_dist = max(top_dists)
+            # 检查是否有内圈顶点（到中心距离明显小于外层）
+            inner_top = [(x, y) for (x, y), d in zip(top_z_layer_coords, top_dists) if d < max_top_dist * 0.7]
+            if len(inner_top) >= 4:
+                # 有内圈，测量窗口尺寸
+                wx_vals = [x for x, y in inner_top]
+                wy_vals = [y for x, y in inner_top]
+                window_len = max(wx_vals) - min(wx_vals)
+                window_wid = max(wy_vals) - min(wy_vals)
+                log_to_file(f"[STEP Exporter] Window detected: {window_len:.1f}x{window_wid:.1f}")
+    
+    # 释放BMesh
+    bm.free()
+    
+    log_to_file(f"[STEP Exporter] Detected TOP shell: {width:.1f}x{depth:.1f} h={outer_height:.1f} tt={top_thickness:.1f} wt={wall_thickness:.1f} cr={corner_radius:.1f} recess={top_recess:.1f} yOff={top_offset_y:.1f} ofr={outer_fillet_radius:.1f} ifr={inner_fillet_radius:.1f} win={window_len:.1f}x{window_wid:.1f}")
+    
+    return {
+        'obj': obj,
+        'width': width,
+        'depth': depth,
+        'outer_height': outer_height,
+        'top_thickness': top_thickness,
+        'wall_thickness': wall_thickness,
+        'corner_radius': corner_radius,
+        'outer_fillet_radius': outer_fillet_radius,
+        'inner_fillet_radius': inner_fillet_radius,
+        'top_recess': top_recess,
+        'top_offset_y': top_offset_y,
+        'window_len': window_len,
+        'window_wid': window_wid,
+        'pos_x': obj.location.x,
+        'pos_y': obj.location.y,
+        'pos_z': obj.location.z,
+    }
+
 def _analyze_bottom_shell_from_mesh(obj, context, scale):
     """
     从 mesh 分析识别是否为底壳类型，并测量所有参数
@@ -502,6 +756,36 @@ def _analyze_bottom_shell_from_mesh(obj, context, scale):
     
     if len(bottom_verts) < 50 or len(top_verts) < 50:
         log_to_file(f"[STEP Exporter] No clear bottom/top planes, not a bottom shell")
+        bm.free()
+        return None
+    
+    # 区分顶壳/底壳：顶壳的封闭面在 max-Z（顶点少），开口在 min-Z（内外壁顶点多）
+    # 底壳的封闭面在 min-Z，开口在 max-Z
+    top_vcount = len(top_verts)
+    bot_vcount = len(bottom_verts)
+    vratio = top_vcount / max(bot_vcount, 1)
+    log_to_file(f"[STEP Exporter] Vertex count: top={top_vcount}, bottom={bot_vcount}, ratio={vratio:.3f}")
+    
+    # 关键判断：如果底部顶点显著多于顶部（ratio < 0.7），说明开口在底部 → 顶壳
+    if vratio < 0.70:
+        log_to_file(f"[STEP Exporter] Bottom has significantly more vertices (ratio={vratio:.3f}) → TOP shell (opening at bottom), not bottom shell")
+        bm.free()
+        return None
+    
+    # 几何检查：顶壳锥形渐缩，顶面bbox显著小于底面bbox
+    top_x_coords = [v.co.x for v in top_verts]
+    top_y_coords = [v.co.y for v in top_verts]
+    bottom_x_coords = [v.co.x for v in bottom_verts]
+    bottom_y_coords = [v.co.y for v in bottom_verts]
+    top_w = max(top_x_coords) - min(top_x_coords)
+    top_d = max(top_y_coords) - min(top_y_coords)
+    bot_w = max(bottom_x_coords) - min(bottom_x_coords)
+    bot_d = max(bottom_y_coords) - min(bottom_y_coords)
+    area_ratio = (top_w * top_d) / max(bot_w * bot_d, 0.01)
+    log_to_file(f"[STEP Exporter] Top bbox: {top_w:.1f}x{top_d:.1f}, Bottom bbox: {bot_w:.1f}x{bot_d:.1f}, area_ratio={area_ratio:.3f}")
+    
+    if area_ratio < 0.80:
+        log_to_file(f"[STEP Exporter] Top face area is {area_ratio:.3f}x bottom → TOP shell (tapered), not bottom shell")
         bm.free()
         return None
     
@@ -642,7 +926,9 @@ def _analyze_bottom_shell_from_mesh(obj, context, scale):
     if outer_fillet_radius > outer_height * 0.5:
         outer_fillet_radius = 0.0
     
-    inner_fillet_radius = 0.0
+    # 内圆角基于外圆角估算（底壳内外圆角比例约1:2）
+    # 另可从 Z-layer gap 检测内壁起始位置推算（见 create_bottom_shell.py 的 measure 逻辑）
+    inner_fillet_radius = max(0.1, min(outer_fillet_radius * 0.5, 3.0))
     
     # ===== 角圆角检测（用最大外轮廓层的坐标）=====
     corner_radius = 0.0
@@ -1630,6 +1916,144 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
             }
 
 
+def _export_parametric_sync(filepath, bottom_shells, top_shells, cylinders, step_schema, step_unit, enable_logging, context):
+    """同步导出所有参数化对象（底壳、顶壳、圆柱），用于后台模式回退"""
+    import _step_exporter as cpp_exporter
+    
+    total = len(bottom_shells) + len(top_shells) + len(cylinders)
+    if total == 0:
+        log_to_file(f"[STEP Exporter] No parametric objects to export")
+        return
+    
+    log_to_file(f"[STEP Exporter] Exporting {len(bottom_shells)} bottom + {len(top_shells)} top + {len(cylinders)} cylinders synchronously...")
+    
+    all_success = True
+    temp_files = []
+    temp_idx = 0
+    
+    # 导出底壳
+    for idx, params in enumerate(bottom_shells):
+        has_holes = params.get('has_holes', False)
+        log_to_file(f"[STEP Exporter]   Exporting bottom shell {idx+1}/{len(bottom_shells)} ({'holes' if has_holes else 'no holes'})...")
+        temp_file = filepath + f".temp{temp_idx}.step"
+        temp_files.append(temp_file)
+        temp_idx += 1
+        
+        if has_holes:
+            success = cpp_exporter.export_bottom_shell_filleted_with_holes_step(
+                temp_file, params['width'], params['depth'], params['outer_height'],
+                params['bottom_thickness'], params['wall_thickness'], params['corner_radius'],
+                params['outer_fillet_radius'], params['inner_fillet_radius'],
+                params.get('step_height', 1.0), params.get('hole_radius', 1.5),
+                params.get('hole_offset_x', 25.0), params.get('hole_offset_y', 20.0),
+                params.get('pos_x', 0.0), params.get('pos_y', 0.0), params.get('pos_z', 0.0),
+                step_schema, step_unit, 1 if enable_logging else 0)
+        else:
+            success = cpp_exporter.export_bottom_shell_filleted_step(
+                temp_file, params['width'], params['depth'], params['outer_height'],
+                params['bottom_thickness'], params['wall_thickness'], params['corner_radius'],
+                params['outer_fillet_radius'], params['inner_fillet_radius'],
+                params.get('step_height', 1.0), params.get('pos_x', 0.0),
+                params.get('pos_y', 0.0), params.get('pos_z', 0.0),
+                step_schema, step_unit, 1 if enable_logging else 0)
+        if not success:
+            all_success = False
+            log_to_file(f"[STEP Exporter]   FAILED to export bottom shell {idx+1}")
+        else:
+            log_to_file(f"[STEP Exporter]   Bottom shell {idx+1} exported")
+    
+    # 导出顶壳
+    for idx, tparams in enumerate(top_shells):
+        log_to_file(f"[STEP Exporter]   Exporting top shell {idx+1}/{len(top_shells)}...")
+        temp_file = filepath + f".temp{temp_idx}.step"
+        temp_files.append(temp_file)
+        temp_idx += 1
+        
+        success = cpp_exporter.export_top_shell_filleted_step(
+            temp_file, tparams['width'], tparams['depth'], tparams['outer_height'],
+            tparams['top_thickness'], tparams['wall_thickness'], tparams['corner_radius'],
+            tparams['outer_fillet_radius'], tparams['inner_fillet_radius'],
+            tparams['top_recess'], tparams['top_offset_y'],
+            tparams.get('window_len', 0.0), tparams.get('window_wid', 0.0),
+            tparams.get('pos_x', 0.0), tparams.get('pos_y', 0.0), tparams.get('pos_z', 0.0),
+            step_schema, step_unit, 1 if enable_logging else 0)
+        if not success:
+            all_success = False
+            log_to_file(f"[STEP Exporter]   FAILED to export top shell {idx+1}")
+        else:
+            log_to_file(f"[STEP Exporter]   Top shell {idx+1} exported")
+    
+    # 导出圆柱/圆锥
+    for idx, cparams in enumerate(cylinders):
+        obj_type = cparams.get('obj_type', 'cylinder')
+        log_to_file(f"[STEP Exporter]   Exporting {obj_type} {idx+1}/{len(cylinders)}...")
+        temp_file = filepath + f".temp{temp_idx}.step"
+        temp_files.append(temp_file)
+        temp_idx += 1
+        
+        px, py, pz = cparams.get('pos_x', 0.0), cparams.get('pos_y', 0.0), cparams.get('pos_z', 0.0)
+        if obj_type == 'cylinder':
+            success = cpp_exporter.export_cylinder_step(temp_file, cparams['radius'], cparams['height'],
+                px, py, pz, step_schema, step_unit, 1 if enable_logging else 0)
+        elif obj_type == 'cone':
+            success = cpp_exporter.export_cone_step(temp_file, cparams['bottom_radius'], cparams['top_radius'],
+                cparams['height'], px, py, pz, step_schema, step_unit, 1 if enable_logging else 0)
+        elif obj_type == 'hollow_cylinder':
+            success = cpp_exporter.export_hollow_cylinder_step(temp_file, cparams['outer_radius'],
+                cparams['inner_radius'], cparams['height'], px, py, pz,
+                step_schema, step_unit, 1 if enable_logging else 0)
+        else:
+            success = False
+        if not success:
+            all_success = False
+            log_to_file(f"[STEP Exporter]   FAILED to export {obj_type} {idx+1}")
+        else:
+            log_to_file(f"[STEP Exporter]   {obj_type} {idx+1} exported")
+    
+    # 合并或复制
+    successful_temp_files = [tf for tf in temp_files if os.path.exists(tf)]
+    successful_count = len(successful_temp_files)
+    
+    if successful_count > 1:
+        try:
+            _merge_step_files(filepath, successful_temp_files)
+            log_to_file(f"[STEP Exporter] Merged {successful_count}/{total} parametric objects into {filepath}")
+        except Exception as merge_err:
+            log_to_file(f"[STEP Exporter] Failed to merge STEP files: {merge_err}")
+            import traceback
+            log_to_file(traceback.format_exc())
+            if os.path.exists(successful_temp_files[0]):
+                import shutil
+                shutil.copy2(successful_temp_files[0], filepath)
+    elif successful_count == 1:
+        try:
+            os.replace(successful_temp_files[0], filepath)
+        except:
+            import shutil
+            shutil.copy2(successful_temp_files[0], filepath)
+    else:
+        log_to_file(f"[STEP Exporter] No parametric objects exported successfully")
+    
+    # 清理临时文件
+    for tf in temp_files:
+        for ext in ('', '.log'):
+            try:
+                if os.path.exists(tf + ext):
+                    os.remove(tf + ext)
+            except:
+                pass
+    
+    if successful_count == total:
+        update_progress(100, "参数化导出完成", context)
+        log_to_file(f"[STEP Exporter] All {total} parametric object(s) exported successfully")
+    elif successful_count > 0:
+        update_progress(100, f"部分导出: {successful_count}/{total}个成功", context)
+        log_to_file(f"[STEP Exporter] {successful_count}/{total} parametric objects exported")
+    else:
+        update_progress(100, "参数化导出失败", context)
+        log_to_file(f"[STEP Exporter] No parametric objects exported")
+
+
 def _export_bottom_shells_sync(filepath, shells, step_schema, step_unit, enable_logging, context):
     """同步导出底壳（非计时器版本，直接在 execute 中调用）"""
     import _step_exporter as cpp_exporter
@@ -1750,388 +2174,385 @@ def _export_bottom_shells_sync(filepath, shells, step_schema, step_unit, enable_
         log_to_file(f"[STEP Exporter] Some bottom shells failed to export")
 
 
-def _export_bottom_shell_timer():
-    global _bottom_shell_export_data
+def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
+    """导出单个圆柱/圆锥类型对象到临时文件，返回成功标志"""
+    obj_type = cparams.get('obj_type', 'cylinder')
+    px = cparams.get('pos_x', 0.0)
+    py = cparams.get('pos_y', 0.0)
+    pz = cparams.get('pos_z', 0.0)
+    
+    if obj_type == 'cylinder':
+        return cpp_exporter.export_cylinder_step(
+            temp_file, cparams['radius'], cparams['height'],
+            px, py, pz, data['step_schema'], data['step_unit'],
+            1 if data['enable_logging'] else 0)
+    elif obj_type == 'cone':
+        return cpp_exporter.export_cone_step(
+            temp_file, cparams['bottom_radius'], cparams['top_radius'],
+            cparams['height'], px, py, pz,
+            data['step_schema'], data['step_unit'],
+            1 if data['enable_logging'] else 0)
+    elif obj_type == 'hollow_cylinder':
+        return cpp_exporter.export_hollow_cylinder_step(
+            temp_file, cparams['outer_radius'], cparams['inner_radius'],
+            cparams['height'], px, py, pz,
+            data['step_schema'], data['step_unit'],
+            1 if data['enable_logging'] else 0)
+    elif obj_type == 'hollow_cone':
+        return cpp_exporter.export_hollow_cone_step(
+            temp_file,
+            cparams['outer_bottom_radius'], cparams['outer_top_radius'],
+            cparams['inner_bottom_radius'], cparams['inner_top_radius'],
+            cparams['height'], px, py, pz,
+            data['step_schema'], data['step_unit'],
+            1 if data['enable_logging'] else 0)
+    elif obj_type == 'cylinder_chamfer':
+        return cpp_exporter.export_cylinder_chamfer_step(
+            temp_file, cparams['radius'], cparams['height'],
+            cparams.get('top_feature_size', 0), px, py, pz,
+            data['step_schema'], data['step_unit'],
+            1 if data['enable_logging'] else 0)
+    elif obj_type == 'cylinder_fillet':
+        return cpp_exporter.export_cylinder_fillet_step(
+            temp_file, cparams['radius'], cparams['height'],
+            cparams.get('top_feature_size', 0), px, py, pz,
+            data['step_schema'], data['step_unit'],
+            1 if data['enable_logging'] else 0)
+    elif obj_type == 'cone_chamfer_fillet':
+        return cpp_exporter.export_cone_chamfer_fillet_step(
+            temp_file,
+            cparams.get('bottom_radius', cparams.get('radius', 0)),
+            cparams.get('top_radius', 0), cparams['height'],
+            cparams.get('bottom_feature_size', 0),
+            cparams.get('top_feature_size', 0), px, py, pz,
+            data['step_schema'], data['step_unit'],
+            1 if data['enable_logging'] else 0)
+    elif obj_type == 'hollow_cone_fillet':
+        return cpp_exporter.export_hollow_cone_fillet_step(
+            temp_file,
+            cparams.get('outer_bottom_radius', cparams.get('outer_radius', 0)),
+            cparams.get('outer_top_radius', cparams.get('outer_radius', 0)),
+            cparams.get('inner_bottom_radius', cparams.get('inner_radius', 0)),
+            cparams.get('inner_top_radius', cparams.get('inner_radius', 0)),
+            cparams['height'], cparams.get('top_feature_size', 0),
+            px, py, pz, data['step_schema'], data['step_unit'],
+            1 if data['enable_logging'] else 0)
+    elif obj_type == 'hollow_cone_fillet_grooved':
+        return cpp_exporter.export_hollow_cone_fillet_with_groove_step(
+            temp_file,
+            cparams.get('outer_bottom_radius', cparams.get('outer_radius', 0)),
+            cparams.get('outer_top_radius', cparams.get('outer_radius', 0)),
+            cparams.get('inner_bottom_radius', cparams.get('inner_radius', 0)),
+            cparams.get('inner_top_radius', cparams.get('inner_radius', 0)),
+            cparams['height'], cparams.get('top_feature_size', 0),
+            cparams.get('groove_depth', 0),
+            cparams.get('groove_bottom_width', 0),
+            cparams.get('groove_top_width', 0),
+            cparams.get('groove_extrusion_length', 0),
+            px, py, pz, data['step_schema'], data['step_unit'],
+            1 if data['enable_logging'] else 0)
+    elif obj_type == 'cone_stepped_hole':
+        top_fr = cparams.get('top_feature_size', 0.0) if cparams.get('top_feature') == 'fillet' else 0.0
+        return cpp_exporter.export_cone_stepped_hole_step(
+            temp_file,
+            cparams.get('outer_bottom_radius', cparams.get('outer_radius', 0)),
+            cparams.get('outer_top_radius', cparams.get('outer_radius', 0)),
+            cparams['height'],
+            cparams.get('small_hole_radius', 0),
+            cparams.get('small_hole_height', 0),
+            cparams.get('inner_bottom_radius', cparams.get('inner_radius', 0)),
+            cparams.get('inner_top_radius', cparams.get('inner_radius', 0)),
+            top_fr, px, py, pz, data['step_schema'], data['step_unit'],
+            1 if data['enable_logging'] else 0)
+    elif obj_type == 'cone_fillet':
+        return cpp_exporter.export_cone_chamfer_fillet_step(
+            temp_file,
+            cparams.get('bottom_radius', 0), cparams.get('top_radius', 0),
+            cparams['height'], 0.0, cparams.get('top_feature_size', 0),
+            px, py, pz, data['step_schema'], data['step_unit'],
+            1 if data['enable_logging'] else 0)
+    elif obj_type == 'hollow_cylinder_fillet':
+        return cpp_exporter.export_hollow_cylinder_fillet_step(
+            temp_file,
+            cparams.get('outer_radius', 0), cparams.get('inner_radius', 0),
+            cparams['height'], cparams.get('top_feature_size', 0),
+            px, py, pz, data['step_schema'], data['step_unit'],
+            1 if data['enable_logging'] else 0)
+    else:
+        log_to_file(f"[STEP Exporter]   Unknown cylinder type: {obj_type}")
+        return False
 
+
+def _parametric_export_staged():
+    """分阶段异步导出参数化物体。
+    每个对象在独立的 timer tick 中处理，保证 Blender UI 能刷新进度条。
+    返回正数表示继续下一个 tick，返回 None 表示完成/停止。
+    """
+    global _bottom_shell_export_data, _parametric_export_stage, _parametric_export_idx
+    global _parametric_temp_files, _parametric_progress_val, _parametric_temp_success_count
+    global _export_complete, _export_success, _export_log_file, _cpp_log_callback
+    global _export_start_time, _stage_start_time
+    
+    import time
+    
     if not _bottom_shell_export_data:
         return None
-
+    
+    data = None
     try:
         data = _bottom_shell_export_data
         context = data['context']
         shells = data.get('shells', [])
+        top_shells_data = data.get('top_shells', [])
         cylinders = data.get('cylinders', [])
         regular_objects = data.get('regular_objects', [])
         
-        if not shells and not cylinders and not regular_objects:
-            log_to_file(f"[STEP Exporter] No objects to export")
-            end_progress(context)
-            _bottom_shell_export_data = None
-            return None
-
-        total_objects = len(shells) + len(cylinders) + len(regular_objects)
-        log_to_file(f"[STEP Exporter] Parametric timer: exporting {len(shells)} shell(s) + {len(cylinders)} cylinder(s) + {len(regular_objects)} mesh(es)...")
-        
         import _step_exporter as cpp_exporter
         
-        all_success = True
-        temp_files = []
-        temp_idx = 0
+        # === Stage 0: Init — 构建对象列表 ===
+        if _parametric_export_stage == 0:
+            _export_start_time = time.time()
+            _stage_start_time = time.time()
+            
+            total_objects = len(shells) + len(top_shells_data) + len(cylinders) + len(regular_objects)
+            if total_objects == 0:
+                log_to_file(f"[STEP Exporter] No objects to export")
+                end_progress(context)
+                _bottom_shell_export_data = None
+                _export_complete = True
+                _export_success = True
+                return None
+            
+            log_to_file(f"[STEP Exporter] Staged export: {len(shells)} bottom + {len(top_shells_data)} top + {len(cylinders)} cyl + {len(regular_objects)} mesh")
+            _parametric_export_stage = 1
+            _parametric_export_idx = 0
+            _parametric_temp_files = []
+            _parametric_progress_val = 10.0
+            update_progress(10, f"开始导出 ({total_objects}个对象)...", context)
+            
+            elapsed = time.time() - _stage_start_time
+            log_to_file(f"[STEP Exporter] [TIMING] Stage 0 (Init) completed in {elapsed:.3f}s")
+            return 0.05
         
-        # 导出每个底壳到临时文件
-        for idx, params in enumerate(shells):
-            has_holes = params.get('has_holes', False)
-            shell_desc = f"with_holes" if has_holes else "no_holes"
-            log_to_file(f"[STEP Exporter]   Exporting shell {idx+1}/{len(shells)} ({shell_desc})...")
-            
-            temp_file = data['filepath'] + f".temp{temp_idx}.step"
-            temp_files.append(temp_file)
-            temp_idx += 1
-            
-            if has_holes:
-                success = cpp_exporter.export_bottom_shell_filleted_with_holes_step(
-                    temp_file,
-                    params['width'],
-                    params['depth'],
-                    params['outer_height'],
-                    params['bottom_thickness'],
-                    params['wall_thickness'],
-                    params['corner_radius'],
-                    params['outer_fillet_radius'],
-                    params['inner_fillet_radius'],
-                    params.get('step_height', 1.0),
-                    params.get('hole_radius', 1.5),
-                    params.get('hole_offset_x', 25.0),
-                    params.get('hole_offset_y', 20.0),
-                    params.get('pos_x', 0.0),
-                    params.get('pos_y', 0.0),
-                    params.get('pos_z', 0.0),
-                    data['step_schema'],
-                    data['step_unit'],
-                    1 if data['enable_logging'] else 0
-                )
-            else:
-                success = cpp_exporter.export_bottom_shell_filleted_step(
-                    temp_file,
-                    params['width'],
-                    params['depth'],
-                    params['outer_height'],
-                    params['bottom_thickness'],
-                    params['wall_thickness'],
-                    params['corner_radius'],
-                    params['outer_fillet_radius'],
-                    params['inner_fillet_radius'],
-                    params.get('step_height', 1.0),
-                    params.get('pos_x', 0.0),
-                    params.get('pos_y', 0.0),
-                    params.get('pos_z', 0.0),
-                    data['step_schema'],
-                    data['step_unit'],
-                    1 if data['enable_logging'] else 0
-                )
-            
-            if not success:
-                all_success = False
-                log_to_file(f"[STEP Exporter]   FAILED to export shell {idx+1}")
-            else:
-                log_to_file(f"[STEP Exporter]   Shell {idx+1} exported successfully")
+        # 构建扁平化对象列表（只在 stage 1 需要）
+        all_objects = []
+        for params in shells:
+            all_objects.append(('bottom_shell', params))
+        for tparams in top_shells_data:
+            all_objects.append(('top_shell', tparams))
+        for cparams in cylinders:
+            all_objects.append(('cylinder', cparams))
+        for obj in regular_objects:
+            all_objects.append(('regular', obj))
+        total_objects = len(all_objects)
         
-        # 导出每个圆柱体/圆锥体到临时文件
-        for idx, cparams in enumerate(cylinders):
-            obj_type = cparams.get('obj_type', 'cylinder')
-            log_to_file(f"[STEP Exporter]   Exporting {obj_type} {idx+1}/{len(cylinders)}...")
+        # === Stage 1: 逐个导出对象 ===
+        if _parametric_export_stage == 1:
+            if _parametric_export_idx == 0:
+                _stage_start_time = time.time()
             
-            temp_file = data['filepath'] + f".temp{temp_idx}.step"
-            temp_files.append(temp_file)
-            temp_idx += 1
+            if _parametric_export_idx >= total_objects:
+                _parametric_export_stage = 2
+                elapsed = time.time() - _stage_start_time
+                log_to_file(f"[STEP Exporter] [TIMING] Stage 1 (Export {total_objects} objects) completed in {elapsed:.3f}s")
+                return 0.05
             
-            px = cparams.get('pos_x', 0.0)
-            py = cparams.get('pos_y', 0.0)
-            pz = cparams.get('pos_z', 0.0)
+            obj_type, obj_params = all_objects[_parametric_export_idx]
+            obj_num = _parametric_export_idx + 1
+            temp_file = data['filepath'] + f".temp{_parametric_export_idx}.step"
+            _parametric_temp_files.append(temp_file)
+            success = False
             
-            if obj_type == 'cylinder':
-                success = cpp_exporter.export_cylinder_step(
-                    temp_file,
-                    cparams['radius'],
-                    cparams['height'],
-                    px, py, pz,
-                    data['step_schema'],
-                    data['step_unit'],
-                    1 if data['enable_logging'] else 0
-                )
-            elif obj_type == 'cone':
-                success = cpp_exporter.export_cone_step(
-                    temp_file,
-                    cparams['bottom_radius'],
-                    cparams['top_radius'],
-                    cparams['height'],
-                    px, py, pz,
-                    data['step_schema'],
-                    data['step_unit'],
-                    1 if data['enable_logging'] else 0
-                )
-            elif obj_type == 'hollow_cylinder':
-                success = cpp_exporter.export_hollow_cylinder_step(
-                    temp_file,
-                    cparams['outer_radius'],
-                    cparams['inner_radius'],
-                    cparams['height'],
-                    px, py, pz,
-                    data['step_schema'],
-                    data['step_unit'],
-                    1 if data['enable_logging'] else 0
-                )
-            elif obj_type == 'hollow_cone':
-                success = cpp_exporter.export_hollow_cone_step(
-                    temp_file,
-                    cparams['outer_bottom_radius'],
-                    cparams['outer_top_radius'],
-                    cparams['inner_bottom_radius'],
-                    cparams['inner_top_radius'],
-                    cparams['height'],
-                    px, py, pz,
-                    data['step_schema'],
-                    data['step_unit'],
-                    1 if data['enable_logging'] else 0
-                )
-            elif obj_type == 'cylinder_chamfer':
-                success = cpp_exporter.export_cylinder_chamfer_step(
-                    temp_file,
-                    cparams['radius'],
-                    cparams['height'],
-                    cparams.get('top_feature_size', 0),
-                    px, py, pz,
-                    data['step_schema'],
-                    data['step_unit'],
-                    1 if data['enable_logging'] else 0
-                )
-            elif obj_type == 'cylinder_fillet':
-                success = cpp_exporter.export_cylinder_fillet_step(
-                    temp_file,
-                    cparams['radius'],
-                    cparams['height'],
-                    cparams.get('top_feature_size', 0),
-                    px, py, pz,
-                    data['step_schema'],
-                    data['step_unit'],
-                    1 if data['enable_logging'] else 0
-                )
-            elif obj_type == 'cone_chamfer_fillet':
-                success = cpp_exporter.export_cone_chamfer_fillet_step(
-                    temp_file,
-                    cparams.get('bottom_radius', cparams.get('radius', 0)),
-                    cparams.get('top_radius', 0),
-                    cparams['height'],
-                    cparams.get('bottom_feature_size', 0),
-                    cparams.get('top_feature_size', 0),
-                    px, py, pz,
-                    data['step_schema'],
-                    data['step_unit'],
-                    1 if data['enable_logging'] else 0
-                )
-            elif obj_type == 'hollow_cone_fillet':
-                success = cpp_exporter.export_hollow_cone_fillet_step(
-                    temp_file,
-                    cparams.get('outer_bottom_radius', cparams.get('outer_radius', 0)),
-                    cparams.get('outer_top_radius', cparams.get('outer_radius', 0)),
-                    cparams.get('inner_bottom_radius', cparams.get('inner_radius', 0)),
-                    cparams.get('inner_top_radius', cparams.get('inner_radius', 0)),
-                    cparams['height'],
-                    cparams.get('top_feature_size', 0),
-                    px, py, pz,
-                    data['step_schema'],
-                    data['step_unit'],
-                    1 if data['enable_logging'] else 0
-                )
-            elif obj_type == 'hollow_cone_fillet_grooved':
-                success = cpp_exporter.export_hollow_cone_fillet_with_groove_step(
-                    temp_file,
-                    cparams.get('outer_bottom_radius', cparams.get('outer_radius', 0)),
-                    cparams.get('outer_top_radius', cparams.get('outer_radius', 0)),
-                    cparams.get('inner_bottom_radius', cparams.get('inner_radius', 0)),
-                    cparams.get('inner_top_radius', cparams.get('inner_radius', 0)),
-                    cparams['height'],
-                    cparams.get('top_feature_size', 0),
-                    cparams.get('groove_depth', 0),
-                    cparams.get('groove_bottom_width', 0),
-                    cparams.get('groove_top_width', 0),
-                    cparams.get('groove_extrusion_length', 0),
-                    px, py, pz,
-                    data['step_schema'],
-                    data['step_unit'],
-                    1 if data['enable_logging'] else 0
-                )
-            elif obj_type == 'cone_stepped_hole':
-                top_fr = cparams.get('top_feature_size', 0.0) if cparams.get('top_feature') == 'fillet' else 0.0
-                log_to_file(f"[STEP Exporter] cone_stepped_hole export: "
-                            f"top_feature={cparams.get('top_feature')} "
-                            f"top_feature_size={cparams.get('top_feature_size')} "
-                            f"top_fr={top_fr}")
-                success = cpp_exporter.export_cone_stepped_hole_step(
-                    temp_file,
-                    cparams.get('outer_bottom_radius', cparams.get('outer_radius', 0)),
-                    cparams.get('outer_top_radius', cparams.get('outer_radius', 0)),
-                    cparams['height'],
-                    cparams.get('small_hole_radius', 0),
-                    cparams.get('small_hole_height', 0),
-                    cparams.get('inner_bottom_radius', cparams.get('inner_radius', 0)),
-                    cparams.get('inner_top_radius', cparams.get('inner_radius', 0)),
-                    top_fr,
-                    px, py, pz,
-                    data['step_schema'],
-                    data['step_unit'],
-                    1 if data['enable_logging'] else 0
-                )
-            elif obj_type == 'cone_fillet':
-                success = cpp_exporter.export_cone_chamfer_fillet_step(
-                    temp_file,
-                    cparams.get('bottom_radius', 0),
-                    cparams.get('top_radius', 0),
-                    cparams['height'],
-                    0.0,  # no chamfer
-                    cparams.get('top_feature_size', 0),
-                    px, py, pz,
-                    data['step_schema'],
-                    data['step_unit'],
-                    1 if data['enable_logging'] else 0
-                )
-            elif obj_type == 'hollow_cylinder_fillet':
-                success = cpp_exporter.export_hollow_cylinder_fillet_step(
-                    temp_file,
-                    cparams.get('outer_radius', 0),
-                    cparams.get('inner_radius', 0),
-                    cparams['height'],
-                    cparams.get('top_feature_size', 0),
-                    px, py, pz,
-                    data['step_schema'],
-                    data['step_unit'],
-                    1 if data['enable_logging'] else 0
-                )
-            else:
-                log_to_file(f"[STEP Exporter]   Unknown cylinder type: {obj_type}")
-                success = False
-            
-            if not success:
-                all_success = False
-                log_to_file(f"[STEP Exporter]   FAILED to export {obj_type} {idx+1}")
-            else:
-                log_to_file(f"[STEP Exporter]   {obj_type} {idx+1} exported successfully")
-        
-        # 导出每个常规 mesh 对象到临时文件（使用 incremental API）
-        for idx, obj in enumerate(regular_objects):
-            log_to_file(f"[STEP Exporter]   Exporting mesh obj {idx+1}/{len(regular_objects)}: {obj.name}...")
-            
-            temp_file = data['filepath'] + f".temp{temp_idx}.step"
-            temp_files.append(temp_file)
-            temp_idx += 1
-            
+            obj_start = time.time()
             try:
-                obj_data = _get_mesh_data_enhanced(obj, context, scale=1000.0)
-                if obj_data is None:
-                    raise RuntimeError("_get_mesh_data_enhanced returned None")
-                
-                # 设置日志回调供 C++ 使用
-                global _cpp_log_callback
-                _cpp_log_callback = lambda msg: log_to_file(msg)
-                
-                # 使用 incremental API 导出单个 mesh
-                init_ok = cpp_exporter.init_incremental_export(
-                    temp_file, 1, 1000.0,
-                    1 if data['fix_geometry'] else 0,
-                    1 if data['create_solid'] else 0,
-                    1 if data['advanced_brep'] else 0,
-                    data['step_schema'],
-                    data['step_unit'],
-                    1 if data['enable_logging'] else 0,
-                    data.get('sew_tolerance', 0.001),
-                    _cpp_log_callback
-                )
-                if init_ok:
-                    add_ok = cpp_exporter.add_object_to_export(obj_data, None)
-                    cpp_exporter.finalize_incremental_export()
-                    if add_ok:
-                        log_to_file(f"[STEP Exporter]   Mesh {obj.name} exported ({len(obj_data['vertices'])} verts, {len(obj_data['faces'])} tris)")
+                if obj_type == 'bottom_shell':
+                    params = obj_params
+                    has_holes = params.get('has_holes', False)
+                    desc = "with_holes" if has_holes else "no_holes"
+                    log_to_file(f"[STEP Exporter] Exporting bottom shell {obj_num}/{total_objects} ({desc})...")
+                    
+                    if has_holes:
+                        success = cpp_exporter.export_bottom_shell_filleted_with_holes_step(
+                            temp_file, params['width'], params['depth'], params['outer_height'],
+                            params['bottom_thickness'], params['wall_thickness'],
+                            params['corner_radius'], params['outer_fillet_radius'],
+                            params['inner_fillet_radius'],
+                            params.get('step_height', 1.0), params.get('hole_radius', 1.5),
+                            params.get('hole_offset_x', 25.0), params.get('hole_offset_y', 20.0),
+                            params.get('pos_x', 0.0), params.get('pos_y', 0.0), params.get('pos_z', 0.0),
+                            data['step_schema'], data['step_unit'],
+                            1 if data['enable_logging'] else 0)
                     else:
-                        all_success = False
-                        log_to_file(f"[STEP Exporter]   FAILED to add mesh object {obj.name}")
+                        success = cpp_exporter.export_bottom_shell_filleted_step(
+                            temp_file, params['width'], params['depth'], params['outer_height'],
+                            params['bottom_thickness'], params['wall_thickness'],
+                            params['corner_radius'], params['outer_fillet_radius'],
+                            params['inner_fillet_radius'],
+                            params.get('step_height', 1.0),
+                            params.get('pos_x', 0.0), params.get('pos_y', 0.0), params.get('pos_z', 0.0),
+                            data['step_schema'], data['step_unit'],
+                            1 if data['enable_logging'] else 0)
+                
+                elif obj_type == 'top_shell':
+                    tparams = obj_params
+                    log_to_file(f"[STEP Exporter] Exporting top shell {obj_num}/{total_objects}...")
+                    success = cpp_exporter.export_top_shell_filleted_step(
+                        temp_file, tparams['width'], tparams['depth'], tparams['outer_height'],
+                        tparams['top_thickness'], tparams['wall_thickness'],
+                        tparams['corner_radius'], tparams['outer_fillet_radius'],
+                        tparams['inner_fillet_radius'], tparams['top_recess'],
+                        tparams['top_offset_y'],
+                        tparams.get('window_len', 0.0), tparams.get('window_wid', 0.0),
+                        tparams.get('pos_x', 0.0), tparams.get('pos_y', 0.0), tparams.get('pos_z', 0.0),
+                        data['step_schema'], data['step_unit'],
+                        1 if data['enable_logging'] else 0)
+                
+                elif obj_type == 'cylinder':
+                    cparams = obj_params
+                    obj_subtype = cparams.get('obj_type', 'cylinder')
+                    log_to_file(f"[STEP Exporter] Exporting {obj_subtype} {obj_num}/{total_objects}...")
+                    success = _export_cylinder_staged(cpp_exporter, temp_file, cparams, data)
+                
+                elif obj_type == 'regular':
+                    obj = obj_params
+                    log_to_file(f"[STEP Exporter] Exporting mesh {obj_num}/{total_objects}: {obj.name}...")
+                    obj_data = _get_mesh_data_enhanced(obj, context, scale=1000.0)
+                    if obj_data is None:
+                        raise RuntimeError("_get_mesh_data_enhanced returned None")
+                    _cpp_log_callback = lambda msg: log_to_file(msg)
+                    init_ok = cpp_exporter.init_incremental_export(
+                        temp_file, 1, 1000.0,
+                        1 if data['fix_geometry'] else 0,
+                        1 if data['create_solid'] else 0,
+                        1 if data['advanced_brep'] else 0,
+                        data['step_schema'], data['step_unit'],
+                        1 if data['enable_logging'] else 0,
+                        data.get('sew_tolerance', 0.001),
+                        _cpp_log_callback)
+                    if init_ok:
+                        add_ok = cpp_exporter.add_object_to_export(obj_data, None)
+                        cpp_exporter.finalize_incremental_export()
+                        if add_ok:
+                            log_to_file(f"[STEP Exporter]   Mesh {obj.name} exported ({len(obj_data['vertices'])} verts, {len(obj_data['faces'])} tris)")
+                            success = True
+                        else:
+                            log_to_file(f"[STEP Exporter]   FAILED to add mesh {obj.name}")
+                    else:
+                        log_to_file(f"[STEP Exporter]   FAILED init incremental for {obj.name}")
+                
+                if success:
+                    log_to_file(f"[STEP Exporter]   Object {obj_num}/{total_objects} OK ({time.time()-obj_start:.3f}s)")
                 else:
-                    all_success = False
-                    log_to_file(f"[STEP Exporter]   FAILED to init incremental export for {obj.name}")
-            except Exception as mesh_exp_err:
-                all_success = False
-                log_to_file(f"[STEP Exporter]   ERROR exporting mesh {obj.name}: {mesh_exp_err}")
+                    log_to_file(f"[STEP Exporter]   Object {obj_num}/{total_objects} FAILED ({time.time()-obj_start:.3f}s)")
+            except Exception as obj_err:
+                log_to_file(f"[STEP Exporter]   ERROR exporting object {obj_num}: {obj_err} ({time.time()-obj_start:.3f}s)")
                 import traceback
                 log_to_file(traceback.format_exc())
+            
+            # 更新进度（10%-90% 之间均匀分布）
+            _parametric_progress_val = 10.0 + (80.0 / max(total_objects, 1)) * obj_num
+            type_names = {'bottom_shell': '底壳', 'top_shell': '顶壳', 'cylinder': '圆柱', 'regular': '网格'}
+            type_name = type_names.get(obj_type, obj_type)
+            update_progress(int(_parametric_progress_val), f"导出{type_name} {obj_num}/{total_objects}", context)
+            
+            _parametric_export_idx += 1
+            return 0.05  # 继续下一个 tick
         
-        # 合并所有临时文件到最终的 STEP 文件
-        if all_success and total_objects > 1:
-            try:
-                _merge_step_files(data['filepath'], temp_files)
-                log_to_file(f"[STEP Exporter] Merged {total_objects} objects into {data['filepath']}")
-            except Exception as merge_err:
-                log_to_file(f"[STEP Exporter] Failed to merge STEP files: {merge_err}")
-                import traceback
-                log_to_file(traceback.format_exc())
-                # 合并失败时至少保留第一个文件
-                if os.path.exists(temp_files[0]):
-                    try:
-                        import shutil
-                        shutil.copy2(temp_files[0], data['filepath'])
-                    except:
-                        pass
-            finally:
-                # 合并C++子进程产出的log文件（在清理前）
+        # === Stage 2: 合并临时文件 ===
+        elif _parametric_export_stage == 2:
+            _stage_start_time = time.time()
+            update_progress(90, "正在合并文件...", context)
+            
+            successful_temp_files = [tf for tf in _parametric_temp_files if os.path.exists(tf)]
+            successful_count = len(successful_temp_files)
+            
+            if successful_count > 1:
                 try:
-                    _merge_log_files(os.path.dirname(data['filepath']), data['filepath'])
-                except:
-                    pass
-                # 清理临时文件及其日志
-                for tf in temp_files:
-                    for ext in ('', '.log'):
+                    _merge_step_files(data['filepath'], successful_temp_files)
+                    log_to_file(f"[STEP Exporter] Merged {successful_count} objects into {data['filepath']}")
+                except Exception as merge_err:
+                    log_to_file(f"[STEP Exporter] Failed to merge STEP files: {merge_err}")
+                    import traceback
+                    log_to_file(traceback.format_exc())
+                    if os.path.exists(successful_temp_files[0]):
                         try:
-                            if os.path.exists(tf + ext):
-                                os.remove(tf + ext)
+                            import shutil
+                            shutil.copy2(successful_temp_files[0], data['filepath'])
                         except:
                             pass
-        elif all_success and total_objects == 1:
-            try:
-                os.replace(temp_files[0], data['filepath'])
-            except:
-                import shutil
-                shutil.copy2(temp_files[0], data['filepath'])
-            finally:
-                # 合并C++子进程产出的log文件（在清理前）
-                try:
-                    _merge_log_files(os.path.dirname(data['filepath']), data['filepath'])
-                except:
-                    pass
-                for ext in ('', '.log'):
+                finally:
                     try:
-                        if os.path.exists(temp_files[0] + ext):
-                            os.remove(temp_files[0] + ext)
+                        _merge_log_files(os.path.dirname(data['filepath']), data['filepath'])
                     except:
                         pass
+            elif successful_count == 1:
+                try:
+                    os.replace(successful_temp_files[0], data['filepath'])
+                except:
+                    import shutil
+                    shutil.copy2(successful_temp_files[0], data['filepath'])
+                finally:
+                    try:
+                        _merge_log_files(os.path.dirname(data['filepath']), data['filepath'])
+                    except:
+                        pass
+            
+            # 清理临时文件
+            for tf in _parametric_temp_files:
+                for ext in ('', '.log'):
+                    try:
+                        if os.path.exists(tf + ext):
+                            os.remove(tf + ext)
+                    except:
+                        pass
+            
+            _parametric_temp_success_count = successful_count  # 保存成功计数供 Stage 3 使用
+            _parametric_export_stage = 3
+            elapsed = time.time() - _stage_start_time
+            log_to_file(f"[STEP Exporter] [TIMING] Stage 2 (Merge) completed in {elapsed:.3f}s")
+            return 0.05  # 进入完成阶段
         
-        if all_success:
-            update_progress(100, "参数化导出完成", context)
-            log_to_file(f"[STEP Exporter] All {total_objects} parametric object(s) exported successfully")
-        else:
-            update_progress(100, "部分对象导出失败", context)
-            log_to_file(f"[STEP Exporter] Some parametric objects failed to export")
-
-        end_progress(context)
+        # === Stage 3: 完成 ===
+        elif _parametric_export_stage == 3:
+            successful_count = _parametric_temp_success_count
+            total_for_count = max(total_objects, 1)
+            
+            if successful_count == total_for_count:
+                update_progress(100, "参数化导出完成", context)
+            elif successful_count > 0:
+                update_progress(100, f"部分导出: {successful_count}/{total_for_count}个成功", context)
+            else:
+                update_progress(100, "参数化导出失败", context)
+            
+            end_progress(context)
+            _bottom_shell_export_data = None
+            _export_success = (successful_count > 0)
+            _export_complete = True
+            
+            total_elapsed = time.time() - _export_start_time
+            log_to_file(f"[STEP Exporter] [TIMING] Total export completed in {total_elapsed:.3f}s")
+            
+            if _export_log_file and not _export_log_file.closed:
+                try:
+                    _export_log_file.close()
+                except:
+                    pass
+            return None  # 停止 timer
+        
+        return None  # 未知阶段，安全停止
+        
     except Exception as e:
-        log_to_file(f"[STEP Exporter] CRITICAL ERROR in timer: {e}")
+        log_to_file(f"[STEP Exporter] CRITICAL ERROR in staged parametric export: {e}")
         import traceback
         log_to_file(traceback.format_exc())
         try:
-            end_progress(context)
+            if data and 'context' in data:
+                end_progress(data['context'])
         except:
             pass
-    finally:
         _bottom_shell_export_data = None
-        # 关闭日志文件
-        global _export_log_file
+        _export_complete = True
+        _export_success = False
         if _export_log_file and not _export_log_file.closed:
             try:
                 _export_log_file.close()
@@ -2399,7 +2820,7 @@ def _export_worker_timer():
             
             # 合并C++子进程产出的log文件
             try:
-                _merge_log_files(os.path.dirname(filepath), filepath)
+                _merge_log_files(os.path.dirname(params['filepath']), params['filepath'])
             except:
                 pass
             
@@ -2411,14 +2832,7 @@ def _export_worker_timer():
         
         # 初始调用，设置阶段 1
         if _export_stage == 0:
-            # 打开日志文件
-            log_filepath = params['filepath'] + ".log"
-            try:
-                _export_log_file = open(log_filepath, 'w', encoding='utf-8')
-            except Exception as e:
-                log_to_file(f"[STEP Exporter] Failed to open log file: {e}")
-                _export_log_file = None
-            
+            # 日志文件已在 execute() 中打开，此处不再重复打开
             _export_stage = 1
             return 0.1
             
@@ -2440,6 +2854,8 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
     bl_label = "Export STEP (Enhanced)"
     bl_description = "Export to STEP format with advanced BREP representation"
     bl_options = {'PRESET', 'UNDO'}
+    
+    _timer = None  # 事件定时器句柄，用于 modal 进度显示
     
     filename_ext = ".step"
     filter_glob: StringProperty(
@@ -2562,13 +2978,78 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
         
 
     
+    def modal(self, context, event):
+        global _export_complete, _export_success, _export_log_file
+        
+        if event.type == 'TIMER':
+            if _export_complete:
+                log_to_file(f"[STEP Exporter] Modal: export complete, success={_export_success}, cleaning up...")
+                
+                # 移除事件定时器
+                if self._timer:
+                    try:
+                        context.window_manager.event_timer_remove(self._timer)
+                    except:
+                        pass
+                    self._timer = None
+                
+                # 结束进度条（wm.progress + operator.report）
+                end_progress(context)
+                clear_operator()
+                
+                # 关闭日志文件
+                if _export_log_file and not _export_log_file.closed:
+                    _export_log_file.close()
+                    _export_log_file = None
+                
+                # 合并日志文件（参数化路径）
+                try:
+                    _merge_log_files(os.path.dirname(self.filepath), self.filepath)
+                except:
+                    pass
+                
+                if _export_success:
+                    self.report({'INFO'}, "STEP 导出完成")
+                else:
+                    self.report({'ERROR'}, "STEP 导出失败，请查看日志")
+                
+                return {'FINISHED'}
+            
+            # 在modal handler中执行分阶段导出，确保UI能刷新进度条
+            try:
+                next_tick = _parametric_export_staged()
+                if next_tick is None:
+                    # 导出完成
+                    _export_complete = True
+                    return {'PASS_THROUGH'}
+                
+                # 强制刷新3D视图UI以确保进度条更新可见
+                try:
+                    for area in context.screen.areas:
+                        if area.type == 'VIEW_3D':
+                            area.tag_redraw()
+                            break
+                except:
+                    pass
+                
+                return {'PASS_THROUGH'}
+            except Exception as e:
+                log_to_file(f"[STEP Exporter] Modal export error: {e}")
+                import traceback
+                log_to_file(traceback.format_exc())
+                _export_success = False
+                _export_complete = True
+                return {'PASS_THROUGH'}
+        
+        return {'PASS_THROUGH'}
+
     def execute(self, context):
         if not CPP_MODULE_LOADED or not step_exporter:
             self.report({'ERROR'}, "C++ extension module '_step_exporter' not loaded. Check console for details.")
             return {'CANCELLED'}
         
         # 尽早打开日志文件，确保所有 [STEP Exporter] 日志都写入 .step.log
-        global _export_log_file, _log_buffer
+        global _export_log_file, _log_buffer, _export_complete, _export_success
         if _export_log_file is None or _export_log_file.closed:
             try:
                 log_path = self.filepath + ".log"
@@ -2582,28 +3063,10 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
             except:
                 pass
         
-        # 启动进度条显示
+        # 启动进度条显示（使用 built-in wm.progress API）
+        set_operator(self)
         log_to_file(f"[STEP Exporter] === Calling start_progress ===")
         start_progress(context)
-        
-        # 启动 modal operator 来显示进度条
-        log_to_file(f"[STEP Exporter] === Checking if bpy.ops.step_exporter exists ===")
-        if hasattr(bpy.ops, 'step_exporter'):
-            log_to_file(f"[STEP Exporter] bpy.ops.step_exporter exists")
-            if hasattr(bpy.ops.step_exporter, 'progress_report'):
-                log_to_file(f"[STEP Exporter] bpy.ops.step_exporter.progress_report exists")
-                try:
-                    log_to_file(f"[STEP Exporter] === Calling progress_report operator ===")
-                    result = getattr(getattr(bpy.ops, 'step_exporter'), 'progress_report')('INVOKE_DEFAULT')
-                    log_to_file(f"[STEP Exporter] progress_report operator called, result: {result}")
-                except Exception as e:
-                    log_to_file(f"[STEP Exporter] Error calling progress_report: {e}")
-                    import traceback
-                    traceback.print_exc()
-            else:
-                log_to_file(f"[STEP Exporter] ERROR: bpy.ops.step_exporter.progress_report does NOT exist!")
-        else:
-            log_to_file(f"[STEP Exporter] ERROR: bpy.ops.step_exporter does NOT exist!")
         
         # 将导出参数存储到全局变量
         global _export_params, _export_stage, _export_objects, _export_objects_data, _export_current_index
@@ -2624,6 +3087,7 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
         
         # 检测底壳和圆柱对象，使用参数化导出
         bottom_shells = []
+        top_shells = []
         cylinder_objects = []
         regular_export_objects = []
         
@@ -2639,6 +3103,14 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
                     log_to_file(f"[STEP Exporter]   -> Bottom shell! has_holes={hh}")
                     log_to_file(f"[STEP Exporter] Found bottom shell: {obj.name} (has_holes={shell_params.get('has_holes', False)})")
                     continue
+
+                # 检测顶壳（锥形渐缩壳）
+                top_shell_params = _analyze_top_shell_from_mesh(obj, context, scale)
+                if top_shell_params:
+                    top_shells.append(top_shell_params)
+                    log_to_file(f"[STEP Exporter]   -> Top shell! recess={top_shell_params.get('top_recess',0):.1f}")
+                    log_to_file(f"[STEP Exporter] Found top shell: {obj.name}")
+                    continue
                 
                 # 再检测圆柱/圆锥
                 cyl_params = _analyze_cylinder_from_mesh(obj, context, scale)
@@ -2653,10 +3125,10 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
             elif obj.type == 'CURVE':
                 regular_export_objects.append(obj)
         
-        total_parametric = len(bottom_shells) + len(cylinder_objects)
-        log_to_file(f"[STEP Exporter] Total objects: {len(_export_objects)}, shells: {len(bottom_shells)}, cylinders: {len(cylinder_objects)}, regular: {len(regular_export_objects)}")
+        total_parametric = len(bottom_shells) + len(top_shells) + len(cylinder_objects)
+        log_to_file(f"[STEP Exporter] Total objects: {len(_export_objects)}, bottom_shells: {len(bottom_shells)}, top_shells: {len(top_shells)}, cylinders: {len(cylinder_objects)}, regular: {len(regular_export_objects)}")
         
-        if bottom_shells or cylinder_objects:
+        if bottom_shells or top_shells or cylinder_objects:
             log_to_file(f"[STEP Exporter] Found {total_parametric} parametric object(s) (+ {len(regular_export_objects)} regular), using parametric export")
             update_progress(10, "检测到参数化对象，正在导出...", context)
 
@@ -2666,6 +3138,7 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
             _bottom_shell_export_data = {
                 'filepath': self.filepath,
                 'shells': bottom_shells,
+                'top_shells': top_shells,
                 'cylinders': cylinder_objects,
                 'regular_objects': regular_export_objects,
                 'step_schema': self.step_schema,
@@ -2678,10 +3151,53 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
                 'context': context,
             }
 
-            timer_handle = bpy.app.timers.register(_export_bottom_shell_timer, first_interval=0.3)
-            log_to_file(f"[STEP Exporter] Timer registered: {timer_handle}")
-            self.report({'INFO'}, f"检测到 {total_parametric} 个参数化对象（{len(bottom_shells)}底壳 + {len(cylinder_objects)}圆柱），正在导出...")
-            return {'FINISHED'}
+            _export_complete = False
+            _export_success = False
+            
+            # 重置分阶段导出状态
+            global _parametric_export_stage, _parametric_export_idx, _parametric_temp_files, _parametric_progress_val
+            _parametric_export_stage = 0
+            _parametric_export_idx = 0
+            _parametric_temp_files = []
+            _parametric_progress_val = 0.0
+            
+            # 后台模式：直接在循环中运行分阶段导出（无UI，无需modal）
+            if bpy.app.background:
+                log_to_file(f"[STEP Exporter] Background mode: running staged export synchronously")
+                try:
+                    while True:
+                        next_tick = _parametric_export_staged()
+                        if next_tick is None:
+                            break
+                except Exception as e:
+                    log_to_file(f"[STEP Exporter] Background export error: {e}")
+                    import traceback
+                    log_to_file(traceback.format_exc())
+                    _export_success = False
+                    _export_complete = True
+                
+                # 清理
+                end_progress(context)
+                clear_operator()
+                if _export_log_file and not _export_log_file.closed:
+                    _export_log_file.close()
+                    _export_log_file = None
+                try:
+                    _merge_log_files(os.path.dirname(self.filepath), self.filepath)
+                except:
+                    pass
+                
+                log_to_file(f"[STEP Exporter] Background export done, success={_export_success}")
+                self.report({'INFO' if _export_success else 'ERROR'}, "STEP 导出完成" if _export_success else "STEP 导出失败")
+                return {'FINISHED'}
+            
+            # UI模式：注册事件定时器用于modal进度更新
+            wm = context.window_manager
+            self._timer = wm.event_timer_add(0.1, window=context.window)
+            wm.modal_handler_add(self)
+            log_to_file(f"[STEP Exporter] Modal handler and event timer registered")
+
+            return {'RUNNING_MODAL'}
         
         _export_params = {
             'filepath': self.filepath,
@@ -2697,25 +3213,49 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
             'context': context,
             'scale': scale
         }
-        
+
         # 重置状态
+        global _export_stage, _export_objects_data, _export_current_index
+        _export_complete = False
+        _export_success = False
         _export_stage = 0
         _export_objects_data = []
         _export_current_index = 0
-        
-        # 关闭日志文件（非参数化路径）
-        if _export_log_file and not _export_log_file.closed:
-            _export_log_file.close()
-        _export_log_file = None
-        
-        log_to_file(f"[STEP Exporter] === Registering timer ===")
+
+        # 注册事件定时器用于modal进度更新
+        wm = context.window_manager
+        self._timer = wm.event_timer_add(0.2, window=context.window)
+        wm.modal_handler_add(self)
+        log_to_file(f"[STEP Exporter] Modal handler and event timer registered (regular path)")
+
+        log_to_file(f"[STEP Exporter] === Registering app timer ===")
         log_to_file(f"[STEP Exporter] Objects to export: {len(_export_objects)}")
-        
-        # 将导出工作交给 timer，这样 modal operator 可以正常处理事件
-        bpy.app.timers.register(_export_worker_timer)
-        
-        # 立即返回，让 Blender 处理事件循环
-        return {'FINISHED'}
+
+        # 包装 _export_worker_timer，完成后设置完成标志
+        def _async_regular_worker():
+            global _export_complete, _export_success
+            try:
+                result = _export_worker_timer()
+                if result is None:
+                    # timer 停止，导出完成（可能成功也可能失败，由内部决定）
+                    _export_success = True
+                    _export_complete = True
+                    return None
+                return result
+            except Exception as e:
+                log_to_file(f"[STEP Exporter] Async regular export error: {e}")
+                import traceback
+                log_to_file(traceback.format_exc())
+                _export_success = False
+                _export_complete = True
+                return None
+
+        # 将导出工作交给 app timer，让 modal operator 保持生命周期
+        bpy.app.timers.register(_async_regular_worker, first_interval=0.1)
+        log_to_file(f"[STEP Exporter] App timer registered for regular export")
+
+        # 返回 RUNNING_MODAL 保持 operator 生命周期，进度条才能持续显示
+        return {'RUNNING_MODAL'}
     
     def get_mesh_data_enhanced(self, obj, context, scale, apply_modifiers=True):
         """获取网格数据（增强版，包含更多检查和信息）"""

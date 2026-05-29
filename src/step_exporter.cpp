@@ -1358,7 +1358,7 @@ TopoDS_Shape static fix_shape_enhanced(const TopoDS_Shape& shape, double toleran
                   << ", non-manifold allowed: " << (allowNonManifold ? "yes" : "no") << std::endl;
 
         // 对于高面数模型（如猴头），简化修复流程以避免过度修复
-        bool simplifyForHighPoly = (originalFaceCount >= 5000);
+        bool simplifyForHighPoly = (originalFaceCount >= 50000);
         std::cout << "[STEP Exporter] DEBUG: simplifyForHighPoly = " << (simplifyForHighPoly ? "true" : "false") << std::endl;
         if (simplifyForHighPoly) {
             std::cout << "[STEP Exporter] High-poly model detected, simplifying repair pipeline." << std::endl;
@@ -1923,6 +1923,30 @@ TopoDS_Shape create_solid_from_mesh(const std::vector<std::vector<double>>& vert
             }
         }
 
+        // 统一相同域合并相邻共面面片（修复网格导出模型"破碎"问题）
+        std::cout << "[STEP Exporter] Unifying faces to reduce fragmentation..." << std::endl;
+        try {
+            Handle(ShapeUpgrade_UnifySameDomain) unify = new ShapeUpgrade_UnifySameDomain;
+            unify->Initialize(finalShape, Standard_True, Standard_True, Standard_True);
+            unify->SetLinearTolerance(adjustedTolerance * toleranceMultiplier);
+            unify->SetAngularTolerance(M_PI / 360.0); // 0.5度角容差
+            unify->Build();
+            if (!unify->Shape().IsNull()) {
+                int facesBefore = 0, facesAfter = 0;
+                for (TopExp_Explorer exp(finalShape, TopAbs_FACE); exp.More(); exp.Next()) facesBefore++;
+                for (TopExp_Explorer exp(unify->Shape(), TopAbs_FACE); exp.More(); exp.Next()) facesAfter++;
+                finalShape = unify->Shape();
+                std::cout << "[STEP Exporter] Face unification: " << facesBefore
+                          << " → " << facesAfter << " faces (merged coplanar triangles)." << std::endl;
+            } else {
+                std::cout << "[STEP Exporter] Unification produced null shape, keeping original." << std::endl;
+            }
+        } catch (const Standard_Failure& e) {
+            std::cout << "[STEP Exporter] Unification failed: " << e.GetMessageString() << ", keeping original." << std::endl;
+        } catch (const std::exception& e) {
+            std::cout << "[STEP Exporter] Unification failed (std): " << e.what() << ", keeping original." << std::endl;
+        }
+
         // 修复前打印最终形状类型
         std::cout << "[STEP Exporter] Final shape type before fixing: ";
         switch (finalShape.ShapeType()) {
@@ -1940,8 +1964,11 @@ TopoDS_Shape create_solid_from_mesh(const std::vector<std::vector<double>>& vert
         std::cout << std::endl;
 
         // 对于高面数模型，跳过增强修复以避免过度修复
-        if (faces.size() >= 10000) {
-            std::cout << "[STEP Exporter] High-poly model (" << faces.size() << " faces), skipping enhanced fixing." << std::endl;
+        // 使用统一后的实际面数判断（而非原始三角形数）
+        int actualFacesAfterUnify = 0;
+        for (TopExp_Explorer exp(finalShape, TopAbs_FACE); exp.More(); exp.Next()) actualFacesAfterUnify++;
+        if (actualFacesAfterUnify >= 10000) {
+            std::cout << "[STEP Exporter] High-poly model (" << actualFacesAfterUnify << " faces), skipping enhanced fixing." << std::endl;
             return finalShape;
         } else {
             return fix_shape_enhanced(finalShape, tolerance);

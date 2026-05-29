@@ -2,6 +2,8 @@
 #include "../include/step_exporter_internal.h"
 #include <STEPControl_Writer.hxx>
 #include <BRepBuilderAPI_MakeVertex.hxx>
+#include <BRepPrimAPI_MakeBox.hxx>
+#include <BRepAlgoAPI_Cut.hxx>
 #include <gp_Pnt.hxx>
 #include <gp_Trsf.hxx>
 #include <BRepBuilderAPI_Transform.hxx>
@@ -1262,6 +1264,156 @@ PyObject* export_hollow_cone_fillet_with_groove_step(PyObject* self, PyObject* a
     }
 }
 
+// === 顶壳解析导出 ===
+PyObject* export_top_shell_filleted_step(PyObject* self, PyObject* args) {
+    const char* filename;
+    double width, depth, outer_height;
+    double top_thickness, wall_thickness, corner_radius;
+    double outer_fillet_radius, inner_fillet_radius;
+    double top_recess, top_offset_y;
+    double window_len = 0.0, window_wid = 0.0;
+    double pos_x = 0.0, pos_y = 0.0, pos_z = 0.0;
+    const char* step_schema = "AP214IS";
+    const char* unit = "MILLIMETER";
+    int enable_logging = 1;
+
+    if (!PyArg_ParseTuple(args, "sdddddddddddddddssi",
+                          &filename,
+                          &width, &depth, &outer_height,
+                          &top_thickness, &wall_thickness, &corner_radius,
+                          &outer_fillet_radius, &inner_fillet_radius,
+                          &top_recess, &top_offset_y,
+                          &window_len, &window_wid,
+                          &pos_x, &pos_y, &pos_z,
+                          &step_schema, &unit, &enable_logging)) {
+        PyErr_SetString(PyExc_TypeError,
+            "export_top_shell_filleted_step() expected: filename, width, depth, outer_height, "
+            "top_thickness, wall_thickness, corner_radius, "
+            "outer_fillet_radius, inner_fillet_radius, "
+            "top_recess, top_offset_y, "
+            "window_len, window_wid, pos_x, pos_y, pos_z, step_schema, unit, enable_logging");
+        return NULL;
+    }
+
+    std::cout << "\n[STEP Exporter] =========================================" << std::endl;
+    std::cout << "[STEP Exporter] Exporting top shell to: " << filename << std::endl;
+    std::cout << "[STEP Exporter] Parameters: " << width << "x" << depth
+              << " h=" << outer_height << " top_t=" << top_thickness
+              << " wall=" << wall_thickness << " cr=" << corner_radius
+              << " ofr=" << outer_fillet_radius << " ifr=" << inner_fillet_radius
+              << " recess=" << top_recess << " yOff=" << top_offset_y
+              << " pos=(" << pos_x << "," << pos_y << "," << pos_z << ")" << std::endl;
+
+    try {
+        TopoDS_Shape shape = create_top_shell_filleted_solid(
+            width, depth, outer_height,
+            top_thickness, wall_thickness, corner_radius,
+            outer_fillet_radius, inner_fillet_radius,
+            top_recess, top_offset_y,
+            window_len, window_wid);
+
+        if (shape.IsNull()) {
+            std::cerr << "[STEP Exporter] Failed to create top shell shape" << std::endl;
+            Py_RETURN_FALSE;
+        }
+
+        // Flip top shell 180 degrees around X axis so opening faces down (like a lid)
+        {
+            gp_Trsf trsf;
+            trsf.SetRotation(gp::OX(), M_PI);
+            BRepBuilderAPI_Transform transform(shape, trsf, Standard_False);
+            shape = transform.Shape();
+            std::cout << "[STEP Exporter] Flipped top shell 180° around X axis (opening now faces down)" << std::endl;
+        }
+
+        // Cut window after flip (window is now on the top face at z=-hh)
+        if (window_len > 0.0 && window_wid > 0.0) {
+            double hh = outer_height / 2.0;
+            double topZ = -hh + top_thickness / 2.0;  // Center of top wall (after flip, top face is at z=-hh)
+            BRepPrimAPI_MakeBox windowMaker(
+                gp_Pnt(-window_len/2.0, -window_wid/2.0, topZ - top_thickness - 2.0),
+                window_len, window_wid, top_thickness + 6.0);
+            TopoDS_Solid windowBox = windowMaker.Solid();
+            BRepAlgoAPI_Cut wc(shape, windowBox);
+            if (wc.IsDone()) {
+                shape = wc.Shape();
+                std::cout << "[STEP Exporter] Window cut after flip: " << window_len << "x" << window_wid << std::endl;
+            } else {
+                std::cerr << "[STEP Exporter] Window cut failed" << std::endl;
+            }
+        }
+
+        // Apply position translation
+        if (pos_x != 0.0 || pos_y != 0.0 || pos_z != 0.0) {
+            gp_Trsf trsf;
+            trsf.SetTranslation(gp_Vec(pos_x, pos_y, pos_z));
+            BRepBuilderAPI_Transform transform(shape, trsf, Standard_False);
+            shape = transform.Shape();
+            std::cout << "[STEP Exporter] Applied translation: (" << pos_x << "," << pos_y << "," << pos_z << ")" << std::endl;
+        }
+
+        int faceCount = 0;
+        for (TopExp_Explorer exp(shape, TopAbs_FACE); exp.More(); exp.Next()) faceCount++;
+        std::cout << "[STEP Exporter] Created top shell shape with " << faceCount << " faces" << std::endl;
+
+        // Shape validity is handled inside create_top_shell_filleted_solid.
+        // Skip fix_shape_enhanced (designed for mesh geometry) to avoid
+        // damaging analytical B-Rep topology.
+        BRepCheck_Analyzer analyzer(shape);
+        if (!analyzer.IsValid()) {
+            std::cout << "[STEP Exporter] Warning: Shape has topology issues, writing as-is" << std::endl;
+        } else {
+            std::cout << "[STEP Exporter] Shape topology is valid" << std::endl;
+        }
+
+        std::string logPath;
+        const char* log_filename = nullptr;
+        if (enable_logging) {
+            logPath = std::string(filename) + ".log";
+            log_filename = logPath.c_str();
+        }
+
+        STEPControl_Writer writer;
+        StdoutRedirectState redirectState = setup_step_writer(writer, filename, step_schema, unit, 1, enable_logging, log_filename);
+
+        IFSelect_ReturnStatus transferStatus = writer.Transfer(shape, STEPControl_AsIs);
+        if (transferStatus != IFSelect_RetDone) {
+            std::cerr << "[STEP Exporter] Failed to transfer top shell to STEP writer" << std::endl;
+            if (redirectState.stdout_redirected) {
+                _dup2(redirectState.saved_stdout_fd, _fileno(stdout));
+                if (redirectState.log_file) fclose(redirectState.log_file);
+            }
+            Py_RETURN_FALSE;
+        }
+
+        std::cout << "[STEP Exporter] Writing STEP file..." << std::endl;
+        IFSelect_ReturnStatus writeStatus = writer.Write(filename);
+
+        if (redirectState.stdout_redirected) {
+            _dup2(redirectState.saved_stdout_fd, _fileno(stdout));
+            if (redirectState.log_file) fclose(redirectState.log_file);
+        }
+
+        if (writeStatus == IFSelect_RetDone) {
+            std::cout << "[STEP Exporter] Successfully exported top shell STEP file" << std::endl;
+            std::cout << "[STEP Exporter] =========================================\n" << std::endl;
+            Py_RETURN_TRUE;
+        } else {
+            std::cerr << "[STEP Exporter] Failed to write STEP file" << std::endl;
+            Py_RETURN_FALSE;
+        }
+    } catch (const Standard_Failure& e) {
+        std::cerr << "[STEP Exporter] OpenCASCADE error: " << e.GetMessageString() << std::endl;
+        Py_RETURN_FALSE;
+    } catch (const std::exception& e) {
+        std::cerr << "[STEP Exporter] Standard error: " << e.what() << std::endl;
+        Py_RETURN_FALSE;
+    } catch (...) {
+        std::cerr << "[STEP Exporter] Unknown error" << std::endl;
+        Py_RETURN_FALSE;
+    }
+}
+
 // 模块方法定义表
 static PyMethodDef step_exporter_methods[] = {
     {"export_step", export_step, METH_VARARGS, "Export simple shape to STEP"},
@@ -1272,6 +1424,7 @@ static PyMethodDef step_exporter_methods[] = {
     {"export_bottom_shell_with_holes_step", export_bottom_shell_with_holes_step, METH_VARARGS, "Export bottom shell with corner holes directly to STEP"},
     {"export_bottom_shell_filleted_step", export_bottom_shell_filleted_step, METH_VARARGS, "Export bottom shell with bottom fillets directly to STEP"},
     {"export_bottom_shell_filleted_with_holes_step", export_bottom_shell_filleted_with_holes_step, METH_VARARGS, "Export bottom shell with bottom fillets and corner holes directly to STEP"},
+    {"export_top_shell_filleted_step", export_top_shell_filleted_step, METH_VARARGS, "Export top shell (tapered, lofted) with fillets and window directly to STEP"},
     {"export_cylinder_step", export_cylinder_step, METH_VARARGS, "Export parametric cylinder to STEP"},
     {"export_cone_step", export_cone_step, METH_VARARGS, "Export parametric cone to STEP"},
     {"export_hollow_cylinder_step", export_hollow_cylinder_step, METH_VARARGS, "Export parametric hollow cylinder to STEP"},

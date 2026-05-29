@@ -4,10 +4,16 @@
 #include <BRepPrimAPI_MakeBox.hxx>
 #include <BRepFilletAPI_MakeFillet.hxx>
 #include <BRepOffsetAPI_MakeThickSolid.hxx>
+#include <BRepOffsetAPI_ThruSections.hxx>
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
+#include <BRepAlgoAPI_Common.hxx>
+#include <BRepBuilderAPI_Sewing.hxx>
+#include <Bnd_Box.hxx>
+#include <BRepBndLib.hxx>
 #include <BRepPrimAPI_MakeCylinder.hxx>
+#include <BRepPrimAPI_MakeHalfSpace.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
 #include <TopExp.hxx>
@@ -30,6 +36,14 @@
 #include <BRepTools.hxx>
 #include <Precision.hxx>
 #include <GeomAbs_SurfaceType.hxx>
+#include <BRepOffsetAPI_ThruSections.hxx>
+#include <BRepBuilderAPI_MakeWire.hxx>
+#include <BRepBuilderAPI_MakeEdge.hxx>
+#include <gp_Circ.hxx>
+#include <BRepBuilderAPI_Transform.hxx>
+
+// Forward declaration
+TopoDS_Solid ensure_solid(const TopoDS_Shape& shape);
 
 TopoDS_Shape create_rounded_box_solid(double width, double depth, double height, double corner_radius)
 {
@@ -118,6 +132,11 @@ TopoDS_Shape create_rounded_box_solid(double width, double depth, double height,
         }
 
         TopoDS_Shape result = filletMaker.Shape();
+        // Ensure result is always a proper solid
+        if (result.ShapeType() != TopAbs_SOLID) {
+            TopoDS_Solid solid = ensure_solid(result);
+            if (!solid.IsNull()) result = solid;
+        }
         std::cout << "[STEP Exporter] Rounded box created successfully" << std::endl;
         return result;
     } catch (const Standard_Failure& e) {
@@ -766,7 +785,7 @@ TopoDS_Shape create_bottom_shell_filleted_with_holes_solid(double width, double 
             }
         }
 
-        // 调试：统计切割前后的面数
+        // 璋冭瘯锛氱粺璁″垏鍓插墠鍚庣殑闈㈡暟
         int facesBefore = 0;
         for (TopExp_Explorer exp(currentSolid, TopAbs_FACE); exp.More(); exp.Next()) facesBefore++;
 
@@ -789,4 +808,398 @@ TopoDS_Shape create_bottom_shell_filleted_with_holes_solid(double width, double 
 
     std::cout << "[STEP Exporter] Created " << successCount << " corner holes in filleted bottom shell" << std::endl;
     return currentShape;
+}
+
+// ============================================
+// Top Shell - Analytical Parametric Export
+// Uses lofting (ThruSections) to create the tapered shape,
+// then boolean hollowing and filleting for a perfect STEP model.
+// ============================================
+
+// Create a rounded rectangle wire profile in the XY plane at given Z
+TopoDS_Wire create_rounded_rect_wire(double width, double depth, double cr, double z)
+{
+    double hw = width / 2.0;
+    double hd = depth / 2.0;
+
+    // Clamp corner radius
+    double max_r = std::min(hw, hd) * 0.99;
+    if (cr > max_r) cr = max_r;
+
+    // Always produce 8-edge wire (4 straight + 4 arc) for consistent topology
+    // with ThruSections. Minimum radius 0.1mm avoids degeneracy.
+    if (cr < 0.1) cr = 0.1;
+
+    BRepBuilderAPI_MakeWire wireMaker;
+
+    double r = cr;
+    double RS = hw, LS = -hw;
+    double TS = hd, BS = -hd;
+
+    struct { double x1,y1,x2,y2; } segs[] = {
+        {LS+r, TS, RS-r, TS},
+        {RS, TS-r, RS, BS+r},
+        {RS-r, BS, LS+r, BS},
+        {LS, BS+r, LS, TS-r}
+    };
+
+    struct { double cx,cy; double x1,y1,x2,y2; } arcs[] = {
+        {RS-r, TS-r, RS-r,TS, RS,TS-r},
+        {RS-r, BS+r, RS,BS+r, RS-r,BS},
+        {LS+r, BS+r, LS+r,BS, LS,BS+r},
+        {LS+r, TS-r, LS,TS-r, LS+r,TS}
+    };
+
+    for (int i = 0; i < 4; i++) {
+        BRepBuilderAPI_MakeEdge edgeMaker(
+            gp_Pnt(segs[i].x1, segs[i].y1, z),
+            gp_Pnt(segs[i].x2, segs[i].y2, z));
+        if (edgeMaker.IsDone())
+            wireMaker.Add(edgeMaker.Edge());
+
+        gp_Pnt arcCenter(arcs[i].cx, arcs[i].cy, z);
+        gp_Ax2 arcAxis(arcCenter, -gp::DZ());  // clockwise: short 90° arc curving outward
+        gp_Circ circle(arcAxis, r);
+        BRepBuilderAPI_MakeEdge arcMaker(circle,
+            gp_Pnt(arcs[i].x1, arcs[i].y1, z),
+            gp_Pnt(arcs[i].x2, arcs[i].y2, z));
+        if (arcMaker.IsDone())
+            wireMaker.Add(arcMaker.Edge());
+    }
+
+    return wireMaker.IsDone() ? wireMaker.Wire() : TopoDS_Wire();
+}
+
+// Ensure shape is a solid
+TopoDS_Solid ensure_solid(const TopoDS_Shape& shape)
+{
+    try {
+        if (shape.ShapeType() == TopAbs_SOLID)
+            return TopoDS::Solid(shape);
+    } catch (...) {}
+    if (shape.ShapeType() == TopAbs_COMPOUND || shape.ShapeType() == TopAbs_SHELL) {
+        BRepBuilderAPI_MakeSolid solidMaker;
+        for (TopExp_Explorer exp(shape, TopAbs_SHELL); exp.More(); exp.Next())
+            solidMaker.Add(TopoDS::Shell(exp.Current()));
+        if (solidMaker.IsDone())
+            return solidMaker.Solid();
+    }
+    return TopoDS_Solid(); // return null
+}
+
+
+// Create a tapered loft solid from two rounded-rectangle profiles.
+// Uses ruled surfaces (straight lines between profiles) for reliable geometry
+// that can be filleted and boolean-cut without topology errors.
+TopoDS_Solid create_tapered_loft_solid(
+    double bot_w, double bot_d, double bot_cr, double bot_z, double bot_y_offs,
+    double top_w, double top_d, double top_cr, double top_z, double top_y_offs)
+{
+    TopoDS_Wire bottomWire = create_rounded_rect_wire(bot_w, bot_d, bot_cr, bot_z);
+    if (bottomWire.IsNull()) {
+        std::cerr << "[STEP Exporter] create_tapered_loft_solid: bottom wire null" << std::endl;
+        return TopoDS_Solid();
+    }
+
+    TopoDS_Wire topWire = create_rounded_rect_wire(top_w, top_d, top_cr, top_z);
+    if (topWire.IsNull()) {
+        std::cerr << "[STEP Exporter] create_tapered_loft_solid: top wire null" << std::endl;
+        return TopoDS_Solid();
+    }
+
+    if (fabs(bot_y_offs) > 0.001) {
+        gp_Trsf trsf;
+        trsf.SetTranslation(gp_Vec(0, bot_y_offs, 0));
+        bottomWire.Move(TopLoc_Location(trsf));
+    }
+    if (fabs(top_y_offs) > 0.001) {
+        gp_Trsf trsf;
+        trsf.SetTranslation(gp_Vec(0, top_y_offs, 0));
+        topWire.Move(TopLoc_Location(trsf));
+    }
+
+    std::cout << "[STEP Exporter] Loft: bot=" << bot_w << "x" << bot_d << " z=" << bot_z << " y=" << bot_y_offs
+              << " top=" << top_w << "x" << top_d << " z=" << top_z << " y=" << top_y_offs << std::endl;
+
+    try {
+        // ruled=true: straight lines between profiles, but with intermediate wires
+        // we approximate curved side walls by adding 48 intermediate profiles (same as Blender)
+        // isSolid=true: caps the first and last profiles, creating a closed solid
+        BRepOffsetAPI_ThruSections loft(true, true);
+        loft.AddWire(bottomWire);
+
+        // Add 48 intermediate wires with cosine-curve distribution (matches Blender)
+        // Blender uses: inset = total_recess * (1 - cos(pi/2 * t))
+        // This creates a smooth curved taper: slow change near top, fast change near bottom
+        int nSteps = 48;
+        double totalTaperW = bot_w - top_w;
+        double totalTaperD = bot_d - top_d;
+        double totalTaperCr = bot_cr - top_cr;
+        double totalYOffs = top_y_offs - bot_y_offs;
+
+        for (int i = 1; i <= nSteps; i++) {
+            double t = (double)i / (nSteps + 1);
+            // Cosine curve distribution (same as Blender)
+            double cosineFactor = 1.0 - cos(M_PI / 2.0 * t);
+
+            // Width/depth decrease from bottom (full) to top (recessed) following cosine curve
+            double midW = bot_w - totalTaperW * cosineFactor;
+            double midD = bot_d - totalTaperD * cosineFactor;
+            double midCr = bot_cr - totalTaperCr * cosineFactor;
+            double midZ = bot_z + (top_z - bot_z) * t;
+            double midYOffs = bot_y_offs + totalYOffs * cosineFactor;
+
+            TopoDS_Wire midWire = create_rounded_rect_wire(midW, midD, midCr, midZ);
+            if (!midWire.IsNull()) {
+                if (fabs(midYOffs) > 0.001) {
+                    gp_Trsf trsf;
+                    trsf.SetTranslation(gp_Vec(0, midYOffs, 0));
+                    midWire.Move(TopLoc_Location(trsf));
+                }
+                loft.AddWire(midWire);
+            }
+        }
+
+        loft.AddWire(topWire);
+        loft.Build();
+
+        if (!loft.IsDone()) {
+            std::cerr << "[STEP Exporter] Loft failed" << std::endl;
+            return TopoDS_Solid();
+        }
+
+        TopoDS_Shape result = loft.Shape();
+        std::cout << "[STEP Exporter] Loft result type: " << (result.ShapeType() == TopAbs_SOLID ? "SOLID" : 
+            result.ShapeType() == TopAbs_SHELL ? "SHELL" : 
+            result.ShapeType() == TopAbs_COMPOUND ? "COMPOUND" : "OTHER") << std::endl;
+
+        if (result.ShapeType() != TopAbs_SOLID) {
+            result = ensure_solid(result);
+        }
+        if (result.IsNull() || result.ShapeType() != TopAbs_SOLID) {
+            std::cerr << "[STEP Exporter] Loft did not produce a valid solid" << std::endl;
+            return TopoDS_Solid();
+        }
+
+        return TopoDS::Solid(result);
+    } catch (const Standard_Failure& e) {
+        std::cerr << "[STEP Exporter] Loft OCCT exception: " << e.GetMessageString() << std::endl;
+        return TopoDS_Solid();
+    } catch (...) {
+        std::cerr << "[STEP Exporter] Loft exception" << std::endl;
+        return TopoDS_Solid();
+    }
+}
+
+// ============================================
+// Top Shell - Analytical Parametric Export
+// Uses lofting (ThruSections) for smooth curved taper,
+// then boolean hollowing and filleting for a perfect STEP model.
+// ============================================
+
+TopoDS_Shape create_top_shell_filleted_solid(
+    double width, double depth, double outer_height,
+    double top_thickness, double wall_thickness,
+    double corner_radius,
+    double outer_fillet_radius, double inner_fillet_radius,
+    double top_recess, double top_offset_y,
+    double window_len, double window_wid)
+{
+    std::cout << "[STEP Exporter] Creating top shell: " << width << "x" << depth
+              << " h=" << outer_height << " top_t=" << top_thickness
+              << " wall=" << wall_thickness << " cr=" << corner_radius
+              << " outer_f=" << outer_fillet_radius << " inner_f=" << inner_fillet_radius
+              << " recess=" << top_recess << " topYOff=" << top_offset_y << std::endl;
+
+    double hh = outer_height / 2.0;
+
+    // Clamp fillet radii
+    double max_safe_fillet = std::min(outer_height * 0.25, std::min(width, depth) * 0.05);
+    outer_fillet_radius = std::min(outer_fillet_radius, max_safe_fillet);
+    inner_fillet_radius = std::min(inner_fillet_radius, max_safe_fillet * 0.8);
+    if (inner_fillet_radius < 0.1) inner_fillet_radius = 0.1;
+
+    double bottom_y_shift = top_offset_y;
+
+    bool use_loft = (top_recess > 0.0 || fabs(top_offset_y) > 0.001);
+
+    TopoDS_Solid outerFinal;
+    TopoDS_Solid innerFinal;
+
+    if (!use_loft) {
+        // === Box-based approach (same as bottom shell, simpler and reliable) ===
+        std::cout << "[STEP Exporter] Using box-based approach (no taper)" << std::endl;
+
+        // Outer solid: rounded box centered at origin
+        TopoDS_Shape outerBox = create_rounded_box_solid(width, depth, outer_height, corner_radius);
+        if (outerBox.IsNull()) {
+            std::cerr << "[STEP Exporter] Failed to create outer box" << std::endl;
+            return TopoDS_Shape();
+        }
+
+        // Apply bottom fillet to outer box (bottom face is at z=-hh)
+        double outer_bottom_z = -hh;
+        TopoDS_Shape outerFilleted = apply_bottom_fillet_to_box(outerBox, outer_fillet_radius, outer_bottom_z);
+        outerFinal = ensure_solid(outerFilleted);
+        if (outerFinal.IsNull()) {
+            std::cerr << "[STEP Exporter] Failed to convert outer filleted to solid" << std::endl;
+            return outerFilleted;
+        }
+
+        // Inner solid: smaller rounded box for cavity
+        double inner_w = width - 2.0 * wall_thickness;
+        double inner_d = depth - 2.0 * wall_thickness;
+        double inner_h = outer_height - top_thickness + 1.0; // extra height for clean cut
+        double inner_cr = std::max(0.0, corner_radius - wall_thickness);
+
+        if (inner_w <= 0 || inner_d <= 0 || inner_h <= 0) {
+            std::cerr << "[STEP Exporter] Wall thickness too large, returning solid outer" << std::endl;
+            return outerFinal;
+        }
+
+        TopoDS_Shape innerBox = create_rounded_box_solid(inner_w, inner_d, inner_h, inner_cr);
+        if (innerBox.IsNull()) {
+            std::cerr << "[STEP Exporter] Failed to create inner box" << std::endl;
+            return outerFinal;
+        }
+
+        // Shift inner box up: its bottom should be at (-hh + top_thickness + 0.05)
+        double inner_bottom_z = -hh + top_thickness + 0.05;
+        double inner_shift_z = inner_bottom_z - (-inner_h / 2.0);
+        gp_Trsf innerTrsf;
+        innerTrsf.SetTranslation(gp_Vec(0, 0, inner_shift_z));
+        TopLoc_Location innerLoc(innerTrsf);
+        innerBox.Move(innerLoc);
+
+        TopoDS_Shape innerFilleted = apply_bottom_fillet_to_box(innerBox, inner_fillet_radius, inner_bottom_z);
+        innerFinal = ensure_solid(innerFilleted);
+        if (innerFinal.IsNull()) {
+            std::cerr << "[STEP Exporter] Failed to convert inner to solid, using unfilleted" << std::endl;
+            innerFinal = ensure_solid(innerBox);
+        }
+    } else {
+        // === Loft-based approach (for tapered shells) ===
+        std::cout << "[STEP Exporter] Using loft-based approach (tapered)" << std::endl;
+
+        // Compute derived dimensions (top = recessed, bottom = full width)
+        // After 180° flip: top(z=+hh) is recessed, bottom(z=-hh) is full width
+        double top_w = width - 2.0 * top_recess;
+        double top_d = depth - 2.0 * top_recess;
+        double top_cr = std::max(0.0, corner_radius - top_recess);
+
+        // === Step 1: Create outer tapered solid (no fillet yet) ===
+        // bottom(z=-hh): full width, no Y offset
+        // top(z=+hh): recessed, full Y offset
+        TopoDS_Solid outerSolid = create_tapered_loft_solid(
+            width, depth, corner_radius, -hh, 0.0,
+            top_w, top_d, top_cr, hh, bottom_y_shift);
+
+        if (outerSolid.IsNull()) {
+            std::cerr << "[STEP Exporter] Failed to create outer loft solid" << std::endl;
+            return TopoDS_Shape();
+        }
+        outerFinal = outerSolid;
+
+        // === Step 2: Create inner tapered solid (cavity, no fillet yet) ===
+        // Inner cavity extends from just below top surface to bottom edge
+        double inner_z_top = hh - top_thickness - 0.05;  // just below outer top
+        double inner_z_bot = -hh - 0.05;                  // extends to outer bottom
+
+        // Interpolate outer dimensions at inner Z levels, then subtract wall thickness
+        double width_recess = width - top_w;
+        double depth_recess = depth - top_d;
+        double cr_recess = corner_radius - top_cr;
+
+        // t=0 at z=-hh (full), t=1 at z=+hh (recessed)
+        double t_bot = (inner_z_bot + hh) / (2.0 * hh);  // near 0 (full width)
+        double t_top = (inner_z_top + hh) / (2.0 * hh);  // near 1 (recessed)
+
+        double inner_w = width - width_recess * t_bot - 2.0 * wall_thickness;
+        double inner_d = depth - depth_recess * t_bot - 2.0 * wall_thickness;
+        double inner_cr = std::max(0.0, corner_radius - cr_recess * t_bot - wall_thickness);
+        double inner_top_w = width - width_recess * t_top - 2.0 * wall_thickness;
+        double inner_top_d = depth - depth_recess * t_top - 2.0 * wall_thickness;
+        double inner_top_cr = std::max(0.0, corner_radius - cr_recess * t_top - wall_thickness);
+
+        if (inner_w <= 0 || inner_d <= 0 || inner_top_w <= 0 || inner_top_d <= 0) {
+            std::cerr << "[STEP Exporter] Wall thickness too large, returning solid outer" << std::endl;
+            return outerFinal;
+        }
+
+        // Y offset: t=0 → 0, t=1 → bottom_y_shift
+        double inner_bottom_y_offs = bottom_y_shift * t_bot;
+        double inner_top_y_offs = bottom_y_shift * t_top;
+
+        TopoDS_Solid innerSolid = create_tapered_loft_solid(
+            inner_w, inner_d, inner_cr, inner_z_bot, inner_bottom_y_offs,
+            inner_top_w, inner_top_d, inner_top_cr, inner_z_top, inner_top_y_offs);
+
+        if (innerSolid.IsNull()) {
+            std::cerr << "[STEP Exporter] Failed to create inner loft solid" << std::endl;
+            return outerFinal;
+        }
+        innerFinal = innerSolid;
+    }
+
+    if (outerFinal.IsNull() || innerFinal.IsNull()) {
+        std::cerr << "[STEP Exporter] Failed to create solids for boolean cut" << std::endl;
+        return TopoDS_Shape();
+    }
+
+    // === Boolean cut (outer - inner) ===
+    BRepAlgoAPI_Cut cutMaker(outerFinal, innerFinal);
+    if (!cutMaker.IsDone()) {
+        std::cerr << "[STEP Exporter] Boolean cut failed" << std::endl;
+        return outerFinal;
+    }
+
+    TopoDS_Shape result = cutMaker.Shape();
+    result = ensure_solid(result);
+    if (result.IsNull()) {
+        std::cerr << "[STEP Exporter] Boolean cut result not a valid solid" << std::endl;
+        return TopoDS_Shape();
+    }
+    std::cout << "[STEP Exporter] Boolean cut (hollow) succeeded" << std::endl;
+
+    // === Apply fillets after boolean cut (loft-based only) ===
+    if (use_loft) {
+        if (outer_fillet_radius > 0.0) {
+            double outer_z = -hh;
+            BRepFilletAPI_MakeFillet filletMaker(result);
+            int count = 0;
+            for (TopExp_Explorer fexp(result, TopAbs_FACE); fexp.More(); fexp.Next()) {
+                TopoDS_Face face = TopoDS::Face(fexp.Current());
+                BRepAdaptor_Surface surf(face);
+                if (surf.GetType() != GeomAbs_Plane) continue;
+                gp_Pln plane = surf.Plane();
+                gp_Dir n = plane.Axis().Direction();
+                if (fabs(n.Z()) < 0.9) continue;
+                if (fabs(plane.Location().Z() - outer_z) > 0.01) continue;
+                for (TopExp_Explorer eexp(face, TopAbs_EDGE); eexp.More(); eexp.Next()) {
+                    filletMaker.Add(outer_fillet_radius, TopoDS::Edge(eexp.Current()));
+                    count++;
+                }
+            }
+            if (count > 0) {
+                filletMaker.Build();
+                if (filletMaker.IsDone()) {
+                    result = filletMaker.Shape();
+                    result = ensure_solid(result);
+                    std::cout << "[STEP Exporter] Outer fillet applied (" << count << " edges)" << std::endl;
+                }
+            }
+        }
+    }
+
+    // === Final validation ===
+    int fc = 0;
+    for (TopExp_Explorer exp(result, TopAbs_FACE); exp.More(); exp.Next()) fc++;
+    std::cout << "[STEP Exporter] Final: " << fc << " faces, "
+              << (result.ShapeType() == TopAbs_SOLID ? "solid" : "non-solid") << std::endl;
+    if (result.ShapeType() == TopAbs_SOLID) {
+        GProp_GProps props;
+        BRepGProp::VolumeProperties(result, props);
+        std::cout << "[STEP Exporter] Volume: " << props.Mass() << " mm^3" << std::endl;
+    }
+    return result;
 }

@@ -55,6 +55,14 @@ TopoDS_Shape create_bottom_shell_filleted_with_holes_solid(double width, double 
                                                              double step_height,
                                                              double hole_radius, double hole_offset_x, double hole_offset_y);
 
+// Top shell parametric export (tapered / lofted shell with fillets and window)
+TopoDS_Shape create_top_shell_filleted_solid(double width, double depth, double outer_height,
+                                              double top_thickness, double wall_thickness,
+                                              double corner_radius,
+                                              double outer_fillet_radius, double inner_fillet_radius,
+                                              double top_recess, double top_offset_y,
+                                              double window_len, double window_wid);
+
 // 参数化圆柱/圆锥/空心实体创建
 TopoDS_Shape create_cylinder_solid_parametric(double radius, double height);
 TopoDS_Shape create_cone_solid_parametric(double bottom_radius, double top_radius, double height);

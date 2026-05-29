@@ -36,7 +36,8 @@ endif()
 # 设置依赖库路径
 set(freetype_DIR "f:/git/blender2step/vcpkg_installed/x64-windows-release/share/freetype" CACHE PATH "freetype config dir")
 find_package(freetype CONFIG REQUIRED)
-set(OpenCASCADE_DIR "f:/git/blender2step/vcpkg_installed/x64-windows-release/share/opencascade" CACHE PATH "Path to OpenCASCADE config")
+# 强制使用vcpkg安装的OpenCASCADE，避免找到C:/Temp/occt_build的版本
+set(OpenCASCADE_DIR "f:/git/blender2step/vcpkg_installed/x64-windows-release/share/opencascade" CACHE PATH "Path to OpenCASCADE config" FORCE)
 # 优先使用静态库
 set(OpenCASCADE_USE_STATIC_LIBS ON)
 find_package(OpenCASCADE CONFIG REQUIRED)

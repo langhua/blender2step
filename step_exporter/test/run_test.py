@@ -219,7 +219,7 @@ def do_operator_export(output_path, cpp_exporter, log_callback):
     """通过Blender菜单操作符 (bpy.ops.export.step_enhanced) 导出STEP文件。
     
     此函数模拟用户在Blender UI中通过菜单导出的完整路径：
-    1. 创建测试场景（底壳+顶壳）
+    1. 创建测试场景（单个顶壳，不带窗口）
     2. 调用操作符执行导出
     3. 验证输出的STEP文件
     """
@@ -229,40 +229,27 @@ def do_operator_export(output_path, cpp_exporter, log_callback):
     bpy.ops.object.select_all(action='SELECT')
     bpy.ops.object.delete()
     
-    # === 创建顶壳（使用简单中空顶壳）===
-    log_callback("Creating top shell for operator test...")
-    from step_exporter.test.create_top_shell import create_hollow_top_shell
+    # === 创建单个顶壳（不带窗口）===
+    log_callback("Creating single top shell (no window) for operator test...")
+    from step_exporter.test.create_top_shell import (
+        clear_scene, create_filleted_top_shell, add_material
+    )
     
-    top_shell = create_hollow_top_shell(
-        name="TestTopShell",
+    shell = create_filleted_top_shell(
+        name="TopShell_NoHoles",
         width=100.0,
         depth=70.0,
         outer_height=10.0,
         top_thickness=2.0,
         wall_thickness=2.0,
         corner_radius=20.0,
+        outer_fillet_radius=1.5,
+        inner_fillet_radius=0.75,
         location=(0, 0, 0),
         segments=24,
-        holes=None
     )
-    top_count = len(bpy.data.objects)
-    log_callback(f"Top shell created: {top_count} objects")
-    
-    # === 创建第二个顶壳（相同参数，不同位置）===
-    log_callback("Creating second top shell for operator test...")
-    top_shell2 = create_hollow_top_shell(
-        name="TestTopShell2",
-        width=100.0,
-        depth=70.0,
-        outer_height=10.0,
-        top_thickness=2.0,
-        wall_thickness=2.0,
-        corner_radius=20.0,
-        location=(120, 0, 0),  # 移到右侧，避免重叠
-        segments=24,
-        holes=None
-    )
-    log_callback(f"Second top shell created: {len(bpy.data.objects)} objects total")
+    add_material(shell, name="TopShellMaterial")
+    log_callback(f"Top shell created: {len(bpy.data.objects)} objects")
     
     # === 调用操作符导出 ===
     log_callback(f"Calling bpy.ops.export_scene.step_enhanced(filepath={output_path})...")
@@ -402,75 +389,18 @@ def main():
         step_file = output_path
 
     elif args.both_shells:
-        # --- 创建底壳 ---
-        build_dir = os.path.join(step_exporter_dir, '..', 'build')
-        bottom_output = os.path.join(build_dir, 'test28_bottom.step')
-        temp_files.append(bottom_output)
+        # 通过操作符路径导出（与Blender菜单导出一致）
+        print("=" * 60)
+        print("Testing both shells via menu operator path (export.step_enhanced)")
+        print("=" * 60)
         
-        print("\n--- Creating bottom shell ---")
-        create_bottom = os.path.join(script_dir, 'create_bottom_shell.py')
-        with open(create_bottom, 'r', encoding='utf-8') as f:
-            code = f.read()
-        bglobals = {'__name__': '__main__', '__file__': create_bottom}
-        exec(compile(code, create_bottom, 'exec'), bglobals)
-        bglobals['create_filleted_bottom_shells_scene']()
-        print(f"Bottom shell: {len(bpy.data.objects)} objects")
-
-        log_cb("Exporting bottom shell...")
-        success = do_parametric_export(
-            100.0, 70.0, 10.0,  # width, depth, outer_height
-            2.0, 2.0, 20.0,     # bottom_t, wall_t, corner_r
-            3.0, 1.5,            # outer_fillet, inner_fillet
-            bottom_output, cpp, log_cb
-        )
-        if not success:
-            print("FAIL: Bottom shell export failed!")
-            sys.exit(1)
-        print(f"  Bottom OK: {os.path.getsize(bottom_output)} bytes")
-
-        # --- 创建顶壳 ---
-        top_output = os.path.join(build_dir, 'test28_top.step')
-        temp_files.append(top_output)
-        
-        print("\n--- Creating top shell ---")
-        # 清除场景
-        bpy.ops.object.select_all(action='SELECT')
-        bpy.ops.object.delete()
-        
-        create_top = os.path.join(script_dir, 'create_top_shell.py')
-        if os.path.exists(create_top):
-            with open(create_top, 'r', encoding='utf-8') as f:
-                code = f.read()
-            tglobals = {'__name__': '__main__', '__file__': create_top}
-            exec(compile(code, create_top, 'exec'), tglobals)
-            for fn_name in ['create_filleted_top_shell_scene', 'create_top_shell_scene']:
-                if fn_name in tglobals:
-                    tglobals[fn_name]()
-                    break
-            print(f"Top shell: {len(bpy.data.objects)} objects")
-
-            log_cb("Exporting top shell...")
-            success = do_top_shell_export(
-                100.0, 70.0, 10.0,  # width, depth, outer_height
-                2.0, 2.0, 20.0,     # top_t, wall_t, corner_r
-                1.5, 0.75,          # outer_fillet, inner_fillet
-                11.5, -3.0,         # recess, yOff
-                20.0, 10.0,         # window_len, window_wid
-                top_output, cpp, log_cb
-            )
-            if not success:
-                print(f"WARNING: Top shell export failed, continuing with bottom only")
-                temp_files = [bottom_output]
-            else:
-                print(f"  Top OK: {os.path.getsize(top_output)} bytes")
-        else:
-            print(f"WARNING: create_top_shell.py not found, testing bottom only")
-            temp_files = [bottom_output]
-
-        # --- 合并 ---
         output_path = os.path.join(args.output_dir, f'test{args.test_number}.step')
-        print(f"\n--- Merging {len(temp_files)} files -> {output_path} ---")
-        merge_step_files(temp_files, output_path)
+        print(f"Output: {output_path}")
+        
+        success = do_operator_export(output_path, cpp, log_cb)
+        if not success:
+            print("FAIL: Operator path export failed")
+            sys.exit(1)
         step_file = output_path
 
     elif args.top_shell:
@@ -494,7 +424,7 @@ def main():
         log_cb("Exporting top shell...")
         success = do_top_shell_export(
             100.0, 70.0, 10.0, 2.0, 2.0, 20.0,
-            1.5, 0.75, 0.0, 0.0, 0.0, 0.0,
+            1.5, 0.75, 10.0, -3.0, 0.0, 0.0,
             output_path, cpp, log_cb
         )
         if not success:

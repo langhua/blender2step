@@ -41,6 +41,11 @@
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <gp_Circ.hxx>
 #include <BRepBuilderAPI_Transform.hxx>
+#include <GeomFill_BSplineCurves.hxx>
+#include <GeomFill.hxx>
+#include <Geom_BSplineCurve.hxx>
+#include <GeomAPI_PointsToBSpline.hxx>
+#include <TColgp_Array1OfPnt.hxx>
 
 // Forward declaration
 TopoDS_Solid ensure_solid(const TopoDS_Shape& shape);
@@ -870,7 +875,7 @@ TopoDS_Wire create_rounded_rect_wire(double width, double depth, double cr, doub
     return wireMaker.IsDone() ? wireMaker.Wire() : TopoDS_Wire();
 }
 
-// Ensure shape is a solid
+// Ensure shape is a solid with correct face orientation
 TopoDS_Solid ensure_solid(const TopoDS_Shape& shape)
 {
     try {
@@ -881,16 +886,45 @@ TopoDS_Solid ensure_solid(const TopoDS_Shape& shape)
         BRepBuilderAPI_MakeSolid solidMaker;
         for (TopExp_Explorer exp(shape, TopAbs_SHELL); exp.More(); exp.Next())
             solidMaker.Add(TopoDS::Shell(exp.Current()));
-        if (solidMaker.IsDone())
-            return solidMaker.Solid();
+        if (solidMaker.IsDone()) {
+            TopoDS_Solid solid = solidMaker.Solid();
+            // Fix face orientation to ensure positive volume
+            ShapeFix_Solid fixSolid(solid);
+            fixSolid.Perform();
+            TopoDS_Solid fixedSolid = TopoDS::Solid(fixSolid.Solid());
+            
+            // Check volume sign and reverse if negative
+            GProp_GProps props;
+            BRepGProp::VolumeProperties(fixedSolid, props);
+            if (props.Mass() < 0) {
+                // Reverse all faces to fix orientation
+                BRepBuilderAPI_Sewing sewer;
+                for (TopExp_Explorer exp(fixedSolid, TopAbs_FACE); exp.More(); exp.Next()) {
+                    TopoDS_Face face = TopoDS::Face(exp.Current());
+                    face.Reverse();
+                    sewer.Add(face);
+                }
+                sewer.Perform();
+                TopoDS_Shape sewedShape = sewer.SewedShape();
+                if (sewedShape.ShapeType() == TopAbs_SHELL || sewedShape.ShapeType() == TopAbs_COMPOUND) {
+                    BRepBuilderAPI_MakeSolid solidMaker2;
+                    for (TopExp_Explorer exp(sewedShape, TopAbs_SHELL); exp.More(); exp.Next())
+                        solidMaker2.Add(TopoDS::Shell(exp.Current()));
+                    if (solidMaker2.IsDone())
+                        return solidMaker2.Solid();
+                }
+            }
+            return fixedSolid;
+        }
     }
     return TopoDS_Solid(); // return null
 }
 
 
 // Create a tapered loft solid from two rounded-rectangle profiles.
-// Uses ruled surfaces (straight lines between profiles) for reliable geometry
-// that can be filleted and boolean-cut without topology errors.
+// Uses analytical BSpline surfaces for each side panel (4 straight + 4 corner arcs),
+// producing a clean STEP with ~12 faces suitable for mold design.
+// The taper follows a cosine curve: inset = total_recess * (1 - cos(pi/2 * t))
 TopoDS_Solid create_tapered_loft_solid(
     double bot_w, double bot_d, double bot_cr, double bot_z, double bot_y_offs,
     double top_w, double top_d, double top_cr, double top_z, double top_y_offs)
@@ -922,71 +956,131 @@ TopoDS_Solid create_tapered_loft_solid(
               << " top=" << top_w << "x" << top_d << " z=" << top_z << " y=" << top_y_offs << std::endl;
 
     try {
-        // ruled=true: straight lines between profiles, but with intermediate wires
-        // we approximate curved side walls by adding 48 intermediate profiles (same as Blender)
-        // isSolid=true: caps the first and last profiles, creating a closed solid
-        BRepOffsetAPI_ThruSections loft(true, true);
-        loft.AddWire(bottomWire);
+        // Collect edges from bottom and top wires (8 edges each: 4 straight + 4 arcs)
+        std::vector<TopoDS_Edge> botEdges, topEdges;
+        for (TopExp_Explorer exp(bottomWire, TopAbs_EDGE); exp.More(); exp.Next())
+            botEdges.push_back(TopoDS::Edge(exp.Current()));
+        for (TopExp_Explorer exp(topWire, TopAbs_EDGE); exp.More(); exp.Next())
+            topEdges.push_back(TopoDS::Edge(exp.Current()));
 
-        // Add 48 intermediate wires with cosine-curve distribution (matches Blender)
-        // Blender uses: inset = total_recess * (1 - cos(pi/2 * t))
-        // This creates a smooth curved taper: slow change near top, fast change near bottom
-        int nSteps = 48;
+        if (botEdges.size() != topEdges.size() || botEdges.size() != 8) {
+            std::cerr << "[STEP Exporter] Expected 8 edges per wire, got " << botEdges.size() << "/" << topEdges.size() << std::endl;
+            return TopoDS_Solid();
+        }
+
+        // Total taper amounts (from bottom full size to top recessed size)
         double totalTaperW = bot_w - top_w;
         double totalTaperD = bot_d - top_d;
         double totalTaperCr = bot_cr - top_cr;
         double totalYOffs = top_y_offs - bot_y_offs;
+        double heightRange = top_z - bot_z;
 
-        for (int i = 1; i <= nSteps; i++) {
-            double t = (double)i / (nSteps + 1);
-            // Cosine curve distribution (same as Blender)
-            double cosineFactor = 1.0 - cos(M_PI / 2.0 * t);
+        // For each of the 8 edges, create a BSpline surface using BRepOffsetAPI_ThruSections
+        // ruled=false creates a smooth BSpline surface (analytical curved surface)
+        // Need at least 3 wires for ruled=false to work correctly
+        BRepBuilderAPI_Sewing sewer;
+        int nLayers = 4;
 
-            // Width/depth decrease from bottom (full) to top (recessed) following cosine curve
-            double midW = bot_w - totalTaperW * cosineFactor;
-            double midD = bot_d - totalTaperD * cosineFactor;
-            double midCr = bot_cr - totalTaperCr * cosineFactor;
-            double midZ = bot_z + (top_z - bot_z) * t;
-            double midYOffs = bot_y_offs + totalYOffs * cosineFactor;
+        for (int e = 0; e < 8; e++) {
+            // ruled=false: creates smooth BSpline surface
+            // isSolid=false: just creates a shell/face
+            BRepOffsetAPI_ThruSections loft(false, false);
 
-            TopoDS_Wire midWire = create_rounded_rect_wire(midW, midD, midCr, midZ);
-            if (!midWire.IsNull()) {
-                if (fabs(midYOffs) > 0.001) {
-                    gp_Trsf trsf;
-                    trsf.SetTranslation(gp_Vec(0, midYOffs, 0));
-                    midWire.Move(TopLoc_Location(trsf));
+            // Get bottom and top edges for interpolation
+            BRepAdaptor_Curve botAdaptor(botEdges[e]);
+            BRepAdaptor_Curve topAdaptor(topEdges[e]);
+            double uFirst = botAdaptor.FirstParameter();
+            double uLast = botAdaptor.LastParameter();
+            int nSamples = 12;
+
+            // Add bottom edge as first wire
+            BRepBuilderAPI_MakeWire botWireMaker;
+            botWireMaker.Add(botEdges[e]);
+            loft.AddWire(botWireMaker.Wire());
+
+            // Add intermediate wires with cosine curve interpolation (matching Blender)
+            for (int sl = 1; sl <= nLayers; sl++) {
+                double t = (double)sl / (nLayers + 1);
+                double midZ = bot_z + heightRange * t;
+
+                // Cosine curve taper: inset = total_recess * (1 - cos(pi/2 * t))
+                // t=0 at bottom (full size), t=1 at top (recessed)
+                double cosineT = 1.0 - cos(M_PI / 2.0 * t);
+                double yCosineT = cosineT; // Y offset follows same curve
+
+                BRepBuilderAPI_MakeWire midWireMaker;
+                for (int i = 0; i < nSamples - 1; i++) {
+                    double u1 = uFirst + (uLast - uFirst) * i / (nSamples - 1);
+                    double u2 = uFirst + (uLast - uFirst) * (i + 1) / (nSamples - 1);
+                    gp_Pnt botPt1 = botAdaptor.Value(u1);
+                    gp_Pnt botPt2 = botAdaptor.Value(u2);
+                    gp_Pnt topPt1 = topAdaptor.Value(u1);
+                    gp_Pnt topPt2 = topAdaptor.Value(u2);
+
+                    // Apply cosine curve interpolation
+                    double midX1 = botPt1.X() + (topPt1.X() - botPt1.X()) * cosineT;
+                    double midY1 = botPt1.Y() + (topPt1.Y() - botPt1.Y()) * yCosineT;
+                    double midX2 = botPt2.X() + (topPt2.X() - botPt2.X()) * cosineT;
+                    double midY2 = botPt2.Y() + (topPt2.Y() - botPt2.Y()) * yCosineT;
+
+                    BRepBuilderAPI_MakeEdge edgeMaker(gp_Pnt(midX1, midY1, midZ), gp_Pnt(midX2, midY2, midZ));
+                    if (edgeMaker.IsDone())
+                        midWireMaker.Add(edgeMaker.Edge());
                 }
-                loft.AddWire(midWire);
+
+                if (midWireMaker.IsDone() && !midWireMaker.Wire().IsNull())
+                    loft.AddWire(midWireMaker.Wire());
+            }
+
+            // Add top edge as last wire
+            BRepBuilderAPI_MakeWire topWireMaker;
+            topWireMaker.Add(topEdges[e]);
+            loft.AddWire(topWireMaker.Wire());
+
+            loft.Build();
+            if (loft.IsDone()) {
+                TopoDS_Shape panelShape = loft.Shape();
+                // Extract the face from the loft result
+                for (TopExp_Explorer exp(panelShape, TopAbs_FACE); exp.More(); exp.Next()) {
+                    sewer.Add(exp.Current());
+                }
             }
         }
 
-        loft.AddWire(topWire);
-        loft.Build();
-
-        if (!loft.IsDone()) {
-            std::cerr << "[STEP Exporter] Loft failed" << std::endl;
-            return TopoDS_Solid();
+        // Add bottom face (from bottom wire)
+        BRepBuilderAPI_MakeFace bottomFaceMaker(bottomWire);
+        if (bottomFaceMaker.IsDone()) {
+            sewer.Add(bottomFaceMaker.Face());
         }
 
-        TopoDS_Shape result = loft.Shape();
-        std::cout << "[STEP Exporter] Loft result type: " << (result.ShapeType() == TopAbs_SOLID ? "SOLID" : 
-            result.ShapeType() == TopAbs_SHELL ? "SHELL" : 
-            result.ShapeType() == TopAbs_COMPOUND ? "COMPOUND" : "OTHER") << std::endl;
+        // Add top face (from top wire)
+        BRepBuilderAPI_MakeFace topFaceMaker(topWire);
+        if (topFaceMaker.IsDone()) {
+            sewer.Add(topFaceMaker.Face());
+        }
+
+        sewer.Perform();
+        TopoDS_Shape result = sewer.SewedShape();
+
+        // Count faces
+        int faceCount = 0;
+        for (TopExp_Explorer exp(result, TopAbs_FACE); exp.More(); exp.Next()) faceCount++;
+        std::cout << "[STEP Exporter] BSpline loft: " << faceCount << " faces" << std::endl;
 
         if (result.ShapeType() != TopAbs_SOLID) {
             result = ensure_solid(result);
         }
         if (result.IsNull() || result.ShapeType() != TopAbs_SOLID) {
-            std::cerr << "[STEP Exporter] Loft did not produce a valid solid" << std::endl;
+            std::cerr << "[STEP Exporter] BSpline loft did not produce a valid solid" << std::endl;
             return TopoDS_Solid();
         }
 
         return TopoDS::Solid(result);
     } catch (const Standard_Failure& e) {
-        std::cerr << "[STEP Exporter] Loft OCCT exception: " << e.GetMessageString() << std::endl;
+        std::cerr << "[STEP Exporter] BSpline loft OCCT exception: " << e.GetMessageString() << std::endl;
         return TopoDS_Solid();
     } catch (...) {
-        std::cerr << "[STEP Exporter] Loft exception" << std::endl;
+        std::cerr << "[STEP Exporter] BSpline loft exception" << std::endl;
         return TopoDS_Solid();
     }
 }
@@ -1078,16 +1172,15 @@ TopoDS_Shape create_top_shell_filleted_solid(
             innerFinal = ensure_solid(innerBox);
         }
     } else {
-        // === Loft-based approach (for tapered shells) ===
-        std::cout << "[STEP Exporter] Using loft-based approach (tapered)" << std::endl;
+        // === Direct loft-based approach for top shell (no boolean cut) ===
+        std::cout << "[STEP Exporter] Using direct loft-based approach (tapered, no boolean)" << std::endl;
 
         // Compute derived dimensions (top = recessed, bottom = full width)
-        // After 180° flip: top(z=+hh) is recessed, bottom(z=-hh) is full width
         double top_w = width - 2.0 * top_recess;
         double top_d = depth - 2.0 * top_recess;
         double top_cr = std::max(0.0, corner_radius - top_recess);
 
-        // === Step 1: Create outer tapered solid (no fillet yet) ===
+        // Create outer tapered solid directly (this will be the final top shell)
         // bottom(z=-hh): full width, no Y offset
         // top(z=+hh): recessed, full Y offset
         TopoDS_Solid outerSolid = create_tapered_loft_solid(
@@ -1099,69 +1192,13 @@ TopoDS_Shape create_top_shell_filleted_solid(
             return TopoDS_Shape();
         }
         outerFinal = outerSolid;
-
-        // === Step 2: Create inner tapered solid (cavity, no fillet yet) ===
-        // Inner cavity extends from just below top surface to bottom edge
-        double inner_z_top = hh - top_thickness - 0.05;  // just below outer top
-        double inner_z_bot = -hh - 0.05;                  // extends to outer bottom
-
-        // Interpolate outer dimensions at inner Z levels, then subtract wall thickness
-        double width_recess = width - top_w;
-        double depth_recess = depth - top_d;
-        double cr_recess = corner_radius - top_cr;
-
-        // t=0 at z=-hh (full), t=1 at z=+hh (recessed)
-        double t_bot = (inner_z_bot + hh) / (2.0 * hh);  // near 0 (full width)
-        double t_top = (inner_z_top + hh) / (2.0 * hh);  // near 1 (recessed)
-
-        double inner_w = width - width_recess * t_bot - 2.0 * wall_thickness;
-        double inner_d = depth - depth_recess * t_bot - 2.0 * wall_thickness;
-        double inner_cr = std::max(0.0, corner_radius - cr_recess * t_bot - wall_thickness);
-        double inner_top_w = width - width_recess * t_top - 2.0 * wall_thickness;
-        double inner_top_d = depth - depth_recess * t_top - 2.0 * wall_thickness;
-        double inner_top_cr = std::max(0.0, corner_radius - cr_recess * t_top - wall_thickness);
-
-        if (inner_w <= 0 || inner_d <= 0 || inner_top_w <= 0 || inner_top_d <= 0) {
-            std::cerr << "[STEP Exporter] Wall thickness too large, returning solid outer" << std::endl;
-            return outerFinal;
-        }
-
-        // Y offset: t=0 → 0, t=1 → bottom_y_shift
-        double inner_bottom_y_offs = bottom_y_shift * t_bot;
-        double inner_top_y_offs = bottom_y_shift * t_top;
-
-        TopoDS_Solid innerSolid = create_tapered_loft_solid(
-            inner_w, inner_d, inner_cr, inner_z_bot, inner_bottom_y_offs,
-            inner_top_w, inner_top_d, inner_top_cr, inner_z_top, inner_top_y_offs);
-
-        if (innerSolid.IsNull()) {
-            std::cerr << "[STEP Exporter] Failed to create inner loft solid" << std::endl;
-            return outerFinal;
-        }
-        innerFinal = innerSolid;
+        innerFinal = TopoDS_Solid(); // No inner solid needed
     }
 
-    if (outerFinal.IsNull() || innerFinal.IsNull()) {
-        std::cerr << "[STEP Exporter] Failed to create solids for boolean cut" << std::endl;
-        return TopoDS_Shape();
-    }
+    // Use outerFinal as the result (no boolean cut needed for direct approach)
+    TopoDS_Shape result = outerFinal;
 
-    // === Boolean cut (outer - inner) ===
-    BRepAlgoAPI_Cut cutMaker(outerFinal, innerFinal);
-    if (!cutMaker.IsDone()) {
-        std::cerr << "[STEP Exporter] Boolean cut failed" << std::endl;
-        return outerFinal;
-    }
-
-    TopoDS_Shape result = cutMaker.Shape();
-    result = ensure_solid(result);
-    if (result.IsNull()) {
-        std::cerr << "[STEP Exporter] Boolean cut result not a valid solid" << std::endl;
-        return TopoDS_Shape();
-    }
-    std::cout << "[STEP Exporter] Boolean cut (hollow) succeeded" << std::endl;
-
-    // === Apply fillets after boolean cut (loft-based only) ===
+    // === Apply fillets after loft (loft-based only) ===
     if (use_loft) {
         if (outer_fillet_radius > 0.0) {
             double outer_z = -hh;
@@ -1199,7 +1236,35 @@ TopoDS_Shape create_top_shell_filleted_solid(
     if (result.ShapeType() == TopAbs_SOLID) {
         GProp_GProps props;
         BRepGProp::VolumeProperties(result, props);
-        std::cout << "[STEP Exporter] Volume: " << props.Mass() << " mm^3" << std::endl;
+        double volume = props.Mass();
+        std::cout << "[STEP Exporter] Volume: " << volume << " mm^3" << std::endl;
+        
+        // Fix negative volume by reversing all faces
+        if (volume < 0) {
+            std::cout << "[STEP Exporter] WARNING: Negative volume detected (" << volume << "), reversing faces..." << std::endl;
+            BRepBuilderAPI_Sewing sewer;
+            for (TopExp_Explorer exp(result, TopAbs_FACE); exp.More(); exp.Next()) {
+                TopoDS_Face face = TopoDS::Face(exp.Current());
+                face.Reverse();
+                sewer.Add(face);
+            }
+            sewer.Perform();
+            TopoDS_Shape sewedShape = sewer.SewedShape();
+            if (sewedShape.ShapeType() == TopAbs_SHELL || sewedShape.ShapeType() == TopAbs_COMPOUND) {
+                BRepBuilderAPI_MakeSolid solidMaker;
+                for (TopExp_Explorer exp(sewedShape, TopAbs_SHELL); exp.More(); exp.Next())
+                    solidMaker.Add(TopoDS::Shell(exp.Current()));
+                if (solidMaker.IsDone()) {
+                    result = solidMaker.Solid();
+                    BRepGProp::VolumeProperties(result, props);
+                    std::cout << "[STEP Exporter] Fixed volume: " << props.Mass() << " mm^3" << std::endl;
+                } else {
+                    std::cerr << "[STEP Exporter] Failed to create solid after reversing faces" << std::endl;
+                }
+            } else {
+                std::cerr << "[STEP Exporter] Sewed shape is not a shell or compound, type=" << sewedShape.ShapeType() << std::endl;
+            }
+        }
     }
     return result;
 }

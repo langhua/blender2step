@@ -822,7 +822,8 @@ TopoDS_Shape create_bottom_shell_filleted_with_holes_solid(double width, double 
 // ============================================
 
 // Create a rounded rectangle wire profile in the XY plane at given Z
-TopoDS_Wire create_rounded_rect_wire(double width, double depth, double cr, double z)
+// Optionally apply Y offset for taper interpolation
+TopoDS_Wire create_rounded_rect_wire(double width, double depth, double cr, double z, double y_offset = 0.0)
 {
     double hw = width / 2.0;
     double hd = depth / 2.0;
@@ -840,6 +841,10 @@ TopoDS_Wire create_rounded_rect_wire(double width, double depth, double cr, doub
     double r = cr;
     double RS = hw, LS = -hw;
     double TS = hd, BS = -hd;
+
+    // Apply Y offset
+    TS += y_offset;
+    BS += y_offset;
 
     struct { double x1,y1,x2,y2; } segs[] = {
         {LS+r, TS, RS-r, TS},
@@ -986,13 +991,6 @@ TopoDS_Solid create_tapered_loft_solid(
             // isSolid=false: just creates a shell/face
             BRepOffsetAPI_ThruSections loft(false, false);
 
-            // Get bottom and top edges for interpolation
-            BRepAdaptor_Curve botAdaptor(botEdges[e]);
-            BRepAdaptor_Curve topAdaptor(topEdges[e]);
-            double uFirst = botAdaptor.FirstParameter();
-            double uLast = botAdaptor.LastParameter();
-            int nSamples = 12;
-
             // Add bottom edge as first wire
             BRepBuilderAPI_MakeWire botWireMaker;
             botWireMaker.Add(botEdges[e]);
@@ -1006,30 +1004,28 @@ TopoDS_Solid create_tapered_loft_solid(
                 // Cosine curve taper: inset = total_recess * (1 - cos(pi/2 * t))
                 // t=0 at bottom (full size), t=1 at top (recessed)
                 double cosineT = 1.0 - cos(M_PI / 2.0 * t);
-                double yCosineT = cosineT; // Y offset follows same curve
 
-                BRepBuilderAPI_MakeWire midWireMaker;
-                for (int i = 0; i < nSamples - 1; i++) {
-                    double u1 = uFirst + (uLast - uFirst) * i / (nSamples - 1);
-                    double u2 = uFirst + (uLast - uFirst) * (i + 1) / (nSamples - 1);
-                    gp_Pnt botPt1 = botAdaptor.Value(u1);
-                    gp_Pnt botPt2 = botAdaptor.Value(u2);
-                    gp_Pnt topPt1 = topAdaptor.Value(u1);
-                    gp_Pnt topPt2 = topAdaptor.Value(u2);
+                // Interpolate dimensions using cosine curve
+                double midW = bot_w - totalTaperW * cosineT;
+                double midD = bot_d - totalTaperD * cosineT;
+                double midCr = bot_cr - totalTaperCr * cosineT;
+                double midYOffs = bot_y_offs + totalYOffs * cosineT;
 
-                    // Apply cosine curve interpolation
-                    double midX1 = botPt1.X() + (topPt1.X() - botPt1.X()) * cosineT;
-                    double midY1 = botPt1.Y() + (topPt1.Y() - botPt1.Y()) * yCosineT;
-                    double midX2 = botPt2.X() + (topPt2.X() - botPt2.X()) * cosineT;
-                    double midY2 = botPt2.Y() + (topPt2.Y() - botPt2.Y()) * yCosineT;
-
-                    BRepBuilderAPI_MakeEdge edgeMaker(gp_Pnt(midX1, midY1, midZ), gp_Pnt(midX2, midY2, midZ));
-                    if (edgeMaker.IsDone())
-                        midWireMaker.Add(edgeMaker.Edge());
+                // Create intermediate wire using create_rounded_rect_wire
+                TopoDS_Wire midWire = create_rounded_rect_wire(midW, midD, midCr, midZ, midYOffs);
+                if (!midWire.IsNull()) {
+                    // Extract the e-th edge from the intermediate wire
+                    int edgeIdx = 0;
+                    for (TopExp_Explorer exp(midWire, TopAbs_EDGE); exp.More(); exp.Next()) {
+                        if (edgeIdx == e) {
+                            BRepBuilderAPI_MakeWire midEdgeWire;
+                            midEdgeWire.Add(TopoDS::Edge(exp.Current()));
+                            loft.AddWire(midEdgeWire.Wire());
+                            break;
+                        }
+                        edgeIdx++;
+                    }
                 }
-
-                if (midWireMaker.IsDone() && !midWireMaker.Wire().IsNull())
-                    loft.AddWire(midWireMaker.Wire());
             }
 
             // Add top edge as last wire

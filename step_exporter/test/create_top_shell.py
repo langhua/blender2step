@@ -427,10 +427,13 @@ def create_rounded_box_filleted(name, width, depth, height, corner_radius,
                           layer_verts[li + 1][next_i], layer_verts[li + 1][i]])
 
     # 底面（内收，翻转后成为顶面）：layers[-1] 直接作为底面轮廓
-    bottom_center = bm.verts.new((0, -top_offset_y, -hh))
+    bottom_z = -hh
+    bottom_profile = layers[-1]
+    bottom_center = bm.verts.new((0, -top_offset_y, bottom_z))
+    bottom_verts = [bm.verts.new(v) for v in bottom_profile]
     for i in range(num_profile):
         next_i = (i + 1) % num_profile
-        bm.faces.new([bottom_center, layer_verts[-1][next_i], layer_verts[-1][i]])
+        bm.faces.new([bottom_center, bottom_verts[next_i], bottom_verts[i]])
 
     bm.to_mesh(me)
     bm.free()
@@ -449,17 +452,121 @@ def create_rounded_box_filleted(name, width, depth, height, corner_radius,
     return obj
 
 
+def create_ring_solid(name, width, depth, corner_radius, ring_width, ring_height,
+                      segments=24):
+    """
+    创建环形实体（1×1mm 横截面），沿圆角矩形轮廓走一圈
+    外轮廓：rounded rect (width/2, depth/2, corner_radius) — 与侧壁外侧对齐
+    内轮廓：rounded rect (width/2-ring_width, depth/2-ring_width, corner_radius-ring_width) — 向内收缩
+    顶面在 z=0，底面在 z=-ring_height
+    """
+    hw = width / 2.0
+    hd = depth / 2.0
+    cr = corner_radius
+    inner_hw = hw - ring_width
+    inner_hd = hd - ring_width
+    inner_cr = max(cr - ring_width, 0.1)
+
+    def gen_profile(hw, hd, cr, z_val, y_offs=0):
+        profile = []
+        for i in range(segments):
+            angle = (math.pi / 2) * i / segments
+            x = hw - cr + cr * math.cos(angle)
+            y = hd - cr + cr * math.sin(angle) - y_offs
+            profile.append((x, y, z_val))
+        for i in range(segments):
+            t = i / segments
+            x = hw - cr - t * (hw * 2 - 2 * cr)
+            y = hd - y_offs
+            profile.append((x, y, z_val))
+        for i in range(segments):
+            angle = math.pi / 2 + (math.pi / 2) * i / segments
+            x = -hw + cr + cr * math.cos(angle)
+            y = hd - cr + cr * math.sin(angle) - y_offs
+            profile.append((x, y, z_val))
+        for i in range(segments):
+            t = i / segments
+            x = -hw
+            y = hd - cr - t * (hd * 2 - 2 * cr) - y_offs
+            profile.append((x, y, z_val))
+        for i in range(segments):
+            angle = math.pi + (math.pi / 2) * i / segments
+            x = -hw + cr + cr * math.cos(angle)
+            y = -hd + cr + cr * math.sin(angle) - y_offs
+            profile.append((x, y, z_val))
+        for i in range(segments):
+            t = i / segments
+            x = -hw + cr + t * (hw * 2 - 2 * cr)
+            y = -hd - y_offs
+            profile.append((x, y, z_val))
+        for i in range(segments):
+            angle = 3 * math.pi / 2 + (math.pi / 2) * i / segments
+            x = hw - cr + cr * math.cos(angle)
+            y = -hd + cr + cr * math.sin(angle) - y_offs
+            profile.append((x, y, z_val))
+        for i in range(segments):
+            t = i / segments
+            x = hw
+            y = -hd + cr + t * (hd * 2 - 2 * cr) - y_offs
+            profile.append((x, y, z_val))
+        return profile
+
+    inner_top = gen_profile(inner_hw, inner_hd, inner_cr, 0)
+    outer_top = gen_profile(hw, hd, cr, 0)
+    inner_bot = gen_profile(inner_hw, inner_hd, inner_cr, -ring_height)
+    outer_bot = gen_profile(hw, hd, cr, -ring_height)
+
+    num_profile = len(inner_top)
+
+    me = bpy.data.meshes.new(name=name)
+    bm = bmesh.new()
+
+    itv = [bm.verts.new(v) for v in inner_top]
+    otv = [bm.verts.new(v) for v in outer_top]
+    ibv = [bm.verts.new(v) for v in inner_bot]
+    obv = [bm.verts.new(v) for v in outer_bot]
+
+    for i in range(num_profile):
+        ni = (i + 1) % num_profile
+        bm.faces.new([itv[i], itv[ni], otv[ni], otv[i]])
+
+    for i in range(num_profile):
+        ni = (i + 1) % num_profile
+        bm.faces.new([obv[i], obv[ni], ibv[ni], ibv[i]])
+
+    for i in range(num_profile):
+        ni = (i + 1) % num_profile
+        bm.faces.new([otv[i], otv[ni], obv[ni], obv[i]])
+
+    for i in range(num_profile):
+        ni = (i + 1) % num_profile
+        bm.faces.new([ibv[i], ibv[ni], itv[ni], itv[i]])
+
+    bm.to_mesh(me)
+    bm.free()
+    me.update(calc_edges=True)
+
+    obj = bpy.data.objects.new(name, me)
+    bpy.context.collection.objects.link(obj)
+    bpy.context.view_layer.objects.active = obj
+    obj.select_set(True)
+    return obj
+
+
 def create_filleted_top_shell(name, width, depth, outer_height, top_thickness,
                                wall_thickness, corner_radius,
                                outer_fillet_radius, inner_fillet_radius,
                                location=(0, 0, 0), segments=24, step_height=1.5,
-                               holes=None, top_offset_y=3, window=None):
+                               holes=None, top_offset_y=3, window=None,
+                               outer_ring_width=0, outer_ring_height=0):
     """
     创建带圆倒角的中空顶壳
     create_rounded_box_filleted 构建从底部到顶部内收的余弦曲线侧壁，
     翻转 180° 使开口朝下、曲线侧壁从底全宽平滑过渡到顶内收面
     top_offset_y: 顶面相对底框的Y向偏移量
     window: (length, width) 顶面矩形窗口尺寸，None 则不开口
+    outer_ring_width: 底部边框外侧环的宽度（水平向外扩展）
+    outer_ring_height: 底部边框外侧环的高度（垂直向下延伸）
     """
     outer_half_h = outer_height / 2.0
     actual_outer_r = min(outer_fillet_radius, outer_height * 0.45, corner_radius * 0.45)
@@ -475,7 +582,7 @@ def create_filleted_top_shell(name, width, depth, outer_height, top_thickness,
         bottom_fillet_radius=actual_outer_r,
         segments=segments,
         top_recess=10,
-        top_offset_y=top_offset_y
+        top_offset_y=top_offset_y,
     )
     bpy.context.view_layer.objects.active = outer
     outer.select_set(True)
@@ -532,6 +639,21 @@ def create_filleted_top_shell(name, width, depth, outer_height, top_thickness,
 
         apply_boolean(outer, cutter, operation='DIFFERENCE')
         bpy.data.objects.remove(cutter, do_unlink=True)
+
+    if outer_ring_width > 0 and outer_ring_height > 0:
+        ring_z = location[2] - outer_half_h
+        ring = create_ring_solid(
+            name=f"{name}_Ring",
+            width=width,
+            depth=depth,
+            corner_radius=corner_radius,
+            ring_width=outer_ring_width,
+            ring_height=outer_ring_height,
+            segments=segments,
+        )
+        ring.location = (location[0], location[1], ring_z)
+        apply_boolean(outer, ring, operation='UNION')
+        bpy.data.objects.remove(ring, do_unlink=True)
 
     outer.name = name
     return outer
@@ -627,6 +749,8 @@ def create_top_shell_scene():
         inner_fillet_radius=inner_fillet_radius,
         location=(-60, 0, 0),
         segments=24,
+        outer_ring_width=1.0,
+        outer_ring_height=1.0,
     )
     add_material(shell_no_holes, name="TopShellNoHolesMaterial")
     print(f"  [OK] Top shell (no window) created")
@@ -645,6 +769,8 @@ def create_top_shell_scene():
         location=(60, 0, 0),
         segments=24,
         window=(window_length, window_width),
+        outer_ring_width=1.0,
+        outer_ring_height=1.0,
     )
     add_material(shell_with_holes, name="TopShellWithHolesMaterial")
     print(f"  [OK] Top shell (with window) created")

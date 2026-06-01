@@ -64,12 +64,14 @@ def do_parametric_export(width, depth, outer_height, bottom_thickness, wall_thic
 def do_top_shell_export(width, depth, outer_height, top_thickness, wall_thickness,
                         corner_radius, outer_fillet_radius, inner_fillet_radius,
                         top_recess, top_offset_y, window_len, window_wid,
-                        output_path, cpp_exporter, log_callback):
+                        output_path, cpp_exporter, log_callback,
+                        step_ring_height=0.0, step_ring_width=0.0):
     """执行顶壳参数化导出"""
     log_callback(f"Top shell: {width}x{depth} h={outer_height} "
                  f"tt={top_thickness} wt={wall_thickness} cr={corner_radius} "
                  f"ofr={outer_fillet_radius} ifr={inner_fillet_radius} "
-                 f"recess={top_recess} yOff={top_offset_y}")
+                 f"recess={top_recess} yOff={top_offset_y} "
+                 f"step_h={step_ring_height} step_w={step_ring_width}")
 
     success = cpp_exporter.export_top_shell_filleted_step(
         output_path,
@@ -78,6 +80,7 @@ def do_top_shell_export(width, depth, outer_height, top_thickness, wall_thicknes
         outer_fillet_radius, inner_fillet_radius,
         top_recess, top_offset_y,
         window_len, window_wid,
+        step_ring_height, step_ring_width,
         0.0, 0.0, outer_height,
         'AP214DIS', 'MILLIMETER', 1
     )
@@ -425,7 +428,8 @@ def main():
         success = do_top_shell_export(
             100.0, 70.0, 10.0, 2.0, 2.0, 20.0,
             1.5, 0.75, 10.0, -3.0, 0.0, 0.0,
-            output_path, cpp, log_cb
+            output_path, cpp, log_cb,
+            step_ring_height=1.0, step_ring_width=1.0
         )
         if not success:
             sys.exit(1)

@@ -1184,13 +1184,15 @@ TopoDS_Shape create_top_shell_filleted_solid(
     double corner_radius,
     double outer_fillet_radius, double inner_fillet_radius,
     double top_recess, double top_offset_y,
-    double window_len, double window_wid)
+    double window_len, double window_wid,
+    double step_ring_height, double step_ring_width)
 {
     std::cout << "[STEP Exporter] Creating top shell: " << width << "x" << depth
               << " h=" << outer_height << " top_t=" << top_thickness
               << " wall=" << wall_thickness << " cr=" << corner_radius
               << " outer_f=" << outer_fillet_radius << " inner_f=" << inner_fillet_radius
-              << " recess=" << top_recess << " topYOff=" << top_offset_y << std::endl;
+              << " recess=" << top_recess << " topYOff=" << top_offset_y
+              << " step_h=" << step_ring_height << " step_w=" << step_ring_width << std::endl;
 
     double hh = outer_height / 2.0;
 
@@ -1226,6 +1228,38 @@ TopoDS_Shape create_top_shell_filleted_solid(
         if (outerFinal.IsNull()) {
             std::cerr << "[STEP Exporter] Failed to convert outer filleted to solid" << std::endl;
             return outerFilleted;
+        }
+
+        // Step ring at bottom (if requested)
+        if (step_ring_height > 0.0 && step_ring_width > 0.0) {
+            double ring_center_z = -hh - step_ring_height / 2.0;
+            double inner_ring_w = width - 2.0 * step_ring_width;
+            double inner_ring_d = depth - 2.0 * step_ring_width;
+            double inner_ring_cr = std::max(0.0, corner_radius - step_ring_width);
+
+            TopoDS_Shape outerRingBox = create_rounded_box_solid(width, depth, step_ring_height, corner_radius);
+            gp_Trsf ringTrsf;
+            ringTrsf.SetTranslation(gp_Vec(0, 0, ring_center_z));
+            outerRingBox.Move(TopLoc_Location(ringTrsf));
+
+            TopoDS_Shape innerRingBox = create_rounded_box_solid(inner_ring_w, inner_ring_d,
+                step_ring_height + 0.2, inner_ring_cr);
+            innerRingBox.Move(TopLoc_Location(ringTrsf));
+
+            BRepAlgoAPI_Cut ringCutMaker(outerRingBox, innerRingBox);
+            if (ringCutMaker.IsDone()) {
+                TopoDS_Shape ringShape = ringCutMaker.Shape();
+                BRepAlgoAPI_Fuse ringFuseMaker(outerFinal, ringShape);
+                if (ringFuseMaker.IsDone()) {
+                    outerFinal = ensure_solid(ringFuseMaker.Shape());
+                    std::cout << "[STEP Exporter] Step ring added: " << step_ring_height
+                              << "mm height, " << step_ring_width << "mm width" << std::endl;
+                } else {
+                    std::cerr << "[STEP Exporter] Step ring fuse failed" << std::endl;
+                }
+            } else {
+                std::cerr << "[STEP Exporter] Step ring cut failed" << std::endl;
+            }
         }
 
         // Inner solid: smaller rounded box for cavity
@@ -1268,13 +1302,20 @@ TopoDS_Shape create_top_shell_filleted_solid(
         double top_d = depth - 2.0 * top_recess;
         double top_cr = std::max(0.0, corner_radius - top_recess);
 
-        // Create outer tapered shell (open bottom)
-        // bottom(z=-hh): full width, no Y offset
+        double outer_bottom_z = -hh;
+        bool sealBottom = false;
+        if (step_ring_height > 0.0 && step_ring_width > 0.0) {
+            outer_bottom_z = -hh - step_ring_height;
+            sealBottom = true;
+        }
+
+        // Create outer tapered shell
+        // bottom(z=outer_bottom_z): full width, no Y offset
         // top(z=+hh): recessed, full Y offset
         TopoDS_Shape outerShell = create_tapered_loft_shell(
-            width, depth, corner_radius, -hh, 0.0,
+            width, depth, corner_radius, outer_bottom_z, 0.0,
             top_w, top_d, top_cr, hh, bottom_y_shift,
-            false);  // do NOT seal bottom (open bottom)
+            sealBottom);
 
         if (outerShell.IsNull()) {
             std::cerr << "[STEP Exporter] Failed to create outer loft shell" << std::endl;
@@ -1298,13 +1339,11 @@ TopoDS_Shape create_top_shell_filleted_solid(
         double inner_top_cr = std::max(0.0, inner_cr - top_recess);
 
         // Create inner tapered shell (open bottom - interior cavity)
-        // bottom(z=-hh): full inner width, no Y offset (same level as outer bottom)
-        // top(z=hh-top_thickness): recessed inner top, full Y offset
         double inner_top_z = hh - top_thickness;
         TopoDS_Shape innerShell = create_tapered_loft_shell(
             inner_w, inner_d, inner_cr, -hh, 0.0,
             inner_top_w, inner_top_d, inner_top_cr, inner_top_z, bottom_y_shift,
-            false);  // do NOT seal bottom (open interior)
+            false);
 
         if (innerShell.IsNull()) {
             std::cerr << "[STEP Exporter] Failed to create inner loft shell" << std::endl;
@@ -1315,43 +1354,66 @@ TopoDS_Shape create_top_shell_filleted_solid(
             innerFinal = TopoDS::Solid(innerShell);
         }
 
+        // Step ring: fuse a step cavity box below the inner shell
+        if (step_ring_height > 0.0 && step_ring_width > 0.0) {
+            double step_cavity_w = width - 2.0 * step_ring_width;
+            double step_cavity_d = depth - 2.0 * step_ring_width;
+            double step_cavity_cr = std::max(0.0, corner_radius - step_ring_width);
+
+            TopoDS_Shape stepCavityBox = create_rounded_box_solid(
+                step_cavity_w, step_cavity_d, step_ring_height, step_cavity_cr);
+            double step_center_z = -hh - step_ring_height / 2.0;
+            gp_Trsf stepTrsf;
+            stepTrsf.SetTranslation(gp_Vec(0, 0, step_center_z));
+            stepCavityBox.Move(TopLoc_Location(stepTrsf));
+
+            BRepAlgoAPI_Fuse cavityFuseMaker(innerFinal, stepCavityBox);
+            if (cavityFuseMaker.IsDone()) {
+                innerFinal = ensure_solid(cavityFuseMaker.Shape());
+                std::cout << "[STEP Exporter] Step cavity fused: " << step_ring_height
+                          << "mm height, " << step_ring_width << "mm step" << std::endl;
+            } else {
+                std::cerr << "[STEP Exporter] Step cavity fuse failed" << std::endl;
+            }
+        }
+
         // Boolean cut: outer - inner = hollow shell with wall thickness
         if (!innerFinal.IsNull()) {
             BRepAlgoAPI_Cut cutter(outerFinal, innerFinal);
             if (cutter.IsDone()) {
                 result = cutter.Shape();
                 
-                // Create bottom sealing face (annular ring between outer and inner bottom edges)
-                // Outer bottom wire at z=-hh
-                TopoDS_Wire outerBottomWire = create_rounded_rect_wire(width, depth, corner_radius, -hh);
-                if (!outerBottomWire.IsNull()) {
-                    // Apply Y offset if needed
-                    if (fabs(0.0) > 0.001) {
-                        gp_Trsf trsf;
-                        trsf.SetTranslation(gp_Vec(0, 0.0, 0));
-                        outerBottomWire.Move(TopLoc_Location(trsf));
-                    }
-                    
-                    // Inner bottom wire at z=-hh (projected to same plane as outer bottom)
-                    double inner_bottom_z = -hh;
-                    TopoDS_Wire innerBottomWire = create_rounded_rect_wire(inner_w, inner_d, inner_cr, inner_bottom_z);
-                    if (!innerBottomWire.IsNull()) {
-                        // Create annular face: outer wire as boundary, inner wire as hole
-                        BRepBuilderAPI_MakeFace annularFaceMaker(outerBottomWire, Standard_True);
-                        if (annularFaceMaker.IsDone()) {
-                            annularFaceMaker.Add(innerBottomWire);
+                bool hasStepRing = (step_ring_height > 0.0 && step_ring_width > 0.0);
+                
+                if (!hasStepRing) {
+                    // Create bottom sealing face (annular ring between outer and inner bottom edges)
+                    // Only needed when outer shell has no sealed bottom (no step ring)
+                    TopoDS_Wire outerBottomWire = create_rounded_rect_wire(width, depth, corner_radius, -hh);
+                    if (!outerBottomWire.IsNull()) {
+                        if (fabs(0.0) > 0.001) {
+                            gp_Trsf trsf;
+                            trsf.SetTranslation(gp_Vec(0, 0.0, 0));
+                            outerBottomWire.Move(TopLoc_Location(trsf));
+                        }
+                        
+                        double inner_bottom_z = -hh;
+                        TopoDS_Wire innerBottomWire = create_rounded_rect_wire(inner_w, inner_d, inner_cr, inner_bottom_z);
+                        if (!innerBottomWire.IsNull()) {
+                            BRepBuilderAPI_MakeFace annularFaceMaker(outerBottomWire, Standard_True);
                             if (annularFaceMaker.IsDone()) {
-                                TopoDS_Face annularFace = annularFaceMaker.Face();
-                                
-                                // Sew annular face with the cut result
-                                BRepBuilderAPI_Sewing sewer(0.01, true, true, true, true);
-                                for (TopExp_Explorer exp(result, TopAbs_FACE); exp.More(); exp.Next()) {
-                                    sewer.Add(exp.Current());
+                                annularFaceMaker.Add(innerBottomWire);
+                                if (annularFaceMaker.IsDone()) {
+                                    TopoDS_Face annularFace = annularFaceMaker.Face();
+                                    
+                                    BRepBuilderAPI_Sewing sewer(0.01, true, true, true, true);
+                                    for (TopExp_Explorer exp(result, TopAbs_FACE); exp.More(); exp.Next()) {
+                                        sewer.Add(exp.Current());
+                                    }
+                                    sewer.Add(annularFace);
+                                    sewer.Perform();
+                                    result = sewer.SewedShape();
+                                    std::cout << "[STEP Exporter] Bottom annular sealing face added" << std::endl;
                                 }
-                                sewer.Add(annularFace);
-                                sewer.Perform();
-                                result = sewer.SewedShape();
-                                std::cout << "[STEP Exporter] Bottom annular sealing face added" << std::endl;
                             }
                         }
                     }

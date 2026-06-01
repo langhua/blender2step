@@ -1272,18 +1272,20 @@ PyObject* export_top_shell_filleted_step(PyObject* self, PyObject* args) {
     double outer_fillet_radius, inner_fillet_radius;
     double top_recess, top_offset_y;
     double window_len = 0.0, window_wid = 0.0;
+    double step_ring_height = 0.0, step_ring_width = 0.0;
     double pos_x = 0.0, pos_y = 0.0, pos_z = 0.0;
     const char* step_schema = "AP214IS";
     const char* unit = "MILLIMETER";
     int enable_logging = 1;
 
-    if (!PyArg_ParseTuple(args, "sdddddddddddddddssi",
+    if (!PyArg_ParseTuple(args, "sdddddddddddddddddssi",
                           &filename,
                           &width, &depth, &outer_height,
                           &top_thickness, &wall_thickness, &corner_radius,
                           &outer_fillet_radius, &inner_fillet_radius,
                           &top_recess, &top_offset_y,
                           &window_len, &window_wid,
+                          &step_ring_height, &step_ring_width,
                           &pos_x, &pos_y, &pos_z,
                           &step_schema, &unit, &enable_logging)) {
         PyErr_SetString(PyExc_TypeError,
@@ -1291,7 +1293,8 @@ PyObject* export_top_shell_filleted_step(PyObject* self, PyObject* args) {
             "top_thickness, wall_thickness, corner_radius, "
             "outer_fillet_radius, inner_fillet_radius, "
             "top_recess, top_offset_y, "
-            "window_len, window_wid, pos_x, pos_y, pos_z, step_schema, unit, enable_logging");
+            "window_len, window_wid, step_ring_height, step_ring_width, "
+            "pos_x, pos_y, pos_z, step_schema, unit, enable_logging");
         return NULL;
     }
 
@@ -1310,7 +1313,8 @@ PyObject* export_top_shell_filleted_step(PyObject* self, PyObject* args) {
             top_thickness, wall_thickness, corner_radius,
             outer_fillet_radius, inner_fillet_radius,
             top_recess, top_offset_y,
-            window_len, window_wid);
+            window_len, window_wid,
+            step_ring_height, step_ring_width);
 
         if (shape.IsNull()) {
             std::cerr << "[STEP Exporter] Failed to create top shell shape" << std::endl;

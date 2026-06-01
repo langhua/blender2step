@@ -61,7 +61,8 @@ TopoDS_Shape create_top_shell_filleted_solid(double width, double depth, double 
                                               double corner_radius,
                                               double outer_fillet_radius, double inner_fillet_radius,
                                               double top_recess, double top_offset_y,
-                                              double window_len, double window_wid);
+                                              double window_len, double window_wid,
+                                              double step_ring_height, double step_ring_width);
 
 // 参数化圆柱/圆锥/空心实体创建
 TopoDS_Shape create_cylinder_solid_parametric(double radius, double height);

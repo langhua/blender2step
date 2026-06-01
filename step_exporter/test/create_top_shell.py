@@ -217,6 +217,7 @@ def create_hollow_top_shell(name, width, depth, outer_height, top_thickness,
     inner_height = outer_height - top_thickness + 0.1
     inner_corner_r = max(corner_radius - wall_thickness, 1.0)
 
+    # 创建内腔实体
     inner = create_rounded_box(
         name=f"{name}_Inner",
         width=inner_width,
@@ -408,7 +409,6 @@ def create_rounded_box_filleted(name, width, depth, height, corner_radius,
     for profile in layers:
         layer_verts.append([bm.verts.new(v) for v in profile])
 
-    # 顶面（全宽，翻转后成为开口底部）
     top_center = bm.verts.new((0, 0, hh))
     for i in range(num_profile):
         next_i = (i + 1) % num_profile
@@ -449,103 +449,281 @@ def create_rounded_box_filleted(name, width, depth, height, corner_radius,
     bpy.context.collection.objects.link(obj)
     bpy.context.view_layer.objects.active = obj
     obj.select_set(True)
+
     return obj
 
 
-def create_ring_solid(name, width, depth, corner_radius, ring_width, ring_height,
-                      segments=24):
+def create_outer_step_ring(name, width, depth, height, corner_radius,
+                            ring_height, ring_width, segments):
     """
-    创建环形实体（1×1mm 横截面），沿圆角矩形轮廓走一圈
-    外轮廓：rounded rect (width/2, depth/2, corner_radius) — 与侧壁外侧对齐
-    内轮廓：rounded rect (width/2-ring_width, depth/2-ring_width, corner_radius-ring_width) — 向内收缩
-    顶面在 z=0，底面在 z=-ring_height
+    创建外侧台阶环，位于外盒顶面边缘外侧
+    外轮廓 = 外盒顶部轮廓，内轮廓 = 向内偏移 ring_width
+    底部在 z=hh-0.5 与外盒顶面穿透避免共面
+    顶部在 z=hh+ring_height
     """
     hw = width / 2.0
     hd = depth / 2.0
-    cr = corner_radius
-    inner_hw = hw - ring_width
-    inner_hd = hd - ring_width
-    inner_cr = max(cr - ring_width, 0.1)
-
-    def gen_profile(hw, hd, cr, z_val, y_offs=0):
-        profile = []
-        for i in range(segments):
-            angle = (math.pi / 2) * i / segments
-            x = hw - cr + cr * math.cos(angle)
-            y = hd - cr + cr * math.sin(angle) - y_offs
-            profile.append((x, y, z_val))
-        for i in range(segments):
-            t = i / segments
-            x = hw - cr - t * (hw * 2 - 2 * cr)
-            y = hd - y_offs
-            profile.append((x, y, z_val))
-        for i in range(segments):
-            angle = math.pi / 2 + (math.pi / 2) * i / segments
-            x = -hw + cr + cr * math.cos(angle)
-            y = hd - cr + cr * math.sin(angle) - y_offs
-            profile.append((x, y, z_val))
-        for i in range(segments):
-            t = i / segments
-            x = -hw
-            y = hd - cr - t * (hd * 2 - 2 * cr) - y_offs
-            profile.append((x, y, z_val))
-        for i in range(segments):
-            angle = math.pi + (math.pi / 2) * i / segments
-            x = -hw + cr + cr * math.cos(angle)
-            y = -hd + cr + cr * math.sin(angle) - y_offs
-            profile.append((x, y, z_val))
-        for i in range(segments):
-            t = i / segments
-            x = -hw + cr + t * (hw * 2 - 2 * cr)
-            y = -hd - y_offs
-            profile.append((x, y, z_val))
-        for i in range(segments):
-            angle = 3 * math.pi / 2 + (math.pi / 2) * i / segments
-            x = hw - cr + cr * math.cos(angle)
-            y = -hd + cr + cr * math.sin(angle) - y_offs
-            profile.append((x, y, z_val))
-        for i in range(segments):
-            t = i / segments
-            x = hw
-            y = -hd + cr + t * (hd * 2 - 2 * cr) - y_offs
-            profile.append((x, y, z_val))
-        return profile
-
-    inner_top = gen_profile(inner_hw, inner_hd, inner_cr, 0)
-    outer_top = gen_profile(hw, hd, cr, 0)
-    inner_bot = gen_profile(inner_hw, inner_hd, inner_cr, -ring_height)
-    outer_bot = gen_profile(hw, hd, cr, -ring_height)
-
-    num_profile = len(inner_top)
+    hh = height / 2.0
+    ring_h = ring_height
+    ring_w = ring_width
+    step_cr = corner_radius - ring_w
 
     me = bpy.data.meshes.new(name=name)
     bm = bmesh.new()
 
-    itv = [bm.verts.new(v) for v in inner_top]
-    otv = [bm.verts.new(v) for v in outer_top]
-    ibv = [bm.verts.new(v) for v in inner_bot]
-    obv = [bm.verts.new(v) for v in outer_bot]
+    outer_profile = []
+    for i in range(segments):
+        angle = (math.pi / 2) * i / segments
+        x = hw - corner_radius + corner_radius * math.cos(angle)
+        y = hd - corner_radius + corner_radius * math.sin(angle)
+        outer_profile.append((x, y, hh))
+    for i in range(segments):
+        t = i / segments
+        x = hw - corner_radius - t * (width - 2 * corner_radius)
+        y = hd
+        outer_profile.append((x, y, hh))
+    for i in range(segments):
+        angle = math.pi / 2 + (math.pi / 2) * i / segments
+        x = -hw + corner_radius + corner_radius * math.cos(angle)
+        y = hd - corner_radius + corner_radius * math.sin(angle)
+        outer_profile.append((x, y, hh))
+    for i in range(segments):
+        t = i / segments
+        x = -hw
+        y = hd - corner_radius - t * (depth - 2 * corner_radius)
+        outer_profile.append((x, y, hh))
+    for i in range(segments):
+        angle = math.pi + (math.pi / 2) * i / segments
+        x = -hw + corner_radius + corner_radius * math.cos(angle)
+        y = -hd + corner_radius + corner_radius * math.sin(angle)
+        outer_profile.append((x, y, hh))
+    for i in range(segments):
+        t = i / segments
+        x = -hw + corner_radius + t * (width - 2 * corner_radius)
+        y = -hd
+        outer_profile.append((x, y, hh))
+    for i in range(segments):
+        angle = 3 * math.pi / 2 + (math.pi / 2) * i / segments
+        x = hw - corner_radius + corner_radius * math.cos(angle)
+        y = -hd + corner_radius + corner_radius * math.sin(angle)
+        outer_profile.append((x, y, hh))
+    for i in range(segments):
+        t = i / segments
+        x = hw
+        y = -hd + corner_radius + t * (depth - 2 * corner_radius)
+        outer_profile.append((x, y, hh))
+
+    inner_profile = []
+    for i in range(segments):
+        angle = (math.pi / 2) * i / segments
+        x = hw - corner_radius + step_cr * math.cos(angle)
+        y = hd - corner_radius + step_cr * math.sin(angle)
+        inner_profile.append((x, y, hh))
+    for i in range(segments):
+        t = i / segments
+        x = hw - corner_radius - t * (width - 2 * corner_radius)
+        y = hd - ring_w
+        inner_profile.append((x, y, hh))
+    for i in range(segments):
+        angle = math.pi / 2 + (math.pi / 2) * i / segments
+        x = -hw + corner_radius + step_cr * math.cos(angle)
+        y = hd - corner_radius + step_cr * math.sin(angle)
+        inner_profile.append((x, y, hh))
+    for i in range(segments):
+        t = i / segments
+        x = -hw + ring_w
+        y = hd - corner_radius - t * (depth - 2 * corner_radius)
+        inner_profile.append((x, y, hh))
+    for i in range(segments):
+        angle = math.pi + (math.pi / 2) * i / segments
+        x = -hw + corner_radius + step_cr * math.cos(angle)
+        y = -hd + corner_radius + step_cr * math.sin(angle)
+        inner_profile.append((x, y, hh))
+    for i in range(segments):
+        t = i / segments
+        x = -hw + corner_radius + t * (width - 2 * corner_radius)
+        y = -hd + ring_w
+        inner_profile.append((x, y, hh))
+    for i in range(segments):
+        angle = 3 * math.pi / 2 + (math.pi / 2) * i / segments
+        x = hw - corner_radius + step_cr * math.cos(angle)
+        y = -hd + corner_radius + step_cr * math.sin(angle)
+        inner_profile.append((x, y, hh))
+    for i in range(segments):
+        t = i / segments
+        x = hw - ring_w
+        y = -hd + corner_radius + t * (depth - 2 * corner_radius)
+        inner_profile.append((x, y, hh))
+
+    num_profile = len(outer_profile)
+    btm_z = hh - 0.5
+    top_z = hh + ring_h
+
+    outer_btm = [bm.verts.new((x, y, btm_z)) for x, y, _ in outer_profile]
+    inner_btm = [bm.verts.new((x, y, btm_z)) for x, y, _ in inner_profile]
+    outer_top = [bm.verts.new((x, y, top_z)) for x, y, _ in outer_profile]
+    inner_top = [bm.verts.new((x, y, top_z)) for x, y, _ in inner_profile]
 
     for i in range(num_profile):
         ni = (i + 1) % num_profile
-        bm.faces.new([itv[i], itv[ni], otv[ni], otv[i]])
+        fv = [outer_btm[i], outer_btm[ni], outer_top[ni], outer_top[i]]
+        bm.faces.new(fv)
 
     for i in range(num_profile):
         ni = (i + 1) % num_profile
-        bm.faces.new([obv[i], obv[ni], ibv[ni], ibv[i]])
+        fv = [inner_btm[ni], inner_btm[i], inner_top[i], inner_top[ni]]
+        bm.faces.new(fv)
 
     for i in range(num_profile):
         ni = (i + 1) % num_profile
-        bm.faces.new([otv[i], otv[ni], obv[ni], obv[i]])
+        bm.faces.new([outer_top[i], outer_top[ni], inner_top[ni], inner_top[i]])
 
     for i in range(num_profile):
         ni = (i + 1) % num_profile
-        bm.faces.new([ibv[i], ibv[ni], itv[ni], itv[i]])
+        bm.faces.new([inner_btm[ni], inner_btm[i], outer_btm[i], outer_btm[ni]])
 
     bm.to_mesh(me)
     bm.free()
     me.update(calc_edges=True)
+    print(f"  [DEBUG] {name}: {len(me.polygons)} faces, {len(me.vertices)} verts")
+    for p in me.polygons:
+        p.use_smooth = False
+    obj = bpy.data.objects.new(name, me)
+    bpy.context.collection.objects.link(obj)
+    bpy.context.view_layer.objects.active = obj
+    obj.select_set(True)
+    return obj
 
+
+def create_step_ring_world(name, width, depth, corner_radius,
+                            ring_width, z_bottom, z_top, segments):
+    """
+    在世界坐标中创建外侧台阶环
+    外轮廓 = 外盒底部轮廓，内轮廓 = 向内偏移 ring_width
+    z_bottom: 台阶环底部Z坐标（远离壳体）
+    z_top: 台阶环顶部Z坐标（穿透入壳体 0.5mm）
+    """
+    hw = width / 2.0
+    hd = depth / 2.0
+    ring_w = ring_width
+    step_cr = corner_radius - ring_w
+
+    me = bpy.data.meshes.new(name=name)
+    bm = bmesh.new()
+
+    outer_profile = []
+    for i in range(segments):
+        angle = (math.pi / 2) * i / segments
+        x = hw - corner_radius + corner_radius * math.cos(angle)
+        y = hd - corner_radius + corner_radius * math.sin(angle)
+        outer_profile.append((x, y))
+    for i in range(segments):
+        t = i / segments
+        x = hw - corner_radius - t * (width - 2 * corner_radius)
+        y = hd
+        outer_profile.append((x, y))
+    for i in range(segments):
+        angle = math.pi / 2 + (math.pi / 2) * i / segments
+        x = -hw + corner_radius + corner_radius * math.cos(angle)
+        y = hd - corner_radius + corner_radius * math.sin(angle)
+        outer_profile.append((x, y))
+    for i in range(segments):
+        t = i / segments
+        x = -hw
+        y = hd - corner_radius - t * (depth - 2 * corner_radius)
+        outer_profile.append((x, y))
+    for i in range(segments):
+        angle = math.pi + (math.pi / 2) * i / segments
+        x = -hw + corner_radius + corner_radius * math.cos(angle)
+        y = -hd + corner_radius + corner_radius * math.sin(angle)
+        outer_profile.append((x, y))
+    for i in range(segments):
+        t = i / segments
+        x = -hw + corner_radius + t * (width - 2 * corner_radius)
+        y = -hd
+        outer_profile.append((x, y))
+    for i in range(segments):
+        angle = 3 * math.pi / 2 + (math.pi / 2) * i / segments
+        x = hw - corner_radius + corner_radius * math.cos(angle)
+        y = -hd + corner_radius + corner_radius * math.sin(angle)
+        outer_profile.append((x, y))
+    for i in range(segments):
+        t = i / segments
+        x = hw
+        y = -hd + corner_radius + t * (depth - 2 * corner_radius)
+        outer_profile.append((x, y))
+
+    inner_profile = []
+    for i in range(segments):
+        angle = (math.pi / 2) * i / segments
+        x = hw - corner_radius + step_cr * math.cos(angle)
+        y = hd - corner_radius + step_cr * math.sin(angle)
+        inner_profile.append((x, y))
+    for i in range(segments):
+        t = i / segments
+        x = hw - corner_radius - t * (width - 2 * corner_radius)
+        y = hd - ring_w
+        inner_profile.append((x, y))
+    for i in range(segments):
+        angle = math.pi / 2 + (math.pi / 2) * i / segments
+        x = -hw + corner_radius + step_cr * math.cos(angle)
+        y = hd - corner_radius + step_cr * math.sin(angle)
+        inner_profile.append((x, y))
+    for i in range(segments):
+        t = i / segments
+        x = -hw + ring_w
+        y = hd - corner_radius - t * (depth - 2 * corner_radius)
+        inner_profile.append((x, y))
+    for i in range(segments):
+        angle = math.pi + (math.pi / 2) * i / segments
+        x = -hw + corner_radius + step_cr * math.cos(angle)
+        y = -hd + corner_radius + step_cr * math.sin(angle)
+        inner_profile.append((x, y))
+    for i in range(segments):
+        t = i / segments
+        x = -hw + corner_radius + t * (width - 2 * corner_radius)
+        y = -hd + ring_w
+        inner_profile.append((x, y))
+    for i in range(segments):
+        angle = 3 * math.pi / 2 + (math.pi / 2) * i / segments
+        x = hw - corner_radius + step_cr * math.cos(angle)
+        y = -hd + corner_radius + step_cr * math.sin(angle)
+        inner_profile.append((x, y))
+    for i in range(segments):
+        t = i / segments
+        x = hw - ring_w
+        y = -hd + corner_radius + t * (depth - 2 * corner_radius)
+        inner_profile.append((x, y))
+
+    num_profile = len(outer_profile)
+
+    outer_btm = [bm.verts.new((x, y, z_bottom)) for x, y in outer_profile]
+    inner_btm = [bm.verts.new((x, y, z_bottom)) for x, y in inner_profile]
+    outer_top = [bm.verts.new((x, y, z_top)) for x, y in outer_profile]
+    inner_top = [bm.verts.new((x, y, z_top)) for x, y in inner_profile]
+
+    for i in range(num_profile):
+        ni = (i + 1) % num_profile
+        bm.faces.new([outer_btm[i], outer_btm[ni], outer_top[ni], outer_top[i]])
+
+    for i in range(num_profile):
+        ni = (i + 1) % num_profile
+        bm.faces.new([inner_btm[ni], inner_btm[i], inner_top[i], inner_top[ni]])
+
+    for i in range(num_profile):
+        ni = (i + 1) % num_profile
+        bm.faces.new([outer_top[i], outer_top[ni], inner_top[ni], inner_top[i]])
+
+    for i in range(num_profile):
+        ni = (i + 1) % num_profile
+        bm.faces.new([inner_btm[ni], inner_btm[i], outer_btm[i], outer_btm[ni]])
+
+    bm.to_mesh(me)
+    bm.free()
+    me.update(calc_edges=True)
+    print(f"  [DEBUG] {name}: {len(me.polygons)} faces, {len(me.vertices)} verts")
+    for p in me.polygons:
+        p.use_smooth = False
     obj = bpy.data.objects.new(name, me)
     bpy.context.collection.objects.link(obj)
     bpy.context.view_layer.objects.active = obj
@@ -558,15 +736,15 @@ def create_filleted_top_shell(name, width, depth, outer_height, top_thickness,
                                outer_fillet_radius, inner_fillet_radius,
                                location=(0, 0, 0), segments=24, step_height=1.5,
                                holes=None, top_offset_y=3, window=None,
-                               outer_ring_width=0, outer_ring_height=0):
+                               outer_ring_height=0, outer_ring_width=0):
     """
     创建带圆倒角的中空顶壳
     create_rounded_box_filleted 构建从底部到顶部内收的余弦曲线侧壁，
     翻转 180° 使开口朝下、曲线侧壁从底全宽平滑过渡到顶内收面
     top_offset_y: 顶面相对底框的Y向偏移量
     window: (length, width) 顶面矩形窗口尺寸，None 则不开口
-    outer_ring_width: 底部边框外侧环的宽度（水平向外扩展）
-    outer_ring_height: 底部边框外侧环的高度（垂直向下延伸）
+    outer_ring_height: 底面外侧环形台阶高度（mm），0 则不添加
+    outer_ring_width: 底面外侧环形台阶宽度（mm），0 则不添加
     """
     outer_half_h = outer_height / 2.0
     actual_outer_r = min(outer_fillet_radius, outer_height * 0.45, corner_radius * 0.45)
@@ -586,6 +764,7 @@ def create_filleted_top_shell(name, width, depth, outer_height, top_thickness,
     )
     bpy.context.view_layer.objects.active = outer
     outer.select_set(True)
+
     outer.rotation_euler = (math.pi, 0, 0)
     bpy.ops.object.transform_apply(location=False, rotation=True, scale=False)
     outer.location = location
@@ -640,20 +819,23 @@ def create_filleted_top_shell(name, width, depth, outer_height, top_thickness,
         apply_boolean(outer, cutter, operation='DIFFERENCE')
         bpy.data.objects.remove(cutter, do_unlink=True)
 
-    if outer_ring_width > 0 and outer_ring_height > 0:
-        ring_z = location[2] - outer_half_h
-        ring = create_ring_solid(
-            name=f"{name}_Ring",
+    if outer_ring_height > 0 and outer_ring_width > 0:
+        shell_bottom_z = location[2] - outer_half_h
+        step_z_top = shell_bottom_z + 0.5
+        step_z_bottom = shell_bottom_z - outer_ring_height
+        step_ring = create_step_ring_world(
+            name=f"{name}_StepRing",
             width=width,
             depth=depth,
             corner_radius=corner_radius,
             ring_width=outer_ring_width,
-            ring_height=outer_ring_height,
+            z_bottom=step_z_bottom,
+            z_top=step_z_top,
             segments=segments,
         )
-        ring.location = (location[0], location[1], ring_z)
-        apply_boolean(outer, ring, operation='UNION')
-        bpy.data.objects.remove(ring, do_unlink=True)
+        step_ring.location = (location[0], location[1], 0)
+        apply_boolean(outer, step_ring, operation='UNION')
+        bpy.data.objects.remove(step_ring, do_unlink=True)
 
     outer.name = name
     return outer
@@ -749,8 +931,8 @@ def create_top_shell_scene():
         inner_fillet_radius=inner_fillet_radius,
         location=(-60, 0, 0),
         segments=24,
-        outer_ring_width=1.0,
         outer_ring_height=1.0,
+        outer_ring_width=1.0,
     )
     add_material(shell_no_holes, name="TopShellNoHolesMaterial")
     print(f"  [OK] Top shell (no window) created")
@@ -769,8 +951,8 @@ def create_top_shell_scene():
         location=(60, 0, 0),
         segments=24,
         window=(window_length, window_width),
-        outer_ring_width=1.0,
         outer_ring_height=1.0,
+        outer_ring_width=1.0,
     )
     add_material(shell_with_holes, name="TopShellWithHolesMaterial")
     print(f"  [OK] Top shell (with window) created")

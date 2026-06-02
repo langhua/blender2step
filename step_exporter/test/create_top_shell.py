@@ -651,26 +651,29 @@ def create_filleted_top_shell(name, width, depth, outer_height, top_thickness,
     bpy.data.objects.remove(inner, do_unlink=True)
 
     if window:
-        if len(window) == 2:
-            win_len, win_wid = window
-            win_off_x, win_off_y = 0.0, 0.0
+        # Normalize to list of (len, wid, off_x, off_y)
+        if isinstance(window[0], (int, float)):
+            windows = [window if len(window) == 4 else (*window, 0.0, 0.0)]
         else:
-            win_len, win_wid, win_off_x, win_off_y = window
+            windows = [w if len(w) == 4 else (*w, 0.0, 0.0) for w in window]
+
         top_wall_center_z = location[2] + outer_half_h - top_thickness / 2.0
         top_center_y = location[1] - top_offset_y
         cutter_depth = top_thickness + 4.0
 
-        bpy.ops.mesh.primitive_cube_add(
-            size=1.0,
-            location=(location[0] + win_off_x, top_center_y + win_off_y, top_wall_center_z),
-        )
-        cutter = bpy.context.active_object
-        cutter.name = f"{name}_WindowCutter"
-        cutter.dimensions = (win_len, win_wid, cutter_depth)
-        bpy.ops.object.transform_apply(scale=True)
+        for i, w in enumerate(windows):
+            win_len, win_wid, win_off_x, win_off_y = w
+            bpy.ops.mesh.primitive_cube_add(
+                size=1.0,
+                location=(location[0] + win_off_x, top_center_y + win_off_y, top_wall_center_z),
+            )
+            cutter = bpy.context.active_object
+            cutter.name = f"{name}_WindowCutter_{i}"
+            cutter.dimensions = (win_len, win_wid, cutter_depth)
+            bpy.ops.object.transform_apply(scale=True)
 
-        apply_boolean(outer, cutter, operation='DIFFERENCE')
-        bpy.data.objects.remove(cutter, do_unlink=True)
+            apply_boolean(outer, cutter, operation='DIFFERENCE')
+            bpy.data.objects.remove(cutter, do_unlink=True)
 
     outer.name = name
 
@@ -681,14 +684,17 @@ def create_filleted_top_shell(name, width, depth, outer_height, top_thickness,
     outer['wall_thickness'] = wall_thickness
 
     if window:
-        if len(window) == 2:
-            win_len, win_wid = window
-            win_off_x, win_off_y = 0.0, 0.0
+        if isinstance(window[0], (int, float)):
+            windows = [window if len(window) == 4 else (*window, 0.0, 0.0)]
         else:
-            win_len, win_wid, win_off_x, win_off_y = window
-        dx = win_off_x
-        dy = win_off_y - top_offset_y
-        outer['window_data'] = f"{dx:.3f},{dy:.3f},{win_len:.3f},{win_wid:.3f}"
+            windows = [w if len(w) == 4 else (*w, 0.0, 0.0) for w in window]
+        entries = []
+        for w in windows:
+            win_len, win_wid, win_off_x, win_off_y = w
+            dx = win_off_x
+            dy = win_off_y - top_offset_y
+            entries.append(f"{dx:.3f},{dy:.3f},{win_len:.3f},{win_wid:.3f}")
+        outer['window_data'] = ";".join(entries)
 
     return outer
 
@@ -802,7 +808,11 @@ def create_top_shell_scene():
         inner_fillet_radius=inner_fillet_radius,
         location=(60, 0, 0),
         segments=24,
-        window=(window_length, window_width, 20.0, 20.0),
+        window=[
+            (window_length, window_width, 20.0, 20.0),
+            (15.0, 8.0, -25.0, 0.0),
+            (14.0, 10.0, 0.0, -15.0),
+        ],
         outer_ring_height=1.0,
         outer_ring_width=1.0,
     )

@@ -246,10 +246,12 @@ def do_operator_export(output_path, cpp_exporter, log_callback):
         top_thickness=2.0,
         wall_thickness=2.0,
         corner_radius=20.0,
-        outer_fillet_radius=1.5,
-        inner_fillet_radius=0.75,
+        outer_fillet_radius=2.0,
+        inner_fillet_radius=1.2,
         location=(0, 0, 0),
         segments=24,
+        outer_ring_height=1.0,
+        outer_ring_width=1.0,
     )
     add_material(shell, name="TopShellMaterial")
     log_callback(f"Top shell created: {len(bpy.data.objects)} objects")

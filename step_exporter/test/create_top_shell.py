@@ -669,6 +669,11 @@ def create_filleted_top_shell(name, width, depth, outer_height, top_thickness,
         bpy.data.objects.remove(cutter, do_unlink=True)
 
     outer.name = name
+
+    if outer_ring_height > 0 and outer_ring_width > 0:
+        outer['step_ring_height'] = outer_ring_height
+        outer['step_ring_width'] = outer_ring_width
+
     return outer
 
 

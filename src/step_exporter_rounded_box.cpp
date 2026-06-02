@@ -1230,7 +1230,7 @@ TopoDS_Shape create_top_shell_filleted_solid(
             return outerFilleted;
         }
 
-        // Step ring at bottom (if requested)
+        // Step ring at bottom (if requested) - single-level ring
         if (step_ring_height > 0.0 && step_ring_width > 0.0) {
             double ring_center_z = -hh - step_ring_height / 2.0;
             double inner_ring_w = width - 2.0 * step_ring_width;
@@ -1252,8 +1252,9 @@ TopoDS_Shape create_top_shell_filleted_solid(
                 BRepAlgoAPI_Fuse ringFuseMaker(outerFinal, ringShape);
                 if (ringFuseMaker.IsDone()) {
                     outerFinal = ensure_solid(ringFuseMaker.Shape());
-                    std::cout << "[STEP Exporter] Step ring added: " << step_ring_height
-                              << "mm height, " << step_ring_width << "mm width" << std::endl;
+                    std::cout << "[STEP Exporter] Step ring added: "
+                              << step_ring_height << "mm height, "
+                              << step_ring_width << "mm width" << std::endl;
                 } else {
                     std::cerr << "[STEP Exporter] Step ring fuse failed" << std::endl;
                 }
@@ -1293,6 +1294,20 @@ TopoDS_Shape create_top_shell_filleted_solid(
             std::cerr << "[STEP Exporter] Failed to convert inner to solid, using unfilleted" << std::endl;
             innerFinal = ensure_solid(innerBox);
         }
+
+        if (!innerFinal.IsNull()) {
+            BRepAlgoAPI_Cut cutter(outerFinal, innerFinal);
+            if (cutter.IsDone()) {
+                result = cutter.Shape();
+                result = ensure_solid(result);
+                std::cout << "[STEP Exporter] Boolean cut applied (wall thickness: " << wall_thickness << "mm)" << std::endl;
+            } else {
+                std::cerr << "[STEP Exporter] Boolean cut failed, using outer shell only" << std::endl;
+                result = outerFinal;
+            }
+        } else {
+            result = outerFinal;
+        }
     } else {
         // === Direct loft-based approach for top shell with wall thickness ===
         std::cout << "[STEP Exporter] Using direct loft-based approach (tapered, with wall thickness)" << std::endl;
@@ -1305,7 +1320,6 @@ TopoDS_Shape create_top_shell_filleted_solid(
         double outer_bottom_z = -hh;
         bool sealBottom = false;
         if (step_ring_height > 0.0 && step_ring_width > 0.0) {
-            outer_bottom_z = -hh - step_ring_height;
             sealBottom = true;
         }
 
@@ -1343,7 +1357,7 @@ TopoDS_Shape create_top_shell_filleted_solid(
         TopoDS_Shape innerShell = create_tapered_loft_shell(
             inner_w, inner_d, inner_cr, -hh, 0.0,
             inner_top_w, inner_top_d, inner_top_cr, inner_top_z, bottom_y_shift,
-            false);
+            true);
 
         if (innerShell.IsNull()) {
             std::cerr << "[STEP Exporter] Failed to create inner loft shell" << std::endl;
@@ -1354,26 +1368,36 @@ TopoDS_Shape create_top_shell_filleted_solid(
             innerFinal = TopoDS::Solid(innerShell);
         }
 
-        // Step ring: fuse a step cavity box below the inner shell
+        // Step ring: fuse single-level ring to outer shell
         if (step_ring_height > 0.0 && step_ring_width > 0.0) {
-            double step_cavity_w = width - 2.0 * step_ring_width;
-            double step_cavity_d = depth - 2.0 * step_ring_width;
-            double step_cavity_cr = std::max(0.0, corner_radius - step_ring_width);
+            double ring_center_z = -hh - step_ring_height / 2.0;
+            double inner_ring_w = width - 2.0 * step_ring_width;
+            double inner_ring_d = depth - 2.0 * step_ring_width;
+            double inner_ring_cr = std::max(0.0, corner_radius - step_ring_width);
 
-            TopoDS_Shape stepCavityBox = create_rounded_box_solid(
-                step_cavity_w, step_cavity_d, step_ring_height, step_cavity_cr);
-            double step_center_z = -hh - step_ring_height / 2.0;
-            gp_Trsf stepTrsf;
-            stepTrsf.SetTranslation(gp_Vec(0, 0, step_center_z));
-            stepCavityBox.Move(TopLoc_Location(stepTrsf));
+            TopoDS_Shape outerRingBox = create_rounded_box_solid(width, depth, step_ring_height, corner_radius);
+            gp_Trsf ringTrsf;
+            ringTrsf.SetTranslation(gp_Vec(0, 0, ring_center_z));
+            outerRingBox.Move(TopLoc_Location(ringTrsf));
 
-            BRepAlgoAPI_Fuse cavityFuseMaker(innerFinal, stepCavityBox);
-            if (cavityFuseMaker.IsDone()) {
-                innerFinal = ensure_solid(cavityFuseMaker.Shape());
-                std::cout << "[STEP Exporter] Step cavity fused: " << step_ring_height
-                          << "mm height, " << step_ring_width << "mm step" << std::endl;
+            TopoDS_Shape innerRingBox = create_rounded_box_solid(inner_ring_w, inner_ring_d,
+                step_ring_height + 0.2, inner_ring_cr);
+            innerRingBox.Move(TopLoc_Location(ringTrsf));
+
+            BRepAlgoAPI_Cut ringCutMaker(outerRingBox, innerRingBox);
+            if (ringCutMaker.IsDone()) {
+                TopoDS_Shape ringShape = ringCutMaker.Shape();
+                BRepAlgoAPI_Fuse ringFuseMaker(outerFinal, ringShape);
+                if (ringFuseMaker.IsDone()) {
+                    outerFinal = ensure_solid(ringFuseMaker.Shape());
+                    std::cout << "[STEP Exporter] Step ring added: "
+                              << step_ring_height << "mm height, "
+                              << step_ring_width << "mm width" << std::endl;
+                } else {
+                    std::cerr << "[STEP Exporter] Step ring fuse failed" << std::endl;
+                }
             } else {
-                std::cerr << "[STEP Exporter] Step cavity fuse failed" << std::endl;
+                std::cerr << "[STEP Exporter] Step ring cut failed" << std::endl;
             }
         }
 

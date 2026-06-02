@@ -596,31 +596,116 @@ def _analyze_top_shell_from_mesh(obj, context, scale):
                 top_thickness = 1.5
     log_to_file(f"[STEP Exporter] Top thickness: {top_thickness:.2f}")
     
-    # === 壁厚分析（使用中层顶点） ===
+    # === 壁厚分析 ===
+    # 壁厚 = 外轮廓边界框 - 内轮廓边界框，避开台阶环和圆角顶点
+    # 找底部区域上方第一个不含台阶环的Z层（顶点数80-150，非最大Z层）
+    bottom_region_zls = [z for z in sorted_z_levels if z <= bottom_z + 3.0]
     wall_thickness = 2.0
-    mid_z_target = bottom_z + outer_height * 0.5
-    mid_z = min(sorted_z_levels, key=lambda z: abs(z - mid_z_target))
-    mid_verts = z_layers.get(mid_z, [])
-    
-    if mid_verts:
-        mid_coords = [(v.co.x, v.co.y, v.co.z) for v in mid_verts]
-        # 区分外壁和内壁
-        mid_dists = [math.sqrt((x - cx)**2 + (y - cy)**2) for x, y, z in mid_coords]
-        if mid_dists:
-            max_mid = max(mid_dists)
-            outer_mid = sorted(mid_dists, reverse=True)
-            inner_mid = sorted(mid_dists)
-            
-            # 外壁前20%平均
-            n = max(20, len(outer_mid) // 5)
-            outer_avg = sum(outer_mid[:n]) / n if outer_mid else 0
-            # 内壁前20%平均
-            inner_avg = sum(inner_mid[:n]) / n if inner_mid else 0
-            
-            if outer_avg > inner_avg:
-                wall_thickness = outer_avg - inner_avg
+    if len(bottom_region_zls) >= 2:
+        # 找台阶环顶Z层（底部区域顶点数最多的Z层，通常是台阶环和外壁共用的底部）
+        max_z = bottom_region_zls[0]
+        max_n = len(z_layers[max_z])
+        for z in bottom_region_zls[1:]:
+            n = len(z_layers[z])
+            if n > max_n:
+                max_n = n
+                max_z = z
+        log_to_file(f"[STEP Exporter] Wall bottom Z={max_z:.2f} ({max_n}v), min Z={bottom_z:.2f}")
+
+        # 在台阶环顶Z层上方 0.3mm 以上找一个顶点数合理的Z层（内轮廓顶点）
+        inner_z = None
+        for z in sorted(bottom_region_zls):
+            if z > max_z + 0.3 and 60 <= len(z_layers[z]) <= 150:
+                inner_z = z
+                break
+
+        if inner_z is not None:
+            inner_coords = [(v.co.x, v.co.y) for v in z_layers[inner_z]]
+            inner_xs = [x for x, y in inner_coords]
+            inner_ys = [y for x, y in inner_coords]
+            inner_w = max(inner_xs) - min(inner_xs)
+            inner_d = max(inner_ys) - min(inner_ys)
+            wall_w = (width - inner_w) / 2.0
+            wall_d = (depth - inner_d) / 2.0
+            wall_thickness = (wall_w + wall_d) / 2.0
+            log_to_file(f"[STEP Exporter] Wall thickness: {wall_thickness:.2f}mm (inner contour at z={inner_z:.2f}: {inner_w:.1f}x{inner_d:.1f}, {len(z_layers[inner_z])}v)")
+        else:
+            log_to_file(f"[STEP Exporter] Wall thickness: {wall_thickness:.2f}mm (default, no suitable inner Z layer)")
+            for z in sorted(bottom_region_zls):
+                log_to_file(f"[STEP Exporter]   z={z:.2f} n={len(z_layers[z])} v")
+    else:
+        log_to_file(f"[STEP Exporter] Wall thickness: {wall_thickness:.2f} (default, insufficient Z levels)")
     wall_thickness = max(1.0, min(10.0, wall_thickness))
-    log_to_file(f"[STEP Exporter] Wall thickness: {wall_thickness:.2f}")
+
+    # === 台阶环检测 ===
+    # 优先从自定义属性读取（由 create_filleted_top_shell 设置）
+    step_ring_height = 0.0
+    step_ring_width = 0.0
+    custom_ring_h = obj.get('step_ring_height', 0.0)
+    custom_ring_w = obj.get('step_ring_width', 0.0)
+    if custom_ring_h > 0 and custom_ring_w > 0:
+        step_ring_height = custom_ring_h
+        step_ring_width = custom_ring_w
+        log_to_file(f"[STEP Exporter] Step ring from custom property: height={step_ring_height:.1f}mm, width={step_ring_width:.1f}mm")
+    elif len(bottom_region_zls) >= 2:
+        # 角度扇区分析，P40-P90百份位避开圆角顶点
+        z0 = bottom_region_zls[0]
+        z1 = None
+        for z in sorted(bottom_region_zls)[1:]:
+            if z - z0 >= 0.3 and len(z_layers[z]) >= 40:
+                z1 = z
+                break
+
+        if z1 is not None and len(z_layers[z0]) >= 80:
+            z0_coords = [(v.co.x, v.co.y) for v in z_layers[z0]]
+            num_sectors = 64
+            sector_angle_step = 2.0 * math.pi / num_sectors
+            sector_dists = [[] for _ in range(num_sectors)]
+
+            for x, y in z0_coords:
+                dx = x - cx
+                dy = y - cy
+                dist = math.sqrt(dx * dx + dy * dy)
+                angle = math.atan2(dy, dx)
+                if angle < 0:
+                    angle += 2.0 * math.pi
+                sector_idx = int(angle / sector_angle_step) % num_sectors
+                sector_dists[sector_idx].append(dist)
+
+            sector_gaps = []
+            for s_dists in sector_dists:
+                if len(s_dists) < 3:
+                    continue
+                s_dists.sort()
+                n_s = len(s_dists)
+                # P40: 跳过圆角顶点，取台阶环内轮廓位置
+                inner_idx = max(0, int(n_s * 0.40))
+                # P90: 取外轮廓位置
+                outer_idx = min(n_s - 1, int(n_s * 0.90))
+                if inner_idx >= outer_idx:
+                    continue
+                inner_val = s_dists[inner_idx]
+                outer_val = s_dists[outer_idx]
+                if outer_val > inner_val + 0.2:
+                    sector_gaps.append(outer_val - inner_val)
+
+            if len(sector_gaps) >= num_sectors // 4:
+                sector_gaps.sort()
+                trim_n = max(1, len(sector_gaps) // 4)
+                if len(sector_gaps) > trim_n * 2:
+                    trimmed = sector_gaps[trim_n:-trim_n]
+                else:
+                    trimmed = sector_gaps
+                avg_gap = sum(trimmed) / len(trimmed)
+
+                log_to_file(f"[STEP Exporter] Step ring check z0={z0:.2f} n={len(z_layers[z0])} sectors={len(sector_gaps)} avg_gap={avg_gap:.2f} wall_thickness={wall_thickness:.2f}")
+
+                if 0.3 <= avg_gap <= wall_thickness * 0.8:
+                    step_ring_width = round(avg_gap, 1)
+                    step_ring_height = round(z1 - z0, 1)
+                    log_to_file(f"[STEP Exporter] Step ring detected: height={step_ring_height:.1f}mm, width={step_ring_width:.1f}mm (angular-sector P40-P90 gap={avg_gap:.1f})")
+
+    log_to_file(f"[STEP Exporter] Step ring: height={step_ring_height:.1f}mm, width={step_ring_width:.1f}mm")
     
     # === 角圆角分析 ===
     # 用底部顶点包围盒
@@ -681,7 +766,7 @@ def _analyze_top_shell_from_mesh(obj, context, scale):
     # 释放BMesh
     bm.free()
     
-    log_to_file(f"[STEP Exporter] Detected TOP shell: {width:.1f}x{depth:.1f} h={outer_height:.1f} tt={top_thickness:.1f} wt={wall_thickness:.1f} cr={corner_radius:.1f} recess={top_recess:.1f} yOff={top_offset_y:.1f} ofr={outer_fillet_radius:.1f} ifr={inner_fillet_radius:.1f} win={window_len:.1f}x{window_wid:.1f}")
+    log_to_file(f"[STEP Exporter] Detected TOP shell: {width:.1f}x{depth:.1f} h={outer_height:.1f} tt={top_thickness:.1f} wt={wall_thickness:.1f} cr={corner_radius:.1f} recess={top_recess:.1f} yOff={top_offset_y:.1f} ofr={outer_fillet_radius:.1f} ifr={inner_fillet_radius:.1f} win={window_len:.1f}x{window_wid:.1f} step_ring={step_ring_height:.1f}x{step_ring_width:.1f}")
     
     return {
         'obj': obj,
@@ -697,6 +782,8 @@ def _analyze_top_shell_from_mesh(obj, context, scale):
         'top_offset_y': top_offset_y,
         'window_len': window_len,
         'window_wid': window_wid,
+        'step_ring_height': step_ring_height,
+        'step_ring_width': step_ring_width,
         'pos_x': obj.location.x,
         'pos_y': obj.location.y,
         'pos_z': obj.location.z,
@@ -1975,6 +2062,7 @@ def _export_parametric_sync(filepath, bottom_shells, top_shells, cylinders, step
             tparams['outer_fillet_radius'], tparams['inner_fillet_radius'],
             tparams['top_recess'], tparams['top_offset_y'],
             tparams.get('window_len', 0.0), tparams.get('window_wid', 0.0),
+            tparams.get('step_ring_height', 0.0), tparams.get('step_ring_width', 0.0),
             tparams.get('pos_x', 0.0), tparams.get('pos_y', 0.0), tparams.get('pos_z', 0.0),
             step_schema, step_unit, 1 if enable_logging else 0)
         if not success:
@@ -2403,6 +2491,7 @@ def _parametric_export_staged():
                         tparams['inner_fillet_radius'], tparams['top_recess'],
                         tparams['top_offset_y'],
                         tparams.get('window_len', 0.0), tparams.get('window_wid', 0.0),
+                        tparams.get('step_ring_height', 0.0), tparams.get('step_ring_width', 0.0),
                         tparams.get('pos_x', 0.0), tparams.get('pos_y', 0.0), tparams.get('pos_z', 0.0),
                         data['step_schema'], data['step_unit'],
                         1 if data['enable_logging'] else 0)

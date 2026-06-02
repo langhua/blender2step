@@ -597,44 +597,50 @@ def _analyze_top_shell_from_mesh(obj, context, scale):
     log_to_file(f"[STEP Exporter] Top thickness: {top_thickness:.2f}")
     
     # === 壁厚分析 ===
-    # 壁厚 = 外轮廓边界框 - 内轮廓边界框，避开台阶环和圆角顶点
-    # 找底部区域上方第一个不含台阶环的Z层（顶点数80-150，非最大Z层）
-    bottom_region_zls = [z for z in sorted_z_levels if z <= bottom_z + 3.0]
-    wall_thickness = 2.0
-    if len(bottom_region_zls) >= 2:
-        # 找台阶环顶Z层（底部区域顶点数最多的Z层，通常是台阶环和外壁共用的底部）
-        max_z = bottom_region_zls[0]
-        max_n = len(z_layers[max_z])
-        for z in bottom_region_zls[1:]:
-            n = len(z_layers[z])
-            if n > max_n:
-                max_n = n
-                max_z = z
-        log_to_file(f"[STEP Exporter] Wall bottom Z={max_z:.2f} ({max_n}v), min Z={bottom_z:.2f}")
-
-        # 在台阶环顶Z层上方 0.3mm 以上找一个顶点数合理的Z层（内轮廓顶点）
-        inner_z = None
-        for z in sorted(bottom_region_zls):
-            if z > max_z + 0.3 and 60 <= len(z_layers[z]) <= 150:
-                inner_z = z
-                break
-
-        if inner_z is not None:
-            inner_coords = [(v.co.x, v.co.y) for v in z_layers[inner_z]]
-            inner_xs = [x for x, y in inner_coords]
-            inner_ys = [y for x, y in inner_coords]
-            inner_w = max(inner_xs) - min(inner_xs)
-            inner_d = max(inner_ys) - min(inner_ys)
-            wall_w = (width - inner_w) / 2.0
-            wall_d = (depth - inner_d) / 2.0
-            wall_thickness = (wall_w + wall_d) / 2.0
-            log_to_file(f"[STEP Exporter] Wall thickness: {wall_thickness:.2f}mm (inner contour at z={inner_z:.2f}: {inner_w:.1f}x{inner_d:.1f}, {len(z_layers[inner_z])}v)")
-        else:
-            log_to_file(f"[STEP Exporter] Wall thickness: {wall_thickness:.2f}mm (default, no suitable inner Z layer)")
-            for z in sorted(bottom_region_zls):
-                log_to_file(f"[STEP Exporter]   z={z:.2f} n={len(z_layers[z])} v")
+    # 优先从自定义属性读取（由 create_filleted_top_shell 设置）
+    custom_wt = obj.get('wall_thickness', 0.0)
+    if custom_wt > 0:
+        wall_thickness = custom_wt
+        log_to_file(f"[STEP Exporter] Wall thickness from custom property: {wall_thickness:.2f}mm")
     else:
-        log_to_file(f"[STEP Exporter] Wall thickness: {wall_thickness:.2f} (default, insufficient Z levels)")
+        # 壁厚 = 外轮廓边界框 - 内轮廓边界框，避开台阶环和圆角顶点
+        # 找底部区域上方第一个不含台阶环的Z层（顶点数80-150，非最大Z层）
+        bottom_region_zls = [z for z in sorted_z_levels if z <= bottom_z + 3.0]
+        wall_thickness = 2.0
+        if len(bottom_region_zls) >= 2:
+            # 找台阶环顶Z层（底部区域顶点数最多的Z层，通常是台阶环和外壁共用的底部）
+            max_z = bottom_region_zls[0]
+            max_n = len(z_layers[max_z])
+            for z in bottom_region_zls[1:]:
+                n = len(z_layers[z])
+                if n > max_n:
+                    max_n = n
+                    max_z = z
+            log_to_file(f"[STEP Exporter] Wall bottom Z={max_z:.2f} ({max_n}v), min Z={bottom_z:.2f}")
+
+            # 在台阶环顶Z层上方 0.3mm 以上找一个顶点数合理的Z层（内轮廓顶点）
+            inner_z = None
+            for z in sorted(bottom_region_zls):
+                if z > max_z + 0.3 and 60 <= len(z_layers[z]) <= 150:
+                    inner_z = z
+                    break
+
+            if inner_z is not None:
+                inner_coords = [(v.co.x, v.co.y) for v in z_layers[inner_z]]
+                inner_xs = [x for x, y in inner_coords]
+                inner_ys = [y for x, y in inner_coords]
+                inner_w = max(inner_xs) - min(inner_xs)
+                inner_d = max(inner_ys) - min(inner_ys)
+                wall_w = (width - inner_w) / 2.0
+                wall_d = (depth - inner_d) / 2.0
+                wall_thickness = (wall_w + wall_d) / 2.0
+                log_to_file(f"[STEP Exporter] Wall thickness: {wall_thickness:.2f}mm (inner contour at z={inner_z:.2f}: {inner_w:.1f}x{inner_d:.1f}, {len(z_layers[inner_z])}v)")
+            else:
+                log_to_file(f"[STEP Exporter] Wall thickness: {wall_thickness:.2f}mm (default, no suitable inner Z layer)")
+                for z in sorted(bottom_region_zls):
+                    log_to_file(f"[STEP Exporter]   z={z:.2f} n={len(z_layers[z])} v")
+        else:
+            log_to_file(f"[STEP Exporter] Wall thickness: {wall_thickness:.2f} (default, insufficient Z levels)")
     wall_thickness = max(1.0, min(10.0, wall_thickness))
 
     # === 台阶环检测 ===

@@ -674,6 +674,8 @@ def create_filleted_top_shell(name, width, depth, outer_height, top_thickness,
         outer['step_ring_height'] = outer_ring_height
         outer['step_ring_width'] = outer_ring_width
 
+    outer['wall_thickness'] = wall_thickness
+
     return outer
 
 

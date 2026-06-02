@@ -651,14 +651,18 @@ def create_filleted_top_shell(name, width, depth, outer_height, top_thickness,
     bpy.data.objects.remove(inner, do_unlink=True)
 
     if window:
-        win_len, win_wid = window
+        if len(window) == 2:
+            win_len, win_wid = window
+            win_off_x, win_off_y = 0.0, 0.0
+        else:
+            win_len, win_wid, win_off_x, win_off_y = window
         top_wall_center_z = location[2] + outer_half_h - top_thickness / 2.0
         top_center_y = location[1] - top_offset_y
         cutter_depth = top_thickness + 4.0
 
         bpy.ops.mesh.primitive_cube_add(
             size=1.0,
-            location=(location[0], top_center_y, top_wall_center_z),
+            location=(location[0] + win_off_x, top_center_y + win_off_y, top_wall_center_z),
         )
         cutter = bpy.context.active_object
         cutter.name = f"{name}_WindowCutter"
@@ -675,6 +679,16 @@ def create_filleted_top_shell(name, width, depth, outer_height, top_thickness,
         outer['step_ring_width'] = outer_ring_width
 
     outer['wall_thickness'] = wall_thickness
+
+    if window:
+        if len(window) == 2:
+            win_len, win_wid = window
+            win_off_x, win_off_y = 0.0, 0.0
+        else:
+            win_len, win_wid, win_off_x, win_off_y = window
+        dx = win_off_x
+        dy = win_off_y - top_offset_y
+        outer['window_data'] = f"{dx:.3f},{dy:.3f},{win_len:.3f},{win_wid:.3f}"
 
     return outer
 
@@ -788,7 +802,7 @@ def create_top_shell_scene():
         inner_fillet_radius=inner_fillet_radius,
         location=(60, 0, 0),
         segments=24,
-        window=(window_length, window_width),
+        window=(window_length, window_width, 20.0, 20.0),
         outer_ring_height=1.0,
         outer_ring_width=1.0,
     )

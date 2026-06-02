@@ -12,6 +12,7 @@
 #include <GProp_GProps.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
+#include <string>
 
 // Define version constant
 const char* MODULE_VERSION = "4.1.1";
@@ -1276,9 +1277,10 @@ PyObject* export_top_shell_filleted_step(PyObject* self, PyObject* args) {
     double pos_x = 0.0, pos_y = 0.0, pos_z = 0.0;
     const char* step_schema = "AP214IS";
     const char* unit = "MILLIMETER";
+    const char* window_data = "";
     int enable_logging = 1;
 
-    if (!PyArg_ParseTuple(args, "sdddddddddddddddddssi",
+    if (!PyArg_ParseTuple(args, "sdddddddddddddddddsssi",
                           &filename,
                           &width, &depth, &outer_height,
                           &top_thickness, &wall_thickness, &corner_radius,
@@ -1287,14 +1289,14 @@ PyObject* export_top_shell_filleted_step(PyObject* self, PyObject* args) {
                           &window_len, &window_wid,
                           &step_ring_height, &step_ring_width,
                           &pos_x, &pos_y, &pos_z,
-                          &step_schema, &unit, &enable_logging)) {
+                          &step_schema, &unit, &window_data, &enable_logging)) {
         PyErr_SetString(PyExc_TypeError,
             "export_top_shell_filleted_step() expected: filename, width, depth, outer_height, "
             "top_thickness, wall_thickness, corner_radius, "
             "outer_fillet_radius, inner_fillet_radius, "
             "top_recess, top_offset_y, "
             "window_len, window_wid, step_ring_height, step_ring_width, "
-            "pos_x, pos_y, pos_z, step_schema, unit, enable_logging");
+            "pos_x, pos_y, pos_z, step_schema, unit, window_data, enable_logging");
         return NULL;
     }
 
@@ -1321,27 +1323,47 @@ PyObject* export_top_shell_filleted_step(PyObject* self, PyObject* args) {
             Py_RETURN_FALSE;
         }
 
-        // Flip top shell 180 degrees around X axis so opening faces down (like a lid)
-        {
-            gp_Trsf trsf;
-            trsf.SetRotation(gp::OX(), M_PI);
-            BRepBuilderAPI_Transform transform(shape, trsf, Standard_False);
-            shape = transform.Shape();
-            std::cout << "[STEP Exporter] Flipped top shell 180° around X axis (opening now faces down)" << std::endl;
-        }
+        // No flip needed — create_top_shell_filleted_solid already produces
+        // the shell with opening facing down (like a lid), matching Blender
 
-        // Cut window after flip (window is now on the top face at z=-hh)
-        if (window_len > 0.0 && window_wid > 0.0) {
+        // Cut windows on top face (at z=+hh)
+        if (window_data && window_data[0] != '\0') {
             double hh = outer_height / 2.0;
-            double topZ = -hh + top_thickness / 2.0;  // Center of top wall (after flip, top face is at z=-hh)
+            double topZ = hh - top_thickness / 2.0;
+            std::string wd(window_data);
+            size_t pos = 0;
+            size_t next = 0;
+            while ((next = wd.find(';', pos)) != std::string::npos || pos < wd.length()) {
+                std::string entry = (next != std::string::npos) ? wd.substr(pos, next - pos) : wd.substr(pos);
+                pos = (next != std::string::npos) ? next + 1 : wd.length();
+                if (entry.empty()) continue;
+                double cx, cy, wlen, wwid;
+                if (sscanf_s(entry.c_str(), "%lf,%lf,%lf,%lf", &cx, &cy, &wlen, &wwid) == 4 && wlen > 0 && wwid > 0) {
+                    BRepPrimAPI_MakeBox windowMaker(
+                        gp_Pnt(cx - wlen/2.0, cy - wwid/2.0, topZ - top_thickness - 2.0),
+                        wlen, wwid, top_thickness + 6.0);
+                    TopoDS_Solid windowBox = windowMaker.Solid();
+                    BRepAlgoAPI_Cut wc(shape, windowBox);
+                    if (wc.IsDone()) {
+                        shape = wc.Shape();
+                        std::cout << "[STEP Exporter] Window cut: " << wlen << "x" << wwid
+                                  << " at (" << cx << "," << cy << ")" << std::endl;
+                    } else {
+                        std::cerr << "[STEP Exporter] Window cut failed at (" << cx << "," << cy << ")" << std::endl;
+                    }
+                }
+            }
+        } else if (window_len > 0.0 && window_wid > 0.0) {
+            double hh = outer_height / 2.0;
+            double topZ = hh - top_thickness / 2.0;
             BRepPrimAPI_MakeBox windowMaker(
-                gp_Pnt(-window_len/2.0, -window_wid/2.0, topZ - top_thickness - 2.0),
+                gp_Pnt(-window_len/2.0, -top_offset_y - window_wid/2.0, topZ - top_thickness - 2.0),
                 window_len, window_wid, top_thickness + 6.0);
             TopoDS_Solid windowBox = windowMaker.Solid();
             BRepAlgoAPI_Cut wc(shape, windowBox);
             if (wc.IsDone()) {
                 shape = wc.Shape();
-                std::cout << "[STEP Exporter] Window cut after flip: " << window_len << "x" << window_wid << std::endl;
+                std::cout << "[STEP Exporter] Window cut: " << window_len << "x" << window_wid << std::endl;
             } else {
                 std::cerr << "[STEP Exporter] Window cut failed" << std::endl;
             }

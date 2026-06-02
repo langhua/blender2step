@@ -573,7 +573,7 @@ def _analyze_top_shell_from_mesh(obj, context, scale):
         top_recess_x = (width - top_width) / 2.0
         top_recess_y = (depth - top_depth) / 2.0
         top_recess = max(top_recess_x, top_recess_y)
-        top_offset_y = cy - top_cy  # 正值表示顶部后移
+        top_offset_y = top_cy - cy  # 正值表示顶部向+Y偏移
         
         log_to_file(f"[STEP Exporter] Top recess={top_recess:.1f}, Y offset={top_offset_y:.1f}")
     else:
@@ -749,20 +749,18 @@ def _analyze_top_shell_from_mesh(obj, context, scale):
     inner_fillet_radius = max(0.1, min(outer_fillet_radius * 0.6, 3.0))  # 内圆角基于外圆角估算
     
     # === 顶部窗口检测 ===
-    # 检查top面是否有缺口（开窗特征）
     window_len = 0.0
     window_wid = 0.0
-    if top_coords and len(top_coords) > 30:
-        # 有开窗的顶面通常有更多顶点（窗口边界产生额外三角化）
-        # 分析顶面Z层是否有内孔
+    window_data = obj.get('window_data', '')
+    if window_data:
+        log_to_file(f"[STEP Exporter] Window data from custom property: {window_data}")
+    elif top_coords and len(top_coords) > 30:
         top_z_layer_coords = [(v.co.x, v.co.y) for v in top_verts]
         top_dists = [math.sqrt((x - cx)**2 + (y - cy)**2) for x, y in top_z_layer_coords]
         if top_dists:
             max_top_dist = max(top_dists)
-            # 检查是否有内圈顶点（到中心距离明显小于外层）
             inner_top = [(x, y) for (x, y), d in zip(top_z_layer_coords, top_dists) if d < max_top_dist * 0.7]
             if len(inner_top) >= 4:
-                # 有内圈，测量窗口尺寸
                 wx_vals = [x for x, y in inner_top]
                 wy_vals = [y for x, y in inner_top]
                 window_len = max(wx_vals) - min(wx_vals)
@@ -788,6 +786,7 @@ def _analyze_top_shell_from_mesh(obj, context, scale):
         'top_offset_y': top_offset_y,
         'window_len': window_len,
         'window_wid': window_wid,
+        'window_data': window_data,
         'step_ring_height': step_ring_height,
         'step_ring_width': step_ring_width,
         'pos_x': obj.location.x,
@@ -2070,7 +2069,8 @@ def _export_parametric_sync(filepath, bottom_shells, top_shells, cylinders, step
             tparams.get('window_len', 0.0), tparams.get('window_wid', 0.0),
             tparams.get('step_ring_height', 0.0), tparams.get('step_ring_width', 0.0),
             tparams.get('pos_x', 0.0), tparams.get('pos_y', 0.0), tparams.get('pos_z', 0.0),
-            step_schema, step_unit, 1 if enable_logging else 0)
+            step_schema, step_unit, tparams.get('window_data', ''),
+            1 if enable_logging else 0)
         if not success:
             all_success = False
             log_to_file(f"[STEP Exporter]   FAILED to export top shell {idx+1}")
@@ -2499,7 +2499,7 @@ def _parametric_export_staged():
                         tparams.get('window_len', 0.0), tparams.get('window_wid', 0.0),
                         tparams.get('step_ring_height', 0.0), tparams.get('step_ring_width', 0.0),
                         tparams.get('pos_x', 0.0), tparams.get('pos_y', 0.0), tparams.get('pos_z', 0.0),
-                        data['step_schema'], data['step_unit'],
+                        data['step_schema'], data['step_unit'], tparams.get('window_data', ''),
                         1 if data['enable_logging'] else 0)
                 
                 elif obj_type == 'cylinder':

@@ -3,10 +3,14 @@
 #include <STEPControl_Writer.hxx>
 #include <BRepBuilderAPI_MakeVertex.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
+#include <BRepPrimAPI_MakeCylinder.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
 #include <gp_Pnt.hxx>
+#include <gp_Ax2.hxx>
 #include <gp_Trsf.hxx>
 #include <BRepBuilderAPI_Transform.hxx>
+#include <BRepBuilderAPI_MakeSolid.hxx>
+#include <TopExp_Explorer.hxx>
 #include <BRepCheck_Analyzer.hxx>
 #include <BRepGProp.hxx>
 #include <GProp_GProps.hxx>
@@ -1326,7 +1330,7 @@ PyObject* export_top_shell_filleted_step(PyObject* self, PyObject* args) {
         // No flip needed — create_top_shell_filleted_solid already produces
         // the shell with opening facing down (like a lid), matching Blender
 
-        // Cut windows on top face (at z=+hh)
+        // Cut windows / holes using window_data
         if (window_data && window_data[0] != '\0') {
             double hh = outer_height / 2.0;
             double topZ = hh - top_thickness / 2.0;
@@ -1338,7 +1342,38 @@ PyObject* export_top_shell_filleted_step(PyObject* self, PyObject* args) {
                 pos = (next != std::string::npos) ? next + 1 : wd.length();
                 if (entry.empty()) continue;
                 double cx, cy, wlen, wwid;
-                if (sscanf_s(entry.c_str(), "%lf,%lf,%lf,%lf", &cx, &cy, &wlen, &wwid) == 4 && wlen > 0 && wwid > 0) {
+                double cz, hole_type;
+                // Try 5-value format: cx,cy,cz,radius,type (type=1 for circular hole on side wall)
+                if (sscanf_s(entry.c_str(), "%lf,%lf,%lf,%lf,%lf", &cx, &cy, &cz, &wlen, &hole_type) == 5 && wlen > 0 && hole_type == 1.0) {
+                    // Circular hole on side wall (Y direction): cylinder at (cx, cy, cz)
+                    double cyl_height = wall_thickness + 10.0;
+                    gp_Ax2 cylAxes(gp_Pnt(cx, cy, cz), gp_Dir(0, 1, 0));
+                    BRepPrimAPI_MakeCylinder cylMaker(cylAxes, wlen, cyl_height);
+                    TopoDS_Shape holeShape = cylMaker.Shape();
+                    // Center the cylinder on the hole position along Y
+                    gp_Trsf holeTrsf;
+                    holeTrsf.SetTranslation(gp_Vec(0, -cyl_height / 2.0, 0));
+                    holeShape.Move(TopLoc_Location(holeTrsf));
+                    // Convert to solid
+                    TopoDS_Solid holeSolid;
+                    BRepBuilderAPI_MakeSolid solidMaker;
+                    for (TopExp_Explorer exp(holeShape, TopAbs_SHELL); exp.More(); exp.Next()) {
+                        solidMaker.Add(TopoDS::Shell(exp.Current()));
+                    }
+                    holeSolid = solidMaker.Solid();
+                    if (!holeSolid.IsNull()) {
+                        BRepAlgoAPI_Cut wc(shape, holeSolid);
+                        if (wc.IsDone()) {
+                            shape = wc.Shape();
+                            std::cout << "[STEP Exporter] Circular hole: r=" << wlen
+                                      << " at (" << cx << "," << cy << "," << cz << ")" << std::endl;
+                        } else {
+                            std::cerr << "[STEP Exporter] Circular hole cut failed at (" << cx << "," << cy << "," << cz << ")" << std::endl;
+                        }
+                    }
+                }
+                // Original 4-value format: cx,cy,wlen,wwid for rectangular window on top face
+                else if (sscanf_s(entry.c_str(), "%lf,%lf,%lf,%lf", &cx, &cy, &wlen, &wwid) == 4 && wlen > 0 && wwid > 0) {
                     BRepPrimAPI_MakeBox windowMaker(
                         gp_Pnt(cx - wlen/2.0, cy - wwid/2.0, topZ - top_thickness - 2.0),
                         wlen, wwid, top_thickness + 6.0);

@@ -819,6 +819,74 @@ def create_top_shell_scene():
     add_material(shell_with_holes, name="TopShellWithHolesMaterial")
     print(f"  [OK] Top shell (with window) created")
 
+    # 后壁通孔（4°圆锥，外侧细内侧粗）
+    hole_radius_outer = 2.0 * 2.0 / 3.0  # ≈1.333 mm，外侧半径
+    taper_angle = 4.0  # 锥度角度
+    hole_y = depth / 2.0  # 孔在后壁位置
+
+    # 计算内侧半径（外侧 + 壁厚 * tan(锥度角)）
+    hole_radius_inner = hole_radius_outer + wall_thickness * math.tan(math.radians(taper_angle))
+
+    # 孔位置：世界坐标
+    shell_loc = shell_with_holes.location
+    hole_cx = shell_loc.x + 26.0  # 世界 X
+    hole_cz = shell_loc.z - 2.0   # 世界 Z（壳中心Z=0, 减2得-2）
+
+    print(f"  [DEBUG] Tapered hole: outer_r={hole_radius_outer:.3f}, inner_r={hole_radius_inner:.3f}, taper={taper_angle}°")
+
+    # 用圆锥体切通孔（外侧细，内侧粗）
+    cyl_depth = wall_thickness + 10.0  # 增加长度确保完全穿透
+    bpy.ops.mesh.primitive_cone_add(
+        vertices=128,
+        radius1=hole_radius_inner,  # 大端（内侧）
+        radius2=hole_radius_outer,  # 小端（外侧）
+        depth=cyl_depth,
+        location=(hole_cx, hole_y - wall_thickness / 2.0, hole_cz),
+    )
+    cone_cutter = bpy.context.active_object
+    cone_cutter.name = "Hole_ConeCutter"
+    cone_cutter.rotation_euler = (math.pi / 2, 0, 0)
+
+    pre_faces = len(shell_with_holes.data.polygons)
+    apply_boolean(shell_with_holes, cone_cutter, operation='DIFFERENCE')
+    bpy.data.objects.remove(cone_cutter, do_unlink=True)
+    post_faces = len(shell_with_holes.data.polygons)
+    print(f"  [OK] Tapered hole cut: {hole_radius_outer*2:.1f}mm -> {hole_radius_inner*2:.1f}mm, faces {pre_faces} -> {post_faces}")
+
+    # 强制更新依赖图，确保导出器能获取到最新的网格数据
+    bpy.context.view_layer.update()
+
+    # 清理孔边缘的多余几何
+    bpy.context.view_layer.objects.active = shell_with_holes
+    bpy.ops.object.mode_set(mode='EDIT')
+    bpy.ops.mesh.select_all(action='SELECT')
+    bpy.ops.mesh.remove_doubles(threshold=0.001)
+    bpy.ops.mesh.dissolve_limited(angle_limit=math.radians(5.0))
+    bpy.ops.mesh.normals_make_consistent(inside=False)
+    bpy.ops.object.mode_set(mode='OBJECT')
+
+    print(f"  [DEBUG] Hole world: ({hole_cx:.1f}, {hole_y:.1f}, {hole_cz:.1f})")
+
+    # 标记对象包含通孔，让 STEP 导出器使用参数化导出 + 圆孔切割
+    # window_data 格式: cx,cy,cz,radius,1 (type=1 表示圆孔)
+    hole_relative_cx = hole_cx - shell_loc.x  # 26.0
+    hole_relative_cy = depth / 2.0  # 后壁
+    hole_relative_cz = hole_cz - shell_loc.z  # -2.0
+    hole_data = f"{hole_relative_cx:.3f},{hole_relative_cy:.3f},{hole_relative_cz:.3f},{hole_radius_outer:.3f},1"
+    existing_wd = shell_with_holes.get("window_data", "")
+    if existing_wd:
+        shell_with_holes["window_data"] = existing_wd + ";" + hole_data
+    else:
+        shell_with_holes["window_data"] = hole_data
+
+    # 清理
+    bpy.context.view_layer.objects.active = shell_with_holes
+    bpy.ops.object.mode_set(mode='EDIT')
+    bpy.ops.mesh.select_all(action='SELECT')
+    bpy.ops.mesh.delete_loose()
+    bpy.ops.mesh.normals_make_consistent(inside=False)
+    bpy.ops.object.mode_set(mode='OBJECT')
+
     for area in bpy.context.screen.areas:
         if area.type == 'VIEW_3D':
             for space in area.spaces:

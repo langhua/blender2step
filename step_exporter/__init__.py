@@ -156,7 +156,8 @@ def _get_mesh_data_enhanced(obj, context, scale, apply_modifiers=True):
     depsgraph = context.evaluated_depsgraph_get() if apply_modifiers else None
     if depsgraph:
         eval_obj = obj.evaluated_get(depsgraph)
-        eval_mesh = eval_obj.data
+        # 直接使用 obj.data，因为修改器已经被应用
+        eval_mesh = obj.data
     else:
         eval_obj = obj
         eval_mesh = mesh
@@ -3190,6 +3191,12 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
             if obj.type == 'MESH':
                 log_to_file(f"[STEP Exporter] Checking: {obj.name}")
                 
+                # 如果对象标记了需要使用网格导出（如包含通孔），则跳过参数化分析
+                if obj.get("step_use_mesh", False):
+                    log_to_file(f"[STEP Exporter]   -> marked for mesh export (has holes/cuts)")
+                    regular_export_objects.append(obj)
+                    continue
+                
                 # 先检测底壳
                 shell_params = _analyze_bottom_shell_from_mesh(obj, context, scale)
                 if shell_params:
@@ -3373,7 +3380,8 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
         depsgraph = context.evaluated_depsgraph_get() if apply_modifiers else None
         if depsgraph:
             eval_obj = obj.evaluated_get(depsgraph)
-            eval_mesh = eval_obj.data
+            # 直接使用 obj.data，因为修改器已经被应用
+            eval_mesh = obj.data
         else:
             eval_obj = obj
             eval_mesh = mesh

@@ -755,7 +755,28 @@ def _analyze_top_shell_from_mesh(obj, context, scale):
     window_data = obj.get('window_data', '')
     if window_data:
         log_to_file(f"[STEP Exporter] Window data from custom property: {window_data}")
-    elif top_coords and len(top_coords) > 30:
+    # === 读取通孔圆倒角半径（可在Blender中修改） ===
+    hole_fillet_radius = obj.get('hole_fillet_radius', 0.0)
+    if hole_fillet_radius > 0.0 and window_data:
+        # 将 fillet_radius 注入到 window_data 的圆孔条目中
+        entries = window_data.split(';')
+        modified = False
+        for i, entry in enumerate(entries):
+            parts = entry.split(',')
+            # 圆孔格式: cx,cy,cz,radius,1 或 cx,cy,cz,radius,1,fillet_radius
+            if len(parts) >= 5 and parts[4].strip() == '1':
+                if len(parts) == 5:
+                    # 没有 fillet_radius，追加
+                    entries[i] = entry + f",{hole_fillet_radius:.3f}"
+                    modified = True
+                elif len(parts) == 6:
+                    # 已有 fillet_radius，更新
+                    entries[i] = ','.join(parts[:5]) + f",{hole_fillet_radius:.3f}"
+                    modified = True
+        if modified:
+            window_data = ';'.join(entries)
+            log_to_file(f"[STEP Exporter]   Updated hole fillet radius: {hole_fillet_radius:.3f}")
+    if not window_data and top_coords and len(top_coords) > 30:
         top_z_layer_coords = [(v.co.x, v.co.y) for v in top_verts]
         top_dists = [math.sqrt((x - cx)**2 + (y - cy)**2) for x, y in top_z_layer_coords]
         if top_dists:

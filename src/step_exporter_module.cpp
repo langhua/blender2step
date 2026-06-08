@@ -4,7 +4,16 @@
 #include <BRepBuilderAPI_MakeVertex.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
 #include <BRepPrimAPI_MakeCylinder.hxx>
+#include <BRepPrimAPI_MakeTorus.hxx>
+#include <BRepPrimAPI_MakeRevol.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
+#include <BRepAlgoAPI_Fuse.hxx>
+#include <BRepFilletAPI_MakeFillet.hxx>
+#include <BRepBuilderAPI_MakeEdge.hxx>
+#include <BRepBuilderAPI_MakeWire.hxx>
+#include <BRepBuilderAPI_MakeFace.hxx>
+#include <Geom_Circle.hxx>
+#include <Geom_TrimmedCurve.hxx>
 #include <gp_Pnt.hxx>
 #include <gp_Ax2.hxx>
 #include <gp_Trsf.hxx>
@@ -1313,6 +1322,23 @@ PyObject* export_top_shell_filleted_step(PyObject* self, PyObject* args) {
               << " recess=" << top_recess << " yOff=" << top_offset_y
               << " pos=(" << pos_x << "," << pos_y << "," << pos_z << ")" << std::endl;
 
+    // Redirect stdout to log file at the start so all C++ messages are captured
+    std::string logPath;
+    const char* log_filename = nullptr;
+    FILE* log_file = nullptr;
+    int saved_stdout_fd = -1;
+    if (enable_logging) {
+        logPath = std::string(filename) + ".log";
+        log_filename = logPath.c_str();
+        log_file = _fsopen(log_filename, "a", _SH_DENYNO);
+        if (log_file) {
+            saved_stdout_fd = _dup(_fileno(stdout));
+            _dup2(_fileno(log_file), _fileno(stdout));
+            setvbuf(stdout, nullptr, _IONBF, 0);
+            std::cout << "[STEP Exporter] Redirecting C++ stdout to log file: " << log_filename << std::endl;
+        }
+    }
+
     try {
         TopoDS_Shape shape = create_top_shell_filleted_solid(
             width, depth, outer_height,
@@ -1324,6 +1350,7 @@ PyObject* export_top_shell_filleted_step(PyObject* self, PyObject* args) {
 
         if (shape.IsNull()) {
             std::cerr << "[STEP Exporter] Failed to create top shell shape" << std::endl;
+            if (saved_stdout_fd >= 0) { _dup2(saved_stdout_fd, _fileno(stdout)); if (log_file) fclose(log_file); }
             Py_RETURN_FALSE;
         }
 
@@ -1343,32 +1370,61 @@ PyObject* export_top_shell_filleted_step(PyObject* self, PyObject* args) {
                 if (entry.empty()) continue;
                 double cx, cy, wlen, wwid;
                 double cz, hole_type;
-                // Try 5-value format: cx,cy,cz,radius,type (type=1 for circular hole on side wall)
-                if (sscanf_s(entry.c_str(), "%lf,%lf,%lf,%lf,%lf", &cx, &cy, &cz, &wlen, &hole_type) == 5 && wlen > 0 && hole_type == 1.0) {
+                // Try 5 or 6-value format: cx,cy,cz,radius,type[,fillet_radius] (type=1 for circular hole on side wall)
+                double parsed_count = 0;
+                double fillet_radius = 0.0;
+                parsed_count = sscanf_s(entry.c_str(), "%lf,%lf,%lf,%lf,%lf,%lf", &cx, &cy, &cz, &wlen, &hole_type, &fillet_radius);
+                if ((parsed_count == 5 || parsed_count == 6) && wlen > 0 && hole_type == 1.0) {
                     // Circular hole on side wall (Y direction): cylinder at (cx, cy, cz)
                     double cyl_height = wall_thickness + 10.0;
-                    gp_Ax2 cylAxes(gp_Pnt(cx, cy, cz), gp_Dir(0, 1, 0));
+                    // Create cylinder centered on the hole position
+                    gp_Ax2 cylAxes(gp_Pnt(cx, cy - cyl_height / 2.0, cz), gp_Dir(0, 1, 0));
                     BRepPrimAPI_MakeCylinder cylMaker(cylAxes, wlen, cyl_height);
-                    TopoDS_Shape holeShape = cylMaker.Shape();
-                    // Center the cylinder on the hole position along Y
-                    gp_Trsf holeTrsf;
-                    holeTrsf.SetTranslation(gp_Vec(0, -cyl_height / 2.0, 0));
-                    holeShape.Move(TopLoc_Location(holeTrsf));
-                    // Convert to solid
-                    TopoDS_Solid holeSolid;
-                    BRepBuilderAPI_MakeSolid solidMaker;
-                    for (TopExp_Explorer exp(holeShape, TopAbs_SHELL); exp.More(); exp.Next()) {
-                        solidMaker.Add(TopoDS::Shell(exp.Current()));
-                    }
-                    holeSolid = solidMaker.Solid();
+                    TopoDS_Solid holeSolid = cylMaker.Solid();
+                    
                     if (!holeSolid.IsNull()) {
                         BRepAlgoAPI_Cut wc(shape, holeSolid);
                         if (wc.IsDone()) {
                             shape = wc.Shape();
                             std::cout << "[STEP Exporter] Circular hole: r=" << wlen
                                       << " at (" << cx << "," << cy << "," << cz << ")" << std::endl;
+                            
+                            // Try to apply fillet to hole edges
+                            double fr = (fillet_radius > 0.0 && fillet_radius < wlen * 0.8) ? fillet_radius : 0.3;
+                            try {
+                                BRepFilletAPI_MakeFillet filletMaker(shape);
+                                int found = 0;
+                                for (TopExp_Explorer exp(shape, TopAbs_EDGE); exp.More(); exp.Next()) {
+                                    TopoDS_Edge edge = TopoDS::Edge(exp.Current());
+                                    // Get edge midpoint
+                                    double f, l;
+                                    Handle(Geom_Curve) curve = BRep_Tool::Curve(edge, f, l);
+                                    if (!curve.IsNull()) {
+                                        double mid = (f + l) * 0.5;
+                                        gp_Pnt mp;
+                                        curve->D0(mid, mp);
+                                        // Check if midpoint is near the hole cylinder surface
+                                        double dx = mp.X() - cx;
+                                        double dz = mp.Z() - cz;
+                                        double dist_from_axis = std::sqrt(dx * dx + dz * dz);
+                                        if (std::abs(dist_from_axis - wlen) < 0.5) {
+                                            filletMaker.Add(fr, edge);
+                                            found++;
+                                        }
+                                    }
+                                }
+                                if (found > 0) {
+                                    filletMaker.Build();
+                                    if (filletMaker.IsDone()) {
+                                        shape = filletMaker.Shape();
+                                        std::cout << "[STEP Exporter]   Fillet applied: r=" << fr << " edges=" << found << std::endl;
+                                    }
+                                }
+                            } catch (...) {
+                                // Fillet failed, hole remains without fillet
+                            }
                         } else {
-                            std::cerr << "[STEP Exporter] Circular hole cut failed at (" << cx << "," << cy << "," << cz << ")" << std::endl;
+                            std::cout << "[STEP Exporter] Circular hole cut failed at (" << cx << "," << cy << "," << cz << ")" << std::endl;
                         }
                     }
                 }
@@ -1427,22 +1483,17 @@ PyObject* export_top_shell_filleted_step(PyObject* self, PyObject* args) {
             std::cout << "[STEP Exporter] Shape topology is valid" << std::endl;
         }
 
-        std::string logPath;
-        const char* log_filename = nullptr;
-        if (enable_logging) {
-            logPath = std::string(filename) + ".log";
-            log_filename = logPath.c_str();
-        }
-
         STEPControl_Writer writer;
-        StdoutRedirectState redirectState = setup_step_writer(writer, filename, step_schema, unit, 1, enable_logging, log_filename);
+        // Pass enable_logging=0 since we already redirected stdout above
+        StdoutRedirectState redirectState = setup_step_writer(writer, filename, step_schema, unit, 1, 0, nullptr);
 
         IFSelect_ReturnStatus transferStatus = writer.Transfer(shape, STEPControl_AsIs);
         if (transferStatus != IFSelect_RetDone) {
             std::cerr << "[STEP Exporter] Failed to transfer top shell to STEP writer" << std::endl;
-            if (redirectState.stdout_redirected) {
-                _dup2(redirectState.saved_stdout_fd, _fileno(stdout));
-                if (redirectState.log_file) fclose(redirectState.log_file);
+            // Restore stdout
+            if (saved_stdout_fd >= 0) {
+                _dup2(saved_stdout_fd, _fileno(stdout));
+                if (log_file) fclose(log_file);
             }
             Py_RETURN_FALSE;
         }
@@ -1450,9 +1501,10 @@ PyObject* export_top_shell_filleted_step(PyObject* self, PyObject* args) {
         std::cout << "[STEP Exporter] Writing STEP file..." << std::endl;
         IFSelect_ReturnStatus writeStatus = writer.Write(filename);
 
-        if (redirectState.stdout_redirected) {
-            _dup2(redirectState.saved_stdout_fd, _fileno(stdout));
-            if (redirectState.log_file) fclose(redirectState.log_file);
+        // Restore stdout
+        if (saved_stdout_fd >= 0) {
+            _dup2(saved_stdout_fd, _fileno(stdout));
+            if (log_file) fclose(log_file);
         }
 
         if (writeStatus == IFSelect_RetDone) {
@@ -1465,12 +1517,15 @@ PyObject* export_top_shell_filleted_step(PyObject* self, PyObject* args) {
         }
     } catch (const Standard_Failure& e) {
         std::cerr << "[STEP Exporter] OpenCASCADE error: " << e.GetMessageString() << std::endl;
+        if (saved_stdout_fd >= 0) { _dup2(saved_stdout_fd, _fileno(stdout)); if (log_file) fclose(log_file); }
         Py_RETURN_FALSE;
     } catch (const std::exception& e) {
         std::cerr << "[STEP Exporter] Standard error: " << e.what() << std::endl;
+        if (saved_stdout_fd >= 0) { _dup2(saved_stdout_fd, _fileno(stdout)); if (log_file) fclose(log_file); }
         Py_RETURN_FALSE;
     } catch (...) {
         std::cerr << "[STEP Exporter] Unknown error" << std::endl;
+        if (saved_stdout_fd >= 0) { _dup2(saved_stdout_fd, _fileno(stdout)); if (log_file) fclose(log_file); }
         Py_RETURN_FALSE;
     }
 }

@@ -868,11 +868,13 @@ def create_top_shell_scene():
     print(f"  [DEBUG] Hole world: ({hole_cx:.1f}, {hole_y:.1f}, {hole_cz:.1f})")
 
     # 标记对象包含通孔，让 STEP 导出器使用参数化导出 + 圆孔切割
-    # window_data 格式: cx,cy,cz,radius,1 (type=1 表示圆孔)
+    # window_data 格式: cx,cy,cz,radius,1[,fillet_radius] (type=1 表示圆孔)
     hole_relative_cx = hole_cx - shell_loc.x  # 26.0
     hole_relative_cy = depth / 2.0  # 后壁
     hole_relative_cz = hole_cz - shell_loc.z  # -2.0
-    hole_data = f"{hole_relative_cx:.3f},{hole_relative_cy:.3f},{hole_relative_cz:.3f},{hole_radius_outer:.3f},1"
+    hole_fillet_radius = 0.3  # 通孔外侧圆倒角半径（0 表示不倒角）
+    hole_data = f"{hole_relative_cx:.3f},{hole_relative_cy:.3f},{hole_relative_cz:.3f},{hole_radius_outer:.3f},1,{hole_fillet_radius:.3f}"
+    shell_with_holes["hole_fillet_radius"] = hole_fillet_radius  # 单独属性，方便在Blender中修改
     existing_wd = shell_with_holes.get("window_data", "")
     if existing_wd:
         shell_with_holes["window_data"] = existing_wd + ";" + hole_data

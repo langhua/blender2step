@@ -46,7 +46,7 @@ def add_material(obj, name=None):
         obj.data.materials.append(mat)
 
 
-def apply_boolean(obj, tool_obj, operation='DIFFERENCE', solver='EXACT'):
+def apply_boolean(obj, tool_obj, operation='DIFFERENCE', solver='FAST'):
     mod = obj.modifiers.new(name="Boolean", type='BOOLEAN')
     mod.operation = operation
     mod.object = tool_obj
@@ -856,14 +856,115 @@ def create_top_shell_scene():
     # 强制更新依赖图，确保导出器能获取到最新的网格数据
     bpy.context.view_layer.update()
 
-    # 清理孔边缘的多余几何
+    # 清理孔边缘的多余几何（仅融合重复顶点）
     bpy.context.view_layer.objects.active = shell_with_holes
     bpy.ops.object.mode_set(mode='EDIT')
     bpy.ops.mesh.select_all(action='SELECT')
-    bpy.ops.mesh.remove_doubles(threshold=0.001)
-    bpy.ops.mesh.dissolve_limited(angle_limit=math.radians(5.0))
-    bpy.ops.mesh.normals_make_consistent(inside=False)
+    bpy.ops.mesh.remove_doubles(threshold=0.05)
     bpy.ops.object.mode_set(mode='OBJECT')
+
+    hole_fillet_radius = 0.3  # 通孔外侧圆倒角半径（0 表示不倒角）
+
+    # 给通孔外侧边缘加圆倒角
+    if hole_fillet_radius > 0:
+        local_hole_cx = hole_cx - shell_loc.x
+        local_hole_cy = hole_y - shell_loc.y
+        local_hole_cz = hole_cz - shell_loc.z
+        
+        bpy.context.view_layer.objects.active = shell_with_holes
+        bpy.ops.object.mode_set(mode='EDIT')
+        bpy.ops.mesh.select_all(action='DESELECT')
+        bm = bmesh.from_edit_mesh(shell_with_holes.data)
+        bm.edges.ensure_lookup_table()
+        bm.faces.ensure_lookup_table()
+        
+        # 孔边缘：两顶点都在孔半径上 + 一边锥面一边壁面 + 边方向切向
+        rim_edges = []
+        pass_pos = 0
+        pass_normal = 0
+        pass_angle = 0
+        pass_tangential = 0
+        for e in bm.edges:
+            if len(e.link_faces) != 2:
+                continue
+            v0 = e.verts[0].co
+            v1 = e.verts[1].co
+            # 两顶点XZ距离都必须接近孔半径
+            dx0 = v0.x - local_hole_cx; dz0 = v0.z - local_hole_cz
+            dx1 = v1.x - local_hole_cx; dz1 = v1.z - local_hole_cz
+            d0 = math.sqrt(dx0*dx0 + dz0*dz0)
+            d1 = math.sqrt(dx1*dx1 + dz1*dz1)
+            near_outer = abs(d0 - hole_radius_outer) < 0.5 and abs(d1 - hole_radius_outer) < 0.5
+            near_inner = abs(d0 - hole_radius_inner) < 0.5 and abs(d1 - hole_radius_inner) < 0.5
+            if not (near_outer or near_inner):
+                continue
+            pass_pos += 1
+            # 必须一边是壁面(|ny|>0.5)一边是锥面(|ny|<0.5)
+            n0y = abs(e.link_faces[0].normal.y)
+            n1y = abs(e.link_faces[1].normal.y)
+            if not ((n0y > 0.5 and n1y < 0.5) or (n1y > 0.5 and n0y < 0.5)):
+                continue
+            pass_normal += 1
+            # 二面角>30°排除锥面内部杂边
+            n0 = e.link_faces[0].normal
+            n1 = e.link_faces[1].normal
+            cos_angle = abs(n0.dot(n1))
+            angle = math.degrees(math.acos(min(cos_angle, 1.0)))
+            if angle < 30.0:
+                continue
+            pass_angle += 1
+            # 边方向必须是切向（环绕孔），排除径向/斜向杂边
+            mid_x = (dx0 + dx1) * 0.5
+            mid_z = (dz0 + dz1) * 0.5
+            mid_dist = math.sqrt(mid_x*mid_x + mid_z*mid_z)
+            if mid_dist > 0.001:
+                # 切向方向 = 绕孔中心旋转, 即 (-mid_z, 0, mid_x).normalized()
+                tang_dir = (-mid_z / mid_dist, 0, mid_x / mid_dist)
+                edge_dir = (dx1 - dx0, v1.y - v0.y, dz1 - dz0)
+                elen = math.sqrt(edge_dir[0]**2 + edge_dir[1]**2 + edge_dir[2]**2)
+                if elen > 0.001:
+                    edge_ux = edge_dir[0] / elen
+                    edge_uz = edge_dir[2] / elen
+                    tangency = abs(edge_ux * tang_dir[0] + edge_uz * tang_dir[2])
+                    if tangency < 0.5:  # 边与切向夹角 > 60° 则排除
+                        continue
+            pass_tangential += 1
+            e.select = True
+            rim_edges.append(e)
+        print(f"  [DEBUG] pos={pass_pos} normal={pass_normal} angle={pass_angle} tang={pass_tangential} final={len(rim_edges)}")
+        
+        print(f"  [DEBUG] rim_edges={len(rim_edges)}")
+        
+        # 调试：统计 rim_edges 的角分布
+        if rim_edges:
+            angles = []
+            for e in rim_edges:
+                mid = (e.verts[0].co + e.verts[1].co) * 0.5
+                dx = mid.x - local_hole_cx
+                dz = mid.z - local_hole_cz
+                angle = math.degrees(math.atan2(dz, dx))
+                angles.append(angle)
+            angles.sort()
+            # 计算间隙（相邻边角度差）
+            gaps = [(angles[i+1] - angles[i]) % 360 for i in range(len(angles)-1)]
+            max_gap = max(gaps) if gaps else 0
+            print(f"  [DEBUG] rim edge angle range: {min(angles):.0f}° to {max(angles):.0f}°, max_gap={max_gap:.0f}°")
+        
+        if rim_edges:
+            bmesh.update_edit_mesh(shell_with_holes.data)
+            bpy.ops.mesh.bevel(
+                offset=hole_fillet_radius,
+                offset_type='OFFSET',
+                segments=2,
+                profile=0.5,
+                affect='EDGES',
+                clamp_overlap=False,
+            )
+            print(f"  [OK] Hole bevel applied: r={hole_fillet_radius:.3f}")
+        else:
+            print(f"  [WARN] No rim edges found for hole bevel")
+        
+        bpy.ops.object.mode_set(mode='OBJECT')
 
     print(f"  [DEBUG] Hole world: ({hole_cx:.1f}, {hole_y:.1f}, {hole_cz:.1f})")
 
@@ -872,7 +973,6 @@ def create_top_shell_scene():
     hole_relative_cx = hole_cx - shell_loc.x  # 26.0
     hole_relative_cy = depth / 2.0  # 后壁
     hole_relative_cz = hole_cz - shell_loc.z  # -2.0
-    hole_fillet_radius = 0.3  # 通孔外侧圆倒角半径（0 表示不倒角）
     hole_data = f"{hole_relative_cx:.3f},{hole_relative_cy:.3f},{hole_relative_cz:.3f},{hole_radius_outer:.3f},1,{hole_fillet_radius:.3f}"
     shell_with_holes["hole_fillet_radius"] = hole_fillet_radius  # 单独属性，方便在Blender中修改
     existing_wd = shell_with_holes.get("window_data", "")

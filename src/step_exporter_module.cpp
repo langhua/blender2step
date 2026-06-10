@@ -6,6 +6,7 @@
 #include <BRepPrimAPI_MakeCylinder.hxx>
 #include <BRepPrimAPI_MakeTorus.hxx>
 #include <BRepPrimAPI_MakeRevol.hxx>
+#include <BRepPrimAPI_MakePrism.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
 #include <BRepAlgoAPI_Fuse.hxx>
 #include <BRepFilletAPI_MakeFillet.hxx>
@@ -13,6 +14,7 @@
 #include <BRepBuilderAPI_MakeWire.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <Geom_Circle.hxx>
+#include <Geom_Line.hxx>
 #include <Geom_TrimmedCurve.hxx>
 #include <gp_Pnt.hxx>
 #include <gp_Ax2.hxx>
@@ -25,6 +27,7 @@
 #include <GProp_GProps.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
+#include <TopLoc_Location.hxx>
 #include <string>
 
 // Define version constant
@@ -1386,8 +1389,10 @@ PyObject* export_top_shell_filleted_step(PyObject* self, PyObject* args) {
                         BRepAlgoAPI_Cut wc(shape, holeSolid);
                         if (wc.IsDone()) {
                             shape = wc.Shape();
+                            int fc1 = 0;
+                            for (TopExp_Explorer e(shape, TopAbs_FACE); e.More(); e.Next()) fc1++;
                             std::cout << "[STEP Exporter] Circular hole: r=" << wlen
-                                      << " at (" << cx << "," << cy << "," << cz << ")" << std::endl;
+                                      << " at (" << cx << "," << cy << "," << cz << ") [faces={" << fc1 << "}]" << std::endl;
                             
                             // Try to apply fillet to hole edges
                             double fr = (fillet_radius > 0.0 && fillet_radius < wlen * 0.8) ? fillet_radius : 0.3;
@@ -1417,7 +1422,9 @@ PyObject* export_top_shell_filleted_step(PyObject* self, PyObject* args) {
                                     filletMaker.Build();
                                     if (filletMaker.IsDone()) {
                                         shape = filletMaker.Shape();
-                                        std::cout << "[STEP Exporter]   Fillet applied: r=" << fr << " edges=" << found << std::endl;
+                                        int fc2 = 0;
+                                        for (TopExp_Explorer e(shape, TopAbs_FACE); e.More(); e.Next()) fc2++;
+                                        std::cout << "[STEP Exporter]   Fillet applied: r=" << fr << " edges=" << found << " [faces={" << fc2 << "}]" << std::endl;
                                     }
                                 }
                             } catch (...) {
@@ -1428,19 +1435,90 @@ PyObject* export_top_shell_filleted_step(PyObject* self, PyObject* args) {
                         }
                     }
                 }
-                // Original 4-value format: cx,cy,wlen,wwid for rectangular window on top face
-                else if (sscanf_s(entry.c_str(), "%lf,%lf,%lf,%lf", &cx, &cy, &wlen, &wwid) == 4 && wlen > 0 && wwid > 0) {
-                    BRepPrimAPI_MakeBox windowMaker(
-                        gp_Pnt(cx - wlen/2.0, cy - wwid/2.0, topZ - top_thickness - 2.0),
-                        wlen, wwid, top_thickness + 6.0);
-                    TopoDS_Solid windowBox = windowMaker.Solid();
-                    BRepAlgoAPI_Cut wc(shape, windowBox);
-                    if (wc.IsDone()) {
-                        shape = wc.Shape();
-                        std::cout << "[STEP Exporter] Window cut: " << wlen << "x" << wwid
-                                  << " at (" << cx << "," << cy << ")" << std::endl;
-                    } else {
-                        std::cerr << "[STEP Exporter] Window cut failed at (" << cx << "," << cy << ")" << std::endl;
+                // Type 2 (rounded rectangle hole on side wall) or 4-value rectangular window
+                else {
+                    // Try type 2 format: cx,cy,cz,width,height,2,corner_radius
+                    double rw = 0.0, rh = 0.0, rt = 0.0, rcr = 0.0;
+                    int rp = sscanf_s(entry.c_str(), "%lf,%lf,%lf,%lf,%lf,%lf,%lf", &cx, &cy, &cz, &rw, &rh, &rt, &rcr);
+                    if (rp >= 6 && rw > 0 && rh > 0 && rt == 2.0) {
+                        if (rcr <= 0.0) rcr = 0.5;
+                        if (rcr > rw * 0.49) rcr = rw * 0.49;
+                        if (rcr > rh * 0.49) rcr = rh * 0.49;
+
+                        double cut_depth = wall_thickness + 20.0;
+
+                        // Build box at target position, then fillet Y-direction corner edges
+                        double boxX = cx - rw / 2.0;
+                        double boxY = cy - cut_depth / 2.0;
+                        double boxZ = cz - rh / 2.0;
+
+                        BRepPrimAPI_MakeBox boxMaker(gp_Pnt(boxX, boxY, boxZ), rw, cut_depth, rh);
+                        TopoDS_Shape holeShape = boxMaker.Shape();
+
+                        // Apply fillet to Y-parallel edges (the 4 vertical corners)
+                        BRepFilletAPI_MakeFillet filletMaker(TopoDS::Solid(holeShape));
+                        int edgeCount = 0;
+                        for (TopExp_Explorer exp(holeShape, TopAbs_EDGE); exp.More(); exp.Next()) {
+                            TopoDS_Edge edge = TopoDS::Edge(exp.Current());
+                            double f, l;
+                            Handle(Geom_Curve) curve = BRep_Tool::Curve(edge, f, l);
+                            if (!curve.IsNull() && curve->DynamicType() == STANDARD_TYPE(Geom_Line)) {
+                                gp_Pnt p1 = curve->Value(f);
+                                gp_Pnt p2 = curve->Value(l);
+                                gp_Vec dir(p1, p2);
+                                // Select edges parallel to Y axis only
+                                if (fabs(dir.X()) < 1e-6 && fabs(dir.Z()) < 1e-6) {
+                                    filletMaker.Add(rcr, edge);
+                                    edgeCount++;
+                                }
+                            }
+                        }
+                        std::cout << "[STEP Exporter] Rounded rect: adding fillet r=" << rcr << " to " << edgeCount << " Y-edges" << std::endl;
+
+                        if (edgeCount > 0) {
+                            filletMaker.Build();
+                            if (filletMaker.IsDone()) {
+                                holeShape = filletMaker.Shape();
+                                std::cout << "[STEP Exporter] Rounded rect: fillet succeeded" << std::endl;
+                            } else {
+                                std::cout << "[STEP Exporter] Rounded rect: fillet failed, using box without fillet" << std::endl;
+                            }
+                        }
+
+                        int pfc = 0;
+                        for (TopExp_Explorer e(holeShape, TopAbs_FACE); e.More(); e.Next()) pfc++;
+                        std::cout << "[STEP Exporter] Rounded rect cutter: " << pfc << " faces, X["
+                                  << boxX << "," << (boxX + rw) << "] Z[" << boxZ << "," << (boxZ + rh)
+                                  << "] Y[" << boxY << "," << (boxY + cut_depth) << "]" << std::endl;
+
+                        BRepAlgoAPI_Cut wc(shape, holeShape);
+                        if (wc.IsDone()) {
+                            shape = wc.Shape();
+                            int fc3 = 0;
+                            for (TopExp_Explorer e(shape, TopAbs_FACE); e.More(); e.Next()) fc3++;
+                            std::cout << "[STEP Exporter] Rounded rect hole: " << rw << "x" << rh
+                                      << " r=" << rcr << " at (" << cx << "," << cy << "," << cz << ") [faces={" << fc3 << "}]" << std::endl;
+                        } else {
+                            std::cout << "[STEP Exporter] Rounded rect hole cut failed at (" << cx << "," << cy << "," << cz << ")" << std::endl;
+                        }
+                    }
+                    // Original 4-value format: cx,cy,wlen,wwid for rectangular window on top face
+                    else if (sscanf_s(entry.c_str(), "%lf,%lf,%lf,%lf", &cx, &cy, &wlen, &wwid) == 4 && wlen > 0 && wwid > 0) {
+                        BRepPrimAPI_MakeBox windowMaker(
+                            gp_Pnt(cx - wlen/2.0, cy - wwid/2.0, topZ - top_thickness - 2.0),
+                            wlen, wwid, top_thickness + 6.0);
+                        TopoDS_Solid windowBox = windowMaker.Solid();
+                        BRepAlgoAPI_Cut wc(shape, windowBox);
+                        if (wc.IsDone()) {
+                            shape = wc.Shape();
+                            std::cout << "[STEP Exporter] Window cut: " << wlen << "x" << wwid
+                                      << " at (" << cx << "," << cy << ") [faces={";
+                            int fc = 0;
+                            for (TopExp_Explorer e(shape, TopAbs_FACE); e.More(); e.Next()) fc++;
+                            std::cout << fc << "}]" << std::endl;
+                        } else {
+                            std::cerr << "[STEP Exporter] Window cut failed at (" << cx << "," << cy << ")" << std::endl;
+                        }
                     }
                 }
             }

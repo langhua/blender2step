@@ -37,6 +37,103 @@ def clear_scene():
             bpy.data.meshes.remove(mesh)
 
 
+def create_rounded_rect_cutter(name, width, height, corner_radius, depth, segments=8):
+    """
+    创建圆角矩形截面沿Y轴挤出的 cutter 实体（用于布尔挖孔）
+    先用 BMesh 建平面轮廓，再用 Blender 原生 extrude 沿 Y 挤出
+    width:  X 方向尺寸
+    height: Z 方向尺寸
+    corner_radius: 圆角半径
+    depth:  Y 方向挤出深度
+    """
+    hw = width / 2.0
+    hh = height / 2.0
+    cr = min(corner_radius, hw * 0.99, hh * 0.99)
+
+    # 生成圆角矩形轮廓（在 XZ 平面，Y=0）
+    profile_xy = []
+    # 右上角弧 (0 → π/2)
+    for i in range(segments + 1):
+        angle = math.pi / 2 * i / segments
+        x = hw - cr + cr * math.cos(angle)
+        z = hh - cr + cr * math.sin(angle)
+        profile_xy.append((x, z))
+    profile_xy.pop()
+    # 上边
+    for i in range(1, segments + 1):
+        t = i / segments
+        x = hw - cr - t * (width - 2 * cr)
+        profile_xy.append((x, hh))
+    profile_xy.pop()
+    # 左上角弧 (π/2 → π)
+    for i in range(1, segments + 1):
+        angle = math.pi / 2 + math.pi / 2 * i / segments
+        x = -hw + cr + cr * math.cos(angle)
+        z = hh - cr + cr * math.sin(angle)
+        profile_xy.append((x, z))
+    profile_xy.pop()
+    # 左边
+    for i in range(1, segments + 1):
+        t = i / segments
+        z = hh - cr - t * (height - 2 * cr)
+        profile_xy.append((-hw, z))
+    profile_xy.pop()
+    # 左下角弧 (π → 3π/2)
+    for i in range(1, segments + 1):
+        angle = math.pi + math.pi / 2 * i / segments
+        x = -hw + cr + cr * math.cos(angle)
+        z = -hh + cr + cr * math.sin(angle)
+        profile_xy.append((x, z))
+    profile_xy.pop()
+    # 下边
+    for i in range(1, segments + 1):
+        t = i / segments
+        x = -hw + cr + t * (width - 2 * cr)
+        profile_xy.append((x, -hh))
+    profile_xy.pop()
+    # 右下角弧 (3π/2 → 2π)
+    for i in range(1, segments + 1):
+        angle = 3 * math.pi / 2 + math.pi / 2 * i / segments
+        x = hw - cr + cr * math.cos(angle)
+        z = -hh + cr + cr * math.sin(angle)
+        profile_xy.append((x, z))
+    profile_xy.pop()
+    # 右边
+    for i in range(1, segments + 1):
+        t = i / segments
+        z = -hh + cr + t * (height - 2 * cr)
+        profile_xy.append((hw, z))
+    profile_xy.pop()
+
+    # 用 BMesh 创建平面轮廓面
+    me = bpy.data.meshes.new(name=name)
+    bm = bmesh.new()
+    verts = [bm.verts.new((x, 0.0, z)) for x, z in profile_xy]
+    bm.faces.new(verts)
+    bmesh.ops.recalc_face_normals(bm, faces=list(bm.faces))
+    bm.to_mesh(me)
+    bm.free()
+    me.update()
+
+    obj = bpy.data.objects.new(name, me)
+    bpy.context.collection.objects.link(obj)
+
+    # 用 Blender 原生 extrude 沿 +Y 挤出
+    bpy.context.view_layer.objects.active = obj
+    obj.select_set(True)
+    bpy.ops.object.mode_set(mode='EDIT')
+    bpy.ops.mesh.select_all(action='SELECT')
+    bpy.ops.mesh.extrude_region_move(
+        TRANSFORM_OT_translate={"value": (0, depth, 0)}
+    )
+    bpy.ops.mesh.select_all(action='SELECT')
+    bpy.ops.mesh.normals_make_consistent(inside=False)
+    bpy.ops.object.mode_set(mode='OBJECT')
+
+    print(f"  [DEBUG] {name}: {len(me.polygons)} faces, {len(me.vertices)} verts")
+    return obj
+
+
 def add_material(obj, name=None):
     if not obj.data.materials:
         mat_name = name or f"{obj.name}_Material"
@@ -878,6 +975,74 @@ def create_top_shell_scene():
         shell_with_holes["window_data"] = existing_wd + ";" + hole_data
     else:
         shell_with_holes["window_data"] = hole_data
+
+    # 后壁左侧圆角矩形通孔
+    rect_hole_w = 12.0     # 宽度 (X)
+    rect_hole_h = 4.0      # 高度 (Z)
+    rect_hole_cr = 1.5     # 圆角半径
+    rect_hole_cx = shell_loc.x - 24.0  # 左侧，与圆形孔对称（向中间移动2mm）
+    rect_hole_cz = shell_loc.z - 2.0   # 壳中心往下2mm
+
+    rect_depth = wall_thickness + 20.0  # 确保穿透（加长）
+
+    # 创建立方体 cutter，只对 Y 方向 4 条棱倒角形成圆角矩形截面
+    bpy.ops.mesh.primitive_cube_add(
+        size=1.0,
+        location=(rect_hole_cx, hole_y - wall_thickness / 2.0, rect_hole_cz),
+    )
+    rect_cutter = bpy.context.active_object
+    rect_cutter.name = "RectHole_Cutter"
+    # scale 为全尺寸（不是半尺寸，因为 size=1 的立方体半长为 0.5）
+    rect_cutter.scale = (rect_hole_w, rect_depth, rect_hole_h)
+    bpy.ops.object.transform_apply(scale=True)
+
+    # 只对 Y 轴方向的 4 条棱倒角（形成 XZ 平面内的圆角矩形截面）
+    bpy.ops.object.mode_set(mode='EDIT')
+    bpy.ops.mesh.select_all(action='DESELECT')
+    bpy.ops.mesh.select_mode(type='EDGE')
+    bm = bmesh.from_edit_mesh(rect_cutter.data)
+    bm.edges.ensure_lookup_table()
+    for e in bm.edges:
+        v0, v1 = e.verts
+        delta = v1.co - v0.co
+        # Y 方向棱：Y 分量主导，X/Z 分量接近 0
+        if abs(delta.y) > abs(delta.x) and abs(delta.y) > abs(delta.z):
+            e.select = True
+    bmesh.update_edit_mesh(rect_cutter.data)
+    bpy.ops.mesh.bevel(
+        offset=rect_hole_cr,
+        offset_type='OFFSET',
+        segments=6,
+        profile=0.5,
+        affect='EDGES',
+        clamp_overlap=False,
+    )
+    bpy.ops.object.mode_set(mode='OBJECT')
+
+    pre_faces = len(shell_with_holes.data.polygons)
+    apply_boolean(shell_with_holes, rect_cutter, operation='DIFFERENCE', solver='EXACT')
+    bpy.data.objects.remove(rect_cutter, do_unlink=True)
+    post_faces = len(shell_with_holes.data.polygons)
+    print(f"  [OK] Rounded rect hole: {rect_hole_w:.0f}x{rect_hole_h:.0f}mm (r={rect_hole_cr:.1f}), faces {pre_faces} -> {post_faces}")
+
+    # 标记圆角矩形孔到 window_data（供 STEP 参数化导出）
+    # 格式: cx,cy,cz,width,height,2,corner_radius (type=2 表示圆角矩形孔)
+    rect_hole_relative_cx = rect_hole_cx - shell_loc.x  # -24.0
+    rect_hole_relative_cy = depth / 2.0  # 后壁
+    rect_hole_relative_cz = rect_hole_cz - shell_loc.z  # -2.0
+    rect_hole_data = f"{rect_hole_relative_cx:.3f},{rect_hole_relative_cy:.3f},{rect_hole_relative_cz:.3f},{rect_hole_w:.3f},{rect_hole_h:.3f},2,{rect_hole_cr:.3f}"
+    existing_wd = shell_with_holes.get("window_data", "")
+    if existing_wd:
+        shell_with_holes["window_data"] = existing_wd + ";" + rect_hole_data
+    else:
+        shell_with_holes["window_data"] = rect_hole_data
+
+    # 清理孔边缘
+    bpy.context.view_layer.objects.active = shell_with_holes
+    bpy.ops.object.mode_set(mode='EDIT')
+    bpy.ops.mesh.select_all(action='SELECT')
+    bpy.ops.mesh.remove_doubles(threshold=0.05)
+    bpy.ops.object.mode_set(mode='OBJECT')
 
     # 清理
     bpy.context.view_layer.objects.active = shell_with_holes

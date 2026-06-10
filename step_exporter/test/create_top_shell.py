@@ -1026,11 +1026,12 @@ def create_top_shell_scene():
     print(f"  [OK] Rounded rect hole: {rect_hole_w:.0f}x{rect_hole_h:.0f}mm (r={rect_hole_cr:.1f}), faces {pre_faces} -> {post_faces}")
 
     # 标记圆角矩形孔到 window_data（供 STEP 参数化导出）
-    # 格式: cx,cy,cz,width,height,2,corner_radius (type=2 表示圆角矩形孔)
+    # 格式: cx,cy,cz,width,height,2,corner_radius[,fillet_radius] (type=2 表示圆角矩形孔)
     rect_hole_relative_cx = rect_hole_cx - shell_loc.x  # -24.0
     rect_hole_relative_cy = depth / 2.0  # 后壁
     rect_hole_relative_cz = rect_hole_cz - shell_loc.z  # -2.0
-    rect_hole_data = f"{rect_hole_relative_cx:.3f},{rect_hole_relative_cy:.3f},{rect_hole_relative_cz:.3f},{rect_hole_w:.3f},{rect_hole_h:.3f},2,{rect_hole_cr:.3f}"
+    rect_hole_fillet_radius = 0.3  # 圆角矩形孔圆倒角半径（仅在 STEP 导出中生效，设为 0 则不加倒角）
+    rect_hole_data = f"{rect_hole_relative_cx:.3f},{rect_hole_relative_cy:.3f},{rect_hole_relative_cz:.3f},{rect_hole_w:.3f},{rect_hole_h:.3f},2,{rect_hole_cr:.3f},{rect_hole_fillet_radius:.3f}"
     existing_wd = shell_with_holes.get("window_data", "")
     if existing_wd:
         shell_with_holes["window_data"] = existing_wd + ";" + rect_hole_data

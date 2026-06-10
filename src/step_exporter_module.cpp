@@ -1437,9 +1437,9 @@ PyObject* export_top_shell_filleted_step(PyObject* self, PyObject* args) {
                 }
                 // Type 2 (rounded rectangle hole on side wall) or 4-value rectangular window
                 else {
-                    // Try type 2 format: cx,cy,cz,width,height,2,corner_radius
-                    double rw = 0.0, rh = 0.0, rt = 0.0, rcr = 0.0;
-                    int rp = sscanf_s(entry.c_str(), "%lf,%lf,%lf,%lf,%lf,%lf,%lf", &cx, &cy, &cz, &rw, &rh, &rt, &rcr);
+                    // Try type 2 format: cx,cy,cz,width,height,2,corner_radius[,fillet_radius]
+                    double rw = 0.0, rh = 0.0, rt = 0.0, rcr = 0.0, rr_fr = 0.0;
+                    int rp = sscanf_s(entry.c_str(), "%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf", &cx, &cy, &cz, &rw, &rh, &rt, &rcr, &rr_fr);
                     if (rp >= 6 && rw > 0 && rh > 0 && rt == 2.0) {
                         if (rcr <= 0.0) rcr = 0.5;
                         if (rcr > rw * 0.49) rcr = rw * 0.49;
@@ -1498,8 +1498,67 @@ PyObject* export_top_shell_filleted_step(PyObject* self, PyObject* args) {
                             for (TopExp_Explorer e(shape, TopAbs_FACE); e.More(); e.Next()) fc3++;
                             std::cout << "[STEP Exporter] Rounded rect hole: " << rw << "x" << rh
                                       << " r=" << rcr << " at (" << cx << "," << cy << "," << cz << ") [faces={" << fc3 << "}]" << std::endl;
-                        } else {
-                            std::cout << "[STEP Exporter] Rounded rect hole cut failed at (" << cx << "," << cy << "," << cz << ")" << std::endl;
+
+                            // Apply fillet to hole boundary edges (rr_fr from 8th field, fillet_radius from circular hole, default 0.3)
+                            double fr;
+                            if (rp >= 8) {
+                                // Explicit per-hole fillet radius: 0 = no fillet
+                                fr = (rr_fr > 0.0 && rr_fr < std::min(rw, rh) * 0.4) ? rr_fr : 0.0;
+                            } else {
+                                // Legacy: use global fillet_radius or default 0.3
+                                fr = (fillet_radius > 0.0 && fillet_radius < std::min(rw, rh) * 0.4) ? fillet_radius : 0.3;
+                            }
+                            double hw = rw / 2.0, hh = rh / 2.0, r = rcr;
+                            if (fr > 0.0) {
+                                try {
+                                    BRepFilletAPI_MakeFillet filletMaker2(shape);
+                                    int found = 0;
+                                    for (TopExp_Explorer exp(shape, TopAbs_EDGE); exp.More(); exp.Next()) {
+                                        TopoDS_Edge edge = TopoDS::Edge(exp.Current());
+                                        double ef, el;
+                                        Handle(Geom_Curve) curve = BRep_Tool::Curve(edge, ef, el);
+                                        if (!curve.IsNull()) {
+                                            double mid = (ef + el) * 0.5;
+                                            gp_Pnt mp;
+                                            curve->D0(mid, mp);
+                                            double adx = fabs(mp.X() - cx);
+                                            double adz = fabs(mp.Z() - cz);
+
+                                            // Check if midpoint lies on rounded rectangle profile
+                                            bool onProfile = false;
+                                            // Straight segments
+                                            if (adz > hh - r - 0.5 && adz < hh + 0.5 && adx < hw - r + 0.5) onProfile = true;
+                                            if (adx > hw - r - 0.5 && adx < hw + 0.5 && adz < hh - r + 0.5) onProfile = true;
+                                            // Corner arcs: distance to any of the 4 corner centers ≈ r
+                                            double cd[4] = {
+                                                sqrt(pow(mp.X() - (cx + hw - r), 2) + pow(mp.Z() - (cz + hh - r), 2)),
+                                                sqrt(pow(mp.X() - (cx - hw + r), 2) + pow(mp.Z() - (cz + hh - r), 2)),
+                                                sqrt(pow(mp.X() - (cx + hw - r), 2) + pow(mp.Z() - (cz - hh + r), 2)),
+                                                sqrt(pow(mp.X() - (cx - hw + r), 2) + pow(mp.Z() - (cz - hh + r), 2))
+                                            };
+                                            for (int ci = 0; ci < 4; ci++) {
+                                                if (fabs(cd[ci] - r) < 0.5) { onProfile = true; break; }
+                                            }
+
+                                            if (onProfile) {
+                                                filletMaker2.Add(fr, edge);
+                                                found++;
+                                            }
+                                        }
+                                    }
+                                    if (found > 0) {
+                                        filletMaker2.Build();
+                                        if (filletMaker2.IsDone()) {
+                                            shape = filletMaker2.Shape();
+                                            int fc4 = 0;
+                                            for (TopExp_Explorer e(shape, TopAbs_FACE); e.More(); e.Next()) fc4++;
+                                            std::cout << "[STEP Exporter]   Rounded rect fillet: r=" << fr << " edges=" << found << " [faces={" << fc4 << "}]" << std::endl;
+                                        }
+                                    }
+                                } catch (...) {
+                                    std::cout << "[STEP Exporter]   Rounded rect fillet: exception caught, skipped" << std::endl;
+                                }
+                            }
                         }
                     }
                     // Original 4-value format: cx,cy,wlen,wwid for rectangular window on top face

@@ -411,6 +411,106 @@ TopoDS_Shape create_cylinder_chamfer_fillet_solid_parametric(
     return solid;
 }
 
+// ====================== 带顶部和底部倒角的圆柱体 ======================
+
+TopoDS_Shape create_cylinder_chamfer_both_solid_parametric(
+    double radius, double height,
+    double top_chamfer_size, double bottom_chamfer_size)
+{
+    TopoDS_Shape shape = create_cylinder_solid_parametric(radius, height);
+    if (shape.IsNull()) return TopoDS_Shape();
+    
+    TopoDS_Solid solid;
+    if (shape.ShapeType() == TopAbs_SOLID) {
+        solid = TopoDS::Solid(shape);
+    } else {
+        BRepBuilderAPI_MakeSolid sm;
+        for (TopExp_Explorer exp(shape, TopAbs_SHELL); exp.More(); exp.Next())
+            sm.Add(TopoDS::Shell(exp.Current()));
+        if (sm.IsDone()) solid = sm.Solid();
+        else return TopoDS_Shape();
+    }
+    
+    std::vector<TopoDS_Edge> topEdges, bottomEdges;
+    find_circular_edges(solid, topEdges, bottomEdges);
+    
+    // Apply chamfer on top edge first
+    if (top_chamfer_size > 0.001 && !topEdges.empty()) {
+        BRepFilletAPI_MakeChamfer chamferMaker(solid);
+        chamferMaker.Add(top_chamfer_size, topEdges[0]);
+        chamferMaker.Build();
+        if (chamferMaker.IsDone()) {
+            solid = shape_to_solid(chamferMaker.Shape());
+        }
+    }
+    
+    // Re-find bottom edge on chamfered shape, then apply chamfer
+    find_circular_edges(solid, topEdges, bottomEdges);
+    if (bottom_chamfer_size > 0.001 && !bottomEdges.empty()) {
+        BRepFilletAPI_MakeChamfer chamferMaker(solid);
+        chamferMaker.Add(bottom_chamfer_size, bottomEdges[0]);
+        chamferMaker.Build();
+        if (chamferMaker.IsDone()) {
+            solid = shape_to_solid(chamferMaker.Shape());
+        }
+    }
+    
+    std::cout << "[STEP Exporter] Created cylinder with top and bottom chamfers: r=" << radius
+              << " h=" << height << " top_chamfer=" << top_chamfer_size
+              << " bottom_chamfer=" << bottom_chamfer_size << std::endl;
+    return solid;
+}
+
+// ====================== 带顶部和底部圆角的圆柱体 ======================
+
+TopoDS_Shape create_cylinder_fillet_both_solid_parametric(
+    double radius, double height,
+    double top_fillet_radius, double bottom_fillet_radius)
+{
+    TopoDS_Shape shape = create_cylinder_solid_parametric(radius, height);
+    if (shape.IsNull()) return TopoDS_Shape();
+    
+    TopoDS_Solid solid;
+    if (shape.ShapeType() == TopAbs_SOLID) {
+        solid = TopoDS::Solid(shape);
+    } else {
+        BRepBuilderAPI_MakeSolid sm;
+        for (TopExp_Explorer exp(shape, TopAbs_SHELL); exp.More(); exp.Next())
+            sm.Add(TopoDS::Shell(exp.Current()));
+        if (sm.IsDone()) solid = sm.Solid();
+        else return TopoDS_Shape();
+    }
+    
+    std::vector<TopoDS_Edge> topEdges, bottomEdges;
+    find_circular_edges(solid, topEdges, bottomEdges);
+    
+    // Apply fillet on top edge first
+    if (top_fillet_radius > 0.001 && !topEdges.empty()) {
+        BRepFilletAPI_MakeFillet filletMaker(solid);
+        filletMaker.Add(top_fillet_radius, topEdges[0]);
+        filletMaker.Build();
+        if (filletMaker.IsDone()) {
+            solid = shape_to_solid(filletMaker.Shape());
+        }
+    }
+    
+    // Re-find bottom edge on filleted shape, then apply fillet
+    find_circular_edges(solid, topEdges, bottomEdges);
+    if (bottom_fillet_radius > 0.001 && !bottomEdges.empty()) {
+        BRepFilletAPI_MakeFillet filletMaker(solid);
+        filletMaker.Add(bottom_fillet_radius, bottomEdges[0]);
+        filletMaker.Build();
+        if (filletMaker.IsDone()) {
+            solid = shape_to_solid(filletMaker.Shape());
+        }
+    }
+    
+    std::cout << "[STEP Exporter] Created cylinder with top and bottom fillets: r=" << radius
+              << " h=" << height << " top_fillet=" << top_fillet_radius
+              << " bottom_fillet=" << bottom_fillet_radius << std::endl;
+    return solid;
+}
+
 // ====================== 带底部倒角和顶部圆角的锥体 ======================
 
 TopoDS_Shape create_cone_chamfer_fillet_solid_parametric(

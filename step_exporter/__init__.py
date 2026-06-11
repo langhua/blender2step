@@ -1960,6 +1960,20 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
         
         return feature_type, feature_size
     
+    # 扩展单层过渡：当过渡区只有1层时，加入相邻的本体端点层
+    # 例如双倒角圆柱：sorted_z = [-0.02(chamfer rim), -0.017(chamfer face), 0.017(chamfer face), 0.02(chamfer rim)]
+    # 过渡区只有 chamfer rim 一层，需要包含 chamfer face 才能正确分类
+    if top_transition_zls and len(top_transition_zls) == 1:
+        valid_zls = [zl for zl in sorted_z if zl in z_radius_data]
+        idx = valid_zls.index(top_transition_zls[0])
+        if idx > 0:
+            top_transition_zls = [valid_zls[idx - 1], valid_zls[idx]]
+    if bottom_transition_zls and len(bottom_transition_zls) == 1:
+        valid_zls = [zl for zl in sorted_z if zl in z_radius_data]
+        idx = valid_zls.index(bottom_transition_zls[0])
+        if idx + 1 < len(valid_zls):
+            bottom_transition_zls = [valid_zls[idx], valid_zls[idx + 1]]
+    
     if top_transition_zls and not top_feature:
         top_feature, top_feature_size = _classify_transition(top_transition_zls)
     if bottom_transition_zls and not bottom_feature:
@@ -1967,6 +1981,12 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
     
     # 对于圆柱本体有过渡 → 修正 radius 为 body_radius
     if cylindrical_body and (top_feature or bottom_feature):
+        # 单侧过渡：用无过渡侧的极端Z层半径作为本体半径
+        # 避免 body_radius 因过渡区边界顶点混入导致轻微偏差
+        if top_feature and not bottom_feature:
+            body_radius = bottom_radius  # 底部是无过渡侧，用底部极端半径
+        elif bottom_feature and not top_feature:
+            body_radius = top_radius  # 顶部是无过渡侧，用顶部极端半径
         bottom_radius = body_radius
         top_radius = body_radius
     
@@ -1974,9 +1994,10 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
     # 当两端过渡区边缘半径接近时（差距<5%），推断为圆柱本体（非锥体）
     if not cylindrical_body and top_feature and bottom_feature:
         if top_transition_zls and bottom_transition_zls:
-            # 顶部过渡：倒数第一个是 chamfer rim（本体半径），第一个是 chamfer 面
-            # 底部过渡：倒数第一个是 fillet 顶部（本体半径），第一个是 fillet 底部
-            top_body_r = z_radius_data.get(top_transition_zls[-1], None)
+            # 过渡区z层级为升序排列
+            # 顶部过渡：升序，第一个是本体边界，最后一个是极端
+            # 底部过渡：升序，第一个是极端，最后一个是本体边界
+            top_body_r = z_radius_data.get(top_transition_zls[0], None)
             bot_body_r = z_radius_data.get(bottom_transition_zls[-1], None)
             if top_body_r is not None and bot_body_r is not None and top_body_r > 0.001:
                 if abs(top_body_r - bot_body_r) / top_body_r < 0.05:
@@ -2155,16 +2176,24 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
             return result
     else:
         if bottom_radius * 0.98 <= top_radius <= bottom_radius * 1.02:
-            avg_radius = (bottom_radius + top_radius) / 2.0
+            # 使用体半径（过渡检测中已修正），避免极端z层混入面顶点导致半径偏小
+            if body_radius and abs(body_radius - bottom_radius) / max(bottom_radius, 0.001) > 0.02:
+                avg_radius = body_radius
+            else:
+                avg_radius = (bottom_radius + top_radius) / 2.0
             obj_type = 'cylinder'
             if top_feature == 'chamfer':
                 if bottom_feature == 'fillet':
                     obj_type = 'cylinder_chamfer_fillet'
+                elif bottom_feature == 'chamfer':
+                    obj_type = 'cylinder_chamfer_both'
                 else:
                     obj_type = 'cylinder_chamfer'
             elif top_feature == 'fillet':
                 if bottom_feature == 'chamfer':
                     obj_type = 'cylinder_chamfer_fillet'  # reversed: chamfer at bottom
+                elif bottom_feature == 'fillet':
+                    obj_type = 'cylinder_fillet_both'
                 else:
                     obj_type = 'cylinder_fillet'
             elif bottom_feature == 'fillet':
@@ -2310,6 +2339,20 @@ def _export_parametric_sync(filepath, bottom_shells, top_shells, cylinders, step
                 cparams.get('bottom_feature_size', 0),
                 px, py, pz, step_schema, step_unit,
                 1 if enable_logging else 0, reversed_flag)
+        elif obj_type == 'cylinder_chamfer_both':
+            success = cpp_exporter.export_cylinder_chamfer_both_step(
+                temp_file, cparams['radius'], cparams['height'],
+                cparams.get('top_feature_size', 0),
+                cparams.get('bottom_feature_size', 0),
+                px, py, pz, step_schema, step_unit,
+                1 if enable_logging else 0)
+        elif obj_type == 'cylinder_fillet_both':
+            success = cpp_exporter.export_cylinder_fillet_both_step(
+                temp_file, cparams['radius'], cparams['height'],
+                cparams.get('top_feature_size', 0),
+                cparams.get('bottom_feature_size', 0),
+                px, py, pz, step_schema, step_unit,
+                1 if enable_logging else 0)
         else:
             success = False
         if not success:
@@ -2535,6 +2578,22 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
             px, py, pz,
             data['step_schema'], data['step_unit'],
             1 if data['enable_logging'] else 0, reversed_flag)
+    elif obj_type == 'cylinder_chamfer_both':
+        return cpp_exporter.export_cylinder_chamfer_both_step(
+            temp_file, cparams['radius'], cparams['height'],
+            cparams.get('top_feature_size', 0),
+            cparams.get('bottom_feature_size', 0),
+            px, py, pz,
+            data['step_schema'], data['step_unit'],
+            1 if data['enable_logging'] else 0)
+    elif obj_type == 'cylinder_fillet_both':
+        return cpp_exporter.export_cylinder_fillet_both_step(
+            temp_file, cparams['radius'], cparams['height'],
+            cparams.get('top_feature_size', 0),
+            cparams.get('bottom_feature_size', 0),
+            px, py, pz,
+            data['step_schema'], data['step_unit'],
+            1 if data['enable_logging'] else 0)
     elif obj_type == 'cone_chamfer_fillet':
         return cpp_exporter.export_cone_chamfer_fillet_step(
             temp_file,

@@ -472,6 +472,7 @@ def _analyze_top_shell_from_mesh(obj, context, scale):
         return None
     
     import bmesh
+    import math
     from collections import defaultdict
     
     log_to_file(f"[STEP Exporter] Analyzing mesh for TOP shell: {obj.name}")
@@ -531,6 +532,24 @@ def _analyze_top_shell_from_mesh(obj, context, scale):
     
     # === 计算底部（开口端）的外轮廓尺寸 ===
     bottom_coords = [(v.co.x, v.co.y, v.co.z) for v in bottom_verts]
+    
+    # === 圆形轮廓检测：排除圆柱体误判为顶壳 ===
+    # 计算底部顶点到中心的距离，如果接近圆形则不是顶壳
+    bot_dists = [math.sqrt(x*x + y*y) for x, y, z in bottom_coords]
+    if bot_dists:
+        mean_dist = sum(bot_dists) / len(bot_dists)
+        log_to_file(f"[STEP Exporter] Top-shell circularity check: mean_dist={mean_dist:.4f}, n={len(bot_dists)}")
+        if mean_dist > 0.001:
+            std_dist = math.sqrt(sum((d - mean_dist)**2 for d in bot_dists) / len(bot_dists))
+            circularity = std_dist / mean_dist  # 越小越圆
+            log_to_file(f"[STEP Exporter] Top-shell circularity: std={std_dist:.4f}, circ={circularity:.4f}")
+            if circularity < 0.05:
+                log_to_file(f"[STEP Exporter] Bottom contour is circular (circ={circularity:.3f}) → NOT a top shell (likely cylinder)")
+                bm.free()
+                return None
+        else:
+            log_to_file(f"[STEP Exporter] Top-shell mean_dist too small ({mean_dist:.4f}) → likely not a shell")
+    
     bottom_x_vals = [x for x, y, z in bottom_coords]
     bottom_y_vals = [y for x, y, z in bottom_coords]
     bot_width = max(bottom_x_vals) - min(bottom_x_vals)
@@ -538,7 +557,7 @@ def _analyze_top_shell_from_mesh(obj, context, scale):
     bot_cx = (max(bottom_x_vals) + min(bottom_x_vals)) / 2.0
     bot_cy = (max(bottom_y_vals) + min(bottom_y_vals)) / 2.0
 
-    log_to_file(f"[STEP Exporter] Bottom contour: {bot_width:.1f}x{bot_depth:.1f}, center=({bot_cx:.1f},{bot_cy:.1f})")
+    log_to_file(f"[STEP Exporter] Bottom contour: {bot_width:.4f}x{bot_depth:.4f}, center=({bot_cx:.4f},{bot_cy:.4f})")
 
     # === 计算顶部（封闭面）的轮廓尺寸 ===
     top_coords = [(v.co.x, v.co.y, v.co.z) for v in top_verts]
@@ -567,8 +586,8 @@ def _analyze_top_shell_from_mesh(obj, context, scale):
 
     half_w = width / 2.0
     half_d = depth / 2.0
-    log_to_file(f"[STEP Exporter] Outer (wide) contour: {width:.1f}x{depth:.1f}, center=({cx:.1f},{cy:.1f})")
-    log_to_file(f"[STEP Exporter] Inner (narrow) contour: {top_width:.1f}x{top_depth:.1f}, center=({top_cx:.1f},{top_cy:.1f})")
+    log_to_file(f"[STEP Exporter] Outer (wide) contour: {width:.4f}x{depth:.4f}, center=({cx:.4f},{cy:.4f})")
+    log_to_file(f"[STEP Exporter] Inner (narrow) contour: {top_width:.4f}x{top_depth:.4f}, center=({top_cx:.4f},{top_cy:.4f})")
 
     if top_coords:
         top_recess_x = (width - top_width) / 2.0
@@ -792,7 +811,7 @@ def _analyze_top_shell_from_mesh(obj, context, scale):
     # 释放BMesh
     bm.free()
     
-    log_to_file(f"[STEP Exporter] Detected TOP shell: {width:.1f}x{depth:.1f} h={outer_height:.1f} tt={top_thickness:.1f} wt={wall_thickness:.1f} cr={corner_radius:.1f} recess={top_recess:.1f} yOff={top_offset_y:.1f} ofr={outer_fillet_radius:.1f} ifr={inner_fillet_radius:.1f} win={window_len:.1f}x{window_wid:.1f} step_ring={step_ring_height:.1f}x{step_ring_width:.1f}")
+    log_to_file(f"[STEP Exporter] Detected TOP shell: {width:.4f}x{depth:.4f} h={outer_height:.4f} tt={top_thickness:.1f} wt={wall_thickness:.1f} cr={corner_radius:.1f} recess={top_recess:.1f} yOff={top_offset_y:.1f} ofr={outer_fillet_radius:.1f} ifr={inner_fillet_radius:.1f} win={window_len:.1f}x{window_wid:.1f} step_ring={step_ring_height:.1f}x{step_ring_width:.1f}")
     
     return {
         'obj': obj,
@@ -1319,7 +1338,7 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
     # 按 Z 坐标分组
     z_layers = defaultdict(list)
     for x, y, z in all_verts:
-        z_key = round(z / 0.05) * 0.05
+        z_key = round(z / 0.0001) * 0.0001
         z_layers[z_key].append((x, y))
     
     sorted_z = sorted(z_layers.keys())
@@ -1441,13 +1460,13 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
         return None
     
     # 半径不能太小
-    if bottom_radius < 0.1 or top_radius < 0.1:
+    if bottom_radius < 0.001 or top_radius < 0.001:
         log_to_file(f"[STEP Exporter] Radius too small: b={bottom_radius:.3f} t={top_radius:.3f}")
         bm.free()
         return None
     
     # 高度不能太小
-    if height < 0.5:
+    if height < 0.0005:
         log_to_file(f"[STEP Exporter] Height too small: {height:.3f}")
         bm.free()
         return None
@@ -1691,9 +1710,38 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
             bottom_transition_zls = []
     else:
         # 圆锥本体：用线性拟合检测过渡
-        # 当Z层稀疏时（中间区域无层），以高度比例分区判断
         top_transition_zls = []
         bottom_transition_zls = []
+        
+        # === 稀疏层级的倒角/圆角快速检测（3层模式） ===
+        valid_zls = [zl for zl in sorted_z if zl in z_radius_data]
+        if len(valid_zls) == 3:
+            r0 = z_radius_data[valid_zls[0]]
+            r1 = z_radius_data[valid_zls[1]]
+            r2 = z_radius_data[valid_zls[2]]
+            ratio_01 = abs(r0 - r1) / max(abs(r0), 0.001)
+            ratio_12 = abs(r1 - r2) / max(abs(r1), 0.001)
+            if ratio_01 > 0.01 and ratio_12 < 0.01:
+                # r0 != r1 == r2 → 顶部倒角，r0 是完整半径
+                body_radius = r0
+                bottom_radius = r0
+                top_radius = r0  # 让后续比例检查通过，确保返回 cylinder 而非 cone
+                top_feature = 'chamfer'
+                top_feature_size = r0 - r2
+                top_transition_zls = [valid_zls[0], valid_zls[1]]
+                cylindrical_body = True
+                body_end_z = valid_zls[2]
+            elif ratio_01 < 0.01 and ratio_12 > 0.01:
+                # r0 == r1 != r2 → 底部倒角
+                body_radius = r0
+                bottom_radius = r0
+                top_radius = r0
+                bottom_feature = 'chamfer'
+                bottom_feature_size = r0 - r2
+                bottom_transition_zls = [valid_zls[1], valid_zls[2]]
+                cylindrical_body = True
+                body_end_z = valid_zls[0]
+        
         fit_zls = None  # will be set if mid-zone fitting is applicable
         valid_zls = [zl for zl in sorted_z if zl in z_radius_data]
         if len(valid_zls) >= 4:
@@ -1790,6 +1838,80 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                     top_transition_zls = deviating_top or top_transition_zls
                     bottom_transition_zls = deviating_bot or bottom_transition_zls
     
+    # === 倒角+圆角组合检测：圆柱本体无中间顶点时的回退 ===
+    # 当圆柱本体无内部顶点，两端过渡区都只有少量层级时，
+    # 顶部2+层同半径→倒角，底部2+层渐变半径→圆角
+    if not cylindrical_body and not top_transition_zls and not bottom_transition_zls:
+        valid_zls_mod = [zl for zl in sorted_z if zl in z_radius_data]
+        if len(valid_zls_mod) >= 4:
+            # 底部检测：检查底部半径是否单调递减/递增（圆角特征）
+            # 取前5层检查趋势，然后扩展整个过渡区
+            probe_count = min(5, len(valid_zls_mod) // 2)
+            if probe_count >= 3:
+                bot_radii_probe = [z_radius_data[valid_zls_mod[i]] for i in range(probe_count)]
+                dr_total = bot_radii_probe[-1] - bot_radii_probe[0]
+                if abs(dr_total) > 0.00005:
+                    # 单调性检查
+                    monotonically = True
+                    direction = 1 if dr_total > 0 else -1
+                    for i in range(1, probe_count):
+                        if (bot_radii_probe[i] - bot_radii_probe[i-1]) * direction < 0:
+                            monotonically = False
+                            break
+                    if monotonically:
+                        # 扩展到所有跟随同一趋势的层（不跨越 >1mm 的空隙）
+                        bottom_transition_zls = []
+                        for i in range(len(valid_zls_mod)):
+                            if i == 0:
+                                bottom_transition_zls.append(valid_zls_mod[i])
+                                continue
+                            # 空隙检查：相邻层 z 差 > 0.001（1mm）说明离开了过渡区
+                            z_gap = valid_zls_mod[i] - valid_zls_mod[i-1]
+                            if z_gap > 0.001:
+                                break
+                            d = z_radius_data[valid_zls_mod[i]] - z_radius_data[valid_zls_mod[i-1]]
+                            if abs(d) < 0.000005:
+                                break  # 半径变化太小，停止扩展
+                            if d * direction < 0:
+                                break  # 方向反转，停止扩展
+                            bottom_transition_zls.append(valid_zls_mod[i])
+                        
+                        if len(bottom_transition_zls) >= 3:
+                            # 过渡区跨度检查：不超过总高度的30%（排除锥体误判）
+                            total_height_mod = sorted_z[-1] - sorted_z[0]
+                            transition_span = bottom_transition_zls[-1] - bottom_transition_zls[0]
+                            if total_height_mod > 0 and transition_span / total_height_mod > 0.3:
+                                bottom_transition_zls = []  # 跨度太大，不是过渡特征
+                            else:
+                                bottom_feature = 'fillet'
+                                bottom_zs = transition_span
+                                bottom_dr = abs(z_radius_data[bottom_transition_zls[-1]] - z_radius_data[bottom_transition_zls[0]])
+                                bottom_feature_size = max(bottom_zs, bottom_dr)
+                                body_radius = z_radius_data[bottom_transition_zls[0]]
+                                bottom_radius = body_radius
+                                top_radius = body_radius
+                                cylindrical_body = True
+            
+            # 顶部检测：检查最高2层是否半径相同（倒角特征）
+            if len(valid_zls_mod) >= 4:
+                top_zls_mod = valid_zls_mod[-2:]  # 取顶部2层
+                if len(top_zls_mod) >= 2:
+                    top_radii = [z_radius_data[zl] for zl in top_zls_mod]
+                    if abs(top_radii[-1] - top_radii[-2]) / max(abs(top_radii[-1]), 0.001) < 0.01:
+                        # 顶部两层半径相同 → 倒角
+                        if not body_radius:
+                            # 从第三层推断体半径
+                            if len(valid_zls_mod) >= 3:
+                                body_radius = z_radius_data[valid_zls_mod[-3]]
+                            else:
+                                body_radius = top_radii[-1]
+                            bottom_radius = body_radius
+                            top_radius = body_radius
+                        top_feature = 'chamfer'
+                        top_feature_size = body_radius - top_radii[-1] if body_radius > top_radii[-1] else 0
+                        top_transition_zls = top_zls_mod
+                        cylindrical_body = True
+    
     # 2. 分析过渡区类型
     def _classify_transition(transition_zls):
         if len(transition_zls) < 2:
@@ -1799,7 +1921,7 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
             return None, 0.0
         
         dr = _radii[-1][1] - _radii[0][1]
-        threshold = max(body_radius * 0.01, 0.05)
+        threshold = max(body_radius * 0.01, 0.0001)
         if abs(dr) < threshold:
             return None, 0.0
         
@@ -1832,26 +1954,53 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                 z_span = (transition_zls[-1] - transition_zls[0]) * 1.0
                 feature_size = max(z_span, abs(dr))
         else:
-            # Too few layers for curvature analysis, default to fillet
-            feature_type = 'fillet'
-            z_span = (transition_zls[-1] - transition_zls[0]) * 1.0
-            feature_size = max(z_span, abs(dr))
+            # 单斜率过渡 → 倒角（线性过渡），用 |dr| 作为倒角尺寸
+            feature_type = 'chamfer'
+            feature_size = abs(dr)
         
         return feature_type, feature_size
     
-    top_feature, top_feature_size = _classify_transition(top_transition_zls)
-    bottom_feature, bottom_feature_size = _classify_transition(bottom_transition_zls)
+    if top_transition_zls and not top_feature:
+        top_feature, top_feature_size = _classify_transition(top_transition_zls)
+    if bottom_transition_zls and not bottom_feature:
+        bottom_feature, bottom_feature_size = _classify_transition(bottom_transition_zls)
     
     # 对于圆柱本体有过渡 → 修正 radius 为 body_radius
     if cylindrical_body and (top_feature or bottom_feature):
         bottom_radius = body_radius
         top_radius = body_radius
     
+    # 回退检测：锥体分析检测到两端过渡特征，但 cylindrical_body 仍为 False
+    # 当两端过渡区边缘半径接近时（差距<5%），推断为圆柱本体（非锥体）
+    if not cylindrical_body and top_feature and bottom_feature:
+        if top_transition_zls and bottom_transition_zls:
+            # 顶部过渡：倒数第一个是 chamfer rim（本体半径），第一个是 chamfer 面
+            # 底部过渡：倒数第一个是 fillet 顶部（本体半径），第一个是 fillet 底部
+            top_body_r = z_radius_data.get(top_transition_zls[-1], None)
+            bot_body_r = z_radius_data.get(bottom_transition_zls[-1], None)
+            if top_body_r is not None and bot_body_r is not None and top_body_r > 0.001:
+                if abs(top_body_r - bot_body_r) / top_body_r < 0.05:
+                    body_radius = (top_body_r + bot_body_r) / 2.0
+                    bottom_radius = body_radius
+                    top_radius = body_radius
+                    cylindrical_body = True
+                    log_to_file(f"[STEP Exporter] Recovered cylindrical body from transition edges: r={body_radius:.4f}")
+    
     bm.free()
     
     pos_x = obj.location.x
     pos_y = obj.location.y
     pos_z = obj.location.z
+    
+    # 检测对象旋转：如果世界矩阵翻转了 Z 轴（绕 X 或 Y 旋转 180°），
+    # 则交换 top_feature 和 bottom_feature（局部坐标中 chamfer 在顶部，
+    # 但世界坐标中应该在底部）
+    world_mat = obj.matrix_world
+    if world_mat[2][2] < 0:
+        if top_feature or bottom_feature:
+            log_to_file(f"[STEP Exporter] Z-axis flipped by rotation, swapping top/bottom features")
+            top_feature, bottom_feature = bottom_feature, top_feature
+            top_feature_size, bottom_feature_size = bottom_feature_size, top_feature_size
     
     # ===== Mesh-based Stepped Hole Detection for Hollow Cones =====
     # Detects stepped inner holes: constant-radius straight section at top,
@@ -1941,6 +2090,21 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                                     f"step_gap={best_gap:.3f}")
     
     # 构建返回参数
+    # 应用单位缩放：所有尺寸参数 × scale（mm=1000, m=1）
+    S = scale if scale > 0 else 1.0
+    bottom_radius *= S; top_radius *= S; height *= S
+    pos_x *= S; pos_y *= S; pos_z *= S
+    body_radius *= S
+    if is_hollow: inner_radius *= S; inner_top_radius *= S
+    if top_feature: top_feature_size *= S
+    if bottom_feature: bottom_feature_size *= S
+    if groove_params:
+        for k in ('groove_depth', 'groove_bottom_width', 'groove_top_width', 'groove_extrusion_length'):
+            if k in groove_params: groove_params[k] *= S
+    if stepped_hole_params:
+        for k in ('small_hole_radius', 'small_hole_height', 'inner_bottom_radius', 'inner_top_radius'):
+            if k in stepped_hole_params: stepped_hole_params[k] *= S
+    
     if is_hollow:
         if bottom_radius * 0.98 <= top_radius <= bottom_radius * 1.02:
             obj_type = 'hollow_cylinder'
@@ -1994,9 +2158,19 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
             avg_radius = (bottom_radius + top_radius) / 2.0
             obj_type = 'cylinder'
             if top_feature == 'chamfer':
-                obj_type = 'cylinder_chamfer'
+                if bottom_feature == 'fillet':
+                    obj_type = 'cylinder_chamfer_fillet'
+                else:
+                    obj_type = 'cylinder_chamfer'
             elif top_feature == 'fillet':
+                if bottom_feature == 'chamfer':
+                    obj_type = 'cylinder_chamfer_fillet'  # reversed: chamfer at bottom
+                else:
+                    obj_type = 'cylinder_fillet'
+            elif bottom_feature == 'fillet':
                 obj_type = 'cylinder_fillet'
+            elif bottom_feature == 'chamfer':
+                obj_type = 'cylinder_chamfer'
             return {
                 'obj_type': obj_type,
                 'radius': avg_radius,
@@ -2118,6 +2292,24 @@ def _export_parametric_sync(filepath, bottom_shells, top_shells, cylinders, step
             success = cpp_exporter.export_hollow_cylinder_step(temp_file, cparams['outer_radius'],
                 cparams['inner_radius'], cparams['height'], px, py, pz,
                 step_schema, step_unit, 1 if enable_logging else 0)
+        elif obj_type == 'cylinder_chamfer':
+            success = cpp_exporter.export_cylinder_chamfer_step(
+                temp_file, cparams['radius'], cparams['height'],
+                cparams.get('top_feature_size', 0), px, py, pz,
+                step_schema, step_unit, 1 if enable_logging else 0)
+        elif obj_type == 'cylinder_fillet':
+            success = cpp_exporter.export_cylinder_fillet_step(
+                temp_file, cparams['radius'], cparams['height'],
+                cparams.get('top_feature_size', 0), px, py, pz,
+                step_schema, step_unit, 1 if enable_logging else 0)
+        elif obj_type == 'cylinder_chamfer_fillet':
+            reversed_flag = 1 if cparams.get('top_feature') == 'fillet' else 0
+            success = cpp_exporter.export_cylinder_chamfer_fillet_step(
+                temp_file, cparams['radius'], cparams['height'],
+                cparams.get('top_feature_size', 0),
+                cparams.get('bottom_feature_size', 0),
+                px, py, pz, step_schema, step_unit,
+                1 if enable_logging else 0, reversed_flag)
         else:
             success = False
         if not success:
@@ -2334,6 +2526,15 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
             cparams.get('top_feature_size', 0), px, py, pz,
             data['step_schema'], data['step_unit'],
             1 if data['enable_logging'] else 0)
+    elif obj_type == 'cylinder_chamfer_fillet':
+        reversed_flag = 1 if cparams.get('top_feature') == 'fillet' else 0
+        return cpp_exporter.export_cylinder_chamfer_fillet_step(
+            temp_file, cparams['radius'], cparams['height'],
+            cparams.get('top_feature_size', 0),
+            cparams.get('bottom_feature_size', 0),
+            px, py, pz,
+            data['step_schema'], data['step_unit'],
+            1 if data['enable_logging'] else 0, reversed_flag)
     elif obj_type == 'cone_chamfer_fillet':
         return cpp_exporter.export_cone_chamfer_fillet_step(
             temp_file,
@@ -3218,7 +3419,15 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
                     regular_export_objects.append(obj)
                     continue
                 
-                # 先检测底壳
+                # 先检测圆柱/圆锥（优先于壳检测，避免 chamfer+fillet 圆柱被误判为顶壳）
+                cyl_params = _analyze_cylinder_from_mesh(obj, context, scale)
+                if cyl_params:
+                    cylinder_objects.append(cyl_params)
+                    log_to_file(f"[STEP Exporter]   -> {cyl_params['obj_type']}! r={cyl_params.get('radius', cyl_params.get('bottom_radius', '?'))} h={cyl_params['height']}")
+                    log_to_file(f"[STEP Exporter] Found {cyl_params['obj_type']}: {obj.name}")
+                    continue
+                
+                # 再检测底壳
                 shell_params = _analyze_bottom_shell_from_mesh(obj, context, scale)
                 if shell_params:
                     bottom_shells.append(shell_params)
@@ -3227,20 +3436,12 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
                     log_to_file(f"[STEP Exporter] Found bottom shell: {obj.name} (has_holes={shell_params.get('has_holes', False)})")
                     continue
 
-                # 检测顶壳（锥形渐缩壳）
+                # 最后检测顶壳（锥形渐缩壳）
                 top_shell_params = _analyze_top_shell_from_mesh(obj, context, scale)
                 if top_shell_params:
                     top_shells.append(top_shell_params)
                     log_to_file(f"[STEP Exporter]   -> Top shell! recess={top_shell_params.get('top_recess',0):.1f}")
                     log_to_file(f"[STEP Exporter] Found top shell: {obj.name}")
-                    continue
-                
-                # 再检测圆柱/圆锥
-                cyl_params = _analyze_cylinder_from_mesh(obj, context, scale)
-                if cyl_params:
-                    cylinder_objects.append(cyl_params)
-                    log_to_file(f"[STEP Exporter]   -> {cyl_params['obj_type']}! r={cyl_params.get('radius', cyl_params.get('bottom_radius', '?'))} h={cyl_params['height']}")
-                    log_to_file(f"[STEP Exporter] Found {cyl_params['obj_type']}: {obj.name}")
                     continue
                 
                 log_to_file(f"[STEP Exporter]   -> NOT a parametric object")

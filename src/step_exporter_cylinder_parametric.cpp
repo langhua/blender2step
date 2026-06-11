@@ -353,6 +353,64 @@ TopoDS_Shape create_cylinder_fillet_solid_parametric(double radius, double heigh
     return filletMaker.Shape();
 }
 
+// ====================== 带顶部倒角和底部圆角的圆柱体 ======================
+
+TopoDS_Shape create_cylinder_chamfer_fillet_solid_parametric(
+    double radius, double height,
+    double chamfer_size, double fillet_radius,
+    bool reversed)
+{
+    TopoDS_Shape shape = create_cylinder_solid_parametric(radius, height);
+    if (shape.IsNull()) return TopoDS_Shape();
+    
+    TopoDS_Solid solid;
+    if (shape.ShapeType() == TopAbs_SOLID) {
+        solid = TopoDS::Solid(shape);
+    } else {
+        BRepBuilderAPI_MakeSolid sm;
+        for (TopExp_Explorer exp(shape, TopAbs_SHELL); exp.More(); exp.Next())
+            sm.Add(TopoDS::Shell(exp.Current()));
+        if (sm.IsDone()) solid = sm.Solid();
+        else return TopoDS_Shape();
+    }
+    
+    std::vector<TopoDS_Edge> topEdges, bottomEdges;
+    find_circular_edges(solid, topEdges, bottomEdges);
+    
+    // Apply chamfer on top edge first
+    if (chamfer_size > 0.001 && !topEdges.empty()) {
+        BRepFilletAPI_MakeChamfer chamferMaker(solid);
+        chamferMaker.Add(chamfer_size, topEdges[0]);
+        chamferMaker.Build();
+        if (chamferMaker.IsDone()) {
+            solid = shape_to_solid(chamferMaker.Shape());
+        }
+    }
+    
+    // Re-find bottom edge on chamfered shape, then apply fillet
+    find_circular_edges(solid, topEdges, bottomEdges);
+    if (fillet_radius > 0.001 && !bottomEdges.empty()) {
+        BRepFilletAPI_MakeFillet filletMaker(solid);
+        filletMaker.Add(fillet_radius, bottomEdges[0]);
+        filletMaker.Build();
+        if (filletMaker.IsDone()) {
+            solid = shape_to_solid(filletMaker.Shape());
+        }
+    }
+    
+    // If reversed: rotate 180° around Y axis to swap chamfer/fillet positions
+    if (reversed) {
+        gp_Trsf trsf;
+        trsf.SetRotation(gp_Ax1(gp_Pnt(0, 0, 0), gp::DY()), M_PI);
+        solid = TopoDS::Solid(BRepBuilderAPI_Transform(solid, trsf).Shape());
+    }
+    
+    std::cout << "[STEP Exporter] Created cylinder with top chamfer and bottom fillet: r=" << radius
+              << " h=" << height << " chamfer=" << chamfer_size
+              << " fillet=" << fillet_radius << (reversed ? " (reversed)" : "") << std::endl;
+    return solid;
+}
+
 // ====================== 带底部倒角和顶部圆角的锥体 ======================
 
 TopoDS_Shape create_cone_chamfer_fillet_solid_parametric(

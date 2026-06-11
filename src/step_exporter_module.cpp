@@ -38,6 +38,13 @@ PyObject* get_version(PyObject* self, PyObject* args) {
     return PyUnicode_FromString(MODULE_VERSION);
 }
 
+// 获取 OpenCASCADE 版本
+PyObject* get_occt_version(PyObject* self, PyObject* args) {
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%d.%d.%d", OCC_VERSION_MAJOR, OCC_VERSION_MINOR, OCC_VERSION_MAINTENANCE);
+    return PyUnicode_FromString(buf);
+}
+
 // 简单导出函数（原始函数）
 PyObject* export_step(PyObject* self, PyObject* args) {
     std::cout << "[STEP Exporter] Simple export_step called" << std::endl;
@@ -1693,6 +1700,7 @@ static PyMethodDef step_exporter_methods[] = {
     {"add_object_to_export", add_object_to_export, METH_VARARGS, "Add single object to incremental export"},
     {"finalize_incremental_export", finalize_incremental_export, METH_NOARGS, "Finalize incremental export and write file"},
     {"get_version", get_version, METH_NOARGS, "Get module version"},
+    {"get_occt_version", get_occt_version, METH_NOARGS, "Get OpenCASCADE version"},
     {NULL, NULL, 0, NULL}
 };
 

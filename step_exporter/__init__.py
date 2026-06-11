@@ -25,7 +25,7 @@ import bmesh
 from mathutils import Vector
 from bpy.types import Operator, Panel
 from bpy_extras.io_utils import ExportHelper
-from bpy.props import StringProperty, FloatProperty, BoolProperty, EnumProperty
+from bpy.props import StringProperty, FloatProperty, IntProperty, BoolProperty, EnumProperty
 
 # 进度报告系统
 from .progress_report import (
@@ -3853,7 +3853,8 @@ class STEP_EXPORTER_PT_main_panel(Panel):
             try:
                 version = step_exporter.get_version()
                 box.label(text=f"✓ Module v{version} loaded", icon='CHECKMARK')
-                box.label(text=f"✓ OpenCASCADE 7.7.2 ready", icon='CHECKMARK')
+                oc_ver = step_exporter.get_occt_version() if hasattr(step_exporter, 'get_occt_version') else "7.7.2"
+                box.label(text=f"✓ OpenCASCADE {oc_ver} ready", icon='CHECKMARK')
             except:
                 box.label(text="✓ C++ module loaded", icon='CHECKMARK')
         else:
@@ -3869,12 +3870,607 @@ class STEP_EXPORTER_PT_main_panel(Panel):
             box = layout.box()
             box.label(text="C++ module required", icon='ERROR')
             box.label(text="Compile and install first")
+        
+        # 样品生成
+        layout.separator()
+        layout.label(text="Sample Generators", icon='MESH_DATA')
+        col = layout.column(align=True)
+        col.operator("step_exporter.create_top_shell", text="Create Top Shell", icon='MESH_PLANE')
+        col.operator("step_exporter.create_bottom_shell", text="Create Bottom Shell", icon='MESH_PLANE')
+        col.operator("step_exporter.create_cylinder", text="Create Cylinder", icon='MESH_CYLINDER')
+
+# ====================== 样品生成 Operators ======================
+
+class STEP_EXPORTER_OT_create_top_shell(Operator):
+    """创建带开窗的塑料顶壳样品"""
+    bl_idname = "step_exporter.create_top_shell"
+    bl_label = "Create Top Shell"
+    bl_options = {'REGISTER', 'UNDO'}
+    
+    def execute(self, context):
+        script_path = os.path.join(os.path.dirname(__file__), 'test', 'create_top_shell.py')
+        exec(compile(open(script_path).read(), script_path, 'exec'), {'__name__': '__main__', '__file__': script_path})
+        self.report({'INFO'}, "Top shell created")
+        return {'FINISHED'}
+
+
+class STEP_EXPORTER_OT_create_bottom_shell(Operator):
+    """创建带螺栓孔的塑料底壳样品"""
+    bl_idname = "step_exporter.create_bottom_shell"
+    bl_label = "Create Bottom Shell"
+    bl_options = {'REGISTER', 'UNDO'}
+    
+    def execute(self, context):
+        script_path = os.path.join(os.path.dirname(__file__), 'test', 'create_bottom_shell.py')
+        old_argv = sys.argv
+        try:
+            sys.argv = [sys.argv[0] if len(sys.argv) > 0 else "", "with_holes"]
+            exec(compile(open(script_path).read(), script_path, 'exec'), {'__name__': '__main__'})
+        finally:
+            sys.argv = old_argv
+        self.report({'INFO'}, "Bottom shell created")
+        return {'FINISHED'}
+
+
+class STEP_EXPORTER_OT_create_cylinder(Operator):
+    """创建机械圆柱体样品"""
+    bl_idname = "step_exporter.create_cylinder"
+    bl_label = "Create Cylinder"
+    bl_options = {'REGISTER', 'UNDO'}
+    
+    def execute(self, context):
+        script_path = os.path.join(os.path.dirname(__file__), 'test', 'create_mesh_cylinder.py')
+        exec(compile(open(script_path).read(), script_path, 'exec'), {'__name__': '__main__', '__file__': script_path})
+        self.report({'INFO'}, "Cylinder created")
+        return {'FINISHED'}
+
+
+# ====================== 参数化圆柱生成 Operator ======================
+
+class STEP_EXPORTER_OT_create_parametric_cylinder(Operator):
+    """创建参数化圆柱体（标准/锥形，带倒角/开孔）"""
+    bl_idname = "step_exporter.create_parametric_cylinder"
+    bl_label = "Parametric Cylinder"
+    bl_options = {'REGISTER', 'UNDO'}
+    
+    # === 圆柱类型 ===
+    cylinder_type: EnumProperty(
+        name="Type",
+        description="Cylinder type",
+        items=[
+            ('standard', "Standard", "Standard cylinder"),
+            ('tapered', "Tapered", "Tapered cylinder (truncated cone)"),
+        ],
+        default='standard',
+    )
+    # 标准圆柱
+    radius: FloatProperty(
+        name="Radius", default=15.0, min=0.5, max=500.0,
+    )
+    # 锥形圆柱
+    top_radius: FloatProperty(
+        name="Top R", default=10.0, min=0.1, max=500.0,
+    )
+    bottom_radius: FloatProperty(
+        name="Bottom R", default=20.0, min=0.1, max=500.0,
+    )
+    # 通用
+    height: FloatProperty(
+        name="Height", default=40.0, min=0.5, max=500.0,
+    )
+    segments: IntProperty(
+        name="Segments", default=64, min=8, max=256,
+    )
+    
+    # === 单位 ===
+    unit: EnumProperty(
+        name="Unit",
+        items=[
+            ('mm', "mm", "Millimeters (input ×0.001 → meters)"),
+            ('m', "m", "Meters (input ×1.0, no conversion)"),
+        ],
+        default='mm',
+    )
+    
+    # === 倒角 ===
+    chamfer_type: EnumProperty(
+        name="Chamfer",
+        items=[
+            ('none', "None", "No edge treatment"),
+            ('chamfer', "Chamfer", "Top chamfer only"),
+            ('fillet', "Fillet", "Top fillet only"),
+            ('chamfer_fillet', "Chamfer+Fillet", "Top chamfer + bottom fillet"),
+            ('chamfer_both', "Both Chamfer", "Top & bottom chamfer"),
+            ('fillet_both', "Both Fillet", "Top & bottom fillet"),
+        ],
+        default='none',
+    )
+    chamfer_size: FloatProperty(
+        name="Chamfer Size", default=2.0, min=0.1, max=50.0,
+    )
+    fillet_radius: FloatProperty(
+        name="Fillet R", default=2.0, min=0.1, max=50.0,
+    )
+    
+    # === 孔 ===
+    hole_type: EnumProperty(
+        name="Hole",
+        items=[
+            ('none', "None", "Solid cylinder, no hole"),
+            ('top', "Top", "Blind hole from top"),
+            ('bottom', "Bottom", "Blind hole from bottom"),
+            ('both', "Both", "Blind holes from top and bottom"),
+            ('through', "Through", "Through hole (top to bottom)"),
+        ],
+        default='none',
+    )
+    hole_radius: FloatProperty(
+        name="Hole R", default=5.0, min=0.1, max=100.0,
+    )
+    hole_depth: FloatProperty(
+        name="Hole Depth %", default=50.0, min=1.0, max=100.0, subtype='PERCENTAGE',
+        description="Hole depth as percentage of cylinder height (for blind holes)",
+    )
+    hole_is_tapered: BoolProperty(
+        name="Tapered Hole", default=False,
+    )
+    hole_top_radius: FloatProperty(
+        name="Hole Top R", default=6.0, min=0.1, max=100.0,
+    )
+    hole_bottom_radius: FloatProperty(
+        name="Hole Bottom R", default=4.0, min=0.1, max=100.0,
+    )
+    hole_fillet_radius: FloatProperty(
+        name="Hole Fillet R", default=0.5, min=0.0, max=50.0,
+        description="Fillet radius for hole opening edge (0 = no fillet)",
+    )
+    
+    def invoke(self, context, event):
+        return context.window_manager.invoke_props_dialog(self, width=320)
+    
+    def draw(self, context):
+        layout = self.layout
+        
+        # Cylinder type
+        box = layout.box()
+        box.label(text="Cylinder", icon='MESH_CYLINDER')
+        box.prop(self, 'unit')
+        box.prop(self, 'cylinder_type')
+        if self.cylinder_type == 'standard':
+            box.prop(self, 'radius')
+        else:
+            box.prop(self, 'top_radius')
+            box.prop(self, 'bottom_radius')
+        box.prop(self, 'height')
+        box.prop(self, 'segments')
+        
+        # Chamfer/Fillet
+        box = layout.box()
+        box.label(text="Edge Treatment", icon='MOD_BEVEL')
+        box.prop(self, 'chamfer_type')
+        if self.chamfer_type in ('chamfer', 'both'):
+            box.prop(self, 'chamfer_size')
+        if self.chamfer_type in ('fillet', 'both'):
+            box.prop(self, 'fillet_radius')
+        
+        # Hole
+        box = layout.box()
+        box.label(text="Hole", icon='MESH_CYLINDER')
+        box.prop(self, 'hole_type')
+        if self.hole_type != 'none':
+            box.prop(self, 'hole_is_tapered')
+            if self.hole_is_tapered:
+                box.prop(self, 'hole_top_radius')
+                box.prop(self, 'hole_bottom_radius')
+            else:
+                box.prop(self, 'hole_radius')
+            if self.hole_type in ('top', 'bottom', 'both'):
+                box.prop(self, 'hole_depth')
+            box.prop(self, 'hole_fillet_radius')
+    
+    def execute(self, context):
+        try:
+            obj = _generate_parametric_cylinder(self)
+            if obj:
+                obj.select_set(True)
+                context.view_layer.objects.active = obj
+                self.report({'INFO'}, "Cylinder created: " + obj.name)
+        except Exception as e:
+            self.report({'ERROR'}, str(e))
+            import traceback; traceback.print_exc()
+            return {'CANCELLED'}
+        return {'FINISHED'}
+
+
+def _generate_parametric_cylinder(props):
+    """使用 BMesh 生成参数化圆柱体"""
+    import bmesh, math
+    
+    # 单位缩放因子 (Blender 内部单位为米)
+    # mm: 用户输入毫米 → 转为米 (×0.001)
+    # m:  用户输入米 → 保持不变 (×1.0)
+    S = 0.001 if props.unit == 'mm' else 1.0
+    
+    Z_UP = (0, 0, 1)
+    Z_DOWN = (0, 0, -1)
+    
+    # === 1. 创建基础圆柱体 mesh ===
+    bm = bmesh.new()
+    
+    if props.cylinder_type == 'standard':
+        # 标准圆柱：用旋绕
+        R = props.radius * S
+        H = props.height * S
+        geom = bmesh.ops.create_circle(
+            bm, cap_ends=False, radius=R, segments=props.segments,
+        )
+        verts_circ = geom['verts']
+        # 排序顶点（沿圆周逆时针）
+        verts_circ = sorted(verts_circ, key=lambda v: math.atan2(v.co.y, v.co.x))
+        
+        # 拉伸到底面
+        bottom_z = -H / 2.0
+        top_z = H / 2.0
+        
+        # 底部面顶点
+        verts_bottom = []
+        for v in verts_circ:
+            nv = bm.verts.new((v.co.x, v.co.y, bottom_z))
+            verts_bottom.append(nv)
+        # 顶部面顶点
+        verts_top = []
+        for v in verts_circ:
+            nv = bm.verts.new((v.co.x, v.co.y, top_z))
+            verts_top.append(nv)
+        bm.verts.index_update()
+        
+        # 删除原始圆
+        bmesh.ops.delete(bm, geom=verts_circ, context='VERTS')
+        
+        # 创建侧面
+        n = len(verts_bottom)
+        for i in range(n):
+            j = (i + 1) % n
+            bm.faces.new((verts_bottom[i], verts_bottom[j], verts_top[j], verts_top[i]))
+        
+        # 顶面和底面 (法线必须朝外)
+        bm.faces.new(verts_top)                     # 顶面法线 +Z
+        bm.faces.new(list(reversed(verts_bottom)))  # 底面法线 -Z
+        
+    else:
+        # 锥形圆柱
+        BR = props.bottom_radius * S
+        TR = props.top_radius * S
+        H = props.height * S
+        geom = bmesh.ops.create_circle(
+            bm, cap_ends=False, radius=BR, segments=props.segments,
+        )
+        verts_circ_bottom = sorted(geom['verts'], key=lambda v: math.atan2(v.co.y, v.co.x))
+        
+        bottom_z = -H / 2.0
+        top_z = H / 2.0
+        
+        # 创建底部顶点
+        verts_bottom = []
+        for v in verts_circ_bottom:
+            nv = bm.verts.new((v.co.x, v.co.y, bottom_z))
+            verts_bottom.append(nv)
+        bmesh.ops.delete(bm, geom=verts_circ_bottom, context='VERTS')
+        
+        # 创建顶部顶点（较小半径）
+        geom2 = bmesh.ops.create_circle(
+            bm, cap_ends=False, radius=TR, segments=props.segments,
+        )
+        verts_circ_top = sorted(geom2['verts'], key=lambda v: math.atan2(v.co.y, v.co.x))
+        verts_top = []
+        for v in verts_circ_top:
+            nv = bm.verts.new((v.co.x, v.co.y, top_z))
+            verts_top.append(nv)
+        bmesh.ops.delete(bm, geom=verts_circ_top, context='VERTS')
+        
+        bm.verts.index_update()
+        
+        # 侧面
+        n = len(verts_bottom)
+        for i in range(n):
+            j = (i + 1) % n
+            bm.faces.new((verts_bottom[i], verts_bottom[j], verts_top[j], verts_top[i]))
+        
+        # 顶面和底面 (法线必须朝外)
+        bm.faces.new(verts_top)                     # 顶面法线 +Z
+        bm.faces.new(list(reversed(verts_bottom)))  # 底面法线 -Z
+    
+    bm.normal_update()
+    
+    # 写入临时 mesh
+    mesh_name = "Cylinder_Mesh"
+    mesh = bpy.data.meshes.new(mesh_name)
+    bm.to_mesh(mesh)
+    bm.free()
+    
+    obj = bpy.data.objects.new("ParametricCylinder", mesh)
+    bpy.context.collection.objects.link(obj)
+    
+    # === 2. 应用倒角/圆角（顶部边缘） ===
+    if props.chamfer_type != 'none':
+        _apply_edge_treatment(obj, props, S)
+    
+    # === 3. 创建孔 ===
+    if props.hole_type != 'none':
+        _create_holes(obj, props, S)
+    
+    return obj
+
+
+def _apply_edge_treatment(obj, props, S):
+    """在边缘应用倒角/圆角"""
+    bpy.ops.object.select_all(action='DESELECT')
+    bpy.context.view_layer.objects.active = obj
+    obj.select_set(True)
+    bpy.ops.object.mode_set(mode='EDIT')
+    
+    bm = bmesh.from_edit_mesh(obj.data)
+    bm.edges.ensure_lookup_table()
+    
+    H = props.height * S
+    top_z = H / 2.0
+    btm_z = -H / 2.0
+    CS = props.chamfer_size * S
+    FR = props.fillet_radius * S
+    
+    def select_edge_loop(z_target):
+        for e in bm.edges: e.select = False
+        for v in bm.verts: v.select = False
+        bm.select_flush(False)
+        for edge in bm.edges:
+            v0_z = edge.verts[0].co.z
+            v1_z = edge.verts[1].co.z
+            if abs(v0_z - z_target) < 0.001 and abs(v1_z - z_target) < 0.001:
+                edge.select = True
+        bmesh.update_edit_mesh(obj.data)
+    
+    if props.chamfer_type == 'chamfer':
+        # 仅顶部斜倒角
+        select_edge_loop(top_z)
+        bpy.ops.mesh.bevel(offset_type='OFFSET', offset=CS, segments=1, profile=0.0, affect='EDGES')
+    
+    elif props.chamfer_type == 'fillet':
+        # 仅顶部圆倒角
+        select_edge_loop(top_z)
+        bpy.ops.mesh.bevel(offset_type='OFFSET', offset=FR, segments=16, profile=0.5, affect='EDGES')
+    
+    elif props.chamfer_type == 'chamfer_fillet':
+        # 顶部斜倒角 + 底部圆倒角
+        select_edge_loop(top_z)
+        bpy.ops.mesh.bevel(offset_type='OFFSET', offset=CS, segments=1, profile=0.0, affect='EDGES')
+        bm = bmesh.from_edit_mesh(obj.data)
+        select_edge_loop(btm_z)
+        bpy.ops.mesh.bevel(offset_type='OFFSET', offset=FR, segments=16, profile=0.5, affect='EDGES')
+    
+    elif props.chamfer_type == 'chamfer_both':
+        # 顶部 + 底部斜倒角
+        select_edge_loop(top_z)
+        bpy.ops.mesh.bevel(offset_type='OFFSET', offset=CS, segments=1, profile=0.0, affect='EDGES')
+        bm = bmesh.from_edit_mesh(obj.data)
+        select_edge_loop(btm_z)
+        bpy.ops.mesh.bevel(offset_type='OFFSET', offset=CS, segments=1, profile=0.0, affect='EDGES')
+    
+    elif props.chamfer_type == 'fillet_both':
+        # 顶部 + 底部圆倒角（一次 bevel 选中两个边环）
+        select_edge_loop(top_z)
+        bm = bmesh.from_edit_mesh(obj.data)
+        for edge in bm.edges:
+            v0_z = edge.verts[0].co.z
+            v1_z = edge.verts[1].co.z
+            if abs(v0_z - btm_z) < 0.001 and abs(v1_z - btm_z) < 0.001:
+                edge.select = True
+        bmesh.update_edit_mesh(obj.data)
+        bpy.ops.mesh.bevel(offset_type='OFFSET', offset=FR, segments=16, profile=0.5, affect='EDGES')
+    
+    bpy.ops.object.mode_set(mode='OBJECT')
+
+
+def _create_holes(obj, props, S):
+    """创建孔（布尔减）"""
+    import bmesh, math
+    
+    H = props.height * S
+    hole_d = props.hole_depth / 100.0 * H if props.hole_type in ('top', 'bottom', 'both') else H + 20.0
+    
+    # 判断孔半径
+    if props.hole_is_tapered:
+        hr_top = props.hole_top_radius * S
+        hr_bottom = props.hole_bottom_radius * S
+    else:
+        hr_top = props.hole_radius * S
+        hr_bottom = props.hole_radius * S
+    
+    cutters = []
+    
+    def make_hole_cutter(cut_name, z_bottom, z_top, r_bottom, r_top):
+        """创建锥形孔切割体"""
+        bm_c = bmesh.new()
+        seg = 64
+        
+        if abs(r_bottom - r_top) < 0.0001:
+            # 直圆柱切割体
+            g = bmesh.ops.create_circle(bm_c, cap_ends=False, radius=r_bottom, segments=seg)
+            vc = sorted(g['verts'], key=lambda v: math.atan2(v.co.y, v.co.x))
+            vb = []
+            vt = []
+            for v in vc:
+                vb.append(bm_c.verts.new((v.co.x, v.co.y, z_bottom)))
+                vt.append(bm_c.verts.new((v.co.x, v.co.y, z_top)))
+            bmesh.ops.delete(bm_c, geom=vc, context='VERTS')
+            bm_c.verts.index_update()
+        else:
+            # 锥形切割体
+            g = bmesh.ops.create_circle(bm_c, cap_ends=False, radius=r_bottom, segments=seg)
+            vc_b = sorted(g['verts'], key=lambda v: math.atan2(v.co.y, v.co.x))
+            vb = []
+            for v in vc_b:
+                vb.append(bm_c.verts.new((v.co.x, v.co.y, z_bottom)))
+            bmesh.ops.delete(bm_c, geom=vc_b, context='VERTS')
+            
+            g = bmesh.ops.create_circle(bm_c, cap_ends=False, radius=r_top, segments=seg)
+            vc_t = sorted(g['verts'], key=lambda v: math.atan2(v.co.y, v.co.x))
+            vt = []
+            for v in vc_t:
+                vt.append(bm_c.verts.new((v.co.x, v.co.y, z_top)))
+            bmesh.ops.delete(bm_c, geom=vc_t, context='VERTS')
+            bm_c.verts.index_update()
+        
+        n = len(vb)
+        for i in range(n):
+            j = (i + 1) % n
+            bm_c.faces.new((vb[i], vb[j], vt[j], vt[i]))
+        bm_c.faces.new(list(reversed(vt)))  # top
+        bm_c.faces.new(vb)  # bottom
+        bm_c.normal_update()
+        
+        mesh_c = bpy.data.meshes.new(cut_name + "_Mesh")
+        bm_c.to_mesh(mesh_c)
+        bm_c.free()
+        obj_c = bpy.data.objects.new(cut_name, mesh_c)
+        bpy.context.collection.objects.link(obj_c)
+        obj_c.hide_set(True)
+        obj_c.hide_render = True
+        return obj_c
+    
+    hh = H
+    ext = 5.0 * S  # 切割体超出量
+    
+    if props.hole_type == 'through':
+        cutters.append(make_hole_cutter(
+            "HoleCutter_Through",
+            -hh / 2 - ext, hh / 2 + ext, hr_bottom, hr_top
+        ))
+    elif props.hole_type == 'top':
+        cutters.append(make_hole_cutter(
+            "HoleCutter_Top",
+            hh / 2 - hole_d, hh / 2 + ext, hr_top, hr_top
+        ))
+    elif props.hole_type == 'bottom':
+        cutters.append(make_hole_cutter(
+            "HoleCutter_Bottom",
+            -hh / 2 - ext, -hh / 2 + hole_d, hr_bottom, hr_bottom
+        ))
+    elif props.hole_type == 'both':
+        cutters.append(make_hole_cutter(
+            "HoleCutter_Top",
+            hh / 2 - hole_d, hh / 2 + ext, hr_top, hr_top
+        ))
+        cutters.append(make_hole_cutter(
+            "HoleCutter_Bottom",
+            -hh / 2 - ext, -hh / 2 + hole_d, hr_bottom, hr_bottom
+        ))
+    
+    # 布尔减
+    for cutter in cutters:
+        is_last = (cutter == cutters[-1])
+        _boolean_difference(obj, cutter, is_last and props.hole_fillet_radius > 0)
+    
+    # 孔口圆倒角
+    if props.hole_fillet_radius > 0 and cutters:
+        _apply_hole_fillet(obj, props, S)
+
+
+def _boolean_difference(target, cutter, as_first):
+    """对 target 做布尔减 cutter"""
+    mod = target.modifiers.new(name="Bool_Hole", type='BOOLEAN')
+    mod.object = cutter
+    mod.operation = 'DIFFERENCE'
+    
+    if as_first:
+        bpy.context.view_layer.objects.active = target
+        bpy.ops.object.modifier_apply(modifier=mod.name)
+
+
+def _apply_hole_fillet(obj, props, S):
+    """对孔口边缘做圆倒角"""
+    obj.select_set(True)
+    bpy.context.view_layer.objects.active = obj
+    bpy.ops.object.mode_set(mode='EDIT')
+    
+    bm = bmesh.from_edit_mesh(obj.data)
+    bm.edges.ensure_lookup_table()
+    
+    H = props.height * S
+    top_z = H / 2.0
+    btm_z = -H / 2.0
+    
+    # 清除所有选择
+    for e in bm.edges:
+        e.select = False
+    for v in bm.verts:
+        v.select = False
+    
+    for edge in bm.edges:
+        vz0 = edge.verts[0].co.z
+        vz1 = edge.verts[1].co.z
+        # 孔口边缘：靠近顶部或底面但不是外圆柱边缘的边
+        if props.hole_type in ('top', 'through', 'both'):
+            dz_top_min = min(abs(vz0 - top_z), abs(vz1 - top_z))
+            # 顶部孔口边：在顶面附近且半径小于外半径
+            if dz_top_min < 0.01:
+                dist0 = math.sqrt(edge.verts[0].co.x**2 + edge.verts[0].co.y**2)
+                dist1 = math.sqrt(edge.verts[1].co.x**2 + edge.verts[1].co.y**2)
+                outer_r = (props.radius if props.cylinder_type == 'standard' else props.top_radius) * S
+                if dist0 < outer_r * 0.9 and dist1 < outer_r * 0.9:
+                    edge.select = True
+        
+        if props.hole_type in ('bottom', 'through', 'both'):
+            dz_btm_min = min(abs(vz0 - btm_z), abs(vz1 - btm_z))
+            if dz_btm_min < 0.01:
+                dist0 = math.sqrt(edge.verts[0].co.x**2 + edge.verts[0].co.y**2)
+                dist1 = math.sqrt(edge.verts[1].co.x**2 + edge.verts[1].co.y**2)
+                outer_r = (props.radius if props.cylinder_type == 'standard' else props.bottom_radius) * S
+                if dist0 < outer_r * 0.9 and dist1 < outer_r * 0.9:
+                    edge.select = True
+    
+    sel_edges = [e for e in bm.edges if e.select]
+    if sel_edges and props.hole_fillet_radius > 0:
+        bmesh.ops.bevel(
+            bm,
+            geom=sel_edges,
+            offset=props.hole_fillet_radius * S,
+            offset_type='OFFSET',
+            segments=8,
+            profile=0.5,
+            affect='EDGES',
+        )
+    
+    bmesh.update_edit_mesh(obj.data)
+    bpy.ops.object.mode_set(mode='OBJECT')
+
+
+# ====================== 参数化圆柱面板 ======================
+
+class STEP_EXPORTER_PT_cylinder_panel(Panel):
+    """参数化圆柱生成面板"""
+    bl_label = "Parametric Cylinder"
+    bl_idname = "STEP_EXPORTER_PT_cylinder_panel"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = "STEP Export"
+    bl_parent_id = "STEP_EXPORTER_PT_main_panel"
+    bl_options = {'DEFAULT_CLOSED'}
+    
+    def draw(self, context):
+        layout = self.layout
+        layout.operator("step_exporter.create_parametric_cylinder", text="Generate Cylinder", icon='MESH_CYLINDER')
+
 
 # ====================== 注册与注销 ======================
 
 classes = [
     STEP_EXPORTER_OT_export_enhanced,
     STEP_EXPORTER_PT_main_panel,
+    STEP_EXPORTER_OT_create_top_shell,
+    STEP_EXPORTER_OT_create_bottom_shell,
+    STEP_EXPORTER_OT_create_cylinder,
+    STEP_EXPORTER_OT_create_parametric_cylinder,
+    STEP_EXPORTER_PT_cylinder_panel,
 ]
 
 def register():

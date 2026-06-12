@@ -384,6 +384,9 @@ TopoDS_Shape create_cylinder_chamfer_fillet_solid_parametric(
         chamferMaker.Build();
         if (chamferMaker.IsDone()) {
             solid = shape_to_solid(chamferMaker.Shape());
+        } else {
+            std::cerr << "[STEP Exporter] ERROR: Chamfer build failed! size=" << chamfer_size
+                      << " radius=" << radius << " height=" << height << std::endl;
         }
     }
     
@@ -395,6 +398,9 @@ TopoDS_Shape create_cylinder_chamfer_fillet_solid_parametric(
         filletMaker.Build();
         if (filletMaker.IsDone()) {
             solid = shape_to_solid(filletMaker.Shape());
+        } else {
+            std::cerr << "[STEP Exporter] ERROR: Fillet build failed! radius=" << fillet_radius
+                      << " cyl_radius=" << radius << " height=" << height << std::endl;
         }
     }
     
@@ -408,6 +414,14 @@ TopoDS_Shape create_cylinder_chamfer_fillet_solid_parametric(
     std::cout << "[STEP Exporter] Created cylinder with top chamfer and bottom fillet: r=" << radius
               << " h=" << height << " chamfer=" << chamfer_size
               << " fillet=" << fillet_radius << (reversed ? " (reversed)" : "") << std::endl;
+    
+    // 验证面数
+    {
+        int faceCount = 0;
+        for (TopExp_Explorer exp(solid, TopAbs_FACE); exp.More(); exp.Next()) faceCount++;
+        std::cout << "[STEP Exporter]   face count: " << faceCount << " (expected >= 3)" << std::endl;
+    }
+    
     return solid;
 }
 
@@ -441,6 +455,8 @@ TopoDS_Shape create_cylinder_chamfer_both_solid_parametric(
         chamferMaker.Build();
         if (chamferMaker.IsDone()) {
             solid = shape_to_solid(chamferMaker.Shape());
+        } else {
+            std::cerr << "[STEP Exporter] ERROR: Top chamfer (both) build failed! size=" << top_chamfer_size << std::endl;
         }
     }
     
@@ -452,6 +468,8 @@ TopoDS_Shape create_cylinder_chamfer_both_solid_parametric(
         chamferMaker.Build();
         if (chamferMaker.IsDone()) {
             solid = shape_to_solid(chamferMaker.Shape());
+        } else {
+            std::cerr << "[STEP Exporter] ERROR: Bottom chamfer (both) build failed! size=" << bottom_chamfer_size << std::endl;
         }
     }
     
@@ -491,6 +509,8 @@ TopoDS_Shape create_cylinder_fillet_both_solid_parametric(
         filletMaker.Build();
         if (filletMaker.IsDone()) {
             solid = shape_to_solid(filletMaker.Shape());
+        } else {
+            std::cerr << "[STEP Exporter] ERROR: Top fillet (both) build failed! radius=" << top_fillet_radius << std::endl;
         }
     }
     
@@ -502,6 +522,8 @@ TopoDS_Shape create_cylinder_fillet_both_solid_parametric(
         filletMaker.Build();
         if (filletMaker.IsDone()) {
             solid = shape_to_solid(filletMaker.Shape());
+        } else {
+            std::cerr << "[STEP Exporter] ERROR: Bottom fillet (both) build failed! radius=" << bottom_fillet_radius << std::endl;
         }
     }
     
@@ -541,6 +563,8 @@ TopoDS_Shape create_cone_chamfer_fillet_solid_parametric(
         chamferMaker.Build();
         if (chamferMaker.IsDone()) {
             solid = shape_to_solid(chamferMaker.Shape());
+        } else {
+            std::cerr << "[STEP Exporter] ERROR: Cone chamfer build failed! size=" << chamfer_size << std::endl;
         }
     }
     
@@ -551,12 +575,76 @@ TopoDS_Shape create_cone_chamfer_fillet_solid_parametric(
         filletMaker.Build();
         if (filletMaker.IsDone()) {
             solid = shape_to_solid(filletMaker.Shape());
+        } else {
+            std::cerr << "[STEP Exporter] ERROR: Cone fillet build failed! radius=" << fillet_radius << std::endl;
         }
     }
     
     std::cout << "[STEP Exporter] Created cone with chamfer+fillet: bR=" << bottom_radius
               << " tR=" << top_radius << " h=" << height
               << " chamfer=" << chamfer_size << " fillet=" << fillet_radius << std::endl;
+    return solid;
+}
+
+// 参数化锥体+倒角（顶部或底部）
+TopoDS_Shape create_cone_chamfer_solid_parametric(
+    double bottom_radius, double top_radius, double height,
+    double chamfer_size, int is_top_chamfer)
+{
+    TopoDS_Shape shape = create_cone_solid_parametric(bottom_radius, top_radius, height);
+    if (shape.IsNull()) return TopoDS_Shape();
+    
+    TopoDS_Solid solid;
+    if (shape.ShapeType() == TopAbs_SOLID) {
+        solid = TopoDS::Solid(shape);
+    } else {
+        BRepBuilderAPI_MakeSolid sm;
+        for (TopExp_Explorer exp(shape, TopAbs_SHELL); exp.More(); exp.Next())
+            sm.Add(TopoDS::Shell(exp.Current()));
+        if (sm.IsDone()) solid = sm.Solid();
+        else return TopoDS_Shape();
+    }
+    
+    std::vector<TopoDS_Edge> topEdges, bottomEdges;
+    find_circular_edges(solid, topEdges, bottomEdges);
+    
+    if (chamfer_size > 0.001) {
+        TopoDS_Edge targetEdge;
+        if (is_top_chamfer) {
+            if (topEdges.empty()) {
+                std::cerr << "[STEP Exporter] ERROR: Cone chamfer - no top edge found!" << std::endl;
+                return solid;
+            }
+            targetEdge = topEdges[0];
+        } else {
+            if (bottomEdges.empty()) {
+                std::cerr << "[STEP Exporter] ERROR: Cone chamfer - no bottom edge found!" << std::endl;
+                return solid;
+            }
+            targetEdge = bottomEdges[0];
+        }
+        
+        BRepFilletAPI_MakeChamfer chamferMaker(solid);
+        chamferMaker.Add(chamfer_size, targetEdge);
+        chamferMaker.Build();
+        if (chamferMaker.IsDone()) {
+            solid = shape_to_solid(chamferMaker.Shape());
+        } else {
+            std::cerr << "[STEP Exporter] ERROR: Cone chamfer build failed! size=" << chamfer_size
+                      << " is_top=" << is_top_chamfer << std::endl;
+        }
+    }
+    
+    // 验证面数
+    {
+        int faceCount = 0;
+        for (TopExp_Explorer exp(solid, TopAbs_FACE); exp.More(); exp.Next()) faceCount++;
+        std::cout << "[STEP Exporter] Created cone with chamfer: bR=" << bottom_radius
+                  << " tR=" << top_radius << " h=" << height
+                  << " chamfer=" << chamfer_size << " is_top=" << is_top_chamfer
+                  << " faces=" << faceCount << std::endl;
+    }
+    
     return solid;
 }
 

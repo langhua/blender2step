@@ -1200,6 +1200,62 @@ PyObject* export_cone_chamfer_fillet_step(PyObject* self, PyObject* args) {
     }
 }
 
+// 参数化导出：带倒角的锥体（顶部或底部）
+PyObject* export_cone_chamfer_step(PyObject* self, PyObject* args) {
+    const char* filename;
+    double bottom_radius, top_radius, height;
+    double chamfer_size;
+    int is_top_chamfer = 0;
+    double pos_x = 0.0, pos_y = 0.0, pos_z = 0.0;
+    const char* step_schema = "AP214IS";
+    const char* unit = "MILLIMETER";
+    int enable_logging = 1;
+
+    if (!PyArg_ParseTuple(args, "sddddi|dddssi",
+                          &filename,
+                          &bottom_radius, &top_radius, &height,
+                          &chamfer_size, &is_top_chamfer,
+                          &pos_x, &pos_y, &pos_z,
+                          &step_schema, &unit, &enable_logging)) {
+        PyErr_SetString(PyExc_TypeError,
+            "export_cone_chamfer_step() expected: filename, bottom_radius, top_radius, height, "
+            "chamfer_size, is_top_chamfer, "
+            "[pos_x], [pos_y], [pos_z], [step_schema], [unit], [enable_logging]");
+        return NULL;
+    }
+
+    try {
+        TopoDS_Shape shape = create_cone_chamfer_solid_parametric(
+            bottom_radius, top_radius, height, chamfer_size, is_top_chamfer);
+        if (shape.IsNull()) { Py_RETURN_FALSE; }
+
+        if (pos_x != 0.0 || pos_y != 0.0 || pos_z != 0.0) {
+            gp_Trsf trsf;
+            trsf.SetTranslation(gp_Vec(pos_x, pos_y, pos_z));
+            shape = BRepBuilderAPI_Transform(shape, trsf).Shape();
+        }
+
+        BRepCheck_Analyzer paramAnalyzer(shape);
+        if (!paramAnalyzer.IsValid()) {
+            std::cout << "[STEP Exporter] Parametric shape has issues, attempting to fix..." << std::endl;
+            shape = fix_shape_enhanced(shape, 0.001);
+        }
+
+        STEPControl_Writer writer;
+        Interface_Static::SetCVal("write.step.schema", step_schema);
+        if (writer.Transfer(shape, STEPControl_AsIs) != IFSelect_RetDone) { Py_RETURN_FALSE; }
+        if (writer.Write(filename) != IFSelect_RetDone) { Py_RETURN_FALSE; }
+
+        Py_RETURN_TRUE;
+    } catch (Standard_Failure& e) {
+        std::cerr << "[STEP Exporter] OCC error: " << e.GetMessageString() << std::endl;
+        Py_RETURN_FALSE;
+    } catch (...) {
+        std::cerr << "[STEP Exporter] Unknown error" << std::endl;
+        Py_RETURN_FALSE;
+    }
+}
+
 // 参数化导出：带顶部圆角的空心锥体
 PyObject* export_hollow_cone_fillet_step(PyObject* self, PyObject* args) {
     const char* filename;
@@ -1849,6 +1905,7 @@ static PyMethodDef step_exporter_methods[] = {
     {"export_cylinder_chamfer_both_step", export_cylinder_chamfer_both_step, METH_VARARGS, "Export parametric cylinder with top and bottom chamfers to STEP"},
     {"export_cylinder_fillet_both_step", export_cylinder_fillet_both_step, METH_VARARGS, "Export parametric cylinder with top and bottom fillets to STEP"},
     {"export_cone_chamfer_fillet_step", export_cone_chamfer_fillet_step, METH_VARARGS, "Export parametric cone with bottom chamfer and top fillet to STEP"},
+    {"export_cone_chamfer_step", export_cone_chamfer_step, METH_VARARGS, "Export parametric cone with chamfer (top or bottom) to STEP"},
     {"export_hollow_cone_fillet_step", export_hollow_cone_fillet_step, METH_VARARGS, "Export parametric hollow cone with top fillet to STEP"},
     {"export_hollow_cylinder_fillet_step", export_hollow_cylinder_fillet_step, METH_VARARGS, "Export parametric hollow cylinder with top fillet to STEP"},
     {"export_hollow_cone_fillet_with_groove_step", export_hollow_cone_fillet_with_groove_step, METH_VARARGS, "Export parametric hollow cone with top fillet and trapezoid groove to STEP"},

@@ -73,6 +73,10 @@ def log_to_file(msg):
 
 # ====================== C++ 模块加载检查 ======================
 
+# 模块版本标记 - 确认新代码已加载
+_log_init_time = __import__('time').strftime('%H:%M:%S')
+log_to_file(f"[STEP Exporter] [MODULE:v3] __init__.py loaded at {_log_init_time}")
+
 # 初始化模块状态变量
 CPP_MODULE_LOADED = False
 step_exporter = None
@@ -1649,6 +1653,14 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
         if r is not None:
             z_radius_data[zl] = r
     
+    # DEBUG: 输出 z-level 和半径数据
+    log_to_file(f"[STEP Exporter]   detect: {len(sorted_z)} z-levels, {len(z_radius_data)} with radius data")
+    for zl in sorted_z:
+        r = z_radius_data.get(zl)
+        if r is not None:
+            log_to_file(f"[STEP Exporter]     z={zl:.6f} r={r:.6f}")
+    log_to_file(f"[STEP Exporter]   detect: bottom_r={bottom_radius:.6f} top_r={top_radius:.6f} height={height:.6f}")
+    
     # 1. 从底部向上找恒定半径区域 → 判断是否为圆柱本体
     body_end_z = sorted_z[0]
     for zl in sorted_z:
@@ -1722,7 +1734,7 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
             ratio_01 = abs(r0 - r1) / max(abs(r0), 0.001)
             ratio_12 = abs(r1 - r2) / max(abs(r1), 0.001)
             if ratio_01 > 0.01 and ratio_12 < 0.01:
-                # r0 != r1 == r2 → 顶部倒角，r0 是完整半径
+                # r0 != r1 == r2 → 顶部倒角，r0 是完整半径（圆柱体）
                 body_radius = r0
                 bottom_radius = r0
                 top_radius = r0  # 让后续比例检查通过，确保返回 cylinder 而非 cone
@@ -1732,7 +1744,7 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                 cylindrical_body = True
                 body_end_z = valid_zls[2]
             elif ratio_01 < 0.01 and ratio_12 > 0.01:
-                # r0 == r1 != r2 → 底部倒角
+                # r0 == r1 != r2 → 底部倒角（圆柱体）
                 body_radius = r0
                 bottom_radius = r0
                 top_radius = r0
@@ -1741,6 +1753,24 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                 bottom_transition_zls = [valid_zls[1], valid_zls[2]]
                 cylindrical_body = True
                 body_end_z = valid_zls[0]
+            elif ratio_01 > 0.01 and ratio_12 > 0.01:
+                # 两端都有半径变化 → 可能是锥体+倒角
+                if r0 < r1 and r1 > r2:
+                    # r0 < r1 > r2 → 底部倒角 on 锥体
+                    # r0: chamfer后的底面半径, r1: 锥体底部全半径, r2: 锥体顶部半径
+                    body_radius = r1
+                    bottom_feature = 'chamfer'
+                    bottom_feature_size = r1 - r0
+                    bottom_transition_zls = [valid_zls[0], valid_zls[1]]
+                    log_to_file(f"[STEP Exporter]   detect: 3-layer cone with bottom chamfer (r0={r0:.4f}<r1={r1:.4f}>r2={r2:.4f})")
+                elif r0 > r1 and r1 > r2:
+                    # r0 > r1 > r2 → 顶部倒角 on 锥体
+                    # r0: 锥体底部半径, r1: 锥体顶部全半径, r2: chamfer后的顶面半径
+                    body_radius = r1
+                    top_feature = 'chamfer'
+                    top_feature_size = r1 - r2
+                    top_transition_zls = [valid_zls[1], valid_zls[2]]
+                    log_to_file(f"[STEP Exporter]   detect: 3-layer cone with top chamfer (r0={r0:.4f}>r1={r1:.4f}>r2={r2:.4f})")
         
         fit_zls = None  # will be set if mid-zone fitting is applicable
         valid_zls = [zl for zl in sorted_z if zl in z_radius_data]
@@ -2009,19 +2039,29 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
     
     bm.free()
     
+    # DEBUG: 输出特征检测结果
+    log_to_file(f"[STEP Exporter]   detect: cylindrical_body={cylindrical_body} top_feature={top_feature} top_feature_size={top_feature_size:.4f} bottom_feature={bottom_feature} bottom_feature_size={bottom_feature_size:.4f}")
+    log_to_file(f"[STEP Exporter]   detect: top_transition_zls={len(top_transition_zls)} bottom_transition_zls={len(bottom_transition_zls)}")
+    
     pos_x = obj.location.x
     pos_y = obj.location.y
     pos_z = obj.location.z
     
     # 检测对象旋转：如果世界矩阵翻转了 Z 轴（绕 X 或 Y 旋转 180°），
     # 则交换 top_feature 和 bottom_feature（局部坐标中 chamfer 在顶部，
-    # 但世界坐标中应该在底部）
+    # 但世界坐标中应该在底部），同时交换 top_radius/bottom_radius
     world_mat = obj.matrix_world
     if world_mat[2][2] < 0:
         if top_feature or bottom_feature:
             log_to_file(f"[STEP Exporter] Z-axis flipped by rotation, swapping top/bottom features")
             top_feature, bottom_feature = bottom_feature, top_feature
             top_feature_size, bottom_feature_size = bottom_feature_size, top_feature_size
+        # 交换上下半径（对于锥体/空心锥体，上下半径不同，旋转180°后需要对应交换）
+        if abs(bottom_radius - top_radius) > 0.0001:
+            top_radius, bottom_radius = bottom_radius, top_radius
+            if is_hollow:
+                inner_radius, inner_top_radius = inner_top_radius, inner_radius
+            log_to_file(f"[STEP Exporter] Z-axis flipped by rotation, swapping top/bottom radii")
     
     # ===== Mesh-based Stepped Hole Detection for Hollow Cones =====
     # Detects stepped inner holes: constant-radius straight section at top,
@@ -2216,12 +2256,14 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
             obj_type = 'cone'
             if top_feature and bottom_feature:
                 obj_type = 'cone_chamfer_fillet'
-            elif top_feature:
+            elif top_feature == 'chamfer' or bottom_feature == 'chamfer':
+                obj_type = 'cone_chamfer'
+            elif top_feature == 'fillet' or bottom_feature == 'fillet':
                 obj_type = 'cone_fillet'
             return {
                 'obj_type': obj_type,
                 'bottom_radius': body_radius if bottom_feature else bottom_radius,
-                'top_radius': top_radius,
+                'top_radius': (body_radius if top_feature else top_radius) if top_feature == 'chamfer' else top_radius,
                 'height': height,
                 'pos_x': pos_x,
                 'pos_y': pos_y,
@@ -2333,12 +2375,29 @@ def _export_parametric_sync(filepath, bottom_shells, top_shells, cylinders, step
                 step_schema, step_unit, 1 if enable_logging else 0)
         elif obj_type == 'cylinder_chamfer_fillet':
             reversed_flag = 1 if cparams.get('top_feature') == 'fillet' else 0
+            chamfer_sz = cparams.get('top_feature_size', 0)
+            fillet_sz = cparams.get('bottom_feature_size', 0)
+            if reversed_flag:
+                # 当 reversed_flag=1 时，top_feature 是 fillet，bottom_feature 是 chamfer
+                # 传入 C++ 的参数需要对应交换：chamfer_size = bottom_feature_size, fillet_radius = top_feature_size
+                chamfer_sz, fillet_sz = fillet_sz, chamfer_sz
+                log_to_file(f"[STEP Exporter]   reversed_flag=1, swapped chamfer/fillet sizes: chamfer={chamfer_sz:.6f} fillet={fillet_sz:.6f}")
+            log_to_file(f"[STEP Exporter]   export params: r={cparams['radius']:.6f} h={cparams['height']:.6f} chamfer={chamfer_sz:.6f} fillet={fillet_sz:.6f} reversed={reversed_flag}")
             success = cpp_exporter.export_cylinder_chamfer_fillet_step(
                 temp_file, cparams['radius'], cparams['height'],
-                cparams.get('top_feature_size', 0),
-                cparams.get('bottom_feature_size', 0),
+                chamfer_sz, fillet_sz,
                 px, py, pz, step_schema, step_unit,
                 1 if enable_logging else 0, reversed_flag)
+            if success:
+                try:
+                    shell_cnt, face_cnts = _verify_step_shell(temp_file)
+                    expected = 5
+                    actual = face_cnts[0] if face_cnts else 0
+                    if actual < expected:
+                        log_to_file(f"[STEP Exporter]   WARNING: expected {expected} faces, got {actual} - chamfer/fillet may have failed!")
+                    log_to_file(f"[STEP Exporter]   verify: {shell_cnt} shells, face counts: {face_cnts}")
+                except Exception as ve:
+                    log_to_file(f"[STEP Exporter]   verify error: {ve}")
         elif obj_type == 'cylinder_chamfer_both':
             success = cpp_exporter.export_cylinder_chamfer_both_step(
                 temp_file, cparams['radius'], cparams['height'],
@@ -2360,6 +2419,9 @@ def _export_parametric_sync(filepath, bottom_shells, top_shells, cylinders, step
             log_to_file(f"[STEP Exporter]   FAILED to export {obj_type} {idx+1}")
         else:
             log_to_file(f"[STEP Exporter]   {obj_type} {idx+1} exported")
+            # 验证导出结果
+            shell_cnt, face_cnts = _verify_step_shell(temp_file)
+            log_to_file(f"[STEP Exporter]   verify: {shell_cnt} shells, face counts: {face_cnts}")
     
     # 合并或复制
     successful_temp_files = [tf for tf in temp_files if os.path.exists(tf)]
@@ -2378,12 +2440,26 @@ def _export_parametric_sync(filepath, bottom_shells, top_shells, cylinders, step
                 shutil.copy2(successful_temp_files[0], filepath)
     elif successful_count == 1:
         try:
-            os.replace(successful_temp_files[0], filepath)
-        except:
+            temp_file = successful_temp_files[0]
+            temp_size = os.path.getsize(temp_file)
+            log_to_file(f"[STEP Exporter] Merging single file: {temp_file} ({temp_size} bytes) -> {filepath}")
+            os.replace(temp_file, filepath)
+            log_to_file(f"[STEP Exporter] Single file merge OK")
+        except Exception as merge_err:
+            log_to_file(f"[STEP Exporter] os.replace failed: {merge_err}, trying shutil.copy2")
             import shutil
-            shutil.copy2(successful_temp_files[0], filepath)
+            try:
+                shutil.copy2(temp_file, filepath)
+                log_to_file(f"[STEP Exporter] shutil.copy2 fallback OK")
+            except Exception as copy_err:
+                log_to_file(f"[STEP Exporter] shutil.copy2 also failed: {copy_err}")
     else:
         log_to_file(f"[STEP Exporter] No parametric objects exported successfully")
+    
+    # 合并后验证输出文件
+    if successful_count > 0:
+        out_shell_cnt, out_face_cnts = _verify_step_shell(filepath)
+        log_to_file(f"[STEP Exporter] post-merge verify: {out_shell_cnt} shells, face counts: {out_face_cnts}")
     
     # 清理临时文件
     for tf in temp_files:
@@ -2527,6 +2603,7 @@ def _export_bottom_shells_sync(filepath, shells, step_schema, step_unit, enable_
 
 def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
     """导出单个圆柱/圆锥类型对象到临时文件，返回成功标志"""
+    log_to_file(f"[STEP Exporter]   [VER:v2] _export_cylinder_staged entry, obj_type={cparams.get('obj_type', '?')}")
     obj_type = cparams.get('obj_type', 'cylinder')
     px = cparams.get('pos_x', 0.0)
     py = cparams.get('pos_y', 0.0)
@@ -2571,13 +2648,31 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
             1 if data['enable_logging'] else 0)
     elif obj_type == 'cylinder_chamfer_fillet':
         reversed_flag = 1 if cparams.get('top_feature') == 'fillet' else 0
-        return cpp_exporter.export_cylinder_chamfer_fillet_step(
+        chamfer_sz = cparams.get('top_feature_size', 0)
+        fillet_sz = cparams.get('bottom_feature_size', 0)
+        if reversed_flag:
+            # 当 reversed_flag=1 时，top_feature 是 fillet，bottom_feature 是 chamfer
+            # 传入 C++ 的参数需要对应交换：chamfer_size = bottom_feature_size, fillet_radius = top_feature_size
+            chamfer_sz, fillet_sz = fillet_sz, chamfer_sz
+        log_to_file(f"[STEP Exporter]   export params: r={cparams['radius']:.6f} h={cparams['height']:.6f} chamfer={chamfer_sz:.6f} fillet={fillet_sz:.6f} reversed={reversed_flag}")
+        result = cpp_exporter.export_cylinder_chamfer_fillet_step(
             temp_file, cparams['radius'], cparams['height'],
-            cparams.get('top_feature_size', 0),
-            cparams.get('bottom_feature_size', 0),
+            chamfer_sz, fillet_sz,
             px, py, pz,
             data['step_schema'], data['step_unit'],
             1 if data['enable_logging'] else 0, reversed_flag)
+        # 验证导出结果——带倒角圆角的圆柱体应有 5 个面，最少 3 个
+        if result:
+            try:
+                shell_cnt, face_cnts = _verify_step_shell(temp_file)
+                expected = 5
+                actual = face_cnts[0] if face_cnts else 0
+                if actual < expected:
+                    log_to_file(f"[STEP Exporter]   WARNING: expected {expected} faces, got {actual} - chamfer/fillet may have failed!")
+                log_to_file(f"[STEP Exporter]   verify: {shell_cnt} shells, face counts: {face_cnts}")
+            except Exception as ve:
+                log_to_file(f"[STEP Exporter]   verify error: {ve}")
+        return result
     elif obj_type == 'cylinder_chamfer_both':
         return cpp_exporter.export_cylinder_chamfer_both_step(
             temp_file, cparams['radius'], cparams['height'],
@@ -2601,6 +2696,17 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
             cparams.get('top_radius', 0), cparams['height'],
             cparams.get('bottom_feature_size', 0),
             cparams.get('top_feature_size', 0), px, py, pz,
+            data['step_schema'], data['step_unit'],
+            1 if data['enable_logging'] else 0)
+    elif obj_type == 'cone_chamfer':
+        chamfer_sz = cparams.get('bottom_feature_size', 0) if cparams.get('bottom_feature') == 'chamfer' else cparams.get('top_feature_size', 0)
+        is_top = 1 if cparams.get('top_feature') == 'chamfer' else 0
+        log_to_file(f"[STEP Exporter]   cone_chamfer: chamfer_sz={chamfer_sz:.4f} is_top={is_top}")
+        return cpp_exporter.export_cone_chamfer_step(
+            temp_file,
+            cparams.get('bottom_radius', cparams.get('radius', 0)),
+            cparams.get('top_radius', 0), cparams['height'],
+            chamfer_sz, is_top, px, py, pz,
             data['step_schema'], data['step_unit'],
             1 if data['enable_logging'] else 0)
     elif obj_type == 'hollow_cone_fillet':
@@ -2819,6 +2925,9 @@ def _parametric_export_staged():
                 
                 if success:
                     log_to_file(f"[STEP Exporter]   Object {obj_num}/{total_objects} OK ({time.time()-obj_start:.3f}s)")
+                    # 验证导出结果
+                    shell_cnt, face_cnts = _verify_step_shell(temp_file)
+                    log_to_file(f"[STEP Exporter]   verify: {shell_cnt} shells, face counts: {face_cnts}")
                 else:
                     log_to_file(f"[STEP Exporter]   Object {obj_num}/{total_objects} FAILED ({time.time()-obj_start:.3f}s)")
             except Exception as obj_err:
@@ -2864,10 +2973,19 @@ def _parametric_export_staged():
                         pass
             elif successful_count == 1:
                 try:
-                    os.replace(successful_temp_files[0], data['filepath'])
-                except:
+                    temp_file = successful_temp_files[0]
+                    temp_size = os.path.getsize(temp_file) if os.path.exists(temp_file) else -1
+                    log_to_file(f"[STEP Exporter] Merging single file: {temp_file} ({temp_size} bytes) -> {data['filepath']}")
+                    os.replace(temp_file, data['filepath'])
+                    log_to_file(f"[STEP Exporter] Single file merge OK")
+                except Exception as merge_err:
+                    log_to_file(f"[STEP Exporter] os.replace failed: {merge_err}, trying shutil.copy2")
                     import shutil
-                    shutil.copy2(successful_temp_files[0], data['filepath'])
+                    try:
+                        shutil.copy2(temp_file, data['filepath'])
+                        log_to_file(f"[STEP Exporter] shutil.copy2 fallback OK")
+                    except Exception as copy_err:
+                        log_to_file(f"[STEP Exporter] shutil.copy2 also failed: {copy_err}")
                 finally:
                     try:
                         _merge_log_files(os.path.dirname(data['filepath']), data['filepath'])
@@ -2887,6 +3005,10 @@ def _parametric_export_staged():
             _parametric_export_stage = 3
             elapsed = time.time() - _stage_start_time
             log_to_file(f"[STEP Exporter] [TIMING] Stage 2 (Merge) completed in {elapsed:.3f}s")
+            # 合并后验证输出文件
+            if successful_count > 0:
+                out_shell_cnt, out_face_cnts = _verify_step_shell(data['filepath'])
+                log_to_file(f"[STEP Exporter] post-merge verify: {out_shell_cnt} shells, face counts: {out_face_cnts}")
             return 0.05  # 进入完成阶段
         
         # === Stage 3: 完成 ===
@@ -2936,6 +3058,26 @@ def _parametric_export_staged():
             except:
                 pass
         return None
+
+
+def _verify_step_shell(filepath):
+    """快速验证 STEP 文件中的 CLOSED_SHELL 面数，用于诊断导出问题。
+    返回 (shell_count, face_counts_list) 或 (0, []) 如果文件不存在."""
+    import re
+    if not os.path.exists(filepath):
+        return 0, []
+    try:
+        with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+            content = f.read()
+        # 查找所有 CLOSED_SHELL 定义: #N=CLOSED_SHELL('name',(#F1,#F2,...));
+        shells = re.findall(r'#\d+\s*=\s*CLOSED_SHELL\s*\([^,]*,\s*\(([^)]*)\)', content)
+        face_counts = []
+        for s in shells:
+            faces = [x.strip() for x in s.split(',') if x.strip().startswith('#')]
+            face_counts.append(len(faces))
+        return len(shells), face_counts
+    except Exception:
+        return 0, []
 
 
 def _merge_step_files(output_path, temp_files):

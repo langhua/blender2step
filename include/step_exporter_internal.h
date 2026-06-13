@@ -84,6 +84,10 @@ TopoDS_Shape create_cone_chamfer_fillet_solid_parametric(double bottom_radius, d
                                                           double chamfer_size, double fillet_radius, int reversed);
 TopoDS_Shape create_cone_chamfer_solid_parametric(double bottom_radius, double top_radius, double height,
                                                    double chamfer_size, int is_top_chamfer);
+TopoDS_Shape create_cone_chamfer_solid_parametric_both(double bottom_radius, double top_radius, double height,
+                                                        double bottom_chamfer_size, double top_chamfer_size);
+TopoDS_Shape create_cone_fillet_solid_parametric_both(double bottom_radius, double top_radius, double height,
+                                                       double bottom_fillet_radius, double top_fillet_radius);
 TopoDS_Shape create_hollow_cone_fillet_solid_parametric(double outer_bottom_radius, double outer_top_radius,
                                                          double inner_bottom_radius, double inner_top_radius,
                                                          double height, double fillet_radius);

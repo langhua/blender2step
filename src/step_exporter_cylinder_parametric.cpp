@@ -1252,3 +1252,74 @@ TopoDS_Shape create_cone_stepped_hole_parametric(
         return TopoDS_Shape();
     }
 }
+
+// ====================== 参数化圆柱体 + 顶部盲孔 ======================
+
+TopoDS_Shape create_cylinder_with_blind_hole_solid_parametric(
+    double radius, double height,
+    double hole_radius, double hole_depth)
+{
+    // 创建外圆柱体
+    TopoDS_Shape outerShape = create_cylinder_solid_parametric(radius, height);
+    if (outerShape.IsNull()) return TopoDS_Shape();
+
+    // 确保外圆柱是实体
+    TopoDS_Solid outerSolid;
+    if (outerShape.ShapeType() == TopAbs_SOLID) {
+        outerSolid = TopoDS::Solid(outerShape);
+    } else {
+        BRepBuilderAPI_MakeSolid sm;
+        for (TopExp_Explorer exp(outerShape, TopAbs_SHELL); exp.More(); exp.Next())
+            sm.Add(TopoDS::Shell(exp.Current()));
+        if (sm.IsDone()) outerSolid = sm.Solid();
+        else return TopoDS_Shape();
+    }
+
+    // 孔切割体：略高于孔深以确保干净切割
+    double ext = std::max(radius * 0.001, 0.0001);
+    double cutterHeight = hole_depth + ext;
+
+    TopoDS_Shape cutterShape = create_cylinder_solid_parametric(hole_radius, cutterHeight);
+    if (cutterShape.IsNull()) return TopoDS_Shape();
+
+    // 将切割体定位到圆柱顶部
+    // 目标：切割体底部 = height/2 - hole_depth，顶部 = height/2 + ext
+    double transZ = height / 2.0 - hole_depth + cutterHeight / 2.0;
+    gp_Trsf trsf;
+    trsf.SetTranslation(gp_Vec(0, 0, transZ));
+    cutterShape = BRepBuilderAPI_Transform(cutterShape, trsf).Shape();
+
+    // 确保切割体是实体
+    TopoDS_Solid cutterSolid;
+    if (cutterShape.ShapeType() == TopAbs_SOLID) {
+        cutterSolid = TopoDS::Solid(cutterShape);
+    } else {
+        BRepBuilderAPI_MakeSolid sm;
+        for (TopExp_Explorer exp(cutterShape, TopAbs_SHELL); exp.More(); exp.Next())
+            sm.Add(TopoDS::Shell(exp.Current()));
+        if (sm.IsDone()) cutterSolid = sm.Solid();
+        else return TopoDS_Shape();
+    }
+
+    // 布尔减：外圆柱 - 孔切割体
+    BRepAlgoAPI_Cut cutMaker(outerSolid, cutterSolid);
+    if (!cutMaker.IsDone()) {
+        std::cerr << "[STEP Exporter] Failed to cut blind hole: r=" << radius
+                  << " h=" << height << " hole_r=" << hole_radius
+                  << " hole_d=" << hole_depth << std::endl;
+        return TopoDS_Shape();
+    }
+
+    std::cout << "[STEP Exporter] Created parametric cylinder with blind hole: r=" << radius
+              << " h=" << height << " hole_r=" << hole_radius
+              << " hole_d=" << hole_depth << std::endl;
+
+    TopoDS_Shape result = cutMaker.Shape();
+    if (result.ShapeType() != TopAbs_SOLID) {
+        BRepBuilderAPI_MakeSolid sm;
+        for (TopExp_Explorer exp(result, TopAbs_SHELL); exp.More(); exp.Next())
+            sm.Add(TopoDS::Shell(exp.Current()));
+        if (sm.IsDone()) return sm.Solid();
+    }
+    return result;
+}

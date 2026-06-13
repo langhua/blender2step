@@ -1424,6 +1424,20 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
     top_is_hollow, top_outer_radii = has_two_clusters(top_radii_sorted)
     might_be_hollow = bottom_is_hollow or top_is_hollow
     
+    # 修复：当顶部有孔洞（如标准圆柱顶部打孔）时，has_two_clusters可能因
+    # 三角面片中间顶点过多而无法检测到两簇。此时用简单阈值法提取外圈半径。
+    if not top_is_hollow and not might_be_hollow:
+        top_min_r = top_radii_sorted[0]
+        top_max_r = top_radii_sorted[-1]
+        if top_max_r - top_min_r > top_max_r * 0.15 and top_min_r > top_max_r * 0.1:
+            mid_r = (top_min_r + top_max_r) / 2.0
+            top_outer = [r for r in top_radii_sorted if r > mid_r]
+            if len(top_outer) >= 4:
+                top_is_hollow = True
+                might_be_hollow = True
+                top_outer_radii = sorted(top_outer)
+                log_to_file(f"[STEP Exporter] Detected ring at top via threshold: outer_r={top_outer_radii[len(top_outer_radii)//2]:.3f}")
+    
     # 如果是空心结构，用外圈半径重新计算
     if might_be_hollow:
         bo_sorted = sorted(bottom_outer_radii)
@@ -1693,6 +1707,21 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
             # swap direction: body is at top, transition at bottom
             body_end_z = body_start_z
     
+    # 修复：圆柱顶部打孔时，孔洞表面顶点半径远小于本体半径，
+    # 导致cylindrical_body=False（"本体"区域只有底部1层）。
+    # 检测这种模式：底部半径大、上方第一层半径骤降>40% → 圆柱带孔洞，非锥体/倒角
+    hole_pattern_detected = False
+    if not cylindrical_body and bottom_radius > 0.01:
+        above_zls = [zl for zl in sorted_z if zl > body_end_z and zl in z_radius_data]
+        if above_zls:
+            above_r_first = z_radius_data[above_zls[0]]
+            if above_r_first < bottom_radius * 0.6:
+                log_to_file(f"[STEP Exporter]   Hole pattern detected: bottom_r={bottom_radius:.3f} above_r={above_r_first:.3f}, treating as cylinder")
+                cylindrical_body = True
+                body_radius = bottom_radius
+                top_radius = bottom_radius  # 防止后续检测为锥体
+                hole_pattern_detected = True
+    
     if cylindrical_body:
         body_radius = sorted([z_radius_data.get(zl, body_radius) for zl in sorted_z 
                                if abs(z_radius_data.get(zl, body_radius) - body_radius) / max(body_radius, 0.01) < 0.01
@@ -1702,8 +1731,12 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
         # 顶部过渡：body_end_z 以上的所有层
         top_transition_zls = [zl for zl in sorted_z if zl > body_end_z and zl in z_radius_data]
         
+        # 孔洞模式：孔洞表面的顶点不应被检测为倒角/圆角过渡
+        if hole_pattern_detected:
+            top_transition_zls = []
+        
         # 如果过渡层不足2层但顶部半径明显偏离，添加上一个本体层作为过渡起点
-        if len(top_transition_zls) < 2:
+        if len(top_transition_zls) < 2 and not hole_pattern_detected:
             top_r = z_radius_data.get(sorted_z[-1])
             if top_r is not None and abs(top_r - body_radius) / max(body_radius, 0.01) > 0.01:
                 # 找到本体与过渡的分界层
@@ -2171,6 +2204,34 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
     # 构建返回参数
     # 应用单位缩放：所有尺寸参数 × scale（mm=1000, m=1）
     S = scale if scale > 0 else 1.0
+    
+    # 检测到孔洞模式（如顶部盲孔）：返回盲孔圆柱体类型
+    # 使用 OpenCASCADE 布尔减操作创建参数化盲孔
+    if hole_pattern_detected:
+        above_zls = [zl for zl in sorted_z if zl > body_end_z and zl in z_radius_data]
+        z_hole_bottom = above_zls[0] if above_zls else sorted_z[-1]
+        hole_depth = sorted_z[-1] - z_hole_bottom  # 从顶部到孔底的距离
+        
+        # 孔半径：取孔壁区域（非顶部混合层）的中位数半径
+        hole_wall_zls = [zl for zl in above_zls if zl < sorted_z[-1] * 0.99]
+        if hole_wall_zls:
+            hole_wall_r = sorted([z_radius_data[zl] for zl in hole_wall_zls])
+            hole_radius = hole_wall_r[len(hole_wall_r)//2]
+        else:
+            hole_radius = z_radius_data[above_zls[0]]
+        
+        log_to_file(f"[STEP Exporter]   -> cylinder_blind_hole! r={bottom_radius:.3f} h={height:.3f} hole_r={hole_radius:.3f} hole_d={hole_depth:.3f}")
+        return {
+            'obj_type': 'cylinder_blind_hole',
+            'radius': bottom_radius * S,
+            'height': height * S,
+            'hole_radius': hole_radius * S,
+            'hole_depth': hole_depth * S,
+            'pos_x': pos_x * S,
+            'pos_y': pos_y * S,
+            'pos_z': pos_z * S,
+        }
+    
     bottom_radius *= S; top_radius *= S; height *= S
     pos_x *= S; pos_y *= S; pos_z *= S
     body_radius *= S
@@ -2450,6 +2511,12 @@ def _export_parametric_sync(filepath, bottom_shells, top_shells, cylinders, step
                 cparams.get('bottom_feature_size', 0),
                 px, py, pz, step_schema, step_unit,
                 1 if enable_logging else 0)
+        elif obj_type == 'cylinder_blind_hole':
+            success = cpp_exporter.export_cylinder_blind_hole_step(
+                temp_file, cparams['radius'], cparams['height'],
+                cparams['hole_radius'], cparams['hole_depth'],
+                px, py, pz, step_schema, step_unit,
+                1 if enable_logging else 0)
         else:
             success = False
         if not success:
@@ -2724,6 +2791,13 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
             temp_file, cparams['radius'], cparams['height'],
             cparams.get('top_feature_size', 0),
             cparams.get('bottom_feature_size', 0),
+            px, py, pz,
+            data['step_schema'], data['step_unit'],
+            1 if data['enable_logging'] else 0)
+    elif obj_type == 'cylinder_blind_hole':
+        return cpp_exporter.export_cylinder_blind_hole_step(
+            temp_file, cparams['radius'], cparams['height'],
+            cparams['hole_radius'], cparams['hole_depth'],
             px, py, pz,
             data['step_schema'], data['step_unit'],
             1 if data['enable_logging'] else 0)
@@ -4852,6 +4926,13 @@ def _create_holes(obj, props, S):
     for cutter in cutters:
         is_last = (cutter == cutters[-1])
         _boolean_difference(obj, cutter, is_last and props.hole_fillet_radius > 0)
+    
+    # 删除切割体（不再需要）
+    for cutter in cutters:
+        mesh = cutter.data
+        bpy.data.objects.remove(cutter, do_unlink=True)
+        if mesh and mesh.users == 0:
+            bpy.data.meshes.remove(mesh)
     
     # 孔口圆倒角
     if props.hole_fillet_radius > 0 and cutters:

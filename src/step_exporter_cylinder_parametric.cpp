@@ -29,6 +29,7 @@
 #include <BRepCheck_Analyzer.hxx>
 #include <Precision.hxx>
 #include <BRepAdaptor_Surface.hxx>
+#include <BRepAdaptor_Curve.hxx>
 #include <BRepTools.hxx>
 #include <Standard_Failure.hxx>
 #include <Geom_Plane.hxx>
@@ -37,9 +38,20 @@
 #include <BRepBuilderAPI_MakePolygon.hxx>
 #include <BRepPrimAPI_MakePrism.hxx>
 #include <BRepPrimAPI_MakeRevol.hxx>
+#include <BRepBuilderAPI_MakeEdge.hxx>
+#include <BRepBuilderAPI_MakeWire.hxx>
+#include <gp_Circ.hxx>
 #include <iostream>
+#include <fstream>
 #include <vector>
 #include <cmath>
+#include <string>
+
+// Helper: write debug message to log file
+static void cyl_log(const std::string& msg) {
+    static std::ofstream fs("F:/git/blender2step/step_exporter/test28.step.log", std::ios::app);
+    fs << "[STEP Exporter][C++] " << msg << std::endl;
+}
 
 // ====================== Helper: convert any shape to TopoDS_Solid ======================
 
@@ -1257,7 +1269,8 @@ TopoDS_Shape create_cone_stepped_hole_parametric(
 
 TopoDS_Shape create_cylinder_with_blind_hole_solid_parametric(
     double radius, double height,
-    double hole_radius, double hole_depth)
+    double hole_radius, double hole_depth,
+    double hole_fillet_radius)
 {
     // 创建外圆柱体
     TopoDS_Shape outerShape = create_cylinder_solid_parametric(radius, height);
@@ -1310,16 +1323,94 @@ TopoDS_Shape create_cylinder_with_blind_hole_solid_parametric(
         return TopoDS_Shape();
     }
 
+    TopoDS_Shape result = cutMaker.Shape();
+    TopoDS_Solid solid;
+    if (result.ShapeType() == TopAbs_SOLID) {
+        solid = TopoDS::Solid(result);
+    } else {
+        BRepBuilderAPI_MakeSolid sm;
+        for (TopExp_Explorer exp(result, TopAbs_SHELL); exp.More(); exp.Next())
+            sm.Add(TopoDS::Shell(exp.Current()));
+        if (sm.IsDone()) solid = sm.Solid();
+        else return TopoDS_Shape();
+    }
+
+    // 孔口圆倒角
+    if (hole_fillet_radius > 0.001) {
+        double halfH = height / 2.0;
+        double FR = hole_fillet_radius;
+        double HR = hole_radius;
+        cyl_log("Applying hole fillet: FR=" + std::to_string(FR) + " HR=" + std::to_string(HR) + " halfH=" + std::to_string(halfH));
+        
+        // 方法：找到位于 z≈halfH、半径≈HR 的圆形边，用 BRepFilletAPI_MakeFillet
+        TopoDS_Edge holeEdge;
+        bool found = false;
+        int edgeIdx = 0;
+        
+        for (TopExp_Explorer exp(solid, TopAbs_EDGE); exp.More(); exp.Next()) {
+            TopoDS_Edge edge = TopoDS::Edge(exp.Current());
+            edgeIdx++;
+            
+            // 检查是否为圆形边
+            BRepAdaptor_Curve curve(edge);
+            GeomAbs_CurveType ct = curve.GetType();
+            
+            if (ct == GeomAbs_Circle) {
+                gp_Circ circ = curve.Circle();
+                gp_Pnt ctr = circ.Location();
+                double cr = circ.Radius();
+                double cz = ctr.Z();
+                double cx = ctr.X();
+                double cy = ctr.Y();
+                cyl_log("  Edge " + std::to_string(edgeIdx) + ": Circle r=" + std::to_string(cr) + 
+                        " ctr=(" + std::to_string(cx) + "," + std::to_string(cy) + "," + std::to_string(cz) + ")");
+                
+                // 孔口边：圆心在 Z 轴上 (cx≈0, cy≈0)，z≈halfH，r≈HR
+                if (std::abs(cx) < 0.01 && std::abs(cy) < 0.01 &&
+                    std::abs(cz - halfH) < 0.01 &&
+                    std::abs(cr - HR) / std::max(HR, 0.001) < 0.15) {
+                    holeEdge = edge;
+                    found = true;
+                    cyl_log("  >>> Found hole edge!");
+                    break;
+                }
+            } else {
+                TopoDS_Vertex v1, v2;
+                TopExp::Vertices(edge, v1, v2);
+                if (!v1.IsNull() && !v2.IsNull()) {
+                    gp_Pnt p1 = BRep_Tool::Pnt(v1);
+                    gp_Pnt p2 = BRep_Tool::Pnt(v2);
+                    double z1 = p1.Z(), z2 = p2.Z();
+                    double r1 = std::sqrt(p1.X()*p1.X() + p1.Y()*p1.Y());
+                    double r2 = std::sqrt(p2.X()*p2.X() + p2.Y()*p2.Y());
+                    std::string cts = (ct == GeomAbs_Line ? "Line" : "Other");
+                    cyl_log("  Edge " + std::to_string(edgeIdx) + ": " + cts +
+                            " v1=(" + std::to_string(p1.X()).substr(0,6) + "," + std::to_string(p1.Y()).substr(0,6) + "," + std::to_string(p1.Z()).substr(0,6) + ")" +
+                            " v2=(" + std::to_string(p2.X()).substr(0,6) + "," + std::to_string(p2.Y()).substr(0,6) + "," + std::to_string(p2.Z()).substr(0,6) + ")" +
+                            " z1=" + std::to_string(z1).substr(0,6) + " z2=" + std::to_string(z2).substr(0,6) +
+                            " r1=" + std::to_string(r1).substr(0,6) + " r2=" + std::to_string(r2).substr(0,6));
+                }
+            }
+        }
+        
+        if (found) {
+            BRepFilletAPI_MakeFillet filletMaker(solid);
+            filletMaker.Add(FR, holeEdge);
+            filletMaker.Build();
+            if (filletMaker.IsDone()) {
+                solid = shape_to_solid(filletMaker.Shape());
+                cyl_log("Applied hole fillet successfully: r=" + std::to_string(FR));
+            } else {
+                cyl_log("FAILED to apply fillet (BRepFilletAPI_MakeFillet not done)");
+            }
+        } else {
+            cyl_log("Could not find hole opening edge among " + std::to_string(edgeIdx) + " edges");
+        }
+    }
+
     std::cout << "[STEP Exporter] Created parametric cylinder with blind hole: r=" << radius
               << " h=" << height << " hole_r=" << hole_radius
               << " hole_d=" << hole_depth << std::endl;
 
-    TopoDS_Shape result = cutMaker.Shape();
-    if (result.ShapeType() != TopAbs_SOLID) {
-        BRepBuilderAPI_MakeSolid sm;
-        for (TopExp_Explorer exp(result, TopAbs_SHELL); exp.More(); exp.Next())
-            sm.Add(TopoDS::Shell(exp.Current()));
-        if (sm.IsDone()) return sm.Solid();
-    }
-    return result;
+    return solid;
 }

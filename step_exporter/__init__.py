@@ -2221,12 +2221,16 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
             hole_radius = z_radius_data[above_zls[0]]
         
         log_to_file(f"[STEP Exporter]   -> cylinder_blind_hole! r={bottom_radius:.3f} h={height:.3f} hole_r={hole_radius:.3f} hole_d={hole_depth:.3f}")
+        hole_fillet_r = obj.get('hole_fillet_radius', 0.0) if hasattr(obj, 'get') else 0.0
+        if hole_fillet_r > 0:
+            log_to_file(f"[STEP Exporter]   hole fillet: r={hole_fillet_r:.3f}")
         return {
             'obj_type': 'cylinder_blind_hole',
             'radius': bottom_radius * S,
             'height': height * S,
             'hole_radius': hole_radius * S,
             'hole_depth': hole_depth * S,
+            'hole_fillet_radius': hole_fillet_r,  # 已为 mm，无需缩放
             'pos_x': pos_x * S,
             'pos_y': pos_y * S,
             'pos_z': pos_z * S,
@@ -2515,6 +2519,7 @@ def _export_parametric_sync(filepath, bottom_shells, top_shells, cylinders, step
             success = cpp_exporter.export_cylinder_blind_hole_step(
                 temp_file, cparams['radius'], cparams['height'],
                 cparams['hole_radius'], cparams['hole_depth'],
+                cparams.get('hole_fillet_radius', 0),
                 px, py, pz, step_schema, step_unit,
                 1 if enable_logging else 0)
         else:
@@ -2798,6 +2803,7 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
         return cpp_exporter.export_cylinder_blind_hole_step(
             temp_file, cparams['radius'], cparams['height'],
             cparams['hole_radius'], cparams['hole_depth'],
+            cparams.get('hole_fillet_radius', 0),
             px, py, pz,
             data['step_schema'], data['step_unit'],
             1 if data['enable_logging'] else 0)
@@ -4755,6 +4761,10 @@ def _generate_parametric_cylinder(props):
     # === 3. 创建孔 ===
     if props.hole_type != 'none':
         _create_holes(obj, props, S)
+    
+    # 存储圆倒角参数到自定义属性，供导出时读取
+    if props.hole_fillet_radius > 0:
+        obj['hole_fillet_radius'] = props.hole_fillet_radius
     
     return obj
 

@@ -1148,26 +1148,29 @@ PyObject* export_cylinder_fillet_both_step(PyObject* self, PyObject* args) {
 PyObject* export_cylinder_blind_hole_step(PyObject* self, PyObject* args) {
     const char* filename;
     double radius, height, hole_radius, hole_depth;
+    double hole_fillet_radius = 0.0;
     double pos_x = 0.0, pos_y = 0.0, pos_z = 0.0;
     const char* step_schema = "AP214IS";
     const char* unit = "MILLIMETER";
     int enable_logging = 1;
 
-    if (!PyArg_ParseTuple(args, "sdddd|dddssi",
+    if (!PyArg_ParseTuple(args, "sdddd|ddddssi",
                           &filename,
                           &radius, &height, &hole_radius, &hole_depth,
+                          &hole_fillet_radius,
                           &pos_x, &pos_y, &pos_z,
                           &step_schema, &unit, &enable_logging)) {
         PyErr_SetString(PyExc_TypeError,
             "export_cylinder_blind_hole_step() expected: filename, radius, height, hole_radius, hole_depth, "
-            "[pos_x], [pos_y], [pos_z], [step_schema], [unit], [enable_logging]");
+            "[hole_fillet_radius], [pos_x], [pos_y], [pos_z], [step_schema], [unit], [enable_logging]");
         return NULL;
     }
 
     try {
         std::cout << "[STEP Exporter] Exporting parametric cylinder with blind hole: r=" << radius
-                  << " h=" << height << " hole_r=" << hole_radius << " hole_d=" << hole_depth << std::endl;
-        TopoDS_Shape shape = create_cylinder_with_blind_hole_solid_parametric(radius, height, hole_radius, hole_depth);
+                  << " h=" << height << " hole_r=" << hole_radius << " hole_d=" << hole_depth
+                  << " hole_fillet_r=" << hole_fillet_radius << std::endl;
+        TopoDS_Shape shape = create_cylinder_with_blind_hole_solid_parametric(radius, height, hole_radius, hole_depth, hole_fillet_radius);
         if (shape.IsNull()) { Py_RETURN_FALSE; }
 
         if (pos_x != 0.0 || pos_y != 0.0 || pos_z != 0.0) {

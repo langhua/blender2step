@@ -83,7 +83,8 @@ TopoDS_Shape create_cylinder_fillet_both_solid_parametric(double radius, double 
 
 // Cylinder with blind hole (top)
 TopoDS_Shape create_cylinder_with_blind_hole_solid_parametric(double radius, double height,
-                                                               double hole_radius, double hole_depth);
+                                                               double hole_radius, double hole_depth,
+                                                               double hole_fillet_radius);
 
 TopoDS_Shape create_cone_chamfer_fillet_solid_parametric(double bottom_radius, double top_radius, double height,
                                                           double chamfer_size, double fillet_radius, int reversed);

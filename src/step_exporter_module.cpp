@@ -1149,28 +1149,47 @@ PyObject* export_cone_chamfer_fillet_step(PyObject* self, PyObject* args) {
     const char* filename;
     double bottom_radius, top_radius, height;
     double chamfer_size, fillet_radius;
+    int reversed = 0;
     double pos_x = 0.0, pos_y = 0.0, pos_z = 0.0;
     const char* step_schema = "AP214IS";
     const char* unit = "MILLIMETER";
     int enable_logging = 1;
 
-    if (!PyArg_ParseTuple(args, "sddddd|dddssi",
+    if (!PyArg_ParseTuple(args, "sdddddi|dddssi",
                           &filename,
                           &bottom_radius, &top_radius, &height,
                           &chamfer_size, &fillet_radius,
+                          &reversed,
                           &pos_x, &pos_y, &pos_z,
                           &step_schema, &unit, &enable_logging)) {
         PyErr_SetString(PyExc_TypeError,
             "export_cone_chamfer_fillet_step() expected: filename, bottom_radius, top_radius, height, "
-            "chamfer_size, fillet_radius, "
+            "chamfer_size, fillet_radius, reversed, "
             "[pos_x], [pos_y], [pos_z], [step_schema], [unit], [enable_logging]");
         return NULL;
     }
 
+    // Redirect stdout to log file so C++ debug output is captured
+    std::string logPath;
+    FILE* log_file = nullptr;
+    int saved_stdout_fd = -1;
+    if (enable_logging) {
+        logPath = std::string(filename) + ".log";
+        log_file = _fsopen(logPath.c_str(), "a", _SH_DENYNO);
+        if (log_file) {
+            saved_stdout_fd = _dup(_fileno(stdout));
+            _dup2(_fileno(log_file), _fileno(stdout));
+            setvbuf(stdout, nullptr, _IONBF, 0);
+        }
+    }
+
     try {
         TopoDS_Shape shape = create_cone_chamfer_fillet_solid_parametric(
-            bottom_radius, top_radius, height, chamfer_size, fillet_radius);
-        if (shape.IsNull()) { Py_RETURN_FALSE; }
+            bottom_radius, top_radius, height, chamfer_size, fillet_radius, reversed);
+        if (shape.IsNull()) { 
+            if (saved_stdout_fd >= 0) { _dup2(saved_stdout_fd, _fileno(stdout)); if (log_file) fclose(log_file); }
+            Py_RETURN_FALSE; 
+        }
 
         if (pos_x != 0.0 || pos_y != 0.0 || pos_z != 0.0) {
             gp_Trsf trsf;
@@ -1187,14 +1206,23 @@ PyObject* export_cone_chamfer_fillet_step(PyObject* self, PyObject* args) {
 
         STEPControl_Writer writer;
         Interface_Static::SetCVal("write.step.schema", step_schema);
-        if (writer.Transfer(shape, STEPControl_AsIs) != IFSelect_RetDone) { Py_RETURN_FALSE; }
-        if (writer.Write(filename) != IFSelect_RetDone) { Py_RETURN_FALSE; }
+        if (writer.Transfer(shape, STEPControl_AsIs) != IFSelect_RetDone) { 
+            if (saved_stdout_fd >= 0) { _dup2(saved_stdout_fd, _fileno(stdout)); if (log_file) fclose(log_file); }
+            Py_RETURN_FALSE; 
+        }
+        if (writer.Write(filename) != IFSelect_RetDone) { 
+            if (saved_stdout_fd >= 0) { _dup2(saved_stdout_fd, _fileno(stdout)); if (log_file) fclose(log_file); }
+            Py_RETURN_FALSE; 
+        }
 
+        if (saved_stdout_fd >= 0) { _dup2(saved_stdout_fd, _fileno(stdout)); if (log_file) fclose(log_file); }
         Py_RETURN_TRUE;
     } catch (Standard_Failure& e) {
+        if (saved_stdout_fd >= 0) { _dup2(saved_stdout_fd, _fileno(stdout)); if (log_file) fclose(log_file); }
         std::cerr << "[STEP Exporter] OCC error: " << e.GetMessageString() << std::endl;
         Py_RETURN_FALSE;
     } catch (...) {
+        if (saved_stdout_fd >= 0) { _dup2(saved_stdout_fd, _fileno(stdout)); if (log_file) fclose(log_file); }
         std::cerr << "[STEP Exporter] Unknown error" << std::endl;
         Py_RETURN_FALSE;
     }

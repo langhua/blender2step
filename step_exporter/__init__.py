@@ -1755,17 +1755,35 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                 body_end_z = valid_zls[0]
             elif ratio_01 > 0.01 and ratio_12 > 0.01:
                 # 两端都有半径变化 → 可能是锥体+倒角
-                if r0 < r1 and r1 > r2:
-                    # r0 < r1 > r2 → 底部倒角 on 锥体
+                # 需要通过 z 间距判断倒角在顶部还是底部
+                # 倒角过渡区较短，锥体本体较长
+                gap_bottom = valid_zls[1] - valid_zls[0]  # 底部过渡区高度
+                gap_top = valid_zls[2] - valid_zls[1]      # 顶部过渡区高度
+                if gap_bottom < gap_top * 0.5:
+                    # 底部过渡区很短 → 底部倒角 on 锥体
                     # r0: chamfer后的底面半径, r1: 锥体底部全半径, r2: 锥体顶部半径
                     body_radius = r1
                     bottom_feature = 'chamfer'
                     bottom_feature_size = r1 - r0
                     bottom_transition_zls = [valid_zls[0], valid_zls[1]]
-                    log_to_file(f"[STEP Exporter]   detect: 3-layer cone with bottom chamfer (r0={r0:.4f}<r1={r1:.4f}>r2={r2:.4f})")
-                elif r0 > r1 and r1 > r2:
-                    # r0 > r1 > r2 → 顶部倒角 on 锥体
+                    log_to_file(f"[STEP Exporter]   detect: 3-layer cone with bottom chamfer (r0={r0:.4f}<r1={r1:.4f}>r2={r2:.4f}, gap_bot={gap_bottom:.4f}<gap_top={gap_top:.4f})")
+                elif gap_top < gap_bottom * 0.5:
+                    # 顶部过渡区很短 → 顶部倒角 on 锥体（锥体上宽下窄）
                     # r0: 锥体底部半径, r1: 锥体顶部全半径, r2: chamfer后的顶面半径
+                    body_radius = r1
+                    top_feature = 'chamfer'
+                    top_feature_size = r1 - r2
+                    top_transition_zls = [valid_zls[1], valid_zls[2]]
+                    log_to_file(f"[STEP Exporter]   detect: 3-layer cone with top chamfer (r0={r0:.4f}<r1={r1:.4f}>r2={r2:.4f}, gap_top={gap_top:.4f}<gap_bot={gap_bottom:.4f})")
+                elif r0 < r1:
+                    # 无法通过间距判断，退化为按半径关系判断：r0<r1 → 底部倒角
+                    body_radius = r1
+                    bottom_feature = 'chamfer'
+                    bottom_feature_size = r1 - r0
+                    bottom_transition_zls = [valid_zls[0], valid_zls[1]]
+                    log_to_file(f"[STEP Exporter]   detect: 3-layer cone with bottom chamfer (fallback, r0={r0:.4f}<r1={r1:.4f})")
+                elif r0 > r1:
+                    # r0 > r1 > r2 → 顶部倒角 on 锥体
                     body_radius = r1
                     top_feature = 'chamfer'
                     top_feature_size = r1 - r2
@@ -2260,10 +2278,25 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                 obj_type = 'cone_chamfer'
             elif top_feature == 'fillet' or bottom_feature == 'fillet':
                 obj_type = 'cone_fillet'
+            # 锥体 + 特征：从过渡区边界获取正确的本体半径
+            # body_radius 初始化为 bottom_radius（极端面半径），对于锥体不适用
+            body_bot_r = bottom_radius
+            body_top_r = top_radius
+            if bottom_feature and bottom_transition_zls:
+                bzls = sorted(bottom_transition_zls)
+                if bzls:
+                    body_bot_r = z_radius_data.get(bzls[-1], bottom_radius / S) * S
+                    log_to_file(f"[STEP Exporter]   body_bot: z_range=[{bzls[0]:.6f},{bzls[-1]:.6f}] zls={len(bzls)} -> r={body_bot_r:.6f}")
+            if top_feature and top_transition_zls:
+                tzls = sorted(top_transition_zls)
+                if tzls:
+                    body_top_r = z_radius_data.get(tzls[0], top_radius / S) * S
+                    log_to_file(f"[STEP Exporter]   body_top: z_range=[{tzls[0]:.6f},{tzls[-1]:.6f}] zls={len(tzls)} -> r={body_top_r:.6f}")
+            log_to_file(f"[STEP Exporter]   CLASSIFIED: {obj_type} bR={body_bot_r:.6f} tR={body_top_r:.6f} h={height:.6f}")
             return {
                 'obj_type': obj_type,
-                'bottom_radius': body_radius if bottom_feature else bottom_radius,
-                'top_radius': (body_radius if top_feature else top_radius) if top_feature == 'chamfer' else top_radius,
+                'bottom_radius': body_bot_r,
+                'top_radius': body_top_r,
                 'height': height,
                 'pos_x': pos_x,
                 'pos_y': pos_y,
@@ -2690,12 +2723,25 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
             data['step_schema'], data['step_unit'],
             1 if data['enable_logging'] else 0)
     elif obj_type == 'cone_chamfer_fillet':
+        # Determine feature order: C++ expects chamfer_size first, fillet_radius second
+        # reversed=0: bottom chamfer + top fillet; reversed=1: bottom fillet + top chamfer
+        bot_feat = cparams.get('bottom_feature')
+        top_feat = cparams.get('top_feature')
+        if bot_feat == 'fillet' and top_feat == 'chamfer':
+            rev_flag = 1
+            chamfer_sz = cparams.get('top_feature_size', 0)
+            fillet_r = cparams.get('bottom_feature_size', 0)
+        else:
+            rev_flag = 0
+            chamfer_sz = cparams.get('bottom_feature_size', 0)
+            fillet_r = cparams.get('top_feature_size', 0)
+        log_to_file(f"[STEP Exporter]   cone_chamfer_fillet: bR={cparams.get('bottom_radius',0):.4f} tR={cparams.get('top_radius',0):.4f} h={cparams['height']:.4f} chamfer_sz={chamfer_sz:.4f} fillet_r={fillet_r:.4f} reversed={rev_flag}")
         return cpp_exporter.export_cone_chamfer_fillet_step(
             temp_file,
             cparams.get('bottom_radius', cparams.get('radius', 0)),
             cparams.get('top_radius', 0), cparams['height'],
-            cparams.get('bottom_feature_size', 0),
-            cparams.get('top_feature_size', 0), px, py, pz,
+            chamfer_sz, fillet_r, rev_flag,
+            px, py, pz,
             data['step_schema'], data['step_unit'],
             1 if data['enable_logging'] else 0)
     elif obj_type == 'cone_chamfer':
@@ -2750,7 +2796,7 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
         return cpp_exporter.export_cone_chamfer_fillet_step(
             temp_file,
             cparams.get('bottom_radius', 0), cparams.get('top_radius', 0),
-            cparams['height'], 0.0, cparams.get('top_feature_size', 0),
+            cparams['height'], 0.0, cparams.get('top_feature_size', 0), 0,
             px, py, pz, data['step_schema'], data['step_unit'],
             1 if data['enable_logging'] else 0)
     elif obj_type == 'hollow_cylinder_fillet':

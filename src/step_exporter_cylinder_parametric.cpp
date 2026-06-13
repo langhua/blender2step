@@ -28,6 +28,8 @@
 #include <TopoDS_Vertex.hxx>
 #include <BRepCheck_Analyzer.hxx>
 #include <Precision.hxx>
+#include <BRepAdaptor_Surface.hxx>
+#include <BRepTools.hxx>
 #include <Standard_Failure.hxx>
 #include <Geom_Plane.hxx>
 #include <Geom_Surface.hxx>
@@ -239,12 +241,19 @@ static void find_circular_edges(const TopoDS_Shape& solid,
     double maxZ = -1e100, minZ = 1e100;
     
     // First pass: find max/min Z among circular edges
+    int totalEdges = 0;
     for (TopExp_Explorer exp(solid, TopAbs_EDGE); exp.More(); exp.Next()) {
         TopoDS_Edge edge = TopoDS::Edge(exp.Current());
         TopoDS_Vertex v1 = TopExp::FirstVertex(edge, true);
         TopoDS_Vertex v2 = TopExp::LastVertex(edge, true);
         gp_Pnt p1 = BRep_Tool::Pnt(v1);
         gp_Pnt p2 = BRep_Tool::Pnt(v2);
+        totalEdges++;
+        
+        std::cout << "[STEP Exporter] CONE-DEBUG: edge#" << totalEdges 
+                  << " v1=(" << p1.X() << "," << p1.Y() << "," << p1.Z() << ")"
+                  << " v2=(" << p2.X() << "," << p2.Y() << "," << p2.Z() << ")"
+                  << " dZ=" << fabs(p1.Z() - p2.Z()) << std::endl;
         
         if (fabs(p1.Z() - p2.Z()) < tolerance) {
             double z = (p1.Z() + p2.Z()) / 2.0;
@@ -252,6 +261,9 @@ static void find_circular_edges(const TopoDS_Shape& solid,
             if (z < minZ) minZ = z;
         }
     }
+    
+    std::cout << "[STEP Exporter] CONE-DEBUG: total edges=" << totalEdges 
+              << " maxZ=" << maxZ << " minZ=" << minZ << std::endl;
     
     // Second pass: collect edges at max/min Z
     for (TopExp_Explorer exp(solid, TopAbs_EDGE); exp.More(); exp.Next()) {
@@ -535,9 +547,40 @@ TopoDS_Shape create_cylinder_fillet_both_solid_parametric(
 
 // ====================== 带底部倒角和顶部圆角的锥体 ======================
 
+// Helper: find planar face at given Z level
+static bool find_planar_face_at_z(const TopoDS_Solid& solid, double targetZ, double tolerance, TopoDS_Face& result) {
+    for (TopExp_Explorer exp(solid, TopAbs_FACE); exp.More(); exp.Next()) {
+        TopoDS_Face face = TopoDS::Face(exp.Current());
+        BRepAdaptor_Surface surf(face);
+        if (surf.GetType() == GeomAbs_Plane) {
+            // Check if this plane is at the target Z
+            gp_Pln plane = surf.Plane();
+            gp_Pnt loc = plane.Location();
+            // Check if plane normal is (0,0,±1) and location Z matches
+            if (fabs(plane.Axis().Direction().Z()) > 0.999 && fabs(loc.Z() - targetZ) < tolerance) {
+                result = face;
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+// Helper: get outer wire edge from a face
+static bool get_outer_wire_edge(const TopoDS_Face& face, TopoDS_Edge& edge) {
+    TopoDS_Wire outerWire = BRepTools::OuterWire(face);
+    TopExp_Explorer exp(outerWire, TopAbs_EDGE);
+    if (exp.More()) {
+        edge = TopoDS::Edge(exp.Current());
+        return true;
+    }
+    return false;
+}
+
 TopoDS_Shape create_cone_chamfer_fillet_solid_parametric(
     double bottom_radius, double top_radius, double height,
-    double chamfer_size, double fillet_radius)
+    double chamfer_size, double fillet_radius,
+    int reversed)
 {
     TopoDS_Shape shape = create_cone_solid_parametric(bottom_radius, top_radius, height);
     if (shape.IsNull()) return TopoDS_Shape();
@@ -553,36 +596,109 @@ TopoDS_Shape create_cone_chamfer_fillet_solid_parametric(
         else return TopoDS_Shape();
     }
     
-    std::vector<TopoDS_Edge> topEdges, bottomEdges;
-    find_circular_edges(solid, topEdges, bottomEdges);
+    // Find top and bottom planar faces
+    double halfH = height / 2.0;
+    TopoDS_Face bottomFace, topFace;
+    bool hasBottom = find_planar_face_at_z(solid, -halfH, 0.01, bottomFace);
+    bool hasTop = find_planar_face_at_z(solid, halfH, 0.01, topFace);
     
-    // Apply bottom chamfer first
-    if (chamfer_size > 0.001 && !bottomEdges.empty()) {
-        BRepFilletAPI_MakeChamfer chamferMaker(solid);
-        chamferMaker.Add(chamfer_size, bottomEdges[0]);
-        chamferMaker.Build();
-        if (chamferMaker.IsDone()) {
-            solid = shape_to_solid(chamferMaker.Shape());
-        } else {
-            std::cerr << "[STEP Exporter] ERROR: Cone chamfer build failed! size=" << chamfer_size << std::endl;
+    std::cout << "[STEP Exporter] CONE-DEBUG: bottom_face=" << (hasBottom ? "found" : "NOT FOUND")
+              << " top_face=" << (hasTop ? "found" : "NOT FOUND") << std::endl;
+    
+    TopoDS_Edge bottomEdge, topEdge;
+    bool hasBottomEdge = hasBottom && get_outer_wire_edge(bottomFace, bottomEdge);
+    bool hasTopEdge = hasTop && get_outer_wire_edge(topFace, topEdge);
+    
+    std::cout << "[STEP Exporter] CONE-DEBUG: bottom_edge=" << (hasBottomEdge ? "found" : "NOT FOUND")
+              << " top_edge=" << (hasTopEdge ? "found" : "NOT FOUND") << std::endl;
+    
+    if (reversed) {
+        // 反转模式：底部圆角 + 顶部倒角
+        std::cout << "[STEP Exporter] CONE-DEBUG: reversed mode - bottom fillet r=" << fillet_radius 
+                  << " then top chamfer sz=" << chamfer_size << std::endl;
+        
+        // Apply bottom fillet first
+        if (fillet_radius > 0.001 && hasBottomEdge) {
+            std::cout << "[STEP Exporter] CONE-DEBUG: applying bottom fillet..." << std::endl;
+            BRepFilletAPI_MakeFillet filletMaker(solid);
+            filletMaker.Add(fillet_radius, bottomEdge);
+            filletMaker.Build();
+            if (filletMaker.IsDone()) {
+                solid = shape_to_solid(filletMaker.Shape());
+                std::cout << "[STEP Exporter] CONE-DEBUG: bottom fillet OK" << std::endl;
+            } else {
+                std::cout << "[STEP Exporter] ERROR: Cone fillet build failed! radius=" << fillet_radius << std::endl;
+            }
+        }
+        
+        // Then apply top chamfer (re-find edges after fillet modified the solid)
+        if (chamfer_size > 0.001) {
+            // Re-find top face and edge after fillet
+            TopoDS_Face newTopFace;
+            TopoDS_Edge newTopEdge;
+            if (find_planar_face_at_z(solid, halfH, 0.01, newTopFace) &&
+                get_outer_wire_edge(newTopFace, newTopEdge)) {
+                std::cout << "[STEP Exporter] CONE-DEBUG: applying top chamfer..." << std::endl;
+                BRepFilletAPI_MakeChamfer chamferMaker(solid);
+                chamferMaker.Add(chamfer_size, newTopEdge);
+                chamferMaker.Build();
+                if (chamferMaker.IsDone()) {
+                    solid = shape_to_solid(chamferMaker.Shape());
+                    std::cout << "[STEP Exporter] CONE-DEBUG: top chamfer OK" << std::endl;
+                } else {
+                    std::cout << "[STEP Exporter] ERROR: Cone chamfer build failed! size=" << chamfer_size << std::endl;
+                }
+            } else {
+                std::cout << "[STEP Exporter] ERROR: Cone chamfer - no top edge after fillet!" << std::endl;
+            }
+        }
+    } else {
+        // 默认模式：底部倒角 + 顶部圆角
+        std::cout << "[STEP Exporter] CONE-DEBUG: normal mode - bottom chamfer sz=" << chamfer_size 
+                  << " then top fillet r=" << fillet_radius << std::endl;
+        
+        // Apply bottom chamfer first
+        if (chamfer_size > 0.001 && hasBottomEdge) {
+            std::cout << "[STEP Exporter] CONE-DEBUG: applying bottom chamfer..." << std::endl;
+            BRepFilletAPI_MakeChamfer chamferMaker(solid);
+            chamferMaker.Add(chamfer_size, bottomEdge);
+            chamferMaker.Build();
+            if (chamferMaker.IsDone()) {
+                solid = shape_to_solid(chamferMaker.Shape());
+                std::cout << "[STEP Exporter] CONE-DEBUG: bottom chamfer OK" << std::endl;
+            } else {
+                std::cout << "[STEP Exporter] ERROR: Cone chamfer build failed! size=" << chamfer_size << std::endl;
+            }
+        }
+        
+        // Then apply top fillet (re-find edges after chamfer modified the solid)
+        if (fillet_radius > 0.001) {
+            TopoDS_Face newTopFace;
+            TopoDS_Edge newTopEdge;
+            if (find_planar_face_at_z(solid, halfH, 0.01, newTopFace) &&
+                get_outer_wire_edge(newTopFace, newTopEdge)) {
+                std::cout << "[STEP Exporter] CONE-DEBUG: applying top fillet..." << std::endl;
+                BRepFilletAPI_MakeFillet filletMaker(solid);
+                filletMaker.Add(fillet_radius, newTopEdge);
+                filletMaker.Build();
+                if (filletMaker.IsDone()) {
+                    solid = shape_to_solid(filletMaker.Shape());
+                    std::cout << "[STEP Exporter] CONE-DEBUG: top fillet OK" << std::endl;
+                } else {
+                    std::cout << "[STEP Exporter] ERROR: Cone fillet build failed! radius=" << fillet_radius << std::endl;
+                }
+            } else {
+                std::cout << "[STEP Exporter] ERROR: Cone fillet - no top edge after chamfer!" << std::endl;
+            }
         }
     }
     
-    // Then apply top fillet
-    if (fillet_radius > 0.001 && !topEdges.empty()) {
-        BRepFilletAPI_MakeFillet filletMaker(solid);
-        filletMaker.Add(fillet_radius, topEdges[0]);
-        filletMaker.Build();
-        if (filletMaker.IsDone()) {
-            solid = shape_to_solid(filletMaker.Shape());
-        } else {
-            std::cerr << "[STEP Exporter] ERROR: Cone fillet build failed! radius=" << fillet_radius << std::endl;
-        }
-    }
-    
+    int fc = 0;
+    for (TopExp_Explorer exp(solid, TopAbs_FACE); exp.More(); exp.Next()) fc++;
     std::cout << "[STEP Exporter] Created cone with chamfer+fillet: bR=" << bottom_radius
               << " tR=" << top_radius << " h=" << height
-              << " chamfer=" << chamfer_size << " fillet=" << fillet_radius << std::endl;
+              << " chamfer=" << chamfer_size << " fillet=" << fillet_radius
+              << " reversed=" << reversed << " faces=" << fc << std::endl;
     return solid;
 }
 

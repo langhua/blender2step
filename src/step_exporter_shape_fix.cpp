@@ -154,13 +154,7 @@ TopoDS_Shape fix_shape_enhanced(const TopoDS_Shape& shape, double tolerance) {
         }
         std::cout << "[STEP Exporter] DEBUG: bboxSize = " << bboxSize << std::endl;
         std::cout << "[STEP Exporter] DEBUG: tolerance parameter = " << tolerance << std::endl;
-
-        // 安全检查：COMPOUND无法修复为SOLID/SHELL，跳过修复以避免挂起
-        if (inputShapeType == TopAbs_COMPOUND) {
-            std::cout << "[STEP Exporter] Input is COMPOUND (bboxSize=" << bboxSize << "), skipping fixing to avoid hang." << std::endl;
-            return shape;
-        }
-
+        
         // 根据包围盒大小调整容差
         double adjustedTolerance = tolerance;
         // 如果包围盒大小小于1微米（1e-6米），视为零尺寸模型，使用默认容差

@@ -28,9 +28,6 @@
 #include <TopoDS_Vertex.hxx>
 #include <BRepCheck_Analyzer.hxx>
 #include <Precision.hxx>
-#include <BRepAdaptor_Surface.hxx>
-#include <BRepAdaptor_Curve.hxx>
-#include <BRepTools.hxx>
 #include <Standard_Failure.hxx>
 #include <Geom_Plane.hxx>
 #include <Geom_Surface.hxx>
@@ -38,20 +35,9 @@
 #include <BRepBuilderAPI_MakePolygon.hxx>
 #include <BRepPrimAPI_MakePrism.hxx>
 #include <BRepPrimAPI_MakeRevol.hxx>
-#include <BRepBuilderAPI_MakeEdge.hxx>
-#include <BRepBuilderAPI_MakeWire.hxx>
-#include <gp_Circ.hxx>
 #include <iostream>
-#include <fstream>
 #include <vector>
 #include <cmath>
-#include <string>
-
-// Helper: write debug message to log file
-static void cyl_log(const std::string& msg) {
-    static std::ofstream fs("F:/git/blender2step/step_exporter/test28.step.log", std::ios::app);
-    fs << "[STEP Exporter][C++] " << msg << std::endl;
-}
 
 // ====================== Helper: convert any shape to TopoDS_Solid ======================
 
@@ -253,19 +239,12 @@ static void find_circular_edges(const TopoDS_Shape& solid,
     double maxZ = -1e100, minZ = 1e100;
     
     // First pass: find max/min Z among circular edges
-    int totalEdges = 0;
     for (TopExp_Explorer exp(solid, TopAbs_EDGE); exp.More(); exp.Next()) {
         TopoDS_Edge edge = TopoDS::Edge(exp.Current());
         TopoDS_Vertex v1 = TopExp::FirstVertex(edge, true);
         TopoDS_Vertex v2 = TopExp::LastVertex(edge, true);
         gp_Pnt p1 = BRep_Tool::Pnt(v1);
         gp_Pnt p2 = BRep_Tool::Pnt(v2);
-        totalEdges++;
-        
-        std::cout << "[STEP Exporter] CONE-DEBUG: edge#" << totalEdges 
-                  << " v1=(" << p1.X() << "," << p1.Y() << "," << p1.Z() << ")"
-                  << " v2=(" << p2.X() << "," << p2.Y() << "," << p2.Z() << ")"
-                  << " dZ=" << fabs(p1.Z() - p2.Z()) << std::endl;
         
         if (fabs(p1.Z() - p2.Z()) < tolerance) {
             double z = (p1.Z() + p2.Z()) / 2.0;
@@ -273,9 +252,6 @@ static void find_circular_edges(const TopoDS_Shape& solid,
             if (z < minZ) minZ = z;
         }
     }
-    
-    std::cout << "[STEP Exporter] CONE-DEBUG: total edges=" << totalEdges 
-              << " maxZ=" << maxZ << " minZ=" << minZ << std::endl;
     
     // Second pass: collect edges at max/min Z
     for (TopExp_Explorer exp(solid, TopAbs_EDGE); exp.More(); exp.Next()) {
@@ -408,9 +384,6 @@ TopoDS_Shape create_cylinder_chamfer_fillet_solid_parametric(
         chamferMaker.Build();
         if (chamferMaker.IsDone()) {
             solid = shape_to_solid(chamferMaker.Shape());
-        } else {
-            std::cerr << "[STEP Exporter] ERROR: Chamfer build failed! size=" << chamfer_size
-                      << " radius=" << radius << " height=" << height << std::endl;
         }
     }
     
@@ -422,9 +395,6 @@ TopoDS_Shape create_cylinder_chamfer_fillet_solid_parametric(
         filletMaker.Build();
         if (filletMaker.IsDone()) {
             solid = shape_to_solid(filletMaker.Shape());
-        } else {
-            std::cerr << "[STEP Exporter] ERROR: Fillet build failed! radius=" << fillet_radius
-                      << " cyl_radius=" << radius << " height=" << height << std::endl;
         }
     }
     
@@ -438,14 +408,6 @@ TopoDS_Shape create_cylinder_chamfer_fillet_solid_parametric(
     std::cout << "[STEP Exporter] Created cylinder with top chamfer and bottom fillet: r=" << radius
               << " h=" << height << " chamfer=" << chamfer_size
               << " fillet=" << fillet_radius << (reversed ? " (reversed)" : "") << std::endl;
-    
-    // 验证面数
-    {
-        int faceCount = 0;
-        for (TopExp_Explorer exp(solid, TopAbs_FACE); exp.More(); exp.Next()) faceCount++;
-        std::cout << "[STEP Exporter]   face count: " << faceCount << " (expected >= 3)" << std::endl;
-    }
-    
     return solid;
 }
 
@@ -479,8 +441,6 @@ TopoDS_Shape create_cylinder_chamfer_both_solid_parametric(
         chamferMaker.Build();
         if (chamferMaker.IsDone()) {
             solid = shape_to_solid(chamferMaker.Shape());
-        } else {
-            std::cerr << "[STEP Exporter] ERROR: Top chamfer (both) build failed! size=" << top_chamfer_size << std::endl;
         }
     }
     
@@ -492,8 +452,6 @@ TopoDS_Shape create_cylinder_chamfer_both_solid_parametric(
         chamferMaker.Build();
         if (chamferMaker.IsDone()) {
             solid = shape_to_solid(chamferMaker.Shape());
-        } else {
-            std::cerr << "[STEP Exporter] ERROR: Bottom chamfer (both) build failed! size=" << bottom_chamfer_size << std::endl;
         }
     }
     
@@ -533,8 +491,6 @@ TopoDS_Shape create_cylinder_fillet_both_solid_parametric(
         filletMaker.Build();
         if (filletMaker.IsDone()) {
             solid = shape_to_solid(filletMaker.Shape());
-        } else {
-            std::cerr << "[STEP Exporter] ERROR: Top fillet (both) build failed! radius=" << top_fillet_radius << std::endl;
         }
     }
     
@@ -546,8 +502,6 @@ TopoDS_Shape create_cylinder_fillet_both_solid_parametric(
         filletMaker.Build();
         if (filletMaker.IsDone()) {
             solid = shape_to_solid(filletMaker.Shape());
-        } else {
-            std::cerr << "[STEP Exporter] ERROR: Bottom fillet (both) build failed! radius=" << bottom_fillet_radius << std::endl;
         }
     }
     
@@ -559,165 +513,9 @@ TopoDS_Shape create_cylinder_fillet_both_solid_parametric(
 
 // ====================== 带底部倒角和顶部圆角的锥体 ======================
 
-// Helper: find planar face at given Z level
-static bool find_planar_face_at_z(const TopoDS_Solid& solid, double targetZ, double tolerance, TopoDS_Face& result) {
-    for (TopExp_Explorer exp(solid, TopAbs_FACE); exp.More(); exp.Next()) {
-        TopoDS_Face face = TopoDS::Face(exp.Current());
-        BRepAdaptor_Surface surf(face);
-        if (surf.GetType() == GeomAbs_Plane) {
-            // Check if this plane is at the target Z
-            gp_Pln plane = surf.Plane();
-            gp_Pnt loc = plane.Location();
-            // Check if plane normal is (0,0,±1) and location Z matches
-            if (fabs(plane.Axis().Direction().Z()) > 0.999 && fabs(loc.Z() - targetZ) < tolerance) {
-                result = face;
-                return true;
-            }
-        }
-    }
-    return false;
-}
-
-// Helper: get outer wire edge from a face
-static bool get_outer_wire_edge(const TopoDS_Face& face, TopoDS_Edge& edge) {
-    TopoDS_Wire outerWire = BRepTools::OuterWire(face);
-    TopExp_Explorer exp(outerWire, TopAbs_EDGE);
-    if (exp.More()) {
-        edge = TopoDS::Edge(exp.Current());
-        return true;
-    }
-    return false;
-}
-
 TopoDS_Shape create_cone_chamfer_fillet_solid_parametric(
     double bottom_radius, double top_radius, double height,
-    double chamfer_size, double fillet_radius,
-    int reversed)
-{
-    TopoDS_Shape shape = create_cone_solid_parametric(bottom_radius, top_radius, height);
-    if (shape.IsNull()) return TopoDS_Shape();
-    
-    TopoDS_Solid solid;
-    if (shape.ShapeType() == TopAbs_SOLID) {
-        solid = TopoDS::Solid(shape);
-    } else {
-        BRepBuilderAPI_MakeSolid sm;
-        for (TopExp_Explorer exp(shape, TopAbs_SHELL); exp.More(); exp.Next())
-            sm.Add(TopoDS::Shell(exp.Current()));
-        if (sm.IsDone()) solid = sm.Solid();
-        else return TopoDS_Shape();
-    }
-    
-    // Find top and bottom planar faces
-    double halfH = height / 2.0;
-    TopoDS_Face bottomFace, topFace;
-    bool hasBottom = find_planar_face_at_z(solid, -halfH, 0.01, bottomFace);
-    bool hasTop = find_planar_face_at_z(solid, halfH, 0.01, topFace);
-    
-    std::cout << "[STEP Exporter] CONE-DEBUG: bottom_face=" << (hasBottom ? "found" : "NOT FOUND")
-              << " top_face=" << (hasTop ? "found" : "NOT FOUND") << std::endl;
-    
-    TopoDS_Edge bottomEdge, topEdge;
-    bool hasBottomEdge = hasBottom && get_outer_wire_edge(bottomFace, bottomEdge);
-    bool hasTopEdge = hasTop && get_outer_wire_edge(topFace, topEdge);
-    
-    std::cout << "[STEP Exporter] CONE-DEBUG: bottom_edge=" << (hasBottomEdge ? "found" : "NOT FOUND")
-              << " top_edge=" << (hasTopEdge ? "found" : "NOT FOUND") << std::endl;
-    
-    if (reversed) {
-        // 反转模式：底部圆角 + 顶部倒角
-        std::cout << "[STEP Exporter] CONE-DEBUG: reversed mode - bottom fillet r=" << fillet_radius 
-                  << " then top chamfer sz=" << chamfer_size << std::endl;
-        
-        // Apply bottom fillet first
-        if (fillet_radius > 0.001 && hasBottomEdge) {
-            std::cout << "[STEP Exporter] CONE-DEBUG: applying bottom fillet..." << std::endl;
-            BRepFilletAPI_MakeFillet filletMaker(solid);
-            filletMaker.Add(fillet_radius, bottomEdge);
-            filletMaker.Build();
-            if (filletMaker.IsDone()) {
-                solid = shape_to_solid(filletMaker.Shape());
-                std::cout << "[STEP Exporter] CONE-DEBUG: bottom fillet OK" << std::endl;
-            } else {
-                std::cout << "[STEP Exporter] ERROR: Cone fillet build failed! radius=" << fillet_radius << std::endl;
-            }
-        }
-        
-        // Then apply top chamfer (re-find edges after fillet modified the solid)
-        if (chamfer_size > 0.001) {
-            // Re-find top face and edge after fillet
-            TopoDS_Face newTopFace;
-            TopoDS_Edge newTopEdge;
-            if (find_planar_face_at_z(solid, halfH, 0.01, newTopFace) &&
-                get_outer_wire_edge(newTopFace, newTopEdge)) {
-                std::cout << "[STEP Exporter] CONE-DEBUG: applying top chamfer..." << std::endl;
-                BRepFilletAPI_MakeChamfer chamferMaker(solid);
-                chamferMaker.Add(chamfer_size, newTopEdge);
-                chamferMaker.Build();
-                if (chamferMaker.IsDone()) {
-                    solid = shape_to_solid(chamferMaker.Shape());
-                    std::cout << "[STEP Exporter] CONE-DEBUG: top chamfer OK" << std::endl;
-                } else {
-                    std::cout << "[STEP Exporter] ERROR: Cone chamfer build failed! size=" << chamfer_size << std::endl;
-                }
-            } else {
-                std::cout << "[STEP Exporter] ERROR: Cone chamfer - no top edge after fillet!" << std::endl;
-            }
-        }
-    } else {
-        // 默认模式：底部倒角 + 顶部圆角
-        std::cout << "[STEP Exporter] CONE-DEBUG: normal mode - bottom chamfer sz=" << chamfer_size 
-                  << " then top fillet r=" << fillet_radius << std::endl;
-        
-        // Apply bottom chamfer first
-        if (chamfer_size > 0.001 && hasBottomEdge) {
-            std::cout << "[STEP Exporter] CONE-DEBUG: applying bottom chamfer..." << std::endl;
-            BRepFilletAPI_MakeChamfer chamferMaker(solid);
-            chamferMaker.Add(chamfer_size, bottomEdge);
-            chamferMaker.Build();
-            if (chamferMaker.IsDone()) {
-                solid = shape_to_solid(chamferMaker.Shape());
-                std::cout << "[STEP Exporter] CONE-DEBUG: bottom chamfer OK" << std::endl;
-            } else {
-                std::cout << "[STEP Exporter] ERROR: Cone chamfer build failed! size=" << chamfer_size << std::endl;
-            }
-        }
-        
-        // Then apply top fillet (re-find edges after chamfer modified the solid)
-        if (fillet_radius > 0.001) {
-            TopoDS_Face newTopFace;
-            TopoDS_Edge newTopEdge;
-            if (find_planar_face_at_z(solid, halfH, 0.01, newTopFace) &&
-                get_outer_wire_edge(newTopFace, newTopEdge)) {
-                std::cout << "[STEP Exporter] CONE-DEBUG: applying top fillet..." << std::endl;
-                BRepFilletAPI_MakeFillet filletMaker(solid);
-                filletMaker.Add(fillet_radius, newTopEdge);
-                filletMaker.Build();
-                if (filletMaker.IsDone()) {
-                    solid = shape_to_solid(filletMaker.Shape());
-                    std::cout << "[STEP Exporter] CONE-DEBUG: top fillet OK" << std::endl;
-                } else {
-                    std::cout << "[STEP Exporter] ERROR: Cone fillet build failed! radius=" << fillet_radius << std::endl;
-                }
-            } else {
-                std::cout << "[STEP Exporter] ERROR: Cone fillet - no top edge after chamfer!" << std::endl;
-            }
-        }
-    }
-    
-    int fc = 0;
-    for (TopExp_Explorer exp(solid, TopAbs_FACE); exp.More(); exp.Next()) fc++;
-    std::cout << "[STEP Exporter] Created cone with chamfer+fillet: bR=" << bottom_radius
-              << " tR=" << top_radius << " h=" << height
-              << " chamfer=" << chamfer_size << " fillet=" << fillet_radius
-              << " reversed=" << reversed << " faces=" << fc << std::endl;
-    return solid;
-}
-
-// 参数化锥体+倒角（顶部或底部）
-TopoDS_Shape create_cone_chamfer_solid_parametric(
-    double bottom_radius, double top_radius, double height,
-    double chamfer_size, int is_top_chamfer)
+    double chamfer_size, double fillet_radius)
 {
     TopoDS_Shape shape = create_cone_solid_parametric(bottom_radius, top_radius, height);
     if (shape.IsNull()) return TopoDS_Shape();
@@ -736,181 +534,29 @@ TopoDS_Shape create_cone_chamfer_solid_parametric(
     std::vector<TopoDS_Edge> topEdges, bottomEdges;
     find_circular_edges(solid, topEdges, bottomEdges);
     
-    if (chamfer_size > 0.001) {
-        TopoDS_Edge targetEdge;
-        if (is_top_chamfer) {
-            if (topEdges.empty()) {
-                std::cerr << "[STEP Exporter] ERROR: Cone chamfer - no top edge found!" << std::endl;
-                return solid;
-            }
-            targetEdge = topEdges[0];
-        } else {
-            if (bottomEdges.empty()) {
-                std::cerr << "[STEP Exporter] ERROR: Cone chamfer - no bottom edge found!" << std::endl;
-                return solid;
-            }
-            targetEdge = bottomEdges[0];
-        }
-        
+    // Apply bottom chamfer first
+    if (chamfer_size > 0.001 && !bottomEdges.empty()) {
         BRepFilletAPI_MakeChamfer chamferMaker(solid);
-        chamferMaker.Add(chamfer_size, targetEdge);
+        chamferMaker.Add(chamfer_size, bottomEdges[0]);
         chamferMaker.Build();
         if (chamferMaker.IsDone()) {
             solid = shape_to_solid(chamferMaker.Shape());
-        } else {
-            std::cerr << "[STEP Exporter] ERROR: Cone chamfer build failed! size=" << chamfer_size
-                      << " is_top=" << is_top_chamfer << std::endl;
         }
     }
     
-    // 验证面数
-    {
-        int faceCount = 0;
-        for (TopExp_Explorer exp(solid, TopAbs_FACE); exp.More(); exp.Next()) faceCount++;
-        std::cout << "[STEP Exporter] Created cone with chamfer: bR=" << bottom_radius
-                  << " tR=" << top_radius << " h=" << height
-                  << " chamfer=" << chamfer_size << " is_top=" << is_top_chamfer
-                  << " faces=" << faceCount << std::endl;
-    }
-    
-    return solid;
-}
-
-// 参数化锥体+倒角（顶部和底部都倒角）
-TopoDS_Shape create_cone_chamfer_solid_parametric_both(
-    double bottom_radius, double top_radius, double height,
-    double bottom_chamfer_size, double top_chamfer_size)
-{
-    TopoDS_Shape shape = create_cone_solid_parametric(bottom_radius, top_radius, height);
-    if (shape.IsNull()) return TopoDS_Shape();
-    
-    TopoDS_Solid solid;
-    if (shape.ShapeType() == TopAbs_SOLID) {
-        solid = TopoDS::Solid(shape);
-    } else {
-        BRepBuilderAPI_MakeSolid sm;
-        for (TopExp_Explorer exp(shape, TopAbs_SHELL); exp.More(); exp.Next())
-            sm.Add(TopoDS::Shell(exp.Current()));
-        if (sm.IsDone()) solid = sm.Solid();
-        else return TopoDS_Shape();
-    }
-    
-    double halfH = height / 2.0;
-    TopoDS_Face bottomFace, topFace;
-    bool hasBottom = find_planar_face_at_z(solid, -halfH, 0.01, bottomFace);
-    bool hasTop = find_planar_face_at_z(solid, halfH, 0.01, topFace);
-    
-    // Apply bottom chamfer first
-    if (bottom_chamfer_size > 0.001 && hasBottom) {
-        TopoDS_Edge bottomEdge;
-        if (get_outer_wire_edge(bottomFace, bottomEdge)) {
-            std::cout << "[STEP Exporter] CONE-DEBUG: applying bottom chamfer sz=" << bottom_chamfer_size << "..." << std::endl;
-            BRepFilletAPI_MakeChamfer chamferMaker(solid);
-            chamferMaker.Add(bottom_chamfer_size, bottomEdge);
-            chamferMaker.Build();
-            if (chamferMaker.IsDone()) {
-                solid = shape_to_solid(chamferMaker.Shape());
-                std::cout << "[STEP Exporter] CONE-DEBUG: bottom chamfer OK" << std::endl;
-            } else {
-                std::cout << "[STEP Exporter] ERROR: Cone bottom chamfer build failed! size=" << bottom_chamfer_size << std::endl;
-            }
+    // Then apply top fillet
+    if (fillet_radius > 0.001 && !topEdges.empty()) {
+        BRepFilletAPI_MakeFillet filletMaker(solid);
+        filletMaker.Add(fillet_radius, topEdges[0]);
+        filletMaker.Build();
+        if (filletMaker.IsDone()) {
+            solid = shape_to_solid(filletMaker.Shape());
         }
     }
     
-    // Then apply top chamfer (re-find face after bottom chamfer modified the solid)
-    if (top_chamfer_size > 0.001) {
-        TopoDS_Face newTopFace;
-        TopoDS_Edge newTopEdge;
-        if (find_planar_face_at_z(solid, halfH, 0.01, newTopFace) &&
-            get_outer_wire_edge(newTopFace, newTopEdge)) {
-            std::cout << "[STEP Exporter] CONE-DEBUG: applying top chamfer sz=" << top_chamfer_size << "..." << std::endl;
-            BRepFilletAPI_MakeChamfer chamferMaker(solid);
-            chamferMaker.Add(top_chamfer_size, newTopEdge);
-            chamferMaker.Build();
-            if (chamferMaker.IsDone()) {
-                solid = shape_to_solid(chamferMaker.Shape());
-                std::cout << "[STEP Exporter] CONE-DEBUG: top chamfer OK" << std::endl;
-            } else {
-                std::cout << "[STEP Exporter] ERROR: Cone top chamfer build failed! size=" << top_chamfer_size << std::endl;
-            }
-        }
-    }
-    
-    int fc = 0;
-    for (TopExp_Explorer exp(solid, TopAbs_FACE); exp.More(); exp.Next()) fc++;
-    std::cout << "[STEP Exporter] Created cone with both chamfers: bR=" << bottom_radius
+    std::cout << "[STEP Exporter] Created cone with chamfer+fillet: bR=" << bottom_radius
               << " tR=" << top_radius << " h=" << height
-              << " bot_chamfer=" << bottom_chamfer_size << " top_chamfer=" << top_chamfer_size
-              << " faces=" << fc << std::endl;
-    return solid;
-}
-
-// 参数化锥体+圆角（顶部和底部都圆角）
-TopoDS_Shape create_cone_fillet_solid_parametric_both(
-    double bottom_radius, double top_radius, double height,
-    double bottom_fillet_radius, double top_fillet_radius)
-{
-    TopoDS_Shape shape = create_cone_solid_parametric(bottom_radius, top_radius, height);
-    if (shape.IsNull()) return TopoDS_Shape();
-    
-    TopoDS_Solid solid;
-    if (shape.ShapeType() == TopAbs_SOLID) {
-        solid = TopoDS::Solid(shape);
-    } else {
-        BRepBuilderAPI_MakeSolid sm;
-        for (TopExp_Explorer exp(shape, TopAbs_SHELL); exp.More(); exp.Next())
-            sm.Add(TopoDS::Shell(exp.Current()));
-        if (sm.IsDone()) solid = sm.Solid();
-        else return TopoDS_Shape();
-    }
-    
-    double halfH = height / 2.0;
-    TopoDS_Face bottomFace, topFace;
-    bool hasBottom = find_planar_face_at_z(solid, -halfH, 0.01, bottomFace);
-    bool hasTop = find_planar_face_at_z(solid, halfH, 0.01, topFace);
-    
-    // Apply bottom fillet first
-    if (bottom_fillet_radius > 0.001 && hasBottom) {
-        TopoDS_Edge bottomEdge;
-        if (get_outer_wire_edge(bottomFace, bottomEdge)) {
-            std::cout << "[STEP Exporter] CONE-DEBUG: applying bottom fillet r=" << bottom_fillet_radius << "..." << std::endl;
-            BRepFilletAPI_MakeFillet filletMaker(solid);
-            filletMaker.Add(bottom_fillet_radius, bottomEdge);
-            filletMaker.Build();
-            if (filletMaker.IsDone()) {
-                solid = shape_to_solid(filletMaker.Shape());
-                std::cout << "[STEP Exporter] CONE-DEBUG: bottom fillet OK" << std::endl;
-            } else {
-                std::cout << "[STEP Exporter] ERROR: Cone bottom fillet build failed! radius=" << bottom_fillet_radius << std::endl;
-            }
-        }
-    }
-    
-    // Then apply top fillet (re-find face after bottom fillet modified the solid)
-    if (top_fillet_radius > 0.001) {
-        TopoDS_Face newTopFace;
-        TopoDS_Edge newTopEdge;
-        if (find_planar_face_at_z(solid, halfH, 0.01, newTopFace) &&
-            get_outer_wire_edge(newTopFace, newTopEdge)) {
-            std::cout << "[STEP Exporter] CONE-DEBUG: applying top fillet r=" << top_fillet_radius << "..." << std::endl;
-            BRepFilletAPI_MakeFillet filletMaker(solid);
-            filletMaker.Add(top_fillet_radius, newTopEdge);
-            filletMaker.Build();
-            if (filletMaker.IsDone()) {
-                solid = shape_to_solid(filletMaker.Shape());
-                std::cout << "[STEP Exporter] CONE-DEBUG: top fillet OK" << std::endl;
-            } else {
-                std::cout << "[STEP Exporter] ERROR: Cone top fillet build failed! radius=" << top_fillet_radius << std::endl;
-            }
-        }
-    }
-    
-    int fc = 0;
-    for (TopExp_Explorer exp(solid, TopAbs_FACE); exp.More(); exp.Next()) fc++;
-    std::cout << "[STEP Exporter] Created cone with both fillets: bR=" << bottom_radius
-              << " tR=" << top_radius << " h=" << height
-              << " bot_fillet=" << bottom_fillet_radius << " top_fillet=" << top_fillet_radius
-              << " faces=" << fc << std::endl;
+              << " chamfer=" << chamfer_size << " fillet=" << fillet_radius << std::endl;
     return solid;
 }
 
@@ -1265,162 +911,74 @@ TopoDS_Shape create_cone_stepped_hole_parametric(
     }
 }
 
-// ====================== 参数化圆柱体 + 顶部盲孔 ======================
+// ====================== 参数化双端盲孔圆柱体 ======================
 
-TopoDS_Shape create_cylinder_with_blind_hole_solid_parametric(
+TopoDS_Shape create_cylinder_with_dual_blind_holes_solid_parametric(
     double radius, double height,
-    double hole_radius, double hole_depth,
-    double hole_fillet_radius,
-    bool is_bottom)
+    double hole_radius,
+    double bottom_hole_depth, double top_hole_depth,
+    double hole_fillet_radius)
 {
-    // 创建外圆柱体
     TopoDS_Shape outerShape = create_cylinder_solid_parametric(radius, height);
     if (outerShape.IsNull()) return TopoDS_Shape();
+    TopoDS_Solid solid = shape_to_solid(outerShape);
+    if (solid.IsNull()) return TopoDS_Shape();
 
-    // 确保外圆柱是实体
-    TopoDS_Solid outerSolid;
-    if (outerShape.ShapeType() == TopAbs_SOLID) {
-        outerSolid = TopoDS::Solid(outerShape);
-    } else {
-        BRepBuilderAPI_MakeSolid sm;
-        for (TopExp_Explorer exp(outerShape, TopAbs_SHELL); exp.More(); exp.Next())
-            sm.Add(TopoDS::Shell(exp.Current()));
-        if (sm.IsDone()) outerSolid = sm.Solid();
-        else return TopoDS_Shape();
-    }
-
-    // 孔切割体：略高于孔深以确保干净切割
     double ext = std::max(radius * 0.001, 0.0001);
-    double cutterHeight = hole_depth + ext;
+    double halfH = height / 2.0;
 
-    TopoDS_Shape cutterShape = create_cylinder_solid_parametric(hole_radius, cutterHeight);
-    if (cutterShape.IsNull()) return TopoDS_Shape();
+    // 底部盲孔切割
+    double btmH = bottom_hole_depth + ext;
+    TopoDS_Shape btmC = create_cylinder_solid_parametric(hole_radius, btmH);
+    if (btmC.IsNull()) return TopoDS_Shape();
+    gp_Trsf btmT; btmT.SetTranslation(gp_Vec(0, 0, -halfH + bottom_hole_depth - btmH / 2.0));
+    btmC = BRepBuilderAPI_Transform(btmC, btmT).Shape();
+    BRepAlgoAPI_Cut btmCut(solid, shape_to_solid(btmC));
+    if (!btmCut.IsDone()) { std::cerr << "[STEP Exporter] Dual blind holes: bottom cut failed" << std::endl; return TopoDS_Shape(); }
+    solid = shape_to_solid(btmCut.Shape());
+    if (solid.IsNull()) return TopoDS_Shape();
 
-    // 将切割体定位到圆柱顶部或底部
-    double transZ;
-    if (is_bottom) {
-        // 底部盲孔：切割体底部 = -height/2 - ext, 顶部 = -height/2 + hole_depth
-        // 切割体中心 = -height/2 + hole_depth - cutterHeight/2
-        transZ = -height / 2.0 + hole_depth - cutterHeight / 2.0;
-    } else {
-        // 顶部盲孔：切割体底部 = height/2 - hole_depth, 顶部 = height/2 + ext
-        // 切割体中心 = height/2 - hole_depth + cutterHeight/2
-        transZ = height / 2.0 - hole_depth + cutterHeight / 2.0;
-    }
-    gp_Trsf trsf;
-    trsf.SetTranslation(gp_Vec(0, 0, transZ));
-    cutterShape = BRepBuilderAPI_Transform(cutterShape, trsf).Shape();
+    // 顶部盲孔切割
+    double topH = top_hole_depth + ext;
+    TopoDS_Shape topC = create_cylinder_solid_parametric(hole_radius, topH);
+    if (topC.IsNull()) return TopoDS_Shape();
+    gp_Trsf topT; topT.SetTranslation(gp_Vec(0, 0, halfH - top_hole_depth + topH / 2.0));
+    topC = BRepBuilderAPI_Transform(topC, topT).Shape();
+    BRepAlgoAPI_Cut topCut(solid, shape_to_solid(topC));
+    if (!topCut.IsDone()) { std::cerr << "[STEP Exporter] Dual blind holes: top cut failed" << std::endl; return TopoDS_Shape(); }
+    solid = shape_to_solid(topCut.Shape());
+    if (solid.IsNull()) return TopoDS_Shape();
 
-    // 确保切割体是实体
-    TopoDS_Solid cutterSolid;
-    if (cutterShape.ShapeType() == TopAbs_SOLID) {
-        cutterSolid = TopoDS::Solid(cutterShape);
-    } else {
-        BRepBuilderAPI_MakeSolid sm;
-        for (TopExp_Explorer exp(cutterShape, TopAbs_SHELL); exp.More(); exp.Next())
-            sm.Add(TopoDS::Shell(exp.Current()));
-        if (sm.IsDone()) cutterSolid = sm.Solid();
-        else return TopoDS_Shape();
-    }
-
-    // 布尔减：外圆柱 - 孔切割体
-    BRepAlgoAPI_Cut cutMaker(outerSolid, cutterSolid);
-    if (!cutMaker.IsDone()) {
-        std::cerr << "[STEP Exporter] Failed to cut blind hole: r=" << radius
-                  << " h=" << height << " hole_r=" << hole_radius
-                  << " hole_d=" << hole_depth << std::endl;
-        return TopoDS_Shape();
-    }
-
-    TopoDS_Shape result = cutMaker.Shape();
-    TopoDS_Solid solid;
-    if (result.ShapeType() == TopAbs_SOLID) {
-        solid = TopoDS::Solid(result);
-    } else {
-        BRepBuilderAPI_MakeSolid sm;
-        for (TopExp_Explorer exp(result, TopAbs_SHELL); exp.More(); exp.Next())
-            sm.Add(TopoDS::Shell(exp.Current()));
-        if (sm.IsDone()) solid = sm.Solid();
-        else return TopoDS_Shape();
-    }
-
-    // 孔口圆倒角
+    // 两端孔口圆倒角
     if (hole_fillet_radius > 0.001) {
-        double halfH = height / 2.0;
-        double FR = hole_fillet_radius;
-        double HR = hole_radius;
-        double targetZ = is_bottom ? -halfH : halfH;
-        cyl_log("Applying hole fillet: FR=" + std::to_string(FR) + " HR=" + std::to_string(HR) + " targetZ=" + std::to_string(targetZ) + " is_bottom=" + std::to_string(is_bottom));
-        
-        // 方法：找到位于 z≈targetZ、半径≈HR 的圆形边，用 BRepFilletAPI_MakeFillet
-        TopoDS_Edge holeEdge;
-        bool found = false;
-        int edgeIdx = 0;
-        
+        double FR = hole_fillet_radius, HR = hole_radius;
+        TopoDS_Edge btmEdge, topEdge;
+        bool btmOk = false, topOk = false;
         for (TopExp_Explorer exp(solid, TopAbs_EDGE); exp.More(); exp.Next()) {
-            TopoDS_Edge edge = TopoDS::Edge(exp.Current());
-            edgeIdx++;
-            
-            // 检查是否为圆形边
-            BRepAdaptor_Curve curve(edge);
-            GeomAbs_CurveType ct = curve.GetType();
-            
-            if (ct == GeomAbs_Circle) {
-                gp_Circ circ = curve.Circle();
-                gp_Pnt ctr = circ.Location();
-                double cr = circ.Radius();
-                double cz = ctr.Z();
-                double cx = ctr.X();
-                double cy = ctr.Y();
-                cyl_log("  Edge " + std::to_string(edgeIdx) + ": Circle r=" + std::to_string(cr) + 
-                        " ctr=(" + std::to_string(cx) + "," + std::to_string(cy) + "," + std::to_string(cz) + ")");
-                
-                // 孔口边：圆心在 Z 轴上 (cx≈0, cy≈0)，z≈targetZ，r≈HR
-                if (std::abs(cx) < 0.01 && std::abs(cy) < 0.01 &&
-                    std::abs(cz - targetZ) < 0.01 &&
-                    std::abs(cr - HR) / std::max(HR, 0.001) < 0.15) {
-                    holeEdge = edge;
-                    found = true;
-                    cyl_log("  >>> Found hole edge!");
-                    break;
-                }
-            } else {
-                TopoDS_Vertex v1, v2;
-                TopExp::Vertices(edge, v1, v2);
-                if (!v1.IsNull() && !v2.IsNull()) {
-                    gp_Pnt p1 = BRep_Tool::Pnt(v1);
-                    gp_Pnt p2 = BRep_Tool::Pnt(v2);
-                    double z1 = p1.Z(), z2 = p2.Z();
-                    double r1 = std::sqrt(p1.X()*p1.X() + p1.Y()*p1.Y());
-                    double r2 = std::sqrt(p2.X()*p2.X() + p2.Y()*p2.Y());
-                    std::string cts = (ct == GeomAbs_Line ? "Line" : "Other");
-                    cyl_log("  Edge " + std::to_string(edgeIdx) + ": " + cts +
-                            " v1=(" + std::to_string(p1.X()).substr(0,6) + "," + std::to_string(p1.Y()).substr(0,6) + "," + std::to_string(p1.Z()).substr(0,6) + ")" +
-                            " v2=(" + std::to_string(p2.X()).substr(0,6) + "," + std::to_string(p2.Y()).substr(0,6) + "," + std::to_string(p2.Z()).substr(0,6) + ")" +
-                            " z1=" + std::to_string(z1).substr(0,6) + " z2=" + std::to_string(z2).substr(0,6) +
-                            " r1=" + std::to_string(r1).substr(0,6) + " r2=" + std::to_string(r2).substr(0,6));
-                }
-            }
+            TopoDS_Edge e = TopoDS::Edge(exp.Current());
+            BRepAdaptor_Curve c(e);
+            if (c.GetType() != GeomAbs_Circle) continue;
+            gp_Circ cr = c.Circle();
+            gp_Pnt ct = cr.Location();
+            if (std::abs(ct.X()) > 0.01 || std::abs(ct.Y()) > 0.01) continue;
+            if (std::abs(cr.Radius() - HR) / std::max(HR, 0.001) > 0.15) continue;
+            if (std::abs(ct.Z() + halfH) < 0.01) { btmEdge = e; btmOk = true; }
+            else if (std::abs(ct.Z() - halfH) < 0.01) { topEdge = e; topOk = true; }
         }
-        
-        if (found) {
-            BRepFilletAPI_MakeFillet filletMaker(solid);
-            filletMaker.Add(FR, holeEdge);
-            filletMaker.Build();
-            if (filletMaker.IsDone()) {
-                solid = shape_to_solid(filletMaker.Shape());
-                cyl_log("Applied hole fillet successfully: r=" + std::to_string(FR));
-            } else {
-                cyl_log("FAILED to apply fillet (BRepFilletAPI_MakeFillet not done)");
+        if (btmOk || topOk) {
+            BRepFilletAPI_MakeFillet fm(solid);
+            if (btmOk) fm.Add(FR, btmEdge);
+            if (topOk) fm.Add(FR, topEdge);
+            fm.Build();
+            if (fm.IsDone()) {
+                solid = shape_to_solid(fm.Shape());
+                std::cout << "[STEP Exporter] Applied dual hole fillets: r=" << FR << std::endl;
             }
-        } else {
-            cyl_log("Could not find hole opening edge among " + std::to_string(edgeIdx) + " edges");
         }
     }
 
-    std::cout << "[STEP Exporter] Created parametric cylinder with blind hole: r=" << radius
+    std::cout << "[STEP Exporter] Created cylinder with dual blind holes: r=" << radius
               << " h=" << height << " hole_r=" << hole_radius
-              << " hole_d=" << hole_depth << std::endl;
-
+              << " btm_d=" << bottom_hole_depth << " top_d=" << top_hole_depth << std::endl;
     return solid;
 }

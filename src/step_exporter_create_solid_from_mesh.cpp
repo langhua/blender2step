@@ -242,14 +242,6 @@ TopoDS_Shape create_solid_from_mesh(const std::vector<std::vector<double>>& vert
 
         std::cout << "[STEP Exporter] Created " << valid_face_count << " valid faces." << std::endl;
 
-        // 安全检查：高面数网格（>5000面）的缝合操作可能非常慢甚至挂起，
-        // 特别是非闭合网格（如带孔洞的圆柱体）。跳过缝合，直接返回面片复合体。
-        if (valid_face_count > 5000) {
-            std::cout << "[STEP Exporter] High-poly mesh (" << valid_face_count << " faces), skipping sewing to avoid hang." << std::endl;
-            std::cout << "[STEP Exporter] Returning compound of " << valid_face_count << " faces directly." << std::endl;
-            return compound;
-        }
-
         // 使用Sewing工具将离散的面片缝合为完整的壳
 
         BRepBuilderAPI_Sewing sewer(adjustedTolerance * toleranceMultiplier); // 基于包围盒大小调整容差

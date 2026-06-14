@@ -1728,6 +1728,7 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
     hole_position = 'top'  # 默认顶部盲孔，底部盲孔时检测为 'bottom'
     hole_radius = 0.0
     hole_depth = 0.0
+    hole_depth_top = 0.0  # 双端孔时顶部孔深
     
     # 强制圆柱体判断：两端半径接近且顶部干净时，即使中间z层缺少外壁顶点
     # （如盲孔圆柱的外壁仅有顶部/底部顶点），也认定为恒定半径圆柱。
@@ -1739,25 +1740,88 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
         log_to_file(f"[STEP Exporter]   Forced cylindrical body: ends same radius (b={bottom_radius:.3f} t={top_radius:.3f}), top clean")
         
         # 底部盲孔检测：强制圆柱体意味着底部有孔洞特征
-        bot_region_count = sum(len(z_layers[zl]) for zl in sorted_z[:max(1, len(sorted_z)//4)])
-        top_vc = len(z_layers[sorted_z[-1]])
         b_radii = sorted(compute_radii(z_layers[sorted_z[0]]))
         inner_n = max(4, len(b_radii) // 8)
         inner_r = sorted(b_radii[:inner_n])[inner_n//2]
-        hole_end = sorted_z[0]
+        
+        # 从底部向上扫描找内孔结束位置
+        hole_end_bottom = sorted_z[0]
         for zl in sorted_z[1:]:
             r = z_radius_data.get(zl)
             if r is not None and r < body_radius * 0.7:
-                hole_end = zl
-        hole_d = hole_end - sorted_z[0]
-        if inner_r > 0.0005 and hole_d > height * 0.08:
+                hole_end_bottom = zl
+        
+        # 从顶部向下扫描找内孔开始位置
+        hole_start_top = sorted_z[-1]
+        for zl in reversed(sorted_z[:-1]):
+            r = z_radius_data.get(zl)
+            if r is not None and r < body_radius * 0.7:
+                hole_start_top = zl
+        
+        bottom_hole_d = hole_end_bottom - sorted_z[0]
+        top_hole_d = sorted_z[-1] - hole_start_top
+        
+        # 判断两端是否有孔
+        btm_has_hole = inner_r > 0.0005 and bottom_hole_d > height * 0.05
+        top_has_hole = inner_r > 0.0005 and top_hole_d > height * 0.05
+        
+        if btm_has_hole and top_has_hole:
+            # 两端都有孔：可能重叠（贯通/相交）也可能不重叠（中间有实体段）
+            if hole_end_bottom >= hole_start_top:
+                # 孔范围交叉/重叠：需要重新扫描找实际孔底
+                btm_end = sorted_z[0]
+                for zl in sorted_z[1:]:
+                    r = z_radius_data.get(zl)
+                    if r is not None and r < body_radius * 0.7:
+                        btm_end = zl
+                    else:
+                        break
+                top_start = sorted_z[-1]
+                for zl in reversed(sorted_z[:-1]):
+                    r = z_radius_data.get(zl)
+                    if r is not None and r < body_radius * 0.7:
+                        top_start = zl
+                    else:
+                        break
+                # 如果扫描到对端（无外壁z层），用顶点数峰值找孔底分界
+                if btm_end >= sorted_z[-1] * 0.99 or top_start <= sorted_z[0] * 1.01:
+                    mid_zls = [zl for zl in sorted_z[1:-1] if zl in z_layers]
+                    if mid_zls:
+                        best_z = max(mid_zls, key=lambda zl: len(z_layers[zl]))
+                        btm_end = best_z
+                        top_start = best_z
+                        log_to_file(f"[STEP Exporter]   Both scans reached opposite ends, using vertex peak z={best_z:.4f} (vc={len(z_layers[best_z])}) as boundary")
+                    else:
+                        mid_z = (sorted_z[0] + sorted_z[-1]) / 2
+                        btm_end = mid_z
+                        top_start = mid_z
+                bottom_hole_d = btm_end - sorted_z[0]
+                top_hole_d = sorted_z[-1] - top_start
+            # else: 不重叠，bottom_hole_d 和 top_hole_d 已在上方扫描中获得
+            
+            if bottom_hole_d > height * 0.05 and top_hole_d > height * 0.05:
+                hole_pattern_detected = True
+                hole_position = 'both'
+                hole_radius = inner_r
+                hole_depth = bottom_hole_d
+                hole_depth_top = top_hole_d
+                log_to_file(f"[STEP Exporter]   Dual blind holes: inner_r={inner_r:.4f} btm_d={bottom_hole_d:.4f} ({bottom_hole_d/height*100:.0f}%) top_d={top_hole_d:.4f} ({top_hole_d/height*100:.0f}%)")
+            else:
+                log_to_file(f"[STEP Exporter]   Hole spans cylinder but depths too small — exporting as solid cylinder")
+        elif btm_has_hole:
             hole_pattern_detected = True
             hole_position = 'bottom'
             hole_radius = inner_r
-            hole_depth = hole_d
-            log_to_file(f"[STEP Exporter]   Bottom blind hole: inner_r={inner_r:.4f} hole_depth={hole_d:.4f} ({hole_d/height*100:.0f}%)")
+            hole_depth = bottom_hole_d
+            log_to_file(f"[STEP Exporter]   Bottom blind hole: inner_r={inner_r:.4f} hole_depth={bottom_hole_d:.4f} ({bottom_hole_d/height*100:.0f}%)")
+        elif top_has_hole:
+            hole_pattern_detected = True
+            hole_position = 'top'
+            hole_radius = inner_r
+            hole_depth = top_hole_d
+            log_to_file(f"[STEP Exporter]   Top blind hole: inner_r={inner_r:.4f} hole_depth={top_hole_d:.4f} ({top_hole_d/height*100:.0f}%)")
         else:
-            log_to_file(f"[STEP Exporter]   Blind hole check: inner_r={inner_r:.6f} hole_d={hole_d:.6f} — not detected")
+            log_to_file(f"[STEP Exporter]   Blind hole check: inner_r={inner_r:.6f} btm_d={bottom_hole_d:.6f} top_d={top_hole_d:.6f} — not detected")
     
     if not cylindrical_body and bottom_radius > 0.01:
         above_zls = [zl for zl in sorted_z if zl > body_end_z and zl in z_radius_data]
@@ -2403,6 +2467,10 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                             hole_depth = height * 0.5
                             hole_radius = body_radius * 0.5
             body_radius_for_export = top_radius
+        elif hole_position == 'both':
+            # 双端盲孔：检测阶段已设置 hole_radius, hole_depth (底部), hole_depth_top (顶部)
+            body_radius_for_export = top_radius
+            log_to_file(f"[STEP Exporter]   Dual blind holes: using pre-computed params btm_d={hole_depth:.4f} top_d={hole_depth_top:.4f}")
         else:
             # 顶部盲孔：原有逻辑
             above_zls = [zl for zl in sorted_z if zl > body_end_z and zl in z_radius_data]
@@ -2422,7 +2490,7 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
         hole_fillet_r = obj.get('hole_fillet_radius', 0.0) if hasattr(obj, 'get') else 0.0
         if hole_fillet_r > 0:
             log_to_file(f"[STEP Exporter]   hole fillet: r={hole_fillet_r:.3f}")
-        return {
+        result = {
             'obj_type': 'cylinder_blind_hole',
             'radius': body_radius_for_export * S,
             'height': height * S,
@@ -2434,6 +2502,9 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
             'pos_y': pos_y * S,
             'pos_z': pos_z * S,
         }
+        if hole_position == 'both':
+            result['hole_depth_top'] = hole_depth_top * S
+        return result
     
     bottom_radius *= S; top_radius *= S; height *= S
     pos_x *= S; pos_y *= S; pos_z *= S
@@ -2715,13 +2786,23 @@ def _export_parametric_sync(filepath, bottom_shells, top_shells, cylinders, step
                 px, py, pz, step_schema, step_unit,
                 1 if enable_logging else 0)
         elif obj_type == 'cylinder_blind_hole':
-            success = cpp_exporter.export_cylinder_blind_hole_step(
-                temp_file, cparams['radius'], cparams['height'],
-                cparams['hole_radius'], cparams['hole_depth'],
-                cparams.get('hole_fillet_radius', 0),
-                cparams.get('hole_position', 'top'),
-                px, py, pz, step_schema, step_unit,
-                1 if enable_logging else 0)
+            hole_pos = cparams.get('hole_position', 'top')
+            if hole_pos == 'both':
+                success = cpp_exporter.export_cylinder_dual_blind_holes_step(
+                    temp_file, cparams['radius'], cparams['height'],
+                    cparams['hole_radius'], cparams['hole_depth'],
+                    cparams.get('hole_depth_top', 0),
+                    cparams.get('hole_fillet_radius', 0),
+                    px, py, pz, step_schema, step_unit,
+                    1 if enable_logging else 0)
+            else:
+                success = cpp_exporter.export_cylinder_blind_hole_step(
+                    temp_file, cparams['radius'], cparams['height'],
+                    cparams['hole_radius'], cparams['hole_depth'],
+                    cparams.get('hole_fillet_radius', 0),
+                    hole_pos,
+                    px, py, pz, step_schema, step_unit,
+                    1 if enable_logging else 0)
         else:
             success = False
         if not success:
@@ -3000,11 +3081,21 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
             data['step_schema'], data['step_unit'],
             1 if data['enable_logging'] else 0)
     elif obj_type == 'cylinder_blind_hole':
+        hole_pos = cparams.get('hole_position', 'top')
+        if hole_pos == 'both':
+            return cpp_exporter.export_cylinder_dual_blind_holes_step(
+                temp_file, cparams['radius'], cparams['height'],
+                cparams['hole_radius'], cparams['hole_depth'],
+                cparams.get('hole_depth_top', 0),
+                cparams.get('hole_fillet_radius', 0),
+                px, py, pz,
+                data['step_schema'], data['step_unit'],
+                1 if data['enable_logging'] else 0)
         return cpp_exporter.export_cylinder_blind_hole_step(
             temp_file, cparams['radius'], cparams['height'],
             cparams['hole_radius'], cparams['hole_depth'],
             cparams.get('hole_fillet_radius', 0),
-            cparams.get('hole_position', 'top'),
+            hole_pos,
             px, py, pz,
             data['step_schema'], data['step_unit'],
             1 if data['enable_logging'] else 0)
@@ -5092,8 +5183,9 @@ def _create_holes(obj, props, S):
         for i in range(n):
             j = (i + 1) % n
             bm_c.faces.new((vb[i], vb[j], vt[j], vt[i]))
-        bm_c.faces.new(list(reversed(vt)))  # top
-        bm_c.faces.new(vb)  # bottom
+        bm_c.faces.new(vt)  # top cap, ccw → normal +z (outward)
+        bm_c.faces.new(list(reversed(vb)))  # bottom cap, cw → normal -z (outward)
+        bmesh.ops.recalc_face_normals(bm_c, faces=bm_c.faces[:])
         bm_c.normal_update()
         
         mesh_c = bpy.data.meshes.new(cut_name + "_Mesh")
@@ -5133,10 +5225,9 @@ def _create_holes(obj, props, S):
             -hh / 2 - ext, -hh / 2 + hole_d, hr_bottom, hr_bottom
         ))
     
-    # 布尔减
+    # 布尔减：每个切割体立即应用
     for cutter in cutters:
-        is_last = (cutter == cutters[-1])
-        _boolean_difference(obj, cutter, is_last and props.hole_fillet_radius > 0)
+        _boolean_difference(obj, cutter)
     
     # 删除切割体（不再需要）
     for cutter in cutters:
@@ -5150,15 +5241,26 @@ def _create_holes(obj, props, S):
         _apply_hole_fillet(obj, props, S)
 
 
-def _boolean_difference(target, cutter, as_first):
-    """对 target 做布尔减 cutter"""
-    mod = target.modifiers.new(name="Bool_Hole", type='BOOLEAN')
+def _boolean_difference(target, cutter):
+    """对 target 做布尔减 cutter，立即应用（使用低层 API 避免 modifier_apply 静默失败）"""
+    mod_name = "Bool_Hole_" + cutter.name
+    mod = target.modifiers.new(name=mod_name, type='BOOLEAN')
     mod.object = cutter
     mod.operation = 'DIFFERENCE'
     
-    if as_first:
-        bpy.context.view_layer.objects.active = target
-        bpy.ops.object.modifier_apply(modifier=mod.name)
+    # 强制更新 depsgraph 确保 modifier 生效
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    target.update_tag()
+    bpy.context.view_layer.update()
+    
+    # 用 evaluated mesh 替换原 mesh，然后移除 modifier
+    eval_obj = target.evaluated_get(depsgraph)
+    new_mesh = bpy.data.meshes.new_from_object(eval_obj)
+    old_mesh = target.data
+    target.modifiers.remove(mod)
+    target.data = new_mesh
+    if old_mesh and old_mesh.users == 0:
+        bpy.data.meshes.remove(old_mesh)
 
 
 def _apply_hole_fillet(obj, props, S):

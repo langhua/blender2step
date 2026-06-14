@@ -1471,6 +1471,20 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
     std_b = radius_std(bottom_outer_radii if might_be_hollow else bottom_radii)
     std_t = radius_std(top_outer_radii if might_be_hollow else top_radii)
     
+    # 修复：底部有圆倒角/孔洞时，底部Z层混合了倒角+孔洞+外壁顶点导致半径方差高。
+    # 此时顶部通常是干净的单层圆。若顶部方差低，用顶部半径作为圆柱体半径。
+    # 不能简单向上扫描找"干净层"——靠近底部的干净层可能是内孔壁（半径偏小），
+    # 会被误判为锥体底部。
+    if std_b > bottom_radius * 0.15 and std_t <= top_radius * 0.15:
+        # 顶部干净，底部混乱 → 恒定半径圆柱，用顶部数据替代底部
+        bottom_radius = top_radius
+        bottom_outer_radii = top_outer_radii if might_be_hollow else top_radii
+        std_b = std_t
+        # 标记为可能空心：后续中间层检测需要提取外圈簇，避免内孔壁污染半径范围检查
+        if not might_be_hollow:
+            might_be_hollow = True
+        log_to_file(f"[STEP Exporter] Bottom variance high (std_b={std_b:.4f}), top is clean (r={top_radius:.4f}), using top radius for cylinder body")
+    
     # 标准差不大于平均半径的 15% 才认为是规则圆柱
     if std_b > bottom_radius * 0.15 or std_t > top_radius * 0.15:
         log_to_file(f"[STEP Exporter] Radius variance too high: std_b={std_b:.3f} std_t={std_t:.3f}")
@@ -1711,6 +1725,40 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
     # 导致cylindrical_body=False（"本体"区域只有底部1层）。
     # 检测这种模式：底部半径大、上方第一层半径骤降>40% → 圆柱带孔洞，非锥体/倒角
     hole_pattern_detected = False
+    hole_position = 'top'  # 默认顶部盲孔，底部盲孔时检测为 'bottom'
+    hole_radius = 0.0
+    hole_depth = 0.0
+    
+    # 强制圆柱体判断：两端半径接近且顶部干净时，即使中间z层缺少外壁顶点
+    # （如盲孔圆柱的外壁仅有顶部/底部顶点），也认定为恒定半径圆柱。
+    # 同时检测底部盲孔：底部顶点数>>顶部顶点数 → 孔在底部。
+    if not cylindrical_body and abs(bottom_radius - top_radius) / max(bottom_radius, 0.01) < 0.02 and std_t <= top_radius * 0.05:
+        cylindrical_body = True
+        body_radius = (bottom_radius + top_radius) / 2.0
+        body_end_z = sorted_z[-1]
+        log_to_file(f"[STEP Exporter]   Forced cylindrical body: ends same radius (b={bottom_radius:.3f} t={top_radius:.3f}), top clean")
+        
+        # 底部盲孔检测：强制圆柱体意味着底部有孔洞特征
+        bot_region_count = sum(len(z_layers[zl]) for zl in sorted_z[:max(1, len(sorted_z)//4)])
+        top_vc = len(z_layers[sorted_z[-1]])
+        b_radii = sorted(compute_radii(z_layers[sorted_z[0]]))
+        inner_n = max(4, len(b_radii) // 8)
+        inner_r = sorted(b_radii[:inner_n])[inner_n//2]
+        hole_end = sorted_z[0]
+        for zl in sorted_z[1:]:
+            r = z_radius_data.get(zl)
+            if r is not None and r < body_radius * 0.7:
+                hole_end = zl
+        hole_d = hole_end - sorted_z[0]
+        if inner_r > 0.0005 and hole_d > height * 0.08:
+            hole_pattern_detected = True
+            hole_position = 'bottom'
+            hole_radius = inner_r
+            hole_depth = hole_d
+            log_to_file(f"[STEP Exporter]   Bottom blind hole: inner_r={inner_r:.4f} hole_depth={hole_d:.4f} ({hole_d/height*100:.0f}%)")
+        else:
+            log_to_file(f"[STEP Exporter]   Blind hole check: inner_r={inner_r:.6f} hole_d={hole_d:.6f} — not detected")
+    
     if not cylindrical_body and bottom_radius > 0.01:
         above_zls = [zl for zl in sorted_z if zl > body_end_z and zl in z_radius_data]
         if above_zls:
@@ -1721,6 +1769,92 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                 body_radius = bottom_radius
                 top_radius = bottom_radius  # 防止后续检测为锥体
                 hole_pattern_detected = True
+    
+    # 底部盲孔检测：顶部恒定半径为本体，底部参数骤降为孔洞
+    if not hole_pattern_detected and cylindrical_body and top_radius > 0.01:
+        below_zls_bottom = [zl for zl in sorted_z if zl < body_end_z and zl in z_radius_data]
+        if below_zls_bottom:
+            below_r_first = z_radius_data[below_zls_bottom[0]]  # 紧邻本体的孔洞层
+            if below_r_first < body_radius * 0.6:
+                log_to_file(f"[STEP Exporter]   Bottom hole pattern detected: body_r={body_radius:.3f} below_r={below_r_first:.3f}")
+                hole_pattern_detected = True
+                hole_position = 'bottom'
+    
+    # 底部盲孔检测（顶点数比值法）：当底部顶点数远多于顶部（>3x），
+    # 且顶部是干净的单层圆时，孔洞在底部。适用于外壁无中间层顶点的情况。
+    # 不依赖 has_two_clusters（圆倒角导致底部层难以聚类）。
+    if not hole_pattern_detected and cylindrical_body:
+        bot_vcount = len(z_layers[sorted_z[0]])
+        top_vcount = len(z_layers[sorted_z[-1]])
+        if bot_vcount > top_vcount * 3:
+            # 孔在底部：从底部层半径分布中找最小半径簇作为内孔半径
+            b_radii = sorted(compute_radii(z_layers[sorted_z[0]]))
+            # 取底部最小的10%顶点半径的中位数（排除外壁和倒角顶点）
+            inner_count = max(4, len(b_radii) // 10)
+            inner_r = sorted(b_radii[:inner_count])[inner_count//2]
+            
+            # 孔深：找底部以上顶点数最多的Z层（通常是孔底平面），
+            # 孔底以上顶点数应骤降（内孔壁结束，仅剩外壁）
+            best_z = sorted_z[0]
+            best_vc = 0
+            for zl in sorted_z[1:-1]:  # 跳过底部和顶部
+                vc = len(z_layers[zl])
+                if vc > best_vc:
+                    best_vc = vc
+                    best_z = zl
+            # 孔底以上第一层顶点数应显著下降
+            if best_vc > top_vcount * 2:
+                hole_end_z = best_z
+            else:
+                hole_end_z = sorted_z[0]  # 无法确定，保守使用底部
+            
+            hole_depth = hole_end_z - sorted_z[0]
+            if inner_r > 0.001 and hole_depth > height * 0.1:
+                hole_radius = inner_r
+                hole_pattern_detected = True
+                hole_position = 'bottom'
+                log_to_file(f"[STEP Exporter]   Bottom blind hole via vcount ratio: bot_v={bot_vcount} top_v={top_vcount} inner_r={inner_r:.4f} hole_depth={hole_depth:.4f} ({hole_depth/height*100:.0f}%) best_z={best_z:.4f} best_vc={best_vc}")
+    
+    # 底部盲孔检测（空心簇法）：底部有两簇（外壁+内孔），但顶部无两簇（实心顶）
+    if not hole_pattern_detected and cylindrical_body and bottom_is_hollow and not top_is_hollow:
+        # 确认中间层也有两簇（内孔壁存在），顶部层无两簇（内孔未贯穿）
+        mid_has_hole = False
+        for zl in sorted_z[1:-1]:  # 检查中间层（排除底部和顶部）
+            if len(z_layers[zl]) >= 16:
+                mid_radii = sorted(compute_radii(z_layers[zl]))
+                mid_cluster, _ = has_two_clusters(mid_radii)
+                if mid_cluster:
+                    mid_has_hole = True
+                    break
+        if mid_has_hole:
+            # 计算孔洞深度：从底部向上找到内孔消失的Z层
+            # hole_end_z = 最后一个有两簇的Z层（内孔壁终点）
+            hole_end_z = sorted_z[0]  # 默认仅在底部
+            for zl in sorted_z[1:]:
+                if len(z_layers[zl]) >= 16:
+                    zl_radii = sorted(compute_radii(z_layers[zl]))
+                    zl_cluster, _ = has_two_clusters(zl_radii)
+                    if zl_cluster:
+                        hole_end_z = zl  # 更新为最后一个有两簇的层
+                    else:
+                        break  # 内孔在此层之上消失
+            # 获取孔半径：从底部层内部簇中提取
+            inner_b, _ = layer_inner_outer_radii(sorted_z[0]) if 'layer_inner_outer_radii' in dir() else (0, 0)
+            if inner_b == 0:
+                # inline compute
+                b_radii = sorted(compute_radii(z_layers[sorted_z[0]]))
+                b_cluster, b_outer = has_two_clusters(b_radii)
+                if b_cluster:
+                    n_b = len(b_radii)
+                    b_inner = b_radii[:n_b - len(b_outer)]
+                    inner_b = sorted(b_inner)[len(b_inner)//2] if b_inner else 0
+            
+            hole_depth = hole_end_z - sorted_z[0]
+            if inner_b > 0.001 and hole_depth > height * 0.15:
+                hole_radius = inner_b
+                hole_pattern_detected = True
+                hole_position = 'bottom'
+                log_to_file(f"[STEP Exporter]   Bottom blind hole detected via cluster: inner_r={inner_b:.4f} hole_depth={hole_depth:.4f} ({hole_depth/height*100:.0f}%)")
     
     if cylindrical_body:
         body_radius = sorted([z_radius_data.get(zl, body_radius) for zl in sorted_z 
@@ -2205,32 +2339,97 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
     # 应用单位缩放：所有尺寸参数 × scale（mm=1000, m=1）
     S = scale if scale > 0 else 1.0
     
-    # 检测到孔洞模式（如顶部盲孔）：返回盲孔圆柱体类型
+    # 检测到孔洞模式（顶部/底部盲孔）：返回盲孔圆柱体类型
     # 使用 OpenCASCADE 布尔减操作创建参数化盲孔
     if hole_pattern_detected:
-        above_zls = [zl for zl in sorted_z if zl > body_end_z and zl in z_radius_data]
-        z_hole_bottom = above_zls[0] if above_zls else sorted_z[-1]
-        hole_depth = sorted_z[-1] - z_hole_bottom  # 从顶部到孔底的距离
-        
-        # 孔半径：取孔壁区域（非顶部混合层）的中位数半径
-        hole_wall_zls = [zl for zl in above_zls if zl < sorted_z[-1] * 0.99]
-        if hole_wall_zls:
-            hole_wall_r = sorted([z_radius_data[zl] for zl in hole_wall_zls])
-            hole_radius = hole_wall_r[len(hole_wall_r)//2]
+        if hole_position == 'bottom':
+            # 底部盲孔：如果 hole_radius/hole_depth 已在检测阶段设置，直接使用
+            if hole_radius > 0 and hole_depth > 0:
+                log_to_file(f"[STEP Exporter]   Using pre-computed blind hole params: hole_r={hole_radius:.4f} hole_d={hole_depth:.4f}")
+            else:
+                # 优先通过中间层内孔簇计算孔半径和深度
+                hole_radius_from_cluster = False
+                # 尝试在任何有两簇的层提取内孔半径（不限于底部层）
+                for zl in sorted_z[:-1]:  # 检查所有非顶层
+                    if len(z_layers[zl]) >= 16:
+                        zl_radii = sorted(compute_radii(z_layers[zl]))
+                        zl_cluster, zl_outer = has_two_clusters(zl_radii)
+                        if zl_cluster:
+                            n_z = len(zl_radii)
+                            zl_inner = zl_radii[:n_z - len(zl_outer)]
+                            inner_r = sorted(zl_inner)[len(zl_inner)//2] if zl_inner else 0
+                            # 找内孔消失Z层
+                            hole_end_z = zl
+                            for zl2 in sorted_z[sorted_z.index(zl)+1:]:
+                                if len(z_layers[zl2]) >= 16:
+                                    zl2_radii = sorted(compute_radii(z_layers[zl2]))
+                                    zl2_cluster, _ = has_two_clusters(zl2_radii)
+                                    if zl2_cluster:
+                                        hole_end_z = zl2
+                                    else:
+                                        break
+                            hole_depth = hole_end_z - sorted_z[0]
+                            if inner_r > 0.001 and hole_depth > height * 0.1:
+                                hole_radius = inner_r
+                                hole_radius_from_cluster = True
+                                log_to_file(f"[STEP Exporter]   Bottom blind hole via cluster at z={zl:.4f}: inner_r={inner_r:.4f} hole_depth={hole_depth:.4f}")
+                                break
+                if not hole_radius_from_cluster:
+                    # 回退：用顶点数比值法估算孔参数
+                    bot_vc = len(z_layers[sorted_z[0]])
+                    top_vc = len(z_layers[sorted_z[-1]])
+                    if bot_vc > top_vc * 3:
+                        b_radii = sorted(compute_radii(z_layers[sorted_z[0]]))
+                        inner_count = max(4, len(b_radii) // 10)
+                        hole_radius = sorted(b_radii[:inner_count])[inner_count//2]
+                        # 孔深：底部以上顶点数最多的Z层（孔底平面）
+                        best_z = sorted_z[0]
+                        best_vc = 0
+                        for zl in sorted_z[1:-1]:
+                            vc = len(z_layers[zl])
+                            if vc > best_vc:
+                                best_vc = vc
+                                best_z = zl
+                        hole_end_z = best_z if best_vc > top_vc * 2 else sorted_z[0]
+                        hole_depth = hole_end_z - sorted_z[0]
+                        log_to_file(f"[STEP Exporter]   Bottom blind hole via vcount fallback: inner_r={hole_radius:.4f} hole_depth={hole_depth:.4f}")
+                    else:
+                        below_zls = [zl for zl in sorted_z if zl < body_end_z and zl in z_radius_data]
+                        if below_zls:
+                            hole_depth = body_end_z - sorted_z[0]
+                            hole_wall_r = sorted([z_radius_data[zl] for zl in below_zls])
+                            hole_radius = hole_wall_r[len(hole_wall_r)//2]
+                        else:
+                            hole_depth = height * 0.5
+                            hole_radius = body_radius * 0.5
+            body_radius_for_export = top_radius
         else:
-            hole_radius = z_radius_data[above_zls[0]]
+            # 顶部盲孔：原有逻辑
+            above_zls = [zl for zl in sorted_z if zl > body_end_z and zl in z_radius_data]
+            z_hole_bottom = above_zls[0] if above_zls else sorted_z[-1]
+            hole_depth = sorted_z[-1] - z_hole_bottom  # 从顶部到孔底的距离
+            
+            # 孔半径：取孔壁区域（非顶部混合层）的中位数半径
+            hole_wall_zls = [zl for zl in above_zls if zl < sorted_z[-1] * 0.99]
+            if hole_wall_zls:
+                hole_wall_r = sorted([z_radius_data[zl] for zl in hole_wall_zls])
+                hole_radius = hole_wall_r[len(hole_wall_r)//2]
+            else:
+                hole_radius = z_radius_data[above_zls[0]]
+            body_radius_for_export = bottom_radius
         
-        log_to_file(f"[STEP Exporter]   -> cylinder_blind_hole! r={bottom_radius:.3f} h={height:.3f} hole_r={hole_radius:.3f} hole_d={hole_depth:.3f}")
+        log_to_file(f"[STEP Exporter]   -> cylinder_blind_hole! r={body_radius_for_export:.3f} h={height:.3f} hole_r={hole_radius:.3f} hole_d={hole_depth:.3f} pos={hole_position}")
         hole_fillet_r = obj.get('hole_fillet_radius', 0.0) if hasattr(obj, 'get') else 0.0
         if hole_fillet_r > 0:
             log_to_file(f"[STEP Exporter]   hole fillet: r={hole_fillet_r:.3f}")
         return {
             'obj_type': 'cylinder_blind_hole',
-            'radius': bottom_radius * S,
+            'radius': body_radius_for_export * S,
             'height': height * S,
             'hole_radius': hole_radius * S,
             'hole_depth': hole_depth * S,
             'hole_fillet_radius': hole_fillet_r,  # 已为 mm，无需缩放
+            'hole_position': hole_position,
             'pos_x': pos_x * S,
             'pos_y': pos_y * S,
             'pos_z': pos_z * S,
@@ -2520,6 +2719,7 @@ def _export_parametric_sync(filepath, bottom_shells, top_shells, cylinders, step
                 temp_file, cparams['radius'], cparams['height'],
                 cparams['hole_radius'], cparams['hole_depth'],
                 cparams.get('hole_fillet_radius', 0),
+                cparams.get('hole_position', 'top'),
                 px, py, pz, step_schema, step_unit,
                 1 if enable_logging else 0)
         else:
@@ -2804,6 +3004,7 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
             temp_file, cparams['radius'], cparams['height'],
             cparams['hole_radius'], cparams['hole_depth'],
             cparams.get('hole_fillet_radius', 0),
+            cparams.get('hole_position', 'top'),
             px, py, pz,
             data['step_schema'], data['step_unit'],
             1 if data['enable_logging'] else 0)

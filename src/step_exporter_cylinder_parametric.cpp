@@ -1270,7 +1270,8 @@ TopoDS_Shape create_cone_stepped_hole_parametric(
 TopoDS_Shape create_cylinder_with_blind_hole_solid_parametric(
     double radius, double height,
     double hole_radius, double hole_depth,
-    double hole_fillet_radius)
+    double hole_fillet_radius,
+    bool is_bottom)
 {
     // 创建外圆柱体
     TopoDS_Shape outerShape = create_cylinder_solid_parametric(radius, height);
@@ -1295,9 +1296,17 @@ TopoDS_Shape create_cylinder_with_blind_hole_solid_parametric(
     TopoDS_Shape cutterShape = create_cylinder_solid_parametric(hole_radius, cutterHeight);
     if (cutterShape.IsNull()) return TopoDS_Shape();
 
-    // 将切割体定位到圆柱顶部
-    // 目标：切割体底部 = height/2 - hole_depth，顶部 = height/2 + ext
-    double transZ = height / 2.0 - hole_depth + cutterHeight / 2.0;
+    // 将切割体定位到圆柱顶部或底部
+    double transZ;
+    if (is_bottom) {
+        // 底部盲孔：切割体底部 = -height/2 - ext, 顶部 = -height/2 + hole_depth
+        // 切割体中心 = -height/2 + hole_depth - cutterHeight/2
+        transZ = -height / 2.0 + hole_depth - cutterHeight / 2.0;
+    } else {
+        // 顶部盲孔：切割体底部 = height/2 - hole_depth, 顶部 = height/2 + ext
+        // 切割体中心 = height/2 - hole_depth + cutterHeight/2
+        transZ = height / 2.0 - hole_depth + cutterHeight / 2.0;
+    }
     gp_Trsf trsf;
     trsf.SetTranslation(gp_Vec(0, 0, transZ));
     cutterShape = BRepBuilderAPI_Transform(cutterShape, trsf).Shape();
@@ -1340,9 +1349,10 @@ TopoDS_Shape create_cylinder_with_blind_hole_solid_parametric(
         double halfH = height / 2.0;
         double FR = hole_fillet_radius;
         double HR = hole_radius;
-        cyl_log("Applying hole fillet: FR=" + std::to_string(FR) + " HR=" + std::to_string(HR) + " halfH=" + std::to_string(halfH));
+        double targetZ = is_bottom ? -halfH : halfH;
+        cyl_log("Applying hole fillet: FR=" + std::to_string(FR) + " HR=" + std::to_string(HR) + " targetZ=" + std::to_string(targetZ) + " is_bottom=" + std::to_string(is_bottom));
         
-        // 方法：找到位于 z≈halfH、半径≈HR 的圆形边，用 BRepFilletAPI_MakeFillet
+        // 方法：找到位于 z≈targetZ、半径≈HR 的圆形边，用 BRepFilletAPI_MakeFillet
         TopoDS_Edge holeEdge;
         bool found = false;
         int edgeIdx = 0;
@@ -1365,9 +1375,9 @@ TopoDS_Shape create_cylinder_with_blind_hole_solid_parametric(
                 cyl_log("  Edge " + std::to_string(edgeIdx) + ": Circle r=" + std::to_string(cr) + 
                         " ctr=(" + std::to_string(cx) + "," + std::to_string(cy) + "," + std::to_string(cz) + ")");
                 
-                // 孔口边：圆心在 Z 轴上 (cx≈0, cy≈0)，z≈halfH，r≈HR
+                // 孔口边：圆心在 Z 轴上 (cx≈0, cy≈0)，z≈targetZ，r≈HR
                 if (std::abs(cx) < 0.01 && std::abs(cy) < 0.01 &&
-                    std::abs(cz - halfH) < 0.01 &&
+                    std::abs(cz - targetZ) < 0.01 &&
                     std::abs(cr - HR) / std::max(HR, 0.001) < 0.15) {
                     holeEdge = edge;
                     found = true;

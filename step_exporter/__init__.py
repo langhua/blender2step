@@ -1527,6 +1527,11 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
     
     if len(mid_all_radii) >= 16:
         mid_sorted = sorted(mid_all_radii)
+        # 检测中间区域是否有内外两簇（如双端盲孔圆柱的外壁+内孔壁）
+        mid_is_cluster, mid_outer_radii = has_two_clusters(mid_sorted)
+        if mid_is_cluster and len(mid_outer_radii) >= 8:
+            # 使用外簇（更大半径的那簇）进行圆度检测
+            mid_sorted = mid_outer_radii
         # 空心结构: 外圈递归检测子簇（凹槽底面 vs 圆柱表面）
         if might_be_hollow:
             is_cluster, outer_radii = has_two_clusters(mid_sorted)
@@ -1676,17 +1681,23 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
     
     # 逐层计算半径
     z_radius_data = {}
+    z_max_radius = {}  # 每层最大半径（用于检测外壁是否存在）
     for zl in sorted_z:
         r = _layer_outer_radius(z_layers[zl])
         if r is not None:
             z_radius_data[zl] = r
+        # 计算该层最大半径
+        all_r = compute_radii(z_layers[zl])
+        if len(all_r) > 0:
+            z_max_radius[zl] = max(all_r)
     
     # DEBUG: 输出 z-level 和半径数据
     log_to_file(f"[STEP Exporter]   detect: {len(sorted_z)} z-levels, {len(z_radius_data)} with radius data")
     for zl in sorted_z:
         r = z_radius_data.get(zl)
+        max_r = z_max_radius.get(zl, 0)
         if r is not None:
-            log_to_file(f"[STEP Exporter]     z={zl:.6f} r={r:.6f}")
+            log_to_file(f"[STEP Exporter]     z={zl:.6f} r={r:.6f} max_r={max_r:.6f}")
     log_to_file(f"[STEP Exporter]   detect: bottom_r={bottom_radius:.6f} top_r={top_radius:.6f} height={height:.6f}")
     
     # 1. 从底部向上找恒定半径区域 → 判断是否为圆柱本体
@@ -1744,18 +1755,21 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
         inner_n = max(4, len(b_radii) // 8)
         inner_r = sorted(b_radii[:inner_n])[inner_n//2]
         
-        # 从底部向上扫描找内孔结束位置
+        # 从底部向上扫描找内孔结束位置（用max半径判断外壁是否存在）
         hole_end_bottom = sorted_z[0]
         for zl in sorted_z[1:]:
             r = z_radius_data.get(zl)
-            if r is not None and r < body_radius * 0.7:
+            max_r = z_max_radius.get(zl, 0)
+            # 内孔z层：外半径小 且 没有外壁顶点
+            if r is not None and r < body_radius * 0.7 and max_r < body_radius * 0.85:
                 hole_end_bottom = zl
         
         # 从顶部向下扫描找内孔开始位置
         hole_start_top = sorted_z[-1]
         for zl in reversed(sorted_z[:-1]):
             r = z_radius_data.get(zl)
-            if r is not None and r < body_radius * 0.7:
+            max_r = z_max_radius.get(zl, 0)
+            if r is not None and r < body_radius * 0.7 and max_r < body_radius * 0.85:
                 hole_start_top = zl
         
         bottom_hole_d = hole_end_bottom - sorted_z[0]
@@ -1768,33 +1782,40 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
         if btm_has_hole and top_has_hole:
             # 两端都有孔：可能重叠（贯通/相交）也可能不重叠（中间有实体段）
             if hole_end_bottom >= hole_start_top:
-                # 孔范围交叉/重叠：需要重新扫描找实际孔底
+                # 孔范围交叉/重叠：用max半径重新扫描找实际孔底
                 btm_end = sorted_z[0]
                 for zl in sorted_z[1:]:
                     r = z_radius_data.get(zl)
-                    if r is not None and r < body_radius * 0.7:
+                    max_r = z_max_radius.get(zl, 0)
+                    if r is not None and r < body_radius * 0.7 and max_r < body_radius * 0.85:
                         btm_end = zl
                     else:
                         break
                 top_start = sorted_z[-1]
                 for zl in reversed(sorted_z[:-1]):
                     r = z_radius_data.get(zl)
-                    if r is not None and r < body_radius * 0.7:
+                    max_r = z_max_radius.get(zl, 0)
+                    if r is not None and r < body_radius * 0.7 and max_r < body_radius * 0.85:
                         top_start = zl
                     else:
                         break
-                # 如果扫描到对端（无外壁z层），用顶点数峰值找孔底分界
+                # 如果扫描到对端（无外壁z层），用max半径找外壁首现位置作为分界
                 if btm_end >= sorted_z[-1] * 0.99 or top_start <= sorted_z[0] * 1.01:
-                    mid_zls = [zl for zl in sorted_z[1:-1] if zl in z_layers]
-                    if mid_zls:
-                        best_z = max(mid_zls, key=lambda zl: len(z_layers[zl]))
-                        btm_end = best_z
-                        top_start = best_z
-                        log_to_file(f"[STEP Exporter]   Both scans reached opposite ends, using vertex peak z={best_z:.4f} (vc={len(z_layers[best_z])}) as boundary")
+                    # 找中间区域第一个有外壁的z层
+                    mid_z = (sorted_z[0] + sorted_z[-1]) / 2
+                    outer_zls = [zl for zl in sorted_z[1:-1]
+                                 if z_max_radius.get(zl, 0) > body_radius * 0.85]
+                    if outer_zls:
+                        # 用最靠近中点的外壁z层作为分界
+                        boundary_z = min(outer_zls, key=lambda zl: abs(zl - mid_z))
+                        btm_end = boundary_z
+                        top_start = boundary_z
+                        log_to_file(f"[STEP Exporter]   Both scans reached opposite ends, using max-radius boundary z={boundary_z:.4f}")
                     else:
-                        mid_z = (sorted_z[0] + sorted_z[-1]) / 2
+                        # 完全没有外壁z层：回退到中点
                         btm_end = mid_z
                         top_start = mid_z
+                        log_to_file(f"[STEP Exporter]   No outer-wall z-levels found, using midpoint z={mid_z:.4f}")
                 bottom_hole_d = btm_end - sorted_z[0]
                 top_hole_d = sorted_z[-1] - top_start
             # else: 不重叠，bottom_hole_d 和 top_hole_d 已在上方扫描中获得
@@ -1803,9 +1824,17 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                 hole_pattern_detected = True
                 hole_position = 'both'
                 hole_radius = inner_r
-                hole_depth = bottom_hole_d
-                hole_depth_top = top_hole_d
-                log_to_file(f"[STEP Exporter]   Dual blind holes: inner_r={inner_r:.4f} btm_d={bottom_hole_d:.4f} ({bottom_hole_d/height*100:.0f}%) top_d={top_hole_d:.4f} ({top_hole_d/height*100:.0f}%)")
+                # 优先使用对象上存储的精确孔深（避免 mesh z-level 分析误差）
+                stored_depth = obj.get('hole_depth') if hasattr(obj, 'get') else None
+                stored_pos = obj.get('hole_position') if hasattr(obj, 'get') else None
+                if stored_depth is not None and stored_pos == 'both':
+                    hole_depth = stored_depth
+                    hole_depth_top = stored_depth
+                    log_to_file(f"[STEP Exporter]   Using stored hole_depth={stored_depth:.4f} from object property")
+                else:
+                    hole_depth = bottom_hole_d
+                    hole_depth_top = top_hole_d
+                log_to_file(f"[STEP Exporter]   Dual blind holes: inner_r={inner_r:.4f} btm_d={hole_depth:.4f} ({hole_depth/height*100:.0f}%) top_d={hole_depth_top:.4f} ({hole_depth_top/height*100:.0f}%)")
             else:
                 log_to_file(f"[STEP Exporter]   Hole spans cylinder but depths too small — exporting as solid cylinder")
         elif btm_has_hole:
@@ -5147,58 +5176,26 @@ def _create_holes(obj, props, S):
     cutters = []
     
     def make_hole_cutter(cut_name, z_bottom, z_top, r_bottom, r_top):
-        """创建锥形孔切割体"""
-        bm_c = bmesh.new()
-        seg = 64
+        """使用 Blender 原生圆柱体创建切割体（比手动 bmesh 更可靠）"""
+        cutter_height = z_top - z_bottom
+        cutter_z = (z_top + z_bottom) / 2.0
+        avg_r = (r_bottom + r_top) / 2.0
         
-        if abs(r_bottom - r_top) < 0.0001:
-            # 直圆柱切割体
-            g = bmesh.ops.create_circle(bm_c, cap_ends=False, radius=r_bottom, segments=seg)
-            vc = sorted(g['verts'], key=lambda v: math.atan2(v.co.y, v.co.x))
-            vb = []
-            vt = []
-            for v in vc:
-                vb.append(bm_c.verts.new((v.co.x, v.co.y, z_bottom)))
-                vt.append(bm_c.verts.new((v.co.x, v.co.y, z_top)))
-            bmesh.ops.delete(bm_c, geom=vc, context='VERTS')
-            bm_c.verts.index_update()
-        else:
-            # 锥形切割体
-            g = bmesh.ops.create_circle(bm_c, cap_ends=False, radius=r_bottom, segments=seg)
-            vc_b = sorted(g['verts'], key=lambda v: math.atan2(v.co.y, v.co.x))
-            vb = []
-            for v in vc_b:
-                vb.append(bm_c.verts.new((v.co.x, v.co.y, z_bottom)))
-            bmesh.ops.delete(bm_c, geom=vc_b, context='VERTS')
-            
-            g = bmesh.ops.create_circle(bm_c, cap_ends=False, radius=r_top, segments=seg)
-            vc_t = sorted(g['verts'], key=lambda v: math.atan2(v.co.y, v.co.x))
-            vt = []
-            for v in vc_t:
-                vt.append(bm_c.verts.new((v.co.x, v.co.y, z_top)))
-            bmesh.ops.delete(bm_c, geom=vc_t, context='VERTS')
-            bm_c.verts.index_update()
-        
-        n = len(vb)
-        for i in range(n):
-            j = (i + 1) % n
-            bm_c.faces.new((vb[i], vb[j], vt[j], vt[i]))
-        bm_c.faces.new(vt)  # top cap, ccw → normal +z (outward)
-        bm_c.faces.new(list(reversed(vb)))  # bottom cap, cw → normal -z (outward)
-        bmesh.ops.recalc_face_normals(bm_c, faces=bm_c.faces[:])
-        bm_c.normal_update()
-        
-        mesh_c = bpy.data.meshes.new(cut_name + "_Mesh")
-        bm_c.to_mesh(mesh_c)
-        bm_c.free()
-        obj_c = bpy.data.objects.new(cut_name, mesh_c)
-        bpy.context.collection.objects.link(obj_c)
+        # 使用 Blender 原生圆柱体
+        bpy.ops.mesh.primitive_cylinder_add(
+            vertices=64, radius=avg_r, depth=cutter_height,
+            location=(0, 0, cutter_z)
+        )
+        obj_c = bpy.context.active_object
+        obj_c.name = cut_name
         obj_c.hide_set(True)
         obj_c.hide_render = True
         return obj_c
     
     hh = H
-    ext = 5.0 * S  # 切割体超出量
+    ext = max(hr_bottom, hole_d * 0.5) if props.hole_type != 'through' else max(hr_bottom, H * 0.5)
+    
+    log_to_file(f"[STEP Exporter] _create_holes: H={H:.4f} hole_d={hole_d:.4f} hole_radius={hr_bottom:.4f} ext={ext:.4f} type={props.hole_type}")
     
     if props.hole_type == 'through':
         cutters.append(make_hole_cutter(
@@ -5225,9 +5222,29 @@ def _create_holes(obj, props, S):
             -hh / 2 - ext, -hh / 2 + hole_d, hr_bottom, hr_bottom
         ))
     
-    # 布尔减：每个切割体立即应用
+    # 布尔减：先创建所有 modifier，再一次性通过 depsgraph 应用
+    mod_names = []
     for cutter in cutters:
-        _boolean_difference(obj, cutter)
+        mod_name = "Bool_Hole_" + cutter.name
+        mod = obj.modifiers.new(name=mod_name, type='BOOLEAN')
+        mod.object = cutter
+        mod.operation = 'DIFFERENCE'
+        mod.solver = 'EXACT'
+        mod_names.append(mod_name)
+        log_to_file(f"[STEP Exporter] _boolean_difference: created {mod_name} (cutter at z={cutter.location.z:.4f}, r={cutter.dimensions.x/2:.4f}, h={cutter.dimensions.z:.4f})")
+    
+    # 一次性通过 depsgraph 评估所有 modifier
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    obj.update_tag()
+    bpy.context.view_layer.update()
+    eval_obj = obj.evaluated_get(depsgraph)
+    new_mesh = bpy.data.meshes.new_from_object(eval_obj)
+    old_mesh = obj.data
+    obj.data = new_mesh
+    obj.modifiers.clear()
+    if old_mesh and old_mesh.users == 0:
+        bpy.data.meshes.remove(old_mesh)
+    log_to_file(f"[STEP Exporter] _boolean_difference: all {len(mod_names)} modifiers applied, target verts={len(obj.data.vertices)}")
     
     # 删除切割体（不再需要）
     for cutter in cutters:
@@ -5236,31 +5253,34 @@ def _create_holes(obj, props, S):
         if mesh and mesh.users == 0:
             bpy.data.meshes.remove(mesh)
     
+    # 存储孔参数到自定义属性，供检测阶段直接使用（避免 mesh z-level 分析误差）
+    if props.hole_type in ('top', 'bottom', 'both'):
+        obj['hole_depth'] = hole_d
+        obj['hole_position'] = props.hole_type
+        log_to_file(f"[STEP Exporter] _create_holes: stored hole_depth={hole_d:.4f} hole_position={props.hole_type} on object")
+    
     # 孔口圆倒角
     if props.hole_fillet_radius > 0 and cutters:
         _apply_hole_fillet(obj, props, S)
 
 
 def _boolean_difference(target, cutter):
-    """对 target 做布尔减 cutter，立即应用（使用低层 API 避免 modifier_apply 静默失败）"""
+    """对 target 做布尔减 cutter，立即应用"""
     mod_name = "Bool_Hole_" + cutter.name
     mod = target.modifiers.new(name=mod_name, type='BOOLEAN')
     mod.object = cutter
     mod.operation = 'DIFFERENCE'
+    mod.solver = 'EXACT'  # 使用精确求解器
     
-    # 强制更新 depsgraph 确保 modifier 生效
-    depsgraph = bpy.context.evaluated_depsgraph_get()
-    target.update_tag()
-    bpy.context.view_layer.update()
+    # 设为活跃对象，确保在 OBJECT 模式
+    bpy.context.view_layer.objects.active = target
+    target.select_set(True)
+    bpy.ops.object.mode_set(mode='OBJECT')
     
-    # 用 evaluated mesh 替换原 mesh，然后移除 modifier
-    eval_obj = target.evaluated_get(depsgraph)
-    new_mesh = bpy.data.meshes.new_from_object(eval_obj)
-    old_mesh = target.data
-    target.modifiers.remove(mod)
-    target.data = new_mesh
-    if old_mesh and old_mesh.users == 0:
-        bpy.data.meshes.remove(old_mesh)
+    log_to_file(f"[STEP Exporter] _boolean_difference: applying {mod_name} (cutter at z={cutter.location.z:.4f}, r={cutter.dimensions.x/2:.4f}, h={cutter.dimensions.z:.4f})")
+    bpy.ops.object.modifier_apply(modifier=mod_name)
+    
+    log_to_file(f"[STEP Exporter] _boolean_difference: {mod_name} done, target verts={len(target.data.vertices)}")
 
 
 def _apply_hole_fillet(obj, props, S):

@@ -819,27 +819,32 @@ PyObject* export_hollow_cylinder_tapered_step(PyObject* self, PyObject* args) {
     const char* filename;
     double outer_radius, inner_radius_top, inner_radius_bottom, height;
     double fillet_radius = 0.0;
+    double chamfer_size = 0.0;
+    const char* chamfer_pos = "";
     double pos_x = 0.0, pos_y = 0.0, pos_z = 0.0;
     const char* step_schema = "AP214IS";
     const char* unit = "MILLIMETER";
     int enable_logging = 1;
 
-    if (!PyArg_ParseTuple(args, "sddddd|dddssi",
+    if (!PyArg_ParseTuple(args, "sdddddd|sdddssi",
                           &filename,
                           &outer_radius, &inner_radius_top, &inner_radius_bottom, &height,
                           &fillet_radius,
+                          &chamfer_size,
+                          &chamfer_pos,
                           &pos_x, &pos_y, &pos_z,
                           &step_schema, &unit, &enable_logging)) {
         PyErr_SetString(PyExc_TypeError,
             "export_hollow_cylinder_tapered_step() expected: filename, outer_radius, "
-            "inner_radius_top, inner_radius_bottom, height, [fillet_radius], "
+            "inner_radius_top, inner_radius_bottom, height, [fillet_radius], [chamfer_size], [chamfer_pos], "
             "[pos_x], [pos_y], [pos_z], [step_schema], [unit], [enable_logging]");
         return NULL;
     }
 
     try {
+        bool chamfer_at_top = (strcmp(chamfer_pos, "top") == 0);
         TopoDS_Shape shape = create_hollow_cylinder_tapered_solid_parametric(
-            outer_radius, inner_radius_top, inner_radius_bottom, height, fillet_radius);
+            outer_radius, inner_radius_top, inner_radius_bottom, height, fillet_radius, chamfer_size, chamfer_at_top);
         if (shape.IsNull()) { Py_RETURN_FALSE; }
 
         if (pos_x != 0.0 || pos_y != 0.0 || pos_z != 0.0) {

@@ -265,7 +265,7 @@ static void find_circular_edges(const TopoDS_Shape& solid,
 
 TopoDS_Shape create_hollow_cylinder_tapered_solid_parametric(
     double outer_radius, double inner_radius_top, double inner_radius_bottom,
-    double height, double fillet_radius)
+    double height, double fillet_radius, double chamfer_size, bool chamfer_at_top)
 {
     TopoDS_Shape outerShape = create_cylinder_solid_parametric(outer_radius, height);
     if (outerShape.IsNull()) return TopoDS_Shape();
@@ -275,20 +275,23 @@ TopoDS_Shape create_hollow_cylinder_tapered_solid_parametric(
     double halfH = height / 2.0;
     double ext = 2.0;
 
-    // Build cone exactly from z=-halfH (bottom) to z=+halfH (top)
-    // R1=inner_radius_bottom at bottom opening, R2=inner_radius_top at top opening
-    // Extend slightly above/below so the cone starts/ends exactly at the cylinder faces
-    // radius(z) = R1 + (z - baseZ) / H * (R2 - R1)
-    // At z=-halfH: we want r=inner_radius_bottom. baseZ=-halfH-ext, so x=ext from base.
-    // At z=+halfH: we want r=inner_radius_top. x=ext+height from base.
-    // H = height + 2*ext
-    // inner_radius_bottom = R1 + ext/H * (R2 - R1)
-    // inner_radius_top    = R1 + (ext+height)/H * (R2 - R1)
-    // Solve: R1 = inner_radius_bottom - ext/H * (R2 - R1)
-    // Let d = R2 - R1. Then:
-    //   lo = R1 + ext/H * d  →  R1 = lo - ext/H * d
-    //   hi = R1 + (ext+Hcyl)/H * d = lo - ext/H*d + (ext+Hcyl)/H*d = lo + Hcyl/H * d
-    //   d = (hi - lo) * H / Hcyl
+    // === Step 1: Apply chamfer to outer edge FIRST (on clean cylinder, easy to find) ===
+    if (chamfer_size > 0.001) {
+        std::vector<TopoDS_Edge> topEdges, bottomEdges;
+        find_circular_edges(solid, topEdges, bottomEdges);
+        const auto& targetEdges = chamfer_at_top ? topEdges : bottomEdges;
+        for (const auto& e : targetEdges) {
+            double er = BRepAdaptor_Curve(e).Circle().Radius();
+            if (std::abs(er - outer_radius) / outer_radius < 0.15) {
+                BRepFilletAPI_MakeChamfer cm(solid);
+                cm.Add(chamfer_size, e);
+                cm.Build();
+                if (cm.IsDone()) { solid = shape_to_solid(cm.Shape()); break; }
+            }
+        }
+    }
+
+    // === Step 2: Cut tapered through-hole ===
     double Hcyl = height;
     double Hcone = Hcyl + 2 * ext;
     double d = (inner_radius_top - inner_radius_bottom) * Hcone / Hcyl;
@@ -305,7 +308,7 @@ TopoDS_Shape create_hollow_cylinder_tapered_solid_parametric(
     solid = shape_to_solid(cut.Shape());
     if (solid.IsNull()) return TopoDS_Shape();
 
-    // Apply fillets at both openings
+    // === Step 3: Apply fillets at hole openings ===
     if (fillet_radius > 0.001) {
         std::vector<TopoDS_Edge> topEdges, bottomEdges;
         find_circular_edges(solid, topEdges, bottomEdges);
@@ -324,7 +327,7 @@ TopoDS_Shape create_hollow_cylinder_tapered_solid_parametric(
 
     std::cout << "[STEP Exporter] Created tapered hollow cylinder: oR=" << outer_radius
               << " iR_top=" << inner_radius_top << " iR_bottom=" << inner_radius_bottom
-              << " h=" << height << " fillet=" << fillet_radius << std::endl;
+              << " h=" << height << " fillet=" << fillet_radius << " chamfer=" << chamfer_size << std::endl;
     return solid;
 }
 

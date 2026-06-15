@@ -2476,7 +2476,21 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
             end_r = obj.get('hole_end_radius', hole_radius) if hasattr(obj, 'get') else hole_radius
             
             if hole_is_tapered_thru and abs(opening_r - end_r) > 0.0001:
-                log_to_file(f"[STEP Exporter]   -> hollow_cylinder_tapered! r={body_radius_for_export:.3f} h={height:.3f} opening_r={opening_r:.3f} end_r={end_r:.3f}")
+                # 读取存储的倒角/圆角参数（mesh 分析可能受通孔干扰）
+                stored_chamfer_type = obj.get('chamfer_type') if hasattr(obj, 'get') else None
+                stored_chamfer_sz = obj.get('chamfer_size', 0) if hasattr(obj, 'get') else 0
+                stored_fillet_r = obj.get('fillet_radius_edge', 0) if hasattr(obj, 'get') else 0
+                if stored_chamfer_type == 'chamfer' or stored_chamfer_type == 'chamfer_both':
+                    top_feature = 'chamfer'
+                    top_feature_size = stored_chamfer_sz * 0.001  # mm -> m
+                    # 使用原始半径（倒角前的），而非 mesh 分析出的倒角后半径
+                    stored_orig_r = obj.get('cylinder_original_radius', 0) if hasattr(obj, 'get') else 0
+                    if stored_orig_r > 0:
+                        body_radius_for_export = stored_orig_r * 0.001  # mm -> m
+                elif stored_chamfer_type == 'fillet' or stored_chamfer_type == 'fillet_both':
+                    top_feature = 'fillet'
+                    top_feature_size = stored_fillet_r * 0.001  # mm -> m
+                log_to_file(f"[STEP Exporter]   -> hollow_cylinder_tapered! r={body_radius_for_export:.3f} h={height:.3f} opening_r={opening_r:.3f} end_r={end_r:.3f} chamfer={top_feature} chamfer_sz={top_feature_size}")
                 return {
                     'obj_type': 'hollow_cylinder_tapered',
                     'outer_radius': body_radius_for_export * S,
@@ -2484,6 +2498,10 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                     'inner_radius_bottom': end_r * S,
                     'height': height * S,
                     'hole_fillet_radius': hole_fillet_r,
+                    'top_feature': top_feature,
+                    'top_feature_size': top_feature_size * S,
+                    'bottom_feature': bottom_feature,
+                    'bottom_feature_size': bottom_feature_size * S,
                     'pos_x': pos_x * S,
                     'pos_y': pos_y * S,
                     'pos_z': pos_z * S,
@@ -2880,11 +2898,14 @@ def _export_parametric_sync(filepath, bottom_shells, top_shells, cylinders, step
                 cparams['inner_radius'], cparams['height'], px, py, pz,
                 step_schema, step_unit, 1 if enable_logging else 0)
         elif obj_type == 'hollow_cylinder_tapered':
+            chamfer_sz = cparams.get('top_feature_size', 0) if cparams.get('top_feature') == 'chamfer' else 0
+            chamfer_pos = 'top' if cparams.get('top_feature') == 'chamfer' else 'bottom' if cparams.get('bottom_feature') == 'chamfer' else ''
             success = cpp_exporter.export_hollow_cylinder_tapered_step(
                 temp_file, cparams['outer_radius'],
                 cparams['inner_radius_top'], cparams['inner_radius_bottom'],
                 cparams['height'],
                 cparams.get('hole_fillet_radius', 0),
+                chamfer_sz, chamfer_pos,
                 px, py, pz,
                 step_schema, step_unit, 1 if enable_logging else 0)
         elif obj_type == 'cylinder_chamfer':
@@ -3172,11 +3193,14 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
             data['step_schema'], data['step_unit'],
             1 if data['enable_logging'] else 0)
     elif obj_type == 'hollow_cylinder_tapered':
+        chamfer_sz = cparams.get('top_feature_size', 0) if cparams.get('top_feature') == 'chamfer' else 0
+        chamfer_pos = 'top' if cparams.get('top_feature') == 'chamfer' else 'bottom' if cparams.get('bottom_feature') == 'chamfer' else ''
         return cpp_exporter.export_hollow_cylinder_tapered_step(
             temp_file, cparams['outer_radius'],
             cparams['inner_radius_top'], cparams['inner_radius_bottom'],
             cparams['height'],
             cparams.get('hole_fillet_radius', 0),
+            chamfer_sz, chamfer_pos,
             px, py, pz,
             data['step_schema'], data['step_unit'],
             1 if data['enable_logging'] else 0)
@@ -5227,6 +5251,11 @@ def _generate_parametric_cylinder(props):
     # === 2. 应用倒角/圆角（顶部边缘） ===
     if props.chamfer_type != 'none':
         _apply_edge_treatment(obj, props, S)
+        # 存储倒角/圆角参数及原始半径，供检测阶段直接使用（避免 mesh 分析受通孔干扰）
+        obj['chamfer_type'] = props.chamfer_type
+        obj['chamfer_size'] = props.chamfer_size
+        obj['fillet_radius_edge'] = props.fillet_radius
+        obj['cylinder_original_radius'] = props.radius
     
     # === 3. 创建孔 ===
     if props.hole_type != 'none':

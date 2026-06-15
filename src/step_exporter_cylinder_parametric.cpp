@@ -986,36 +986,28 @@ TopoDS_Shape create_cylinder_with_blind_hole_solid_parametric(
     }
 
     // Tapered hole: use cone cutter
-    // Place cone base OUTSIDE the cylinder (above/below opening by ext), taper goes inward
-    // This way the cone extends past the opening for clean cut but the hole bottom is exact
-    // Top: base at halfH+ext, dir=-DZ, height=depth+ext → bottom at halfH-depth
-    // Bottom: base at -halfH-ext, dir=+DZ, height=depth+ext → top at -halfH+depth
-    // Adjust R1 so radius at opening = hole_radius, radius at hole bottom = hole_radius_bottom
+    // OCCT always stores the smaller radius at axis origin for cones.
+    // Strategy: build expanding cone (R1=hole_radius_bottom, R2=hole_radius) at z=0,
+    //   going UP to z=+depth. For bottom holes, mirror across XY plane to go DOWN.
+    // Top hole:    cone from z=0 UP to z=+depth → r=hole_radius_bottom at z=0, r=hole_radius at z=depth
+    // Bottom hole: cone mirrored: from z=0 DOWN to z=-depth → r=hole_radius at z=-depth, r=hole_radius_bottom at z=0
 
-    double coneR1; // radius at base (outside cylinder)
-    if (hole_depth > 0.001 && ext > 0.001) {
-        coneR1 = hole_radius + (hole_radius - hole_radius_bottom) * ext / hole_depth;
-    } else {
-        coneR1 = hole_radius;
-    }
+    cutterR1 = hole_radius_bottom; // smaller (hole end)
+    cutterR2 = hole_radius;        // larger (opening)
+    cutterH = hole_depth;
 
-    gp_Dir coneDir;
-    double coneBaseZ;
-    if (is_bottom) {
-        coneDir = gp::DZ();           // cone goes UP from below cylinder
-        coneBaseZ = -halfH - ext;     // base below cylinder bottom
-        cutterR1 = coneR1;            // R1 at base (below opening)
-        cutterR2 = hole_radius_bottom; // R2 at hole top = exact
-    } else {
-        coneDir = -gp::DZ();           // cone goes DOWN from above cylinder
-        coneBaseZ = halfH + ext;       // base above cylinder top
-        cutterR1 = coneR1;             // R1 at base (above opening)
-        cutterR2 = hole_radius_bottom; // R2 at hole bottom = exact
-    }
-    gp_Ax2 coneAx2Pos(gp_Pnt(0, 0, coneBaseZ), coneDir);
+    // Both start at z=0 going UP
+    gp_Ax2 coneAx2Pos(gp_Pnt(0, 0, 0), gp::DZ());
     BRepPrimAPI_MakeCone coneMaker(coneAx2Pos, cutterR1, cutterR2, cutterH);
     TopoDS_Shape cutter = coneMaker.Shape();
     if (cutter.IsNull()) return TopoDS_Shape();
+
+    if (is_bottom) {
+        // Mirror across XY plane: cone now goes DOWN from z=0 to z=-depth
+        gp_Trsf trsf;
+        trsf.SetMirror(gp_Ax2(gp_Pnt(0, 0, 0), gp::DZ()));
+        cutter = BRepBuilderAPI_Transform(cutter, trsf).Shape();
+    }
 
     BRepAlgoAPI_Cut cutT(outer, shape_to_solid(cutter));
     if (!cutT.IsDone()) {
@@ -1087,30 +1079,20 @@ TopoDS_Shape create_cylinder_with_dual_blind_holes_solid_parametric(
             gp_Trsf t; t.SetTranslation(gp_Vec(0, 0, z));
             return BRepBuilderAPI_Transform(c, t).Shape();
         }
-        // Tapered: cone cutter — base outside cylinder, taper inward, exact depth
-        // Top: base at halfH+ext, dir=-DZ → bottom at halfH-depth
-        // Bottom: base at -halfH-ext, dir=+DZ → top at -halfH+depth
-        double coneR1 = hole_radius;
-        if (depth > 0.001 && ext > 0.001) {
-            coneR1 = hole_radius + (hole_radius - hole_radius_bottom) * ext / depth;
+        // Tapered: cone cutter — expanding cone at z=0, mirror for bottom
+        double r1 = hole_radius_bottom; // smaller (hole end)
+        double r2 = hole_radius;        // larger (opening)
+        gp_Ax2 ax2(gp_Pnt(0, 0, 0), gp::DZ());
+        BRepPrimAPI_MakeCone cone(ax2, r1, r2, depth);
+        TopoDS_Shape c = cone.Shape();
+        if (c.IsNull()) return TopoDS_Shape();
+        if (!is_top) {
+            // Bottom hole: mirror across XY plane
+            gp_Trsf trsf;
+            trsf.SetMirror(gp_Ax2(gp_Pnt(0, 0, 0), gp::DZ()));
+            c = BRepBuilderAPI_Transform(c, trsf).Shape();
         }
-        double r1, r2;
-        double baseZ;
-        gp_Dir dir;
-        if (is_top) {
-            baseZ = halfH + ext;
-            dir = -gp::DZ();
-            r1 = coneR1;
-            r2 = hole_radius_bottom;
-        } else {
-            baseZ = -halfH - ext;
-            dir = gp::DZ();
-            r1 = coneR1;
-            r2 = hole_radius_bottom;
-        }
-        gp_Ax2 ax2(gp_Pnt(0, 0, baseZ), dir);
-        BRepPrimAPI_MakeCone cone(ax2, r1, r2, cutterH);
-        return cone.Shape();
+        return c;
     };
 
     // 底部盲孔切割

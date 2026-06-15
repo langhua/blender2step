@@ -2578,17 +2578,22 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
         log_to_file(f"[STEP Exporter]   -> cylinder_blind_hole! r={body_radius_for_export:.3f} h={height:.3f} hole_r={hole_radius:.3f} hole_d={hole_depth:.3f} pos={hole_position}")
         hole_fillet_r = obj.get('hole_fillet_radius', 0.0) if hasattr(obj, 'get') else 0.0
         hole_is_tapered = obj.get('hole_is_tapered', False) if hasattr(obj, 'get') else False
-        hole_r_bottom = obj.get('hole_radius_bottom', 0.0) if hasattr(obj, 'get') else 0.0
         hole_r_top_stored = obj.get('hole_radius_top', 0.0) if hasattr(obj, 'get') else 0.0
+        hole_r_bottom_stored = obj.get('hole_radius_bottom', 0.0) if hasattr(obj, 'get') else 0.0
         if hole_fillet_r > 0:
             log_to_file(f"[STEP Exporter]   hole fillet: r={hole_fillet_r:.3f}")
         if hole_is_tapered:
-            # 使用存储的精确半径覆盖 mesh 扫描值
-            if hole_r_top_stored > 0:
-                hole_radius = hole_r_top_stored
-            if hole_r_bottom > 0:
-                pass  # 已在下方使用
-            log_to_file(f"[STEP Exporter]   tapered hole: top_r={hole_radius:.3f} bottom_r={hole_r_bottom:.3f}")
+            # 存储属性：hole_radius_top=孔顶端半径, hole_radius_bottom=孔底端半径
+            # C++ 期望：hole_radius=开口半径, hole_radius_bottom=孔内端半径
+            if hole_position == 'bottom':
+                hole_radius = hole_r_bottom_stored if hole_r_bottom_stored > 0 else hole_radius  # 开口在底面
+                hole_r_bottom = hole_r_top_stored  # 内端在顶侧
+            else:
+                hole_radius = hole_r_top_stored if hole_r_top_stored > 0 else hole_radius  # 开口在顶面（top/both）
+                hole_r_bottom = hole_r_bottom_stored  # 内端在底侧
+            log_to_file(f"[STEP Exporter]   tapered hole: opening_r={hole_radius:.3f} end_r={hole_r_bottom:.3f}")
+        else:
+            hole_r_bottom = hole_r_bottom_stored
         result = {
             'obj_type': 'cylinder_blind_hole',
             'radius': body_radius_for_export * S,
@@ -4889,6 +4894,19 @@ class STEP_EXPORTER_OT_create_cylinder(Operator):
 
 # ====================== 参数化圆柱生成 Operator ======================
 
+def _on_hole_param_change(self, context=None):
+    """当孔位置或锥形选项改变时，自动交换锥形孔默认半径"""
+    if not self.hole_is_tapered:
+        return
+    if self.hole_type == 'bottom':
+        # 底部孔：开口在底面（较大），孔底在顶侧（较小）
+        if self.hole_top_radius > self.hole_bottom_radius:
+            self.hole_top_radius, self.hole_bottom_radius = self.hole_bottom_radius, self.hole_top_radius
+    elif self.hole_type == 'top':
+        # 顶部孔：开口在顶面（较大），孔底在底侧（较小）
+        if self.hole_top_radius < self.hole_bottom_radius:
+            self.hole_top_radius, self.hole_bottom_radius = self.hole_bottom_radius, self.hole_top_radius
+
 class STEP_EXPORTER_OT_create_parametric_cylinder(Operator):
     """创建参数化圆柱体（标准/锥形，带倒角/开孔）"""
     bl_idname = "step_exporter.create_parametric_cylinder"
@@ -4965,6 +4983,7 @@ class STEP_EXPORTER_OT_create_parametric_cylinder(Operator):
             ('through', "Through", "Through hole (top to bottom)"),
         ],
         default='none',
+        update=lambda self, ctx: _on_hole_param_change(self),
     )
     hole_radius: FloatProperty(
         name="Hole R", default=5.0, min=0.1, max=100.0,
@@ -4975,6 +4994,7 @@ class STEP_EXPORTER_OT_create_parametric_cylinder(Operator):
     )
     hole_is_tapered: BoolProperty(
         name="Tapered Hole", default=False,
+        update=lambda self, ctx: _on_hole_param_change(self),
     )
     hole_top_radius: FloatProperty(
         name="Hole Top R", default=6.0, min=0.1, max=100.0,
@@ -5022,6 +5042,8 @@ class STEP_EXPORTER_OT_create_parametric_cylinder(Operator):
         if self.hole_type != 'none':
             box.prop(self, 'hole_is_tapered')
             if self.hole_is_tapered:
+                # hole_top_radius = 孔顶端半径, hole_bottom_radius = 孔底端半径
+                # 开口处应较大(6mm默认), 孔内端应较小(4mm默认)
                 box.prop(self, 'hole_top_radius')
                 box.prop(self, 'hole_bottom_radius')
             else:

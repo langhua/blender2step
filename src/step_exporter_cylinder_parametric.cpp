@@ -23,6 +23,14 @@
 #include <gp_Circ.hxx>
 #include <gp_Ax2.hxx>
 #include <gp_Ax3.hxx>
+#include <gp_Pln.hxx>
+#include <Geom_CylindricalSurface.hxx>
+#include <BRepBuilderAPI_MakeEdge.hxx>
+#include <BRepBuilderAPI_MakeWire.hxx>
+#include <BRepBuilderAPI_MakeFace.hxx>
+#include <BRepBuilderAPI_MakeSolid.hxx>
+#include <ShapeUpgrade_UnifySameDomain.hxx>
+#include <BRepBuilderAPI_Sewing.hxx>
 #include <gp_Ax1.hxx>
 #include <gp_Dir.hxx>
 #include <gp_Pln.hxx>
@@ -133,49 +141,27 @@ TopoDS_Shape create_cone_solid_parametric(double bottom_radius, double top_radiu
 
 TopoDS_Shape create_hollow_cylinder_solid_parametric(double outer_radius, double inner_radius, double height)
 {
-    // 创建外圆柱体
     TopoDS_Shape outerShape = create_cylinder_solid_parametric(outer_radius, height);
     if (outerShape.IsNull()) return TopoDS_Shape();
-
-    // 创建内圆柱体（稍高一点确保完全穿透）
     TopoDS_Shape innerShape = create_cylinder_solid_parametric(inner_radius, height + 2.0);
     if (innerShape.IsNull()) return TopoDS_Shape();
 
-    // 确保都是实体
     TopoDS_Solid outerSolid, innerSolid;
-    if (outerShape.ShapeType() == TopAbs_SOLID) {
-        outerSolid = TopoDS::Solid(outerShape);
-    } else {
-        BRepBuilderAPI_MakeSolid sm;
-        for (TopExp_Explorer exp(outerShape, TopAbs_SHELL); exp.More(); exp.Next()) sm.Add(TopoDS::Shell(exp.Current()));
-        if (sm.IsDone()) outerSolid = sm.Solid(); else return TopoDS_Shape();
-    }
-    if (innerShape.ShapeType() == TopAbs_SOLID) {
-        innerSolid = TopoDS::Solid(innerShape);
-    } else {
-        BRepBuilderAPI_MakeSolid sm;
-        for (TopExp_Explorer exp(innerShape, TopAbs_SHELL); exp.More(); exp.Next()) sm.Add(TopoDS::Shell(exp.Current()));
-        if (sm.IsDone()) innerSolid = sm.Solid(); else return TopoDS_Shape();
-    }
+    if (outerShape.ShapeType() == TopAbs_SOLID) outerSolid = TopoDS::Solid(outerShape);
+    else { BRepBuilderAPI_MakeSolid sm; for (TopExp_Explorer e(outerShape,TopAbs_SHELL); e.More(); e.Next()) sm.Add(TopoDS::Shell(e.Current())); if (sm.IsDone()) outerSolid = sm.Solid(); else return TopoDS_Shape(); }
+    if (innerShape.ShapeType() == TopAbs_SOLID) innerSolid = TopoDS::Solid(innerShape);
+    else { BRepBuilderAPI_MakeSolid sm; for (TopExp_Explorer e(innerShape,TopAbs_SHELL); e.More(); e.Next()) sm.Add(TopoDS::Shell(e.Current())); if (sm.IsDone()) innerSolid = sm.Solid(); else return TopoDS_Shape(); }
 
-    // 布尔切割
-    BRepAlgoAPI_Cut cutMaker(outerSolid, innerSolid);
-    if (!cutMaker.IsDone()) {
-        std::cerr << "[STEP Exporter] Failed to cut hollow cylinder: oR=" << outer_radius
-                  << " iR=" << inner_radius << std::endl;
-        return TopoDS_Shape();
-    }
+    BRepAlgoAPI_Cut cut(outerSolid, innerSolid);
+    if (!cut.IsDone()) return TopoDS_Shape();
 
-    std::cout << "[STEP Exporter] Created parametric hollow cylinder: oR=" << outer_radius
-              << " iR=" << inner_radius << " h=" << height << std::endl;
-    
-    TopoDS_Shape result = cutMaker.Shape();
+    TopoDS_Shape result = cut.Shape();
     if (result.ShapeType() != TopAbs_SOLID) {
         BRepBuilderAPI_MakeSolid sm;
-        for (TopExp_Explorer exp(result, TopAbs_SHELL); exp.More(); exp.Next())
-            sm.Add(TopoDS::Shell(exp.Current()));
+        for (TopExp_Explorer e(result,TopAbs_SHELL); e.More(); e.Next()) sm.Add(TopoDS::Shell(e.Current()));
         if (sm.IsDone()) return sm.Solid();
     }
+    std::cout << "[STEP Exporter] Created hollow cylinder: oR=" << outer_radius << " iR=" << inner_radius << " h=" << height << std::endl;
     return result;
 }
 
@@ -1036,8 +1022,6 @@ TopoDS_Shape create_cylinder_with_dual_blind_holes_solid_parametric(
         double FR = hole_fillet_radius, HR = hole_radius;
         TopoDS_Edge btmEdge, topEdge;
         bool btmOk = false, topOk = false;
-        double btmHoleZ = -halfH + bottom_hole_depth;  // 底部孔口Z位置
-        double topHoleZ = halfH - top_hole_depth;       // 顶部孔口Z位置
         for (TopExp_Explorer exp(solid, TopAbs_EDGE); exp.More(); exp.Next()) {
             TopoDS_Edge e = TopoDS::Edge(exp.Current());
             BRepAdaptor_Curve c(e);
@@ -1046,8 +1030,8 @@ TopoDS_Shape create_cylinder_with_dual_blind_holes_solid_parametric(
             gp_Pnt ct = cr.Location();
             if (std::abs(ct.X()) > 0.01 || std::abs(ct.Y()) > 0.01) continue;
             if (std::abs(cr.Radius() - HR) / std::max(HR, 0.001) > 0.15) continue;
-            if (std::abs(ct.Z() - btmHoleZ) < 0.01) { btmEdge = e; btmOk = true; }
-            else if (std::abs(ct.Z() - topHoleZ) < 0.01) { topEdge = e; topOk = true; }
+            if (std::abs(ct.Z() + halfH) < 0.01) { btmEdge = e; btmOk = true; }
+            else if (std::abs(ct.Z() - halfH) < 0.01) { topEdge = e; topOk = true; }
         }
         if (btmOk || topOk) {
             BRepFilletAPI_MakeFillet fm(solid);

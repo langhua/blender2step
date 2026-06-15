@@ -1741,6 +1741,15 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
     hole_depth = 0.0
     hole_depth_top = 0.0  # 双端孔时顶部孔深
     
+    # 通孔检测：检查对象上存储的自定义属性
+    stored_pos = obj.get('hole_position') if hasattr(obj, 'get') else None
+    if stored_pos == 'through':
+        hole_pattern_detected = True
+        hole_position = 'through'
+        hole_radius = inner_r if inner_r > 0.0005 else body_radius * 0.35
+        hole_depth = height  # 全高
+        log_to_file(f"[STEP Exporter]   Through-hole: using stored property, inner_r={hole_radius:.4f}")
+    
     # 强制圆柱体判断：两端半径接近且顶部干净时，即使中间z层缺少外壁顶点
     # （如盲孔圆柱的外壁仅有顶部/底部顶点），也认定为恒定半径圆柱。
     # 同时检测底部盲孔：底部顶点数>>顶部顶点数 → 孔在底部。
@@ -2435,6 +2444,31 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
     # 检测到孔洞模式（顶部/底部盲孔）：返回盲孔圆柱体类型
     # 使用 OpenCASCADE 布尔减操作创建参数化盲孔
     if hole_pattern_detected:
+        if hole_position == 'through':
+            # 通孔：使用空心圆柱体
+            body_radius_for_export = max(bottom_radius, top_radius)
+            log_to_file(f"[STEP Exporter]   -> hollow_cylinder (through-hole)! r={body_radius_for_export:.3f} h={height:.3f} inner_r={hole_radius:.3f}")
+            hole_fillet_r = obj.get('hole_fillet_radius', 0.0) if hasattr(obj, 'get') else 0.0
+            result = {
+                'obj_type': 'hollow_cylinder',
+                'outer_radius': body_radius_for_export * S,
+                'inner_radius': hole_radius * S,
+                'height': height * S,
+                'pos_x': pos_x * S,
+                'pos_y': pos_y * S,
+                'pos_z': pos_z * S,
+                'top_feature': None,
+                'top_feature_size': 0.0,
+                'bottom_feature': None,
+                'bottom_feature_size': 0.0,
+            }
+            if hole_fillet_r > 0:
+                result['top_feature'] = 'fillet'
+                result['top_feature_size'] = hole_fillet_r
+                result['bottom_feature'] = 'fillet'
+                result['bottom_feature_size'] = hole_fillet_r
+                result['obj_type'] = 'hollow_cylinder_fillet'
+            return result
         if hole_position == 'bottom':
             # 底部盲孔：如果 hole_radius/hole_depth 已在检测阶段设置，直接使用
             if hole_radius > 0 and hole_depth > 0:

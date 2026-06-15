@@ -2480,16 +2480,22 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                 stored_chamfer_type = obj.get('chamfer_type') if hasattr(obj, 'get') else None
                 stored_chamfer_sz = obj.get('chamfer_size', 0) if hasattr(obj, 'get') else 0
                 stored_fillet_r = obj.get('fillet_radius_edge', 0) if hasattr(obj, 'get') else 0
-                if stored_chamfer_type == 'chamfer' or stored_chamfer_type == 'chamfer_both':
-                    top_feature = 'chamfer'
-                    top_feature_size = stored_chamfer_sz * 0.001  # mm -> m
-                    # 使用原始半径（倒角前的），而非 mesh 分析出的倒角后半径
-                    stored_orig_r = obj.get('cylinder_original_radius', 0) if hasattr(obj, 'get') else 0
-                    if stored_orig_r > 0:
-                        body_radius_for_export = stored_orig_r * 0.001  # mm -> m
-                elif stored_chamfer_type == 'fillet' or stored_chamfer_type == 'fillet_both':
-                    top_feature = 'fillet'
-                    top_feature_size = stored_fillet_r * 0.001  # mm -> m
+                stored_orig_r = obj.get('cylinder_original_radius', 0) if hasattr(obj, 'get') else 0
+                if stored_orig_r > 0:
+                    body_radius_for_export = stored_orig_r * 0.001  # mm -> m
+                if stored_chamfer_type == 'chamfer':
+                    top_feature = 'chamfer'; top_feature_size = stored_chamfer_sz * 0.001
+                elif stored_chamfer_type == 'fillet':
+                    top_feature = 'fillet'; top_feature_size = stored_fillet_r * 0.001
+                elif stored_chamfer_type == 'chamfer_both':
+                    top_feature = 'chamfer'; top_feature_size = stored_chamfer_sz * 0.001
+                    bottom_feature = 'chamfer'; bottom_feature_size = stored_chamfer_sz * 0.001
+                elif stored_chamfer_type == 'fillet_both':
+                    top_feature = 'fillet'; top_feature_size = stored_fillet_r * 0.001
+                    bottom_feature = 'fillet'; bottom_feature_size = stored_fillet_r * 0.001
+                elif stored_chamfer_type == 'chamfer_fillet':
+                    top_feature = 'chamfer'; top_feature_size = stored_chamfer_sz * 0.001
+                    bottom_feature = 'fillet'; bottom_feature_size = stored_fillet_r * 0.001
                 log_to_file(f"[STEP Exporter]   -> hollow_cylinder_tapered! r={body_radius_for_export:.3f} h={height:.3f} opening_r={opening_r:.3f} end_r={end_r:.3f} chamfer={top_feature} chamfer_sz={top_feature_size}")
                 return {
                     'obj_type': 'hollow_cylinder_tapered',
@@ -2900,13 +2906,14 @@ def _export_parametric_sync(filepath, bottom_shells, top_shells, cylinders, step
         elif obj_type == 'hollow_cylinder_tapered':
             chamfer_sz = cparams.get('top_feature_size', 0) if cparams.get('top_feature') == 'chamfer' else 0
             fillet_sz = cparams.get('top_feature_size', 0) if cparams.get('top_feature') == 'fillet' else 0
-            outer_pos = 'top' if cparams.get('top_feature') in ('chamfer', 'fillet') else 'bottom' if cparams.get('bottom_feature') in ('chamfer', 'fillet') else ''
+            btm_chamfer_sz = cparams.get('bottom_feature_size', 0) if cparams.get('bottom_feature') == 'chamfer' else 0
+            btm_fillet_sz = cparams.get('bottom_feature_size', 0) if cparams.get('bottom_feature') == 'fillet' else 0
             success = cpp_exporter.export_hollow_cylinder_tapered_step(
                 temp_file, cparams['outer_radius'],
                 cparams['inner_radius_top'], cparams['inner_radius_bottom'],
                 cparams['height'],
                 cparams.get('hole_fillet_radius', 0),
-                chamfer_sz, fillet_sz, outer_pos,
+                chamfer_sz, fillet_sz, btm_chamfer_sz, btm_fillet_sz,
                 px, py, pz,
                 step_schema, step_unit, 1 if enable_logging else 0)
         elif obj_type == 'cylinder_chamfer':
@@ -3196,13 +3203,14 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
     elif obj_type == 'hollow_cylinder_tapered':
         chamfer_sz = cparams.get('top_feature_size', 0) if cparams.get('top_feature') == 'chamfer' else 0
         fillet_sz = cparams.get('top_feature_size', 0) if cparams.get('top_feature') == 'fillet' else 0
-        outer_pos = 'top' if cparams.get('top_feature') in ('chamfer', 'fillet') else 'bottom' if cparams.get('bottom_feature') in ('chamfer', 'fillet') else ''
+        btm_chamfer_sz = cparams.get('bottom_feature_size', 0) if cparams.get('bottom_feature') == 'chamfer' else 0
+        btm_fillet_sz = cparams.get('bottom_feature_size', 0) if cparams.get('bottom_feature') == 'fillet' else 0
         return cpp_exporter.export_hollow_cylinder_tapered_step(
             temp_file, cparams['outer_radius'],
             cparams['inner_radius_top'], cparams['inner_radius_bottom'],
             cparams['height'],
             cparams.get('hole_fillet_radius', 0),
-            chamfer_sz, fillet_sz, outer_pos,
+            chamfer_sz, fillet_sz, btm_chamfer_sz, btm_fillet_sz,
             px, py, pz,
             data['step_schema'], data['step_unit'],
             1 if data['enable_logging'] else 0)

@@ -819,34 +819,33 @@ PyObject* export_hollow_cylinder_tapered_step(PyObject* self, PyObject* args) {
     const char* filename;
     double outer_radius, inner_radius_top, inner_radius_bottom, height;
     double hole_fillet_r = 0.0;
-    double outer_chamfer = 0.0;
-    double outer_fillet = 0.0;
-    const char* outer_pos = "";
+    double top_chamfer = 0.0, top_fillet = 0.0;
+    double bottom_chamfer = 0.0, bottom_fillet = 0.0;
     double pos_x = 0.0, pos_y = 0.0, pos_z = 0.0;
     const char* step_schema = "AP214IS";
     const char* unit = "MILLIMETER";
     int enable_logging = 1;
 
-    if (!PyArg_ParseTuple(args, "sddddddd|sdddssi",
+    if (!PyArg_ParseTuple(args, "sddddddddd|dddssi",
                           &filename,
                           &outer_radius, &inner_radius_top, &inner_radius_bottom, &height,
                           &hole_fillet_r,
-                          &outer_chamfer,
-                          &outer_fillet,
-                          &outer_pos,
+                          &top_chamfer, &top_fillet,
+                          &bottom_chamfer, &bottom_fillet,
                           &pos_x, &pos_y, &pos_z,
                           &step_schema, &unit, &enable_logging)) {
         PyErr_SetString(PyExc_TypeError,
             "export_hollow_cylinder_tapered_step() expected: filename, outer_radius, "
-            "inner_radius_top, inner_radius_bottom, height, [hole_fillet_r], [outer_chamfer], [outer_fillet], [outer_pos], "
+            "inner_radius_top, inner_radius_bottom, height, [hole_fillet_r], "
+            "[top_chamfer], [top_fillet], [bottom_chamfer], [bottom_fillet], "
             "[pos_x], [pos_y], [pos_z], [step_schema], [unit], [enable_logging]");
         return NULL;
     }
 
     try {
-        bool outer_at_top = (strcmp(outer_pos, "top") == 0);
         TopoDS_Shape shape = create_hollow_cylinder_tapered_solid_parametric(
-            outer_radius, inner_radius_top, inner_radius_bottom, height, hole_fillet_r, outer_chamfer, outer_fillet, outer_at_top);
+            outer_radius, inner_radius_top, inner_radius_bottom, height,
+            hole_fillet_r, top_chamfer, top_fillet, bottom_chamfer, bottom_fillet);
         if (shape.IsNull()) { Py_RETURN_FALSE; }
 
         if (pos_x != 0.0 || pos_y != 0.0 || pos_z != 0.0) {

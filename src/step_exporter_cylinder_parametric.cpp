@@ -265,7 +265,9 @@ static void find_circular_edges(const TopoDS_Shape& solid,
 
 TopoDS_Shape create_hollow_cylinder_tapered_solid_parametric(
     double outer_radius, double inner_radius_top, double inner_radius_bottom,
-    double height, double hole_fillet_r, double outer_edge_chamfer, double outer_edge_fillet, bool outer_at_top)
+    double height, double hole_fillet_r,
+    double top_chamfer, double top_fillet,
+    double bottom_chamfer, double bottom_fillet)
 {
     TopoDS_Shape outerShape = create_cylinder_solid_parametric(outer_radius, height);
     if (outerShape.IsNull()) return TopoDS_Shape();
@@ -275,30 +277,35 @@ TopoDS_Shape create_hollow_cylinder_tapered_solid_parametric(
     double halfH = height / 2.0;
     double ext = 2.0;
 
-    // === Step 1: Apply chamfer or fillet to outer edge FIRST (on clean cylinder) ===
-    double outer_edge_sz = std::max(outer_edge_chamfer, outer_edge_fillet);
-    bool outer_is_chamfer = (outer_edge_chamfer > 0.001);
-    if (outer_edge_sz > 0.001) {
+    // === Step 1: Apply chamfer/fillet to outer edges FIRST (on clean cylinder) ===
+    auto apply_outer_feature = [&](bool at_top) {
+        double chamfer_sz = at_top ? top_chamfer : bottom_chamfer;
+        double fillet_sz = at_top ? top_fillet : bottom_fillet;
+        double sz = std::max(chamfer_sz, fillet_sz);
+        if (sz <= 0.001) return;
+        bool is_chamfer = (chamfer_sz > 0.001);
         std::vector<TopoDS_Edge> topEdges, bottomEdges;
         find_circular_edges(solid, topEdges, bottomEdges);
-        const auto& targetEdges = outer_at_top ? topEdges : bottomEdges;
+        const auto& targetEdges = at_top ? topEdges : bottomEdges;
         for (const auto& e : targetEdges) {
             double er = BRepAdaptor_Curve(e).Circle().Radius();
             if (std::abs(er - outer_radius) / outer_radius < 0.15) {
-                if (outer_is_chamfer) {
+                if (is_chamfer) {
                     BRepFilletAPI_MakeChamfer cm(solid);
-                    cm.Add(outer_edge_sz, e);
+                    cm.Add(sz, e);
                     cm.Build();
                     if (cm.IsDone()) { solid = shape_to_solid(cm.Shape()); break; }
                 } else {
                     BRepFilletAPI_MakeFillet fm(solid);
-                    fm.Add(outer_edge_sz, e);
+                    fm.Add(sz, e);
                     fm.Build();
                     if (fm.IsDone()) { solid = shape_to_solid(fm.Shape()); break; }
                 }
             }
         }
-    }
+    };
+    apply_outer_feature(true);   // top
+    apply_outer_feature(false);  // bottom
 
     // === Step 2: Cut tapered through-hole ===
     double Hcyl = height;
@@ -337,7 +344,8 @@ TopoDS_Shape create_hollow_cylinder_tapered_solid_parametric(
     std::cout << "[STEP Exporter] Created tapered hollow cylinder: oR=" << outer_radius
               << " iR_top=" << inner_radius_top << " iR_bottom=" << inner_radius_bottom
               << " h=" << height << " hole_fillet=" << hole_fillet_r
-              << " outer_chamfer=" << outer_edge_chamfer << " outer_fillet=" << outer_edge_fillet << std::endl;
+              << " top_ch=" << top_chamfer << " top_fr=" << top_fillet
+              << " btm_ch=" << bottom_chamfer << " btm_fr=" << bottom_fillet << std::endl;
     return solid;
 }
 

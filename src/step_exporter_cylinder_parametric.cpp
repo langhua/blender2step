@@ -1079,19 +1079,32 @@ TopoDS_Shape create_cylinder_with_dual_blind_holes_solid_parametric(
             gp_Trsf t; t.SetTranslation(gp_Vec(0, 0, z));
             return BRepBuilderAPI_Transform(c, t).Shape();
         }
-        // Tapered: cone cutter — expanding cone at z=0, mirror for bottom
+        // Tapered: cone cutter — expanding cone, then translated to hole position
+        // Cone at z=0, R1=hole_radius_bottom (end), R2=hole_radius (opening), H=depth, +DZ
+        // Top hole:    translate UP by (halfH - depth) so opening is at +halfH
+        // Bottom hole: mirror, then translate DOWN by -(halfH - depth) so opening is at -halfH
         double r1 = hole_radius_bottom; // smaller (hole end)
         double r2 = hole_radius;        // larger (opening)
         gp_Ax2 ax2(gp_Pnt(0, 0, 0), gp::DZ());
         BRepPrimAPI_MakeCone cone(ax2, r1, r2, depth);
         TopoDS_Shape c = cone.Shape();
         if (c.IsNull()) return TopoDS_Shape();
-        if (!is_top) {
-            // Bottom hole: mirror across XY plane
+        
+        double shiftZ;
+        if (is_top) {
+            // Cone from z=0 to z=+depth, shift up so opening at halfH
+            shiftZ = halfH - depth;
+        } else {
+            // Mirror: cone now from z=0 to z=-depth (opening at z=-depth)
             gp_Trsf trsf;
             trsf.SetMirror(gp_Ax2(gp_Pnt(0, 0, 0), gp::DZ()));
             c = BRepBuilderAPI_Transform(c, trsf).Shape();
+            // Shift down so opening at -halfH
+            shiftZ = -(halfH - depth);
         }
+        gp_Trsf trsfShift;
+        trsfShift.SetTranslation(gp_Vec(0, 0, shiftZ));
+        c = BRepBuilderAPI_Transform(c, trsfShift).Shape();
         return c;
     };
 

@@ -2578,22 +2578,17 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
         log_to_file(f"[STEP Exporter]   -> cylinder_blind_hole! r={body_radius_for_export:.3f} h={height:.3f} hole_r={hole_radius:.3f} hole_d={hole_depth:.3f} pos={hole_position}")
         hole_fillet_r = obj.get('hole_fillet_radius', 0.0) if hasattr(obj, 'get') else 0.0
         hole_is_tapered = obj.get('hole_is_tapered', False) if hasattr(obj, 'get') else False
-        hole_r_top_stored = obj.get('hole_radius_top', 0.0) if hasattr(obj, 'get') else 0.0
-        hole_r_bottom_stored = obj.get('hole_radius_bottom', 0.0) if hasattr(obj, 'get') else 0.0
+        hole_r_opening_stored = obj.get('hole_opening_radius', 0.0) if hasattr(obj, 'get') else 0.0
+        hole_r_end_stored = obj.get('hole_end_radius', 0.0) if hasattr(obj, 'get') else 0.0
         if hole_fillet_r > 0:
             log_to_file(f"[STEP Exporter]   hole fillet: r={hole_fillet_r:.3f}")
         if hole_is_tapered:
-            # 存储属性：hole_radius_top=孔顶端半径, hole_radius_bottom=孔底端半径
-            # C++ 期望：hole_radius=开口半径, hole_radius_bottom=孔内端半径
-            if hole_position == 'bottom':
-                hole_radius = hole_r_bottom_stored if hole_r_bottom_stored > 0 else hole_radius  # 开口在底面
-                hole_r_bottom = hole_r_top_stored  # 内端在顶侧
-            else:
-                hole_radius = hole_r_top_stored if hole_r_top_stored > 0 else hole_radius  # 开口在顶面（top/both）
-                hole_r_bottom = hole_r_bottom_stored  # 内端在底侧
+            # 使用存储的精确半径覆盖 mesh 扫描值
+            # hole_opening_radius=开口半径(较大), hole_end_radius=孔底半径(较小)
+            if hole_r_opening_stored > 0:
+                hole_radius = hole_r_opening_stored
+            hole_r_bottom = hole_r_end_stored
             log_to_file(f"[STEP Exporter]   tapered hole: opening_r={hole_radius:.3f} end_r={hole_r_bottom:.3f}")
-        else:
-            hole_r_bottom = hole_r_bottom_stored
         result = {
             'obj_type': 'cylinder_blind_hole',
             'radius': body_radius_for_export * S,
@@ -4895,17 +4890,12 @@ class STEP_EXPORTER_OT_create_cylinder(Operator):
 # ====================== 参数化圆柱生成 Operator ======================
 
 def _on_hole_param_change(self, context=None):
-    """当孔位置或锥形选项改变时，自动交换锥形孔默认半径"""
+    """当孔位置或锥形选项改变时，确保开口半径 >= 孔底半径"""
     if not self.hole_is_tapered:
         return
-    if self.hole_type == 'bottom':
-        # 底部孔：开口在底面（较大），孔底在顶侧（较小）
-        if self.hole_top_radius > self.hole_bottom_radius:
-            self.hole_top_radius, self.hole_bottom_radius = self.hole_bottom_radius, self.hole_top_radius
-    elif self.hole_type == 'top':
-        # 顶部孔：开口在顶面（较大），孔底在底侧（较小）
-        if self.hole_top_radius < self.hole_bottom_radius:
-            self.hole_top_radius, self.hole_bottom_radius = self.hole_bottom_radius, self.hole_top_radius
+    # 开口半径应 >= 孔底半径，若用户设反了则自动交换
+    if self.hole_opening_radius < self.hole_end_radius:
+        self.hole_opening_radius, self.hole_end_radius = self.hole_end_radius, self.hole_opening_radius
 
 class STEP_EXPORTER_OT_create_parametric_cylinder(Operator):
     """创建参数化圆柱体（标准/锥形，带倒角/开孔）"""
@@ -4996,11 +4986,13 @@ class STEP_EXPORTER_OT_create_parametric_cylinder(Operator):
         name="Tapered Hole", default=False,
         update=lambda self, ctx: _on_hole_param_change(self),
     )
-    hole_top_radius: FloatProperty(
-        name="Hole Top R", default=6.0, min=0.1, max=100.0,
+    hole_opening_radius: FloatProperty(
+        name="Hole Opening R", default=6.0, min=0.1, max=100.0,
+        description="Radius at hole opening (cylinder face)",
     )
-    hole_bottom_radius: FloatProperty(
-        name="Hole Bottom R", default=4.0, min=0.1, max=100.0,
+    hole_end_radius: FloatProperty(
+        name="Hole End R", default=4.0, min=0.1, max=100.0,
+        description="Radius at hole bottom/end (inside cylinder)",
     )
     hole_fillet_radius: FloatProperty(
         name="Hole Fillet R", default=0.5, min=0.0, max=50.0,
@@ -5042,10 +5034,8 @@ class STEP_EXPORTER_OT_create_parametric_cylinder(Operator):
         if self.hole_type != 'none':
             box.prop(self, 'hole_is_tapered')
             if self.hole_is_tapered:
-                # hole_top_radius = 孔顶端半径, hole_bottom_radius = 孔底端半径
-                # 开口处应较大(6mm默认), 孔内端应较小(4mm默认)
-                box.prop(self, 'hole_top_radius')
-                box.prop(self, 'hole_bottom_radius')
+                box.prop(self, 'hole_opening_radius')
+                box.prop(self, 'hole_end_radius')
             else:
                 box.prop(self, 'hole_radius')
             if self.hole_type in ('top', 'bottom', 'both'):
@@ -5267,11 +5257,11 @@ def _create_holes(obj, props, S):
     
     # 判断孔半径
     if props.hole_is_tapered:
-        hr_top = props.hole_top_radius * S
-        hr_bottom = props.hole_bottom_radius * S
+        hr_opening = props.hole_opening_radius * S
+        hr_end = props.hole_end_radius * S
     else:
-        hr_top = props.hole_radius * S
-        hr_bottom = props.hole_radius * S
+        hr_opening = props.hole_radius * S
+        hr_end = props.hole_radius * S
     
     cutters = []
     
@@ -5299,45 +5289,37 @@ def _create_holes(obj, props, S):
         return obj_c
     
     hh = H
-    ext = max(hr_bottom, hole_d * 0.5) if props.hole_type != 'through' else max(hr_bottom, H * 0.5)
+    ext = max(hr_end, hole_d * 0.5) if props.hole_type != 'through' else max(hr_end, H * 0.5)
     
-    log_to_file(f"[STEP Exporter] _create_holes: H={H:.4f} hole_d={hole_d:.4f} hole_radius={hr_bottom:.4f} ext={ext:.4f} type={props.hole_type}")
+    log_to_file(f"[STEP Exporter] _create_holes: H={H:.4f} hole_d={hole_d:.4f} opening_r={hr_opening:.4f} end_r={hr_end:.4f} ext={ext:.4f} type={props.hole_type}")
     
     if props.hole_type == 'through':
         cutters.append(make_hole_cutter(
             "HoleCutter_Through",
-            -hh / 2 - ext, hh / 2 + ext, hr_bottom, hr_top
+            -hh / 2 - ext, hh / 2 + ext, hr_end, hr_opening
         ))
     elif props.hole_type == 'top':
         # 顶部孔：开口在顶面(z=hh/2)，孔底在(z=hh/2-hole_d)
-        r_opening = hr_top  # 开口处半径
-        r_bottom_hole = hr_bottom if props.hole_is_tapered else hr_top  # 孔底半径（锥形时不同）
         cutters.append(make_hole_cutter(
             "HoleCutter_Top",
-            hh / 2 - hole_d, hh / 2 + ext, r_bottom_hole, r_opening
+            hh / 2 - hole_d, hh / 2 + ext, hr_end, hr_opening
         ))
     elif props.hole_type == 'bottom':
         # 底部孔：开口在底面(z=-hh/2)，孔底在(z=-hh/2+hole_d)
-        r_opening = hr_bottom  # 开口处半径
-        r_top_hole = hr_top if props.hole_is_tapered else hr_bottom  # 孔底半径
         cutters.append(make_hole_cutter(
             "HoleCutter_Bottom",
-            -hh / 2 - ext, -hh / 2 + hole_d, r_opening, r_top_hole
+            -hh / 2 - ext, -hh / 2 + hole_d, hr_opening, hr_end
         ))
     elif props.hole_type == 'both':
-        # 顶部孔
-        r_top_opening = hr_top
-        r_top_bottom = hr_bottom if props.hole_is_tapered else hr_top
+        # 顶部孔：开口在顶面
         cutters.append(make_hole_cutter(
             "HoleCutter_Top",
-            hh / 2 - hole_d, hh / 2 + ext, r_top_bottom, r_top_opening
+            hh / 2 - hole_d, hh / 2 + ext, hr_end, hr_opening
         ))
-        # 底部孔
-        r_btm_opening = hr_bottom
-        r_btm_top = hr_top if props.hole_is_tapered else hr_bottom
+        # 底部孔：开口在底面
         cutters.append(make_hole_cutter(
             "HoleCutter_Bottom",
-            -hh / 2 - ext, -hh / 2 + hole_d, r_btm_opening, r_btm_top
+            -hh / 2 - ext, -hh / 2 + hole_d, hr_opening, hr_end
         ))
     
     # 布尔减：先创建所有 modifier，再一次性通过 depsgraph 应用
@@ -5375,9 +5357,9 @@ def _create_holes(obj, props, S):
     if props.hole_type in ('top', 'bottom', 'both'):
         obj['hole_depth'] = hole_d
         obj['hole_position'] = props.hole_type
-        obj['hole_radius'] = hr_bottom if props.hole_type in ('bottom', 'both') else hr_top
-        obj['hole_radius_top'] = hr_top
-        obj['hole_radius_bottom'] = hr_bottom
+        obj['hole_radius'] = hr_opening  # 开口半径（对 top/bottom/both 都是开口端）
+        obj['hole_opening_radius'] = hr_opening
+        obj['hole_end_radius'] = hr_end
         obj['hole_is_tapered'] = props.hole_is_tapered
         log_to_file(f"[STEP Exporter] _create_holes: stored hole_depth={hole_d:.4f} hole_position={props.hole_type} hole_r={obj['hole_radius']:.4f} on object")
     

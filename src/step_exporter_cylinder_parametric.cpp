@@ -261,6 +261,73 @@ static void find_circular_edges(const TopoDS_Shape& solid,
     }
 }
 
+// ====================== 参数化锥形通孔圆柱体 ======================
+
+TopoDS_Shape create_hollow_cylinder_tapered_solid_parametric(
+    double outer_radius, double inner_radius_top, double inner_radius_bottom,
+    double height, double fillet_radius)
+{
+    TopoDS_Shape outerShape = create_cylinder_solid_parametric(outer_radius, height);
+    if (outerShape.IsNull()) return TopoDS_Shape();
+    TopoDS_Solid solid = shape_to_solid(outerShape);
+    if (solid.IsNull()) return TopoDS_Shape();
+
+    double halfH = height / 2.0;
+    double ext = 2.0;
+
+    // Build cone exactly from z=-halfH (bottom) to z=+halfH (top)
+    // R1=inner_radius_bottom at bottom opening, R2=inner_radius_top at top opening
+    // Extend slightly above/below so the cone starts/ends exactly at the cylinder faces
+    // radius(z) = R1 + (z - baseZ) / H * (R2 - R1)
+    // At z=-halfH: we want r=inner_radius_bottom. baseZ=-halfH-ext, so x=ext from base.
+    // At z=+halfH: we want r=inner_radius_top. x=ext+height from base.
+    // H = height + 2*ext
+    // inner_radius_bottom = R1 + ext/H * (R2 - R1)
+    // inner_radius_top    = R1 + (ext+height)/H * (R2 - R1)
+    // Solve: R1 = inner_radius_bottom - ext/H * (R2 - R1)
+    // Let d = R2 - R1. Then:
+    //   lo = R1 + ext/H * d  →  R1 = lo - ext/H * d
+    //   hi = R1 + (ext+Hcyl)/H * d = lo - ext/H*d + (ext+Hcyl)/H*d = lo + Hcyl/H * d
+    //   d = (hi - lo) * H / Hcyl
+    double Hcyl = height;
+    double Hcone = Hcyl + 2 * ext;
+    double d = (inner_radius_top - inner_radius_bottom) * Hcone / Hcyl;
+    double r1 = inner_radius_bottom - ext / Hcone * d;
+    double r2 = r1 + d;
+
+    gp_Ax2 ax2(gp_Pnt(0, 0, -halfH - ext), gp::DZ());
+    BRepPrimAPI_MakeCone coneMaker(ax2, r1, r2, Hcone);
+    TopoDS_Shape innerShape = coneMaker.Shape();
+    if (innerShape.IsNull()) return TopoDS_Shape();
+
+    BRepAlgoAPI_Cut cut(solid, shape_to_solid(innerShape));
+    if (!cut.IsDone()) { std::cerr << "[STEP Exporter] Tapered through-hole cut failed" << std::endl; return TopoDS_Shape(); }
+    solid = shape_to_solid(cut.Shape());
+    if (solid.IsNull()) return TopoDS_Shape();
+
+    // Apply fillets at both openings
+    if (fillet_radius > 0.001) {
+        std::vector<TopoDS_Edge> topEdges, bottomEdges;
+        find_circular_edges(solid, topEdges, bottomEdges);
+        BRepFilletAPI_MakeFillet fm(solid);
+        bool added = false;
+        for (const auto& e : topEdges) {
+            double er = BRepAdaptor_Curve(e).Circle().Radius();
+            if (std::abs(er - inner_radius_top) / std::max(inner_radius_top, 0.001) < 0.2) { fm.Add(fillet_radius, e); added = true; }
+        }
+        for (const auto& e : bottomEdges) {
+            double er = BRepAdaptor_Curve(e).Circle().Radius();
+            if (std::abs(er - inner_radius_bottom) / std::max(inner_radius_bottom, 0.001) < 0.2) { fm.Add(fillet_radius, e); added = true; }
+        }
+        if (added) { fm.Build(); if (fm.IsDone()) solid = shape_to_solid(fm.Shape()); }
+    }
+
+    std::cout << "[STEP Exporter] Created tapered hollow cylinder: oR=" << outer_radius
+              << " iR_top=" << inner_radius_top << " iR_bottom=" << inner_radius_bottom
+              << " h=" << height << " fillet=" << fillet_radius << std::endl;
+    return solid;
+}
+
 // ====================== 带顶部倒角的圆柱体 ======================
 
 TopoDS_Shape create_cylinder_chamfer_solid_parametric(double radius, double height, double chamfer_size)

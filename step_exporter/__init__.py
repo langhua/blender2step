@@ -1741,19 +1741,22 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
     hole_depth = 0.0
     hole_depth_top = 0.0  # 双端孔时顶部孔深
     
-    # 通孔检测：检查对象上存储的自定义属性
+    # 通孔检测：检查对象上存储的自定义属性（hole_type 或 hole_position）
+    stored_hole_type = obj.get('hole_type') if hasattr(obj, 'get') else None
     stored_pos = obj.get('hole_position') if hasattr(obj, 'get') else None
-    if stored_pos == 'through':
+    log_to_file(f"[STEP Exporter]   Stored props: hole_type={stored_hole_type}, hole_position={stored_pos}, is_tapered={obj.get('hole_is_tapered') if hasattr(obj,'get') else None}")
+    if stored_hole_type == 'through' or stored_pos == 'through':
         hole_pattern_detected = True
         hole_position = 'through'
-        hole_radius = inner_r if inner_r > 0.0005 else body_radius * 0.35
+        hole_radius = body_radius * 0.5  # rough estimate, will be overridden by stored properties later
         hole_depth = height  # 全高
-        log_to_file(f"[STEP Exporter]   Through-hole: using stored property, inner_r={hole_radius:.4f}")
+        log_to_file(f"[STEP Exporter]   Through-hole detected from stored property, skipping blind hole analysis")
     
     # 强制圆柱体判断：两端半径接近且顶部干净时，即使中间z层缺少外壁顶点
     # （如盲孔圆柱的外壁仅有顶部/底部顶点），也认定为恒定半径圆柱。
     # 同时检测底部盲孔：底部顶点数>>顶部顶点数 → 孔在底部。
-    if not cylindrical_body and abs(bottom_radius - top_radius) / max(bottom_radius, 0.01) < 0.02 and std_t <= top_radius * 0.05:
+    # 注意：如果已检测到通孔，跳过盲孔分析
+    if hole_position != 'through' and not cylindrical_body and abs(bottom_radius - top_radius) / max(bottom_radius, 0.01) < 0.02 and std_t <= top_radius * 0.05:
         cylindrical_body = True
         body_radius = (bottom_radius + top_radius) / 2.0
         body_end_z = sorted_z[-1]
@@ -2465,10 +2468,28 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
     # 使用 OpenCASCADE 布尔减操作创建参数化盲孔
     if hole_pattern_detected:
         if hole_position == 'through':
-            # 通孔：使用空心圆柱体
+            # 通孔：使用空心圆柱体（直孔或锥形孔）
             body_radius_for_export = max(bottom_radius, top_radius)
-            log_to_file(f"[STEP Exporter]   -> hollow_cylinder (through-hole)! r={body_radius_for_export:.3f} h={height:.3f} inner_r={hole_radius:.3f}")
             hole_fillet_r = obj.get('hole_fillet_radius', 0.0) if hasattr(obj, 'get') else 0.0
+            hole_is_tapered_thru = obj.get('hole_is_tapered', False) if hasattr(obj, 'get') else False
+            opening_r = obj.get('hole_opening_radius', hole_radius) if hasattr(obj, 'get') else hole_radius
+            end_r = obj.get('hole_end_radius', hole_radius) if hasattr(obj, 'get') else hole_radius
+            
+            if hole_is_tapered_thru and abs(opening_r - end_r) > 0.0001:
+                log_to_file(f"[STEP Exporter]   -> hollow_cylinder_tapered! r={body_radius_for_export:.3f} h={height:.3f} opening_r={opening_r:.3f} end_r={end_r:.3f}")
+                return {
+                    'obj_type': 'hollow_cylinder_tapered',
+                    'outer_radius': body_radius_for_export * S,
+                    'inner_radius_top': opening_r * S,
+                    'inner_radius_bottom': end_r * S,
+                    'height': height * S,
+                    'hole_fillet_radius': hole_fillet_r,
+                    'pos_x': pos_x * S,
+                    'pos_y': pos_y * S,
+                    'pos_z': pos_z * S,
+                }
+            
+            log_to_file(f"[STEP Exporter]   -> hollow_cylinder (through-hole)! r={body_radius_for_export:.3f} h={height:.3f} inner_r={hole_radius:.3f}")
             result = {
                 'obj_type': 'hollow_cylinder',
                 'outer_radius': body_radius_for_export * S,
@@ -2622,6 +2643,27 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
     
     if is_hollow:
         if bottom_radius * 0.98 <= top_radius <= bottom_radius * 1.02:
+            # 检查锥形通孔
+            hole_is_tapered_thru = obj.get('hole_is_tapered', False) if hasattr(obj, 'get') else False
+            inner_end_r = obj.get('hole_end_radius', inner_radius) if hasattr(obj, 'get') else inner_radius
+            inner_opening_r = obj.get('hole_opening_radius', inner_radius) if hasattr(obj, 'get') else inner_radius
+            
+            if hole_is_tapered_thru and abs(inner_opening_r - inner_end_r) > 0.0001:
+                obj_type = 'hollow_cylinder_tapered'
+                fillet_r = obj.get('hole_fillet_radius', 0.0) if hasattr(obj, 'get') else 0.0
+                log_to_file(f"[STEP Exporter]   Tapered through-hole: opening_r={inner_opening_r:.3f} end_r={inner_end_r:.3f}")
+                return {
+                    'obj_type': obj_type,
+                    'outer_radius': max(bottom_radius, top_radius),
+                    'inner_radius_top': inner_opening_r,
+                    'inner_radius_bottom': inner_end_r,
+                    'height': height,
+                    'hole_fillet_radius': fillet_r,
+                    'pos_x': pos_x,
+                    'pos_y': pos_y,
+                    'pos_z': pos_z,
+                }
+            
             obj_type = 'hollow_cylinder'
             if top_feature == 'fillet':
                 obj_type = 'hollow_cylinder_fillet'
@@ -2836,6 +2878,14 @@ def _export_parametric_sync(filepath, bottom_shells, top_shells, cylinders, step
         elif obj_type == 'hollow_cylinder':
             success = cpp_exporter.export_hollow_cylinder_step(temp_file, cparams['outer_radius'],
                 cparams['inner_radius'], cparams['height'], px, py, pz,
+                step_schema, step_unit, 1 if enable_logging else 0)
+        elif obj_type == 'hollow_cylinder_tapered':
+            success = cpp_exporter.export_hollow_cylinder_tapered_step(
+                temp_file, cparams['outer_radius'],
+                cparams['inner_radius_top'], cparams['inner_radius_bottom'],
+                cparams['height'],
+                cparams.get('hole_fillet_radius', 0),
+                px, py, pz,
                 step_schema, step_unit, 1 if enable_logging else 0)
         elif obj_type == 'cylinder_chamfer':
             success = cpp_exporter.export_cylinder_chamfer_step(
@@ -3119,6 +3169,15 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
         return cpp_exporter.export_hollow_cylinder_step(
             temp_file, cparams['outer_radius'], cparams['inner_radius'],
             cparams['height'], px, py, pz,
+            data['step_schema'], data['step_unit'],
+            1 if data['enable_logging'] else 0)
+    elif obj_type == 'hollow_cylinder_tapered':
+        return cpp_exporter.export_hollow_cylinder_tapered_step(
+            temp_file, cparams['outer_radius'],
+            cparams['inner_radius_top'], cparams['inner_radius_bottom'],
+            cparams['height'],
+            cparams.get('hole_fillet_radius', 0),
+            px, py, pz,
             data['step_schema'], data['step_unit'],
             1 if data['enable_logging'] else 0)
     elif obj_type == 'hollow_cone':
@@ -5354,14 +5413,16 @@ def _create_holes(obj, props, S):
             bpy.data.meshes.remove(mesh)
     
     # 存储孔参数到自定义属性，供检测阶段直接使用（避免 mesh z-level 分析误差）
-    if props.hole_type in ('top', 'bottom', 'both'):
-        obj['hole_depth'] = hole_d
-        obj['hole_position'] = props.hole_type
-        obj['hole_radius'] = hr_opening  # 开口半径（对 top/bottom/both 都是开口端）
+    if props.hole_type in ('top', 'bottom', 'both', 'through'):
+        if props.hole_type != 'through':
+            obj['hole_depth'] = hole_d
+            obj['hole_position'] = props.hole_type
+        obj['hole_radius'] = hr_opening  # 开口半径
         obj['hole_opening_radius'] = hr_opening
         obj['hole_end_radius'] = hr_end
         obj['hole_is_tapered'] = props.hole_is_tapered
-        log_to_file(f"[STEP Exporter] _create_holes: stored hole_depth={hole_d:.4f} hole_position={props.hole_type} hole_r={obj['hole_radius']:.4f} on object")
+        obj['hole_type'] = props.hole_type
+        log_to_file(f"[STEP Exporter] _create_holes: stored type={props.hole_type} opening_r={hr_opening:.4f} end_r={hr_end:.4f} tapered={props.hole_is_tapered}")
     
     # 孔口圆倒角
     if props.hole_fillet_radius > 0 and cutters:

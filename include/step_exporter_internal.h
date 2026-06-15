@@ -80,6 +80,12 @@ TopoDS_Shape create_cylinder_chamfer_both_solid_parametric(double radius, double
                                                            double top_chamfer_size, double bottom_chamfer_size);
 TopoDS_Shape create_cylinder_fillet_both_solid_parametric(double radius, double height,
                                                            double top_fillet_radius, double bottom_fillet_radius);
+// Hollow cylinder (through hole)
+TopoDS_Shape create_hollow_cylinder_solid_parametric(double outer_radius, double inner_radius, double height);
+// Hollow cylinder with tapered through hole
+TopoDS_Shape create_hollow_cylinder_tapered_solid_parametric(double outer_radius, double inner_radius_top,
+                                                              double inner_radius_bottom, double height,
+                                                              double fillet_radius);
 // Cylinder with blind hole (single end) — hole_radius_bottom=0 means straight hole (use hole_radius)
 TopoDS_Shape create_cylinder_with_blind_hole_solid_parametric(double radius, double height,
                                                                double hole_radius, double hole_depth,

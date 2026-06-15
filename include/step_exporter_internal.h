@@ -80,14 +80,16 @@ TopoDS_Shape create_cylinder_chamfer_both_solid_parametric(double radius, double
                                                            double top_chamfer_size, double bottom_chamfer_size);
 TopoDS_Shape create_cylinder_fillet_both_solid_parametric(double radius, double height,
                                                            double top_fillet_radius, double bottom_fillet_radius);
-// Cylinder with blind hole (single end)
+// Cylinder with blind hole (single end) — hole_radius_bottom=0 means straight hole (use hole_radius)
 TopoDS_Shape create_cylinder_with_blind_hole_solid_parametric(double radius, double height,
                                                                double hole_radius, double hole_depth,
-                                                               double hole_fillet_radius, bool is_bottom = false);
+                                                               double hole_fillet_radius, bool is_bottom = false,
+                                                               double hole_radius_bottom = 0.0);
 // Cylinder with dual blind holes (both ends)
 TopoDS_Shape create_cylinder_with_dual_blind_holes_solid_parametric(double radius, double height,
                                                                      double hole_radius, double bottom_hole_depth,
-                                                                     double top_hole_depth, double hole_fillet_radius);
+                                                                     double top_hole_depth, double hole_fillet_radius,
+                                                                     double hole_radius_bottom = 0.0);
 TopoDS_Shape create_cone_chamfer_solid_parametric(double bottom_radius, double top_radius, double height,
                                                    double chamfer_size, int is_top_chamfer);
 TopoDS_Shape create_cone_chamfer_solid_parametric_both(double bottom_radius, double top_radius, double height,

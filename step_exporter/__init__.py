@@ -1764,6 +1764,13 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
         inner_n = max(4, len(b_radii) // 8)
         inner_r = sorted(b_radii[:inner_n])[inner_n//2]
         
+        # 优先使用对象上存储的精确孔半径（避免 z-level 分析的 inner_r 偏差）
+        stored_hr = obj.get('hole_radius') if hasattr(obj, 'get') else None
+        stored_pos2 = obj.get('hole_position') if hasattr(obj, 'get') else None
+        if stored_hr is not None and stored_pos2 in ('top', 'bottom', 'both') and stored_hr > 0.0005:
+            inner_r = stored_hr
+            log_to_file(f"[STEP Exporter]   Using stored hole_radius={stored_hr:.4f} from object property")
+        
         # 从底部向上扫描找内孔结束位置（用max半径判断外壁是否存在）
         hole_end_bottom = sorted_z[0]
         for zl in sorted_z[1:]:
@@ -1830,20 +1837,33 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
             # else: 不重叠，bottom_hole_d 和 top_hole_d 已在上方扫描中获得
             
             if bottom_hole_d > height * 0.05 and top_hole_d > height * 0.05:
-                hole_pattern_detected = True
-                hole_position = 'both'
-                hole_radius = inner_r
-                # 优先使用对象上存储的精确孔深（避免 mesh z-level 分析误差）
-                stored_depth = obj.get('hole_depth') if hasattr(obj, 'get') else None
-                stored_pos = obj.get('hole_position') if hasattr(obj, 'get') else None
-                if stored_depth is not None and stored_pos == 'both':
-                    hole_depth = stored_depth
-                    hole_depth_top = stored_depth
-                    log_to_file(f"[STEP Exporter]   Using stored hole_depth={stored_depth:.4f} from object property")
-                else:
+                # 优先使用存储的 hole_position（避免误判为双端孔）
+                stored_pos3 = obj.get('hole_position') if hasattr(obj, 'get') else None
+                if stored_pos3 == 'top':
+                    hole_pattern_detected = True
+                    hole_position = 'top'
+                    hole_radius = inner_r
+                    hole_depth = top_hole_d
+                    log_to_file(f"[STEP Exporter]   Using stored hole_position=top, overriding dual-blind detection")
+                elif stored_pos3 == 'bottom':
+                    hole_pattern_detected = True
+                    hole_position = 'bottom'
+                    hole_radius = inner_r
                     hole_depth = bottom_hole_d
-                    hole_depth_top = top_hole_d
-                log_to_file(f"[STEP Exporter]   Dual blind holes: inner_r={inner_r:.4f} btm_d={hole_depth:.4f} ({hole_depth/height*100:.0f}%) top_d={hole_depth_top:.4f} ({hole_depth_top/height*100:.0f}%)")
+                    log_to_file(f"[STEP Exporter]   Using stored hole_position=bottom, overriding dual-blind detection")
+                else:
+                    hole_pattern_detected = True
+                    hole_position = 'both'
+                    hole_radius = inner_r
+                    stored_depth = obj.get('hole_depth') if hasattr(obj, 'get') else None
+                    if stored_depth is not None:
+                        hole_depth = stored_depth
+                        hole_depth_top = stored_depth
+                        log_to_file(f"[STEP Exporter]   Using stored hole_depth={stored_depth:.4f} from object property")
+                    else:
+                        hole_depth = bottom_hole_d
+                        hole_depth_top = top_hole_d
+                    log_to_file(f"[STEP Exporter]   Dual blind holes: inner_r={inner_r:.4f} btm_d={hole_depth:.4f} ({hole_depth/height*100:.0f}%) top_d={hole_depth_top:.4f} ({hole_depth_top/height*100:.0f}%)")
             else:
                 log_to_file(f"[STEP Exporter]   Hole spans cylinder but depths too small — exporting as solid cylinder")
         elif btm_has_hole:
@@ -2535,24 +2555,40 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
             body_radius_for_export = top_radius
             log_to_file(f"[STEP Exporter]   Dual blind holes: using pre-computed params btm_d={hole_depth:.4f} top_d={hole_depth_top:.4f}")
         else:
-            # 顶部盲孔：原有逻辑
-            above_zls = [zl for zl in sorted_z if zl > body_end_z and zl in z_radius_data]
-            z_hole_bottom = above_zls[0] if above_zls else sorted_z[-1]
-            hole_depth = sorted_z[-1] - z_hole_bottom  # 从顶部到孔底的距离
-            
-            # 孔半径：取孔壁区域（非顶部混合层）的中位数半径
-            hole_wall_zls = [zl for zl in above_zls if zl < sorted_z[-1] * 0.99]
-            if hole_wall_zls:
-                hole_wall_r = sorted([z_radius_data[zl] for zl in hole_wall_zls])
-                hole_radius = hole_wall_r[len(hole_wall_r)//2]
+            # 顶部盲孔
+            # 优先使用检测阶段预计算的 hole_radius/hole_depth（来自存储属性覆盖时）
+            if hole_radius > 0 and hole_depth > 0:
+                log_to_file(f"[STEP Exporter]   Using pre-computed top blind hole params: hole_r={hole_radius:.4f} hole_d={hole_depth:.4f}")
             else:
-                hole_radius = z_radius_data[above_zls[0]]
+                above_zls = [zl for zl in sorted_z if zl > body_end_z and zl in z_radius_data]
+                if above_zls:
+                    z_hole_bottom = above_zls[0]
+                    hole_depth = sorted_z[-1] - z_hole_bottom
+                    hole_wall_zls = [zl for zl in above_zls if zl < sorted_z[-1] * 0.99]
+                    if hole_wall_zls:
+                        hole_wall_r = sorted([z_radius_data[zl] for zl in hole_wall_zls])
+                        hole_radius = hole_wall_r[len(hole_wall_r)//2]
+                    else:
+                        hole_radius = z_radius_data[above_zls[0]]
+                else:
+                    hole_depth = height * 0.5
+                    hole_radius = body_radius * 0.5
             body_radius_for_export = bottom_radius
         
         log_to_file(f"[STEP Exporter]   -> cylinder_blind_hole! r={body_radius_for_export:.3f} h={height:.3f} hole_r={hole_radius:.3f} hole_d={hole_depth:.3f} pos={hole_position}")
         hole_fillet_r = obj.get('hole_fillet_radius', 0.0) if hasattr(obj, 'get') else 0.0
+        hole_is_tapered = obj.get('hole_is_tapered', False) if hasattr(obj, 'get') else False
+        hole_r_bottom = obj.get('hole_radius_bottom', 0.0) if hasattr(obj, 'get') else 0.0
+        hole_r_top_stored = obj.get('hole_radius_top', 0.0) if hasattr(obj, 'get') else 0.0
         if hole_fillet_r > 0:
             log_to_file(f"[STEP Exporter]   hole fillet: r={hole_fillet_r:.3f}")
+        if hole_is_tapered:
+            # 使用存储的精确半径覆盖 mesh 扫描值
+            if hole_r_top_stored > 0:
+                hole_radius = hole_r_top_stored
+            if hole_r_bottom > 0:
+                pass  # 已在下方使用
+            log_to_file(f"[STEP Exporter]   tapered hole: top_r={hole_radius:.3f} bottom_r={hole_r_bottom:.3f}")
         result = {
             'obj_type': 'cylinder_blind_hole',
             'radius': body_radius_for_export * S,
@@ -2567,6 +2603,8 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
         }
         if hole_position == 'both':
             result['hole_depth_top'] = hole_depth_top * S
+        if hole_is_tapered and hole_r_bottom > 0:
+            result['hole_radius_bottom'] = hole_r_bottom * S
         return result
     
     bottom_radius *= S; top_radius *= S; height *= S
@@ -2850,12 +2888,14 @@ def _export_parametric_sync(filepath, bottom_shells, top_shells, cylinders, step
                 1 if enable_logging else 0)
         elif obj_type == 'cylinder_blind_hole':
             hole_pos = cparams.get('hole_position', 'top')
+            hole_r_bottom = cparams.get('hole_radius_bottom', 0.0)
             if hole_pos == 'both':
                 success = cpp_exporter.export_cylinder_dual_blind_holes_step(
                     temp_file, cparams['radius'], cparams['height'],
                     cparams['hole_radius'], cparams['hole_depth'],
                     cparams.get('hole_depth_top', 0),
                     cparams.get('hole_fillet_radius', 0),
+                    hole_r_bottom,
                     px, py, pz, step_schema, step_unit,
                     1 if enable_logging else 0)
             else:
@@ -2863,6 +2903,7 @@ def _export_parametric_sync(filepath, bottom_shells, top_shells, cylinders, step
                     temp_file, cparams['radius'], cparams['height'],
                     cparams['hole_radius'], cparams['hole_depth'],
                     cparams.get('hole_fillet_radius', 0),
+                    hole_r_bottom,
                     hole_pos,
                     px, py, pz, step_schema, step_unit,
                     1 if enable_logging else 0)
@@ -3145,12 +3186,14 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
             1 if data['enable_logging'] else 0)
     elif obj_type == 'cylinder_blind_hole':
         hole_pos = cparams.get('hole_position', 'top')
+        hole_r_bottom = cparams.get('hole_radius_bottom', 0.0)
         if hole_pos == 'both':
             return cpp_exporter.export_cylinder_dual_blind_holes_step(
                 temp_file, cparams['radius'], cparams['height'],
                 cparams['hole_radius'], cparams['hole_depth'],
                 cparams.get('hole_depth_top', 0),
                 cparams.get('hole_fillet_radius', 0),
+                hole_r_bottom,
                 px, py, pz,
                 data['step_schema'], data['step_unit'],
                 1 if data['enable_logging'] else 0)
@@ -3158,6 +3201,7 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
             temp_file, cparams['radius'], cparams['height'],
             cparams['hole_radius'], cparams['hole_depth'],
             cparams.get('hole_fillet_radius', 0),
+            hole_r_bottom,
             hole_pos,
             px, py, pz,
             data['step_schema'], data['step_unit'],
@@ -5210,16 +5254,22 @@ def _create_holes(obj, props, S):
     cutters = []
     
     def make_hole_cutter(cut_name, z_bottom, z_top, r_bottom, r_top):
-        """使用 Blender 原生圆柱体创建切割体（比手动 bmesh 更可靠）"""
+        """创建锥形/直孔切割体"""
         cutter_height = z_top - z_bottom
         cutter_z = (z_top + z_bottom) / 2.0
-        avg_r = (r_bottom + r_top) / 2.0
         
-        # 使用 Blender 原生圆柱体
-        bpy.ops.mesh.primitive_cylinder_add(
-            vertices=64, radius=avg_r, depth=cutter_height,
-            location=(0, 0, cutter_z)
-        )
+        # 直孔用原生圆柱体
+        if abs(r_bottom - r_top) < 0.0001:
+            bpy.ops.mesh.primitive_cylinder_add(
+                vertices=64, radius=r_bottom, depth=cutter_height,
+                location=(0, 0, cutter_z)
+            )
+        else:
+            # 锥形孔用原生锥体
+            bpy.ops.mesh.primitive_cone_add(
+                vertices=64, radius1=r_bottom, radius2=r_top, depth=cutter_height,
+                location=(0, 0, cutter_z)
+            )
         obj_c = bpy.context.active_object
         obj_c.name = cut_name
         obj_c.hide_set(True)
@@ -5237,23 +5287,35 @@ def _create_holes(obj, props, S):
             -hh / 2 - ext, hh / 2 + ext, hr_bottom, hr_top
         ))
     elif props.hole_type == 'top':
+        # 顶部孔：开口在顶面(z=hh/2)，孔底在(z=hh/2-hole_d)
+        r_opening = hr_top  # 开口处半径
+        r_bottom_hole = hr_bottom if props.hole_is_tapered else hr_top  # 孔底半径（锥形时不同）
         cutters.append(make_hole_cutter(
             "HoleCutter_Top",
-            hh / 2 - hole_d, hh / 2 + ext, hr_top, hr_top
+            hh / 2 - hole_d, hh / 2 + ext, r_bottom_hole, r_opening
         ))
     elif props.hole_type == 'bottom':
+        # 底部孔：开口在底面(z=-hh/2)，孔底在(z=-hh/2+hole_d)
+        r_opening = hr_bottom  # 开口处半径
+        r_top_hole = hr_top if props.hole_is_tapered else hr_bottom  # 孔底半径
         cutters.append(make_hole_cutter(
             "HoleCutter_Bottom",
-            -hh / 2 - ext, -hh / 2 + hole_d, hr_bottom, hr_bottom
+            -hh / 2 - ext, -hh / 2 + hole_d, r_opening, r_top_hole
         ))
     elif props.hole_type == 'both':
+        # 顶部孔
+        r_top_opening = hr_top
+        r_top_bottom = hr_bottom if props.hole_is_tapered else hr_top
         cutters.append(make_hole_cutter(
             "HoleCutter_Top",
-            hh / 2 - hole_d, hh / 2 + ext, hr_top, hr_top
+            hh / 2 - hole_d, hh / 2 + ext, r_top_bottom, r_top_opening
         ))
+        # 底部孔
+        r_btm_opening = hr_bottom
+        r_btm_top = hr_top if props.hole_is_tapered else hr_bottom
         cutters.append(make_hole_cutter(
             "HoleCutter_Bottom",
-            -hh / 2 - ext, -hh / 2 + hole_d, hr_bottom, hr_bottom
+            -hh / 2 - ext, -hh / 2 + hole_d, r_btm_opening, r_btm_top
         ))
     
     # 布尔减：先创建所有 modifier，再一次性通过 depsgraph 应用
@@ -5291,7 +5353,11 @@ def _create_holes(obj, props, S):
     if props.hole_type in ('top', 'bottom', 'both'):
         obj['hole_depth'] = hole_d
         obj['hole_position'] = props.hole_type
-        log_to_file(f"[STEP Exporter] _create_holes: stored hole_depth={hole_d:.4f} hole_position={props.hole_type} on object")
+        obj['hole_radius'] = hr_bottom if props.hole_type in ('bottom', 'both') else hr_top
+        obj['hole_radius_top'] = hr_top
+        obj['hole_radius_bottom'] = hr_bottom
+        obj['hole_is_tapered'] = props.hole_is_tapered
+        log_to_file(f"[STEP Exporter] _create_holes: stored hole_depth={hole_d:.4f} hole_position={props.hole_type} hole_r={obj['hole_radius']:.4f} on object")
     
     # 孔口圆倒角
     if props.hole_fillet_radius > 0 and cutters:

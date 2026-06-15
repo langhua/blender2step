@@ -265,7 +265,7 @@ static void find_circular_edges(const TopoDS_Shape& solid,
 
 TopoDS_Shape create_hollow_cylinder_tapered_solid_parametric(
     double outer_radius, double inner_radius_top, double inner_radius_bottom,
-    double height, double fillet_radius, double chamfer_size, bool chamfer_at_top)
+    double height, double hole_fillet_r, double outer_edge_chamfer, double outer_edge_fillet, bool outer_at_top)
 {
     TopoDS_Shape outerShape = create_cylinder_solid_parametric(outer_radius, height);
     if (outerShape.IsNull()) return TopoDS_Shape();
@@ -275,18 +275,27 @@ TopoDS_Shape create_hollow_cylinder_tapered_solid_parametric(
     double halfH = height / 2.0;
     double ext = 2.0;
 
-    // === Step 1: Apply chamfer to outer edge FIRST (on clean cylinder, easy to find) ===
-    if (chamfer_size > 0.001) {
+    // === Step 1: Apply chamfer or fillet to outer edge FIRST (on clean cylinder) ===
+    double outer_edge_sz = std::max(outer_edge_chamfer, outer_edge_fillet);
+    bool outer_is_chamfer = (outer_edge_chamfer > 0.001);
+    if (outer_edge_sz > 0.001) {
         std::vector<TopoDS_Edge> topEdges, bottomEdges;
         find_circular_edges(solid, topEdges, bottomEdges);
-        const auto& targetEdges = chamfer_at_top ? topEdges : bottomEdges;
+        const auto& targetEdges = outer_at_top ? topEdges : bottomEdges;
         for (const auto& e : targetEdges) {
             double er = BRepAdaptor_Curve(e).Circle().Radius();
             if (std::abs(er - outer_radius) / outer_radius < 0.15) {
-                BRepFilletAPI_MakeChamfer cm(solid);
-                cm.Add(chamfer_size, e);
-                cm.Build();
-                if (cm.IsDone()) { solid = shape_to_solid(cm.Shape()); break; }
+                if (outer_is_chamfer) {
+                    BRepFilletAPI_MakeChamfer cm(solid);
+                    cm.Add(outer_edge_sz, e);
+                    cm.Build();
+                    if (cm.IsDone()) { solid = shape_to_solid(cm.Shape()); break; }
+                } else {
+                    BRepFilletAPI_MakeFillet fm(solid);
+                    fm.Add(outer_edge_sz, e);
+                    fm.Build();
+                    if (fm.IsDone()) { solid = shape_to_solid(fm.Shape()); break; }
+                }
             }
         }
     }
@@ -309,25 +318,26 @@ TopoDS_Shape create_hollow_cylinder_tapered_solid_parametric(
     if (solid.IsNull()) return TopoDS_Shape();
 
     // === Step 3: Apply fillets at hole openings ===
-    if (fillet_radius > 0.001) {
+    if (hole_fillet_r > 0.001) {
         std::vector<TopoDS_Edge> topEdges, bottomEdges;
         find_circular_edges(solid, topEdges, bottomEdges);
         BRepFilletAPI_MakeFillet fm(solid);
         bool added = false;
         for (const auto& e : topEdges) {
             double er = BRepAdaptor_Curve(e).Circle().Radius();
-            if (std::abs(er - inner_radius_top) / std::max(inner_radius_top, 0.001) < 0.2) { fm.Add(fillet_radius, e); added = true; }
+            if (std::abs(er - inner_radius_top) / std::max(inner_radius_top, 0.001) < 0.2) { fm.Add(hole_fillet_r, e); added = true; }
         }
         for (const auto& e : bottomEdges) {
             double er = BRepAdaptor_Curve(e).Circle().Radius();
-            if (std::abs(er - inner_radius_bottom) / std::max(inner_radius_bottom, 0.001) < 0.2) { fm.Add(fillet_radius, e); added = true; }
+            if (std::abs(er - inner_radius_bottom) / std::max(inner_radius_bottom, 0.001) < 0.2) { fm.Add(hole_fillet_r, e); added = true; }
         }
         if (added) { fm.Build(); if (fm.IsDone()) solid = shape_to_solid(fm.Shape()); }
     }
 
     std::cout << "[STEP Exporter] Created tapered hollow cylinder: oR=" << outer_radius
               << " iR_top=" << inner_radius_top << " iR_bottom=" << inner_radius_bottom
-              << " h=" << height << " fillet=" << fillet_radius << " chamfer=" << chamfer_size << std::endl;
+              << " h=" << height << " hole_fillet=" << hole_fillet_r
+              << " outer_chamfer=" << outer_edge_chamfer << " outer_fillet=" << outer_edge_fillet << std::endl;
     return solid;
 }
 

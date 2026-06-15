@@ -2899,13 +2899,14 @@ def _export_parametric_sync(filepath, bottom_shells, top_shells, cylinders, step
                 step_schema, step_unit, 1 if enable_logging else 0)
         elif obj_type == 'hollow_cylinder_tapered':
             chamfer_sz = cparams.get('top_feature_size', 0) if cparams.get('top_feature') == 'chamfer' else 0
-            chamfer_pos = 'top' if cparams.get('top_feature') == 'chamfer' else 'bottom' if cparams.get('bottom_feature') == 'chamfer' else ''
+            fillet_sz = cparams.get('top_feature_size', 0) if cparams.get('top_feature') == 'fillet' else 0
+            outer_pos = 'top' if cparams.get('top_feature') in ('chamfer', 'fillet') else 'bottom' if cparams.get('bottom_feature') in ('chamfer', 'fillet') else ''
             success = cpp_exporter.export_hollow_cylinder_tapered_step(
                 temp_file, cparams['outer_radius'],
                 cparams['inner_radius_top'], cparams['inner_radius_bottom'],
                 cparams['height'],
                 cparams.get('hole_fillet_radius', 0),
-                chamfer_sz, chamfer_pos,
+                chamfer_sz, fillet_sz, outer_pos,
                 px, py, pz,
                 step_schema, step_unit, 1 if enable_logging else 0)
         elif obj_type == 'cylinder_chamfer':
@@ -3194,13 +3195,14 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
             1 if data['enable_logging'] else 0)
     elif obj_type == 'hollow_cylinder_tapered':
         chamfer_sz = cparams.get('top_feature_size', 0) if cparams.get('top_feature') == 'chamfer' else 0
-        chamfer_pos = 'top' if cparams.get('top_feature') == 'chamfer' else 'bottom' if cparams.get('bottom_feature') == 'chamfer' else ''
+        fillet_sz = cparams.get('top_feature_size', 0) if cparams.get('top_feature') == 'fillet' else 0
+        outer_pos = 'top' if cparams.get('top_feature') in ('chamfer', 'fillet') else 'bottom' if cparams.get('bottom_feature') in ('chamfer', 'fillet') else ''
         return cpp_exporter.export_hollow_cylinder_tapered_step(
             temp_file, cparams['outer_radius'],
             cparams['inner_radius_top'], cparams['inner_radius_bottom'],
             cparams['height'],
             cparams.get('hole_fillet_radius', 0),
-            chamfer_sz, chamfer_pos,
+            chamfer_sz, fillet_sz, outer_pos,
             px, py, pz,
             data['step_schema'], data['step_unit'],
             1 if data['enable_logging'] else 0)

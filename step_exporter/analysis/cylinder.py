@@ -621,11 +621,15 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
         if above_zls:
             above_r_first = z_radius_data[above_zls[0]]
             if above_r_first < bottom_radius * 0.6:
-                log_to_file(f"[STEP Exporter]   Hole pattern detected: bottom_r={bottom_radius:.3f} above_r={above_r_first:.3f}, treating as cylinder")
-                cylindrical_body = True
-                body_radius = bottom_radius
-                top_radius = bottom_radius  # 防止后续检测为锥体
-                hole_pattern_detected = True
+                # Check if this is a cone (radius changes significantly) vs blind hole
+                if top_radius < bottom_radius * 0.85:
+                    log_to_file(f"[STEP Exporter]   Cone detected (bR={bottom_radius:.3f} tR={top_radius:.3f}), not blind hole")
+                else:
+                    log_to_file(f"[STEP Exporter]   Hole pattern detected: bottom_r={bottom_radius:.3f} above_r={above_r_first:.3f}, treating as cylinder")
+                    cylindrical_body = True
+                    body_radius = bottom_radius
+                    top_radius = bottom_radius
+                    hole_pattern_detected = True
     
     # 底部盲孔检测：顶部恒定半径为本体，底部参数骤降为孔洞
     if not hole_pattern_detected and cylindrical_body and top_radius > 0.01:

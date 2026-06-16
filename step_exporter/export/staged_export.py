@@ -274,15 +274,15 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
             temp_file,
             cparams.get('bottom_radius', cparams.get('radius', 0)),
             cparams.get('top_radius', 0), cparams['height'],
-            chamfer_sz, fillet_r, rev_flag,
+            chamfer_sz, fillet_r,
             px, py, pz,
             data['step_schema'], data['step_unit'],
-            1 if data['enable_logging'] else 0)
+            1 if data['enable_logging'] else 0,
+            rev_flag)  # reversed as last optional arg
     elif obj_type == 'cone_chamfer':
         has_bottom = cparams.get('bottom_feature') == 'chamfer'
         has_top = cparams.get('top_feature') == 'chamfer'
         if has_bottom and has_top:
-            # Both ends chamfered: use new C++ function
             bot_sz = cparams.get('bottom_feature_size', 0)
             top_sz = cparams.get('top_feature_size', 0)
             log_to_file(f"[STEP Exporter]   cone_chamfer(both): bot_sz={bot_sz:.4f} top_sz={top_sz:.4f}")
@@ -297,13 +297,15 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
             chamfer_sz = cparams.get('bottom_feature_size', 0) if has_bottom else cparams.get('top_feature_size', 0)
             is_top = 1 if has_top else 0
             log_to_file(f"[STEP Exporter]   cone_chamfer: chamfer_sz={chamfer_sz:.4f} is_top={is_top}")
-            return cpp_exporter.export_cone_chamfer_step(
+            return cpp_exporter.export_cone_chamfer_fillet_step(
                 temp_file,
                 cparams.get('bottom_radius', cparams.get('radius', 0)),
                 cparams.get('top_radius', 0), cparams['height'],
-                chamfer_sz, is_top, px, py, pz,
+                chamfer_sz, 0,  # chamfer_size, fillet_radius=0
+                px, py, pz,
                 data['step_schema'], data['step_unit'],
-                1 if data['enable_logging'] else 0)
+                1 if data['enable_logging'] else 0,
+                is_top)  # reversed=1 for top chamfer
     elif obj_type == 'hollow_cone_fillet':
         return cpp_exporter.export_hollow_cone_fillet_step(
             temp_file,
@@ -345,7 +347,6 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
         has_bottom = cparams.get('bottom_feature') == 'fillet'
         has_top = cparams.get('top_feature') == 'fillet'
         if has_bottom and has_top:
-            # Both ends filleted: use new C++ function
             bot_r = cparams.get('bottom_feature_size', 0)
             top_r = cparams.get('top_feature_size', 0)
             log_to_file(f"[STEP Exporter]   cone_fillet(both): bot_r={bot_r:.4f} top_r={top_r:.4f}")
@@ -360,9 +361,9 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
             return cpp_exporter.export_cone_chamfer_fillet_step(
                 temp_file,
                 cparams.get('bottom_radius', 0), cparams.get('top_radius', 0),
-                cparams['height'], 0.0, cparams.get('top_feature_size', 0), 0,
+                cparams['height'], 0.0, cparams.get('top_feature_size', 0),
                 px, py, pz, data['step_schema'], data['step_unit'],
-                1 if data['enable_logging'] else 0)
+                1 if data['enable_logging'] else 0, 0)  # reversed=0: bottom chamfer=0, top fillet
     elif obj_type == 'hollow_cylinder_fillet':
         return cpp_exporter.export_hollow_cylinder_fillet_step(
             temp_file,

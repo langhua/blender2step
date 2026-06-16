@@ -654,6 +654,72 @@ TopoDS_Shape create_cone_chamfer_fillet_solid_parametric(
     return solid;
 }
 
+// ====================== 带顶部和底部倒角的锥体 ======================
+
+TopoDS_Shape create_cone_chamfer_solid_parametric_both(
+    double bottom_radius, double top_radius, double height,
+    double bottom_chamfer, double top_chamfer)
+{
+    TopoDS_Shape shape = create_cone_solid_parametric(bottom_radius, top_radius, height);
+    if (shape.IsNull()) return TopoDS_Shape();
+    TopoDS_Solid solid = shape_to_solid(shape);
+    if (solid.IsNull()) return TopoDS_Shape();
+
+    std::vector<TopoDS_Edge> topEdges, bottomEdges;
+    find_circular_edges(solid, topEdges, bottomEdges);
+
+    if (top_chamfer > 0.001 && !topEdges.empty()) {
+        BRepFilletAPI_MakeChamfer cm(solid);
+        cm.Add(top_chamfer, topEdges[0]); cm.Build();
+        if (cm.IsDone()) solid = shape_to_solid(cm.Shape());
+    }
+
+    find_circular_edges(solid, topEdges, bottomEdges);
+    if (bottom_chamfer > 0.001 && !bottomEdges.empty()) {
+        BRepFilletAPI_MakeChamfer cm(solid);
+        cm.Add(bottom_chamfer, bottomEdges[0]); cm.Build();
+        if (cm.IsDone()) solid = shape_to_solid(cm.Shape());
+    }
+
+    std::cout << "[STEP Exporter] Created cone with top+bottom chamfer: bR=" << bottom_radius
+              << " tR=" << top_radius << " h=" << height
+              << " top_ch=" << top_chamfer << " btm_ch=" << bottom_chamfer << std::endl;
+    return solid;
+}
+
+// ====================== 带顶部和底部圆角的锥体 ======================
+
+TopoDS_Shape create_cone_fillet_solid_parametric_both(
+    double bottom_radius, double top_radius, double height,
+    double bottom_fillet, double top_fillet)
+{
+    TopoDS_Shape shape = create_cone_solid_parametric(bottom_radius, top_radius, height);
+    if (shape.IsNull()) return TopoDS_Shape();
+    TopoDS_Solid solid = shape_to_solid(shape);
+    if (solid.IsNull()) return TopoDS_Shape();
+
+    std::vector<TopoDS_Edge> topEdges, bottomEdges;
+    find_circular_edges(solid, topEdges, bottomEdges);
+
+    if (top_fillet > 0.001 && !topEdges.empty()) {
+        BRepFilletAPI_MakeFillet fm(solid);
+        fm.Add(top_fillet, topEdges[0]); fm.Build();
+        if (fm.IsDone()) solid = shape_to_solid(fm.Shape());
+    }
+
+    find_circular_edges(solid, topEdges, bottomEdges);
+    if (bottom_fillet > 0.001 && !bottomEdges.empty()) {
+        BRepFilletAPI_MakeFillet fm(solid);
+        fm.Add(bottom_fillet, bottomEdges[0]); fm.Build();
+        if (fm.IsDone()) solid = shape_to_solid(fm.Shape());
+    }
+
+    std::cout << "[STEP Exporter] Created cone with top+bottom fillet: bR=" << bottom_radius
+              << " tR=" << top_radius << " h=" << height
+              << " top_fr=" << top_fillet << " btm_fr=" << bottom_fillet << std::endl;
+    return solid;
+}
+
 // ====================== 带顶部圆角的空心锥体 ======================
 
 TopoDS_Shape create_hollow_cone_fillet_solid_parametric(

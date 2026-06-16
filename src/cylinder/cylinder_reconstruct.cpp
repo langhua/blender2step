@@ -12,8 +12,8 @@
 // - 将工具函数迁移到 cylinder_utils.cpp
 
 #include "../include/step_exporter_internal.h"
-#include "cylinder/cylinder_types.h"
-#include "cylinder/cylinder_detector.h"
+#include "cylinder_types.h"
+#include "cylinder_detector.h"
 #include <iomanip>
 #include <fstream>
 

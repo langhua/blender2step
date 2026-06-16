@@ -73,36 +73,32 @@ include_directories(
 
 # ====== 4. 创建库 ======
 add_library(step_exporter SHARED
-    # Basic shape functions (split from step_exporter_basic.cpp)
-    src/step_exporter_fix_shape.cpp
-    src/step_exporter_create_shape_from_mesh.cpp
-    src/step_exporter_create_solid_from_mesh.cpp
-    # Curve shape functions
-    src/step_exporter_curve.cpp
-    src/step_exporter_curve_dict.cpp
-    src/step_exporter_curve_poly.cpp
-    src/step_exporter_curve_bezier.cpp
-    src/step_exporter_curve_nurbs.cpp
-    src/step_exporter_curve_common.cpp
-    # Shape fixing functions
-    src/step_exporter_shape_fix.cpp
-    # Export functions
-    src/step_exporter_export_scene.cpp
-    src/step_exporter_export_enhanced_parse.cpp
-    src/step_exporter_export_enhanced_progress.cpp
-    src/step_exporter_export_enhanced_writer.cpp
-    src/step_exporter_export_enhanced_objects.cpp
-    src/step_exporter_export_enhanced_transfer.cpp
-    src/step_exporter_export_enhanced.cpp
-    # Incremental export functions
-    src/step_exporter_incremental.cpp
-    # Module initialization
-    src/step_exporter_module.cpp
+    # Shape creation & fixing
+    src/shape/fix_shape.cpp
+    src/shape/create_shape_from_mesh.cpp
+    src/shape/create_solid_from_mesh.cpp
+    src/shape/shape_fix.cpp
+    src/shape/rounded_box.cpp
+    # Curve functions
+    src/curve/curve.cpp
+    src/curve/curve_dict.cpp
+    src/curve/curve_poly.cpp
+    src/curve/curve_bezier.cpp
+    src/curve/curve_nurbs.cpp
+    src/curve/curve_common.cpp
+    # Export & module
+    src/export/export_scene.cpp
+    src/export/enhanced_parse.cpp
+    src/export/enhanced_progress.cpp
+    src/export/enhanced_writer.cpp
+    src/export/enhanced_objects.cpp
+    src/export/enhanced_transfer.cpp
+    src/export/enhanced.cpp
+    src/export/incremental.cpp
+    src/export/module.cpp
     # STEP converter
     src/step_converter.cpp
-    # Rounded box and bottom shell creation
-    src/step_exporter_rounded_box.cpp
-    # Cylinder detection and reconstruction
+    # Cylinder detection, reconstruction & parametric creation
     src/cylinder/cylinder_types.h
     src/cylinder/cylinder_detector.h
     src/cylinder/cylinder_detector.cpp
@@ -114,15 +110,15 @@ add_library(step_exporter SHARED
     src/cylinder/cylinder_deduplicator.cpp
     src/cylinder/cylinder_geometry.cpp
     src/cylinder/cylinder_utils.cpp
-    src/step_exporter_cylinder_reconstruct.cpp
-    # Parametric cylinder/cone/hollow creation
-    src/step_exporter_cylinder_parametric.cpp
+    src/cylinder/cylinder_reconstruct.cpp
+    src/cylinder/cylinder_parametric.cpp
 )
 
 # 设置 Python 头文件路径（使用 Blender 自带的 Python 3.11 头文件）
 include_directories(
     ${PYTHON_INCLUDE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/cylinder
 )
 
 # 设置输出名称

@@ -1543,10 +1543,14 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                         log_to_file(f"[STEP Exporter] Middle region has sub-clusters (groove), "
                                     f"using custom groove parameters for parametric export")
                     else:
-                        log_to_file(f"[STEP Exporter] Middle region outer ring has sub-clusters, "
-                                    f"mesh has cuts/grooves")
-                        bm.free()
-                        return None
+                        stored_hole_pos2 = obj.get('hole_position') if hasattr(obj, 'get') else None
+                        if stored_hole_pos2:
+                            log_to_file(f"[STEP Exporter] Middle region has sub-clusters but has stored holes, continuing")
+                        else:
+                            log_to_file(f"[STEP Exporter] Middle region outer ring has sub-clusters, "
+                                        f"mesh has cuts/grooves")
+                            bm.free()
+                            return None
                 mid_sorted = outer_radii
         mean_r = sum(mid_sorted) / len(mid_sorted)
         range_r = max(mid_sorted) - min(mid_sorted)
@@ -1555,10 +1559,15 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                 log_to_file(f"[STEP Exporter] Middle region not cleanly circular (groove detected), "
                             f"using custom groove parameters for parametric export")
             else:
-                log_to_file(f"[STEP Exporter] Middle region not cleanly circular "
-                            f"(range={range_r:.3f} > {mean_r*0.08:.3f}), mesh has cuts/grooves")
-                bm.free()
-                return None
+                # 检查是否有孔洞存储属性——双端盲孔会破坏中段圆形检测
+                stored_hole_pos = obj.get('hole_position') if hasattr(obj, 'get') else None
+                if stored_hole_pos:
+                    log_to_file(f"[STEP Exporter] Middle region not cleanly circular but has stored hole_position={stored_hole_pos}, continuing")
+                else:
+                    log_to_file(f"[STEP Exporter] Middle region not cleanly circular "
+                                f"(range={range_r:.3f} > {mean_r*0.08:.3f}), mesh has cuts/grooves")
+                    bm.free()
+                    return None
     
     log_to_file(f"[STEP Exporter] Detected: center=({center_x:.3f},{center_y:.3f}), "
                 f"bottom_r={bottom_radius:.3f} top_r={top_radius:.3f}, height={height:.3f}")

@@ -5,11 +5,11 @@ from mathutils import Vector
 from bpy.types import Operator, Panel
 from bpy_extras.io_utils import ExportHelper
 from bpy.props import StringProperty, FloatProperty, IntProperty, BoolProperty, EnumProperty
-from .utils import log_to_file, _merge_step_files, _merge_log_files
-from .progress_report import start_progress, update_progress, end_progress, set_operator, clear_operator
-from .shape_analysis import _analyze_cylinder_from_mesh, _analyze_bottom_shell_from_mesh, _analyze_top_shell_from_mesh
-from .export_parametric import _export_worker_timer, _parametric_export_staged
-from . import _globals as _g
+from ..core.utils import log_to_file, _merge_step_files, _merge_log_files
+from ..export.progress_report import start_progress, update_progress, end_progress, set_operator, clear_operator
+from ..analysis.shape_analysis import _analyze_cylinder_from_mesh, _analyze_bottom_shell_from_mesh, _analyze_top_shell_from_mesh
+from ..export.export_parametric import _export_worker_timer, _parametric_export_staged
+from ..core import _globals as _g
 
 class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
     """Export to STEP format with advanced BREP and solid creation"""

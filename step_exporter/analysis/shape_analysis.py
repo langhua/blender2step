@@ -2,8 +2,8 @@
 import sys, math
 import bmesh
 from mathutils import Vector
-from .utils import log_to_file
-from . import _globals as _g
+from ..core.utils import log_to_file
+from ..core import _globals as _g
 
 def _analyze_top_shell_from_mesh(obj, context, scale):
     """

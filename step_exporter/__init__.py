@@ -14,15 +14,26 @@ bl_info = {
 }
 
 import sys, os
+
+# Support running as script (VSCode Blender Development) — set up package
+if not __package__:
+    _here = os.path.dirname(os.path.abspath(__file__))
+    _parent = os.path.dirname(_here)
+    if _parent not in sys.path:
+        sys.path.insert(0, _parent)
+    if _here not in sys.path:
+        sys.path.insert(0, _here)
+    __package__ = "step_exporter"
+
 sys.path.append(os.path.abspath(os.path.dirname(__file__)))
 
 # ====================== C++ module loading ======================
-from .utils import log_to_file
+from .core.utils import log_to_file
 
 _log_init_time = __import__("time").strftime("%H:%M:%S")
 log_to_file(f"[STEP Exporter] [MODULE:v4] __init__.py loaded at {_log_init_time}")
 
-from . import _globals as _g
+from .core import _globals as _g
 
 try:
     script_dir = os.path.dirname(os.path.realpath(__file__))
@@ -57,17 +68,17 @@ except Exception as e:
     _g.MODULE_LOAD_ERROR = f"Error: {e}"
 
 # ====================== Sub-module imports ======================
-from . import mesh_data
-from . import shape_analysis
-from . import export_parametric
-from . import operators
+from .core import mesh_data
+from .analysis import shape_analysis
+from .export import export_parametric
+from .ui import operators
 
 # Re-export for backward compatibility
-from .utils import log_to_file, _verify_step_shell, _merge_step_files, _merge_log_files
-from .mesh_data import _get_mesh_data_enhanced, _get_curve_data_enhanced
-from .shape_analysis import _analyze_top_shell_from_mesh, _analyze_bottom_shell_from_mesh, _analyze_cylinder_from_mesh
-from .export_parametric import _export_parametric_sync, _export_bottom_shells_sync, _export_cylinder_staged, _parametric_export_staged, _export_worker_timer
-from .operators import (
+from .core.utils import log_to_file, _verify_step_shell, _merge_step_files, _merge_log_files
+from .core.mesh_data import _get_mesh_data_enhanced, _get_curve_data_enhanced
+from .analysis.shape_analysis import _analyze_top_shell_from_mesh, _analyze_bottom_shell_from_mesh, _analyze_cylinder_from_mesh
+from .export.export_parametric import _export_parametric_sync, _export_bottom_shells_sync, _export_cylinder_staged, _parametric_export_staged, _export_worker_timer
+from .ui.operators import (
     STEP_EXPORTER_OT_export_enhanced, STEP_EXPORTER_PT_main_panel,
     STEP_EXPORTER_OT_create_top_shell, STEP_EXPORTER_OT_create_bottom_shell,
     STEP_EXPORTER_OT_create_cylinder, STEP_EXPORTER_OT_create_parametric_cylinder,
@@ -88,7 +99,7 @@ _classes = (
 
 
 def register():
-    from .progress_report import register as _rp
+    from .export.progress_report import register as _rp
     _rp()
     import bpy
     for cls in _classes:
@@ -107,7 +118,7 @@ def unregister():
     TOPBAR_MT_file_export.remove(menu_func_export_enhanced)
     for cls in reversed(_classes):
         bpy.utils.unregister_class(cls)
-    from .progress_report import unregister as _urp
+    from .export.progress_report import unregister as _urp
     _urp()
 
 

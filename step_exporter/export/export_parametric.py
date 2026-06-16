@@ -1,10 +1,10 @@
 """Parametric export functions for STEP Exporter."""
 import sys, os, math, time
 import bpy
-from .utils import log_to_file, _verify_step_shell, _merge_step_files, _merge_log_files
+from ..core.utils import log_to_file, _verify_step_shell, _merge_step_files, _merge_log_files
 from .progress_report import update_progress, start_progress, end_progress
-from .mesh_data import _get_mesh_data_enhanced, _get_curve_data_enhanced
-from . import _globals as _g
+from ..core.mesh_data import _get_mesh_data_enhanced, _get_curve_data_enhanced
+from ..core import _globals as _g
 
 def _export_parametric_sync(filepath, bottom_shells, top_shells, cylinders, step_schema, step_unit, enable_logging, context):
     """同步导出所有参数化对象（底壳、顶壳、圆柱），用于后台模式回退"""

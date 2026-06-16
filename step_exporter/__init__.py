@@ -2677,11 +2677,17 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
         stored_csz = obj.get('chamfer_size', 0) if hasattr(obj, 'get') else 0
         stored_fr = obj.get('fillet_radius_edge', 0) if hasattr(obj, 'get') else 0
         stored_orig_r = obj.get('cylinder_original_radius', 0) if hasattr(obj, 'get') else 0
-        outer_chamfer = 0.0; outer_fillet = 0.0
-        if stored_ctype in ('chamfer', 'chamfer_both', 'chamfer_fillet'):
-            outer_chamfer = stored_csz * 0.001  # mm -> m
-        if stored_ctype in ('fillet', 'fillet_both', 'chamfer_fillet'):
-            outer_fillet = stored_fr * 0.001
+        top_ch = 0.0; top_fr = 0.0; btm_ch = 0.0; btm_fr = 0.0
+        if stored_ctype == 'chamfer':
+            top_ch = stored_csz * 0.001
+        elif stored_ctype == 'fillet':
+            top_fr = stored_fr * 0.001
+        elif stored_ctype == 'chamfer_both':
+            top_ch = stored_csz * 0.001; btm_ch = stored_csz * 0.001
+        elif stored_ctype == 'fillet_both':
+            top_fr = stored_fr * 0.001; btm_fr = stored_fr * 0.001
+        elif stored_ctype == 'chamfer_fillet':
+            top_ch = stored_csz * 0.001; btm_fr = stored_fr * 0.001
         if stored_orig_r > 0:
             body_radius_for_export = stored_orig_r * 0.001  # use original radius
         result = {
@@ -2692,8 +2698,10 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
             'hole_depth': hole_depth * S,
             'hole_fillet_radius': hole_fillet_r,
             'hole_position': hole_position,
-            'outer_chamfer': outer_chamfer * S,
-            'outer_fillet': outer_fillet * S,
+            'top_chamfer': top_ch * S,
+            'top_fillet': top_fr * S,
+            'bottom_chamfer': btm_ch * S,
+            'bottom_fillet': btm_fr * S,
             'pos_x': pos_x * S,
             'pos_y': pos_y * S,
             'pos_z': pos_z * S,
@@ -3020,8 +3028,10 @@ def _export_parametric_sync(filepath, bottom_shells, top_shells, cylinders, step
         elif obj_type == 'cylinder_blind_hole':
             hole_pos = cparams.get('hole_position', 'top')
             hole_r_bottom = cparams.get('hole_radius_bottom', 0.0)
-            outer_ch = cparams.get('outer_chamfer', 0.0)
-            outer_fr = cparams.get('outer_fillet', 0.0)
+            top_ch = cparams.get('top_chamfer', 0.0)
+            top_fr = cparams.get('top_fillet', 0.0)
+            btm_ch = cparams.get('bottom_chamfer', 0.0)
+            btm_fr = cparams.get('bottom_fillet', 0.0)
             if hole_pos == 'both':
                 success = cpp_exporter.export_cylinder_dual_blind_holes_step(
                     temp_file, cparams['radius'], cparams['height'],
@@ -3029,7 +3039,7 @@ def _export_parametric_sync(filepath, bottom_shells, top_shells, cylinders, step
                     cparams.get('hole_depth_top', 0),
                     cparams.get('hole_fillet_radius', 0),
                     hole_r_bottom,
-                    outer_ch, outer_fr,
+                    top_ch, top_fr, btm_ch, btm_fr,
                     px, py, pz, step_schema, step_unit,
                     1 if enable_logging else 0)
             else:
@@ -3039,7 +3049,7 @@ def _export_parametric_sync(filepath, bottom_shells, top_shells, cylinders, step
                     cparams.get('hole_fillet_radius', 0),
                     hole_r_bottom,
                     hole_pos,
-                    outer_ch, outer_fr,
+                    top_ch, top_fr, btm_ch, btm_fr,
                     px, py, pz, step_schema, step_unit,
                     1 if enable_logging else 0)
         else:
@@ -3336,8 +3346,10 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
     elif obj_type == 'cylinder_blind_hole':
         hole_pos = cparams.get('hole_position', 'top')
         hole_r_bottom = cparams.get('hole_radius_bottom', 0.0)
-        outer_ch = cparams.get('outer_chamfer', 0.0)
-        outer_fr = cparams.get('outer_fillet', 0.0)
+        top_ch = cparams.get('top_chamfer', 0.0)
+        top_fr = cparams.get('top_fillet', 0.0)
+        btm_ch = cparams.get('bottom_chamfer', 0.0)
+        btm_fr = cparams.get('bottom_fillet', 0.0)
         if hole_pos == 'both':
             return cpp_exporter.export_cylinder_dual_blind_holes_step(
                 temp_file, cparams['radius'], cparams['height'],
@@ -3345,7 +3357,7 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
                 cparams.get('hole_depth_top', 0),
                 cparams.get('hole_fillet_radius', 0),
                 hole_r_bottom,
-                outer_ch, outer_fr,
+                top_ch, top_fr, btm_ch, btm_fr,
                 px, py, pz,
                 data['step_schema'], data['step_unit'],
                 1 if data['enable_logging'] else 0)
@@ -3355,7 +3367,7 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
             cparams.get('hole_fillet_radius', 0),
             hole_r_bottom,
             hole_pos,
-            outer_ch, outer_fr,
+            top_ch, top_fr, btm_ch, btm_fr,
             px, py, pz,
             data['step_schema'], data['step_unit'],
             1 if data['enable_logging'] else 0)

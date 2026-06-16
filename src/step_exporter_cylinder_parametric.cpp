@@ -1009,7 +1009,8 @@ TopoDS_Shape create_cone_stepped_hole_parametric(
 TopoDS_Shape create_cylinder_with_blind_hole_solid_parametric(
     double radius, double height, double hole_radius, double hole_depth,
     double hole_fillet_radius, bool is_bottom, double hole_radius_bottom,
-    double outer_chamfer, double outer_fillet)
+    double top_chamfer, double top_fillet,
+    double bottom_chamfer, double bottom_fillet)
 {
     double halfH = height / 2.0;
     double ext = 5.0; // 超出量确保切割完整
@@ -1021,28 +1022,32 @@ TopoDS_Shape create_cylinder_with_blind_hole_solid_parametric(
     if (solid.IsNull()) return TopoDS_Shape();
 
     // === Apply outer edge chamfer/fillet FIRST (on clean cylinder) ===
-    // Chamfer/fillet is always on TOP edge (or both), not related to hole position
-    double outer_edge_sz = std::max(outer_chamfer, outer_fillet);
-    if (outer_edge_sz > 0.001) {
+    auto apply_edge_feature = [&](bool at_top) {
+        double ch = at_top ? top_chamfer : bottom_chamfer;
+        double fr = at_top ? top_fillet : bottom_fillet;
+        double sz = std::max(ch, fr);
+        if (sz <= 0.001) return;
+        bool is_chamfer = (ch > 0.001);
         std::vector<TopoDS_Edge> topEdges, bottomEdges;
         find_circular_edges(solid, topEdges, bottomEdges);
-        // Apply to top edge
-        const auto& targetEdges = topEdges;
+        const auto& targetEdges = at_top ? topEdges : bottomEdges;
         for (const auto& e : targetEdges) {
             double er = BRepAdaptor_Curve(e).Circle().Radius();
             if (std::abs(er - radius) / radius < 0.15) {
-                if (outer_chamfer > 0.001) {
+                if (is_chamfer) {
                     BRepFilletAPI_MakeChamfer cm(solid);
-                    cm.Add(outer_chamfer, e); cm.Build();
+                    cm.Add(ch, e); cm.Build();
                     if (cm.IsDone()) { solid = shape_to_solid(cm.Shape()); break; }
                 } else {
                     BRepFilletAPI_MakeFillet fm(solid);
-                    fm.Add(outer_fillet, e); fm.Build();
+                    fm.Add(fr, e); fm.Build();
                     if (fm.IsDone()) { solid = shape_to_solid(fm.Shape()); break; }
                 }
             }
         }
-    }
+    };
+    apply_edge_feature(true);   // top
+    apply_edge_feature(false);  // bottom
 
     // Create hole cutter: cone if tapered, cylinder if straight
     double cutterH = hole_depth + ext;
@@ -1191,33 +1196,41 @@ TopoDS_Shape create_cylinder_with_dual_blind_holes_solid_parametric(
     double hole_radius,
     double bottom_hole_depth, double top_hole_depth,
     double hole_fillet_radius, double hole_radius_bottom,
-    double outer_chamfer, double outer_fillet)
+    double top_chamfer, double top_fillet,
+    double bottom_chamfer, double bottom_fillet)
 {
     TopoDS_Shape outerShape = create_cylinder_solid_parametric(radius, height);
     if (outerShape.IsNull()) return TopoDS_Shape();
     TopoDS_Solid solid = shape_to_solid(outerShape);
     if (solid.IsNull()) return TopoDS_Shape();
 
-    // === Apply outer edge chamfer/fillet FIRST (on clean cylinder, always at top) ===
-    double outer_edge_sz = std::max(outer_chamfer, outer_fillet);
-    if (outer_edge_sz > 0.001) {
+    // === Apply outer edge chamfer/fillet FIRST (on clean cylinder) ===
+    auto apply_edge_feature = [&](bool at_top) {
+        double ch = at_top ? top_chamfer : bottom_chamfer;
+        double fr = at_top ? top_fillet : bottom_fillet;
+        double sz = std::max(ch, fr);
+        if (sz <= 0.001) return;
+        bool is_chamfer = (ch > 0.001);
         std::vector<TopoDS_Edge> topEdges, bottomEdges;
         find_circular_edges(solid, topEdges, bottomEdges);
-        for (const auto& e : topEdges) {
+        const auto& targetEdges = at_top ? topEdges : bottomEdges;
+        for (const auto& e : targetEdges) {
             double er = BRepAdaptor_Curve(e).Circle().Radius();
             if (std::abs(er - radius) / radius < 0.15) {
-                if (outer_chamfer > 0.001) {
+                if (is_chamfer) {
                     BRepFilletAPI_MakeChamfer cm(solid);
-                    cm.Add(outer_chamfer, e); cm.Build();
+                    cm.Add(ch, e); cm.Build();
                     if (cm.IsDone()) { solid = shape_to_solid(cm.Shape()); break; }
                 } else {
                     BRepFilletAPI_MakeFillet fm(solid);
-                    fm.Add(outer_fillet, e); fm.Build();
+                    fm.Add(fr, e); fm.Build();
                     if (fm.IsDone()) { solid = shape_to_solid(fm.Shape()); break; }
                 }
             }
         }
-    }
+    };
+    apply_edge_feature(true);   // top
+    apply_edge_feature(false);  // bottom
 
     double ext = std::max(radius * 0.001, 0.0001);
     double halfH = height / 2.0;

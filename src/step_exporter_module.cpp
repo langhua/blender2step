@@ -1212,30 +1212,34 @@ PyObject* export_cylinder_blind_hole_step(PyObject* self, PyObject* args) {
     double hole_fillet_radius = 0.0;
     double hole_radius_bottom = 0.0;
     const char* hole_position = "top";
+    double outer_chamfer = 0.0, outer_fillet = 0.0;
     double pos_x = 0.0, pos_y = 0.0, pos_z = 0.0;
     const char* step_schema = "AP214IS";
     const char* unit = "MILLIMETER";
     int enable_logging = 1;
 
-    if (!PyArg_ParseTuple(args, "sddddd|dsdddssi",
+    if (!PyArg_ParseTuple(args, "sdddddd|sdddddssi",
                           &filename,
                           &radius, &height, &hole_radius, &hole_depth,
                           &hole_fillet_radius,
                           &hole_radius_bottom,
                           &hole_position,
+                          &outer_chamfer, &outer_fillet,
                           &pos_x, &pos_y, &pos_z,
                           &step_schema, &unit, &enable_logging)) {
         PyErr_SetString(PyExc_TypeError,
             "export_cylinder_blind_hole_step() expected: filename, radius, height, "
             "hole_radius, hole_depth, [hole_fillet_radius], [hole_radius_bottom], "
-            "[hole_position], [pos_x], [pos_y], [pos_z], [step_schema], [unit], [enable_logging]");
+            "[hole_position], [outer_chamfer], [outer_fillet], "
+            "[pos_x], [pos_y], [pos_z], [step_schema], [unit], [enable_logging]");
         return NULL;
     }
 
     try {
         bool is_bottom = (strcmp(hole_position, "bottom") == 0);
         TopoDS_Shape shape = create_cylinder_with_blind_hole_solid_parametric(
-            radius, height, hole_radius, hole_depth, hole_fillet_radius, is_bottom, hole_radius_bottom);
+            radius, height, hole_radius, hole_depth, hole_fillet_radius, is_bottom, hole_radius_bottom,
+            outer_chamfer, outer_fillet);
         if (shape.IsNull()) { Py_RETURN_FALSE; }
 
         if (pos_x != 0.0 || pos_y != 0.0 || pos_z != 0.0) {
@@ -1271,35 +1275,31 @@ PyObject* export_cylinder_dual_blind_holes_step(PyObject* self, PyObject* args) 
     double radius, height, hole_radius, bottom_hole_depth, top_hole_depth;
     double hole_fillet_radius = 0.0;
     double hole_radius_bottom = 0.0;
+    double outer_chamfer = 0.0, outer_fillet = 0.0;
     double pos_x = 0.0, pos_y = 0.0, pos_z = 0.0;
     const char* step_schema = "AP214IS";
     const char* unit = "MILLIMETER";
     int enable_logging = 1;
 
-    if (!PyArg_ParseTuple(args, "sdddddd|ddddssi",
+    if (!PyArg_ParseTuple(args, "sdddddddd|ddddssi",
                           &filename,
                           &radius, &height, &hole_radius, &bottom_hole_depth, &top_hole_depth,
                           &hole_fillet_radius,
                           &hole_radius_bottom,
+                          &outer_chamfer, &outer_fillet,
                           &pos_x, &pos_y, &pos_z,
                           &step_schema, &unit, &enable_logging)) {
         PyErr_SetString(PyExc_TypeError,
             "export_cylinder_dual_blind_holes_step() expected: filename, radius, height, hole_radius, "
             "bottom_hole_depth, top_hole_depth, [hole_fillet_radius], [hole_radius_bottom], "
-            "[pos_x], [pos_y], [pos_z], [step_schema], [unit], [enable_logging]");
+            "[outer_chamfer], [outer_fillet], [pos_x], [pos_y], [pos_z], [step_schema], [unit], [enable_logging]");
         return NULL;
     }
 
     try {
-        std::cout << "[STEP Exporter] Exporting cylinder with dual blind holes: r=" << radius
-                  << " h=" << height << " hole_r=" << hole_radius
-                  << " btm_d=" << bottom_hole_depth << " top_d=" << top_hole_depth
-                  << " fillet_r=" << hole_fillet_radius
-                  << (hole_radius_bottom > 0.001 ? " hole_r_bottom=" + std::to_string(hole_radius_bottom) : "")
-                  << std::endl;
         TopoDS_Shape shape = create_cylinder_with_dual_blind_holes_solid_parametric(
             radius, height, hole_radius, bottom_hole_depth, top_hole_depth,
-            hole_fillet_radius, hole_radius_bottom);
+            hole_fillet_radius, hole_radius_bottom, outer_chamfer, outer_fillet);
         if (shape.IsNull()) { Py_RETURN_FALSE; }
 
         if (pos_x != 0.0 || pos_y != 0.0 || pos_z != 0.0) {

@@ -1741,16 +1741,28 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
     hole_depth = 0.0
     hole_depth_top = 0.0  # 双端孔时顶部孔深
     
-    # 通孔检测：检查对象上存储的自定义属性（hole_type 或 hole_position）
+    # 通孔/盲孔检测：检查对象上存储的自定义属性
     stored_hole_type = obj.get('hole_type') if hasattr(obj, 'get') else None
     stored_pos = obj.get('hole_position') if hasattr(obj, 'get') else None
     log_to_file(f"[STEP Exporter]   Stored props: hole_type={stored_hole_type}, hole_position={stored_pos}, is_tapered={obj.get('hole_is_tapered') if hasattr(obj,'get') else None}")
     if stored_hole_type == 'through' or stored_pos == 'through':
         hole_pattern_detected = True
         hole_position = 'through'
-        hole_radius = body_radius * 0.5  # rough estimate, will be overridden by stored properties later
-        hole_depth = height  # 全高
-        log_to_file(f"[STEP Exporter]   Through-hole detected from stored property, skipping blind hole analysis")
+        stored_hr = obj.get('hole_radius') if hasattr(obj, 'get') else None
+        hole_radius = stored_hr if stored_hr else body_radius * 0.35
+        hole_depth = height
+        log_to_file(f"[STEP Exporter]   Through-hole detected from stored property, r={hole_radius:.4f}")
+    elif stored_pos in ('top', 'bottom', 'both'):
+        hole_pattern_detected = True
+        hole_position = stored_pos
+        # 使用存储的孔半径和深度，避免 mesh z-level 分析误差
+        stored_hr = obj.get('hole_radius') if hasattr(obj, 'get') else None
+        stored_hd = obj.get('hole_depth') if hasattr(obj, 'get') else None
+        hole_radius = stored_hr if stored_hr else body_radius * 0.35
+        hole_depth = stored_hd if stored_hd else height * 0.5
+        if stored_pos == 'both':
+            hole_depth_top = hole_depth
+        log_to_file(f"[STEP Exporter]   Blind hole from stored property: pos={stored_pos} r={hole_radius:.4f} d={hole_depth:.4f}")
     
     # 强制圆柱体判断：两端半径接近且顶部干净时，即使中间z层缺少外壁顶点
     # （如盲孔圆柱的外壁仅有顶部/底部顶点），也认定为恒定半径圆柱。
@@ -2514,25 +2526,51 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                 }
             
             log_to_file(f"[STEP Exporter]   -> hollow_cylinder (through-hole)! r={body_radius_for_export:.3f} h={height:.3f} inner_r={hole_radius:.3f}")
+            # 读取存储的倒角/圆角参数
+            stored_chamfer_type = obj.get('chamfer_type') if hasattr(obj, 'get') else None
+            stored_chamfer_sz = obj.get('chamfer_size', 0) if hasattr(obj, 'get') else 0
+            stored_fillet_r = obj.get('fillet_radius_edge', 0) if hasattr(obj, 'get') else 0
+            stored_orig_r = obj.get('cylinder_original_radius', 0) if hasattr(obj, 'get') else 0
+            top_feat = 'none'; top_sz = 0.0; bot_feat = 'none'; bot_sz = 0.0
+            if stored_orig_r > 0:
+                body_radius_for_export = stored_orig_r * 0.001  # mm -> m
+            if stored_chamfer_type == 'chamfer':
+                top_feat = 'chamfer'; top_sz = stored_chamfer_sz * 0.001
+            elif stored_chamfer_type == 'fillet':
+                top_feat = 'fillet'; top_sz = stored_fillet_r * 0.001
+            elif stored_chamfer_type == 'chamfer_both':
+                top_feat = 'chamfer'; top_sz = stored_chamfer_sz * 0.001
+                bot_feat = 'chamfer'; bot_sz = stored_chamfer_sz * 0.001
+            elif stored_chamfer_type == 'fillet_both':
+                top_feat = 'fillet'; top_sz = stored_fillet_r * 0.001
+                bot_feat = 'fillet'; bot_sz = stored_fillet_r * 0.001
+            elif stored_chamfer_type == 'chamfer_fillet':
+                top_feat = 'chamfer'; top_sz = stored_chamfer_sz * 0.001
+                bot_feat = 'fillet'; bot_sz = stored_fillet_r * 0.001
+            log_to_file(f"[STEP Exporter]   outer feature: type={stored_chamfer_type} top={top_feat}/{top_sz:.4f} bot={bot_feat}/{bot_sz:.4f}")
+            has_outer_feature = (stored_chamfer_type in ('chamfer','fillet','chamfer_both','chamfer_fillet','fillet_both'))
+            obj_type_out = 'hollow_cylinder_tapered' if has_outer_feature else 'hollow_cylinder'
             result = {
-                'obj_type': 'hollow_cylinder',
+                'obj_type': obj_type_out,
                 'outer_radius': body_radius_for_export * S,
-                'inner_radius': hole_radius * S,
+                'inner_radius_top': hole_radius * S,
+                'inner_radius_bottom': hole_radius * S,
                 'height': height * S,
+                'hole_fillet_radius': hole_fillet_r,
                 'pos_x': pos_x * S,
                 'pos_y': pos_y * S,
                 'pos_z': pos_z * S,
-                'top_feature': None,
-                'top_feature_size': 0.0,
-                'bottom_feature': None,
-                'bottom_feature_size': 0.0,
+                'top_feature': top_feat,
+                'top_feature_size': top_sz * S,
+                'bottom_feature': bot_feat,
+                'bottom_feature_size': bot_sz * S,
             }
-            if hole_fillet_r > 0:
+            if hole_fillet_r > 0 and not has_outer_feature:
                 result['top_feature'] = 'fillet'
                 result['top_feature_size'] = hole_fillet_r
                 result['bottom_feature'] = 'fillet'
                 result['bottom_feature_size'] = hole_fillet_r
-                result['obj_type'] = 'hollow_cylinder_fillet'
+                result['obj_type'] = 'hollow_cylinder_tapered'
             return result
         if hole_position == 'bottom':
             # 底部盲孔：如果 hole_radius/hole_depth 已在检测阶段设置，直接使用
@@ -2634,14 +2672,28 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                 hole_radius = hole_r_opening_stored
             hole_r_bottom = hole_r_end_stored
             log_to_file(f"[STEP Exporter]   tapered hole: opening_r={hole_radius:.3f} end_r={hole_r_bottom:.3f}")
+        # 读取存储的倒角/圆角参数（用于外缘）
+        stored_ctype = obj.get('chamfer_type') if hasattr(obj, 'get') else None
+        stored_csz = obj.get('chamfer_size', 0) if hasattr(obj, 'get') else 0
+        stored_fr = obj.get('fillet_radius_edge', 0) if hasattr(obj, 'get') else 0
+        stored_orig_r = obj.get('cylinder_original_radius', 0) if hasattr(obj, 'get') else 0
+        outer_chamfer = 0.0; outer_fillet = 0.0
+        if stored_ctype in ('chamfer', 'chamfer_both', 'chamfer_fillet'):
+            outer_chamfer = stored_csz * 0.001  # mm -> m
+        if stored_ctype in ('fillet', 'fillet_both', 'chamfer_fillet'):
+            outer_fillet = stored_fr * 0.001
+        if stored_orig_r > 0:
+            body_radius_for_export = stored_orig_r * 0.001  # use original radius
         result = {
             'obj_type': 'cylinder_blind_hole',
             'radius': body_radius_for_export * S,
             'height': height * S,
             'hole_radius': hole_radius * S,
             'hole_depth': hole_depth * S,
-            'hole_fillet_radius': hole_fillet_r,  # 已为 mm，无需缩放
+            'hole_fillet_radius': hole_fillet_r,
             'hole_position': hole_position,
+            'outer_chamfer': outer_chamfer * S,
+            'outer_fillet': outer_fillet * S,
             'pos_x': pos_x * S,
             'pos_y': pos_y * S,
             'pos_z': pos_z * S,
@@ -2968,6 +3020,8 @@ def _export_parametric_sync(filepath, bottom_shells, top_shells, cylinders, step
         elif obj_type == 'cylinder_blind_hole':
             hole_pos = cparams.get('hole_position', 'top')
             hole_r_bottom = cparams.get('hole_radius_bottom', 0.0)
+            outer_ch = cparams.get('outer_chamfer', 0.0)
+            outer_fr = cparams.get('outer_fillet', 0.0)
             if hole_pos == 'both':
                 success = cpp_exporter.export_cylinder_dual_blind_holes_step(
                     temp_file, cparams['radius'], cparams['height'],
@@ -2975,6 +3029,7 @@ def _export_parametric_sync(filepath, bottom_shells, top_shells, cylinders, step
                     cparams.get('hole_depth_top', 0),
                     cparams.get('hole_fillet_radius', 0),
                     hole_r_bottom,
+                    outer_ch, outer_fr,
                     px, py, pz, step_schema, step_unit,
                     1 if enable_logging else 0)
             else:
@@ -2984,6 +3039,7 @@ def _export_parametric_sync(filepath, bottom_shells, top_shells, cylinders, step
                     cparams.get('hole_fillet_radius', 0),
                     hole_r_bottom,
                     hole_pos,
+                    outer_ch, outer_fr,
                     px, py, pz, step_schema, step_unit,
                     1 if enable_logging else 0)
         else:
@@ -3280,6 +3336,8 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
     elif obj_type == 'cylinder_blind_hole':
         hole_pos = cparams.get('hole_position', 'top')
         hole_r_bottom = cparams.get('hole_radius_bottom', 0.0)
+        outer_ch = cparams.get('outer_chamfer', 0.0)
+        outer_fr = cparams.get('outer_fillet', 0.0)
         if hole_pos == 'both':
             return cpp_exporter.export_cylinder_dual_blind_holes_step(
                 temp_file, cparams['radius'], cparams['height'],
@@ -3287,6 +3345,7 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
                 cparams.get('hole_depth_top', 0),
                 cparams.get('hole_fillet_radius', 0),
                 hole_r_bottom,
+                outer_ch, outer_fr,
                 px, py, pz,
                 data['step_schema'], data['step_unit'],
                 1 if data['enable_logging'] else 0)
@@ -3296,6 +3355,7 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
             cparams.get('hole_fillet_radius', 0),
             hole_r_bottom,
             hole_pos,
+            outer_ch, outer_fr,
             px, py, pz,
             data['step_schema'], data['step_unit'],
             1 if data['enable_logging'] else 0)

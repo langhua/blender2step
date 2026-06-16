@@ -68,17 +68,17 @@ except Exception as e:
     _g.MODULE_LOAD_ERROR = f"Error: {e}"
 
 # ====================== Sub-module imports ======================
-from .core import mesh_data
-from .analysis import shape_analysis
-from .export import export_parametric
-from .ui import operators
+from . import core
+from . import analysis
+from . import export
+from . import ui
 
 # Re-export for backward compatibility
 from .core.utils import log_to_file, _verify_step_shell, _merge_step_files, _merge_log_files
 from .core.mesh_data import _get_mesh_data_enhanced, _get_curve_data_enhanced
-from .analysis.shape_analysis import _analyze_top_shell_from_mesh, _analyze_bottom_shell_from_mesh, _analyze_cylinder_from_mesh
-from .export.export_parametric import _export_parametric_sync, _export_bottom_shells_sync, _export_cylinder_staged, _parametric_export_staged, _export_worker_timer
-from .ui.operators import (
+from .analysis import _analyze_top_shell_from_mesh, _analyze_bottom_shell_from_mesh, _analyze_cylinder_from_mesh
+from .export import _export_parametric_sync, _export_bottom_shells_sync, _export_cylinder_staged, _parametric_export_staged, _export_worker_timer
+from .ui import (
     STEP_EXPORTER_OT_export_enhanced, STEP_EXPORTER_PT_main_panel,
     STEP_EXPORTER_OT_create_top_shell, STEP_EXPORTER_OT_create_bottom_shell,
     STEP_EXPORTER_OT_create_cylinder, STEP_EXPORTER_OT_create_parametric_cylinder,

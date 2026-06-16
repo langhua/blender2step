@@ -95,7 +95,7 @@ def _analyze_top_shell_from_mesh(obj, context, scale):
             std_dist = math.sqrt(sum((d - mean_dist)**2 for d in bot_dists) / len(bot_dists))
             circularity = std_dist / mean_dist  # 越小越圆
             log_to_file(f"[STEP Exporter] Top-shell circularity: std={std_dist:.4f}, circ={circularity:.4f}")
-            if circularity < 0.05:
+            if circularity < 0.02:
                 log_to_file(f"[STEP Exporter] Bottom contour is circular (circ={circularity:.3f}) → NOT a top shell (likely cylinder)")
                 bm.free()
                 return None

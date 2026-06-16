@@ -10,7 +10,7 @@ class STEP_EXPORTER_OT_create_top_shell(Operator):
     bl_options = {'REGISTER', 'UNDO'}
     
     def execute(self, context):
-        script_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'test', 'create_top_shell.py')
+        script_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'examples', 'create_top_shell.py')
         exec(compile(open(script_path).read(), script_path, 'exec'), {'__name__': '__main__', '__file__': script_path})
         self.report({'INFO'}, "Top shell created")
         return {'FINISHED'}
@@ -23,7 +23,7 @@ class STEP_EXPORTER_OT_create_bottom_shell(Operator):
     bl_options = {'REGISTER', 'UNDO'}
     
     def execute(self, context):
-        script_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'test', 'create_bottom_shell.py')
+        script_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'examples', 'create_bottom_shell.py')
         old_argv = sys.argv
         try:
             sys.argv = [sys.argv[0] if len(sys.argv) > 0 else "", "with_holes"]
@@ -41,7 +41,7 @@ class STEP_EXPORTER_OT_create_cylinder(Operator):
     bl_options = {'REGISTER', 'UNDO'}
     
     def execute(self, context):
-        script_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'test', 'create_mesh_cylinder.py')
+        script_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'examples', 'create_mesh_cylinder.py')
         exec(compile(open(script_path).read(), script_path, 'exec'), {'__name__': '__main__', '__file__': script_path})
         self.report({'INFO'}, "Cylinder created")
         return {'FINISHED'}

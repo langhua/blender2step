@@ -102,6 +102,13 @@ TopoDS_Shape create_cylinder_with_dual_blind_holes_solid_parametric(double radiu
                                                                      double hole_radius_bottom = 0.0,
                                                                      double top_chamfer = 0.0, double top_fillet = 0.0,
                                                                      double bottom_chamfer = 0.0, double bottom_fillet = 0.0);
+// Cone with blind hole (single end)
+TopoDS_Shape create_cone_with_blind_hole_solid_parametric(double bottom_radius, double top_radius, double height,
+                                                           double hole_radius, double hole_depth,
+                                                           double hole_fillet_radius, bool is_bottom = false,
+                                                           double hole_radius_bottom = 0.0,
+                                                           double top_chamfer = 0.0, double top_fillet = 0.0,
+                                                           double bottom_chamfer = 0.0, double bottom_fillet = 0.0);
 TopoDS_Shape create_cone_chamfer_solid_parametric(double bottom_radius, double top_radius, double height,
                                                    double chamfer_size, int is_top_chamfer);
 TopoDS_Shape create_cone_chamfer_solid_parametric_both(double bottom_radius, double top_radius, double height,

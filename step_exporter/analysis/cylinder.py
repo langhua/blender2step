@@ -624,6 +624,9 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                 # Check if this is a cone (radius changes significantly) vs blind hole
                 if top_radius < bottom_radius * 0.85:
                     log_to_file(f"[STEP Exporter]   Cone detected (bR={bottom_radius:.3f} tR={top_radius:.3f}), not blind hole")
+                    if hole_pattern_detected:
+                        log_to_file(f"[STEP Exporter]   Cone+hole detected, using cone_blind_hole path")
+                        _is_cone_body = True  # flag for result construction
                 else:
                     log_to_file(f"[STEP Exporter]   Hole pattern detected: bottom_r={bottom_radius:.3f} above_r={above_r_first:.3f}, treating as cylinder")
                     cylindrical_body = True
@@ -1414,6 +1417,31 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
             top_ch = stored_csz * 0.001; btm_fr = stored_fr * 0.001
         if stored_orig_r > 0:
             body_radius_for_export = stored_orig_r * 0.001  # use original radius
+
+        # Check if cone body + blind hole (use cone_blind_hole C++ path)
+        radius_ratio = top_radius / bottom_radius if bottom_radius > 0 else 1.0
+        if radius_ratio < 0.85 and hole_position != 'both':
+            result = {
+                'obj_type': 'cone_blind_hole',
+                'bottom_radius': bottom_radius * S,
+                'top_radius': top_radius * S,
+                'height': height * S,
+                'hole_radius': hole_radius * S,
+                'hole_depth': hole_depth * S,
+                'hole_fillet_radius': hole_fillet_r,
+                'hole_position': hole_position,
+                'top_chamfer': top_ch * S,
+                'top_fillet': top_fr * S,
+                'bottom_chamfer': btm_ch * S,
+                'bottom_fillet': btm_fr * S,
+                'pos_x': pos_x * S,
+                'pos_y': pos_y * S,
+                'pos_z': pos_z * S,
+            }
+            if hole_is_tapered and hole_r_bottom > 0:
+                result['hole_radius_bottom'] = hole_r_bottom * S
+            return result
+
         result = {
             'obj_type': 'cylinder_blind_hole',
             'radius': body_radius_for_export * S,

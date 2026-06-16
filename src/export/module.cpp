@@ -1336,6 +1336,68 @@ PyObject* export_cylinder_dual_blind_holes_step(PyObject* self, PyObject* args) 
     }
 }
 
+// 参数化导出：带盲孔的锥体
+PyObject* export_cone_blind_hole_step(PyObject* self, PyObject* args) {
+    const char* filename;
+    double bottom_radius, top_radius, height, hole_radius, hole_depth;
+    double hole_fillet_radius = 0.0;
+    double hole_radius_bottom = 0.0;
+    const char* hole_position = "top";
+    double top_chamfer = 0.0, top_fillet = 0.0;
+    double bottom_chamfer = 0.0, bottom_fillet = 0.0;
+    double pos_x = 0.0, pos_y = 0.0, pos_z = 0.0;
+    const char* step_schema = "AP214IS";
+    const char* unit = "MILLIMETER";
+    int enable_logging = 1;
+
+    if (!PyArg_ParseTuple(args, "sddddd|ddsdddddddssi",
+                          &filename,
+                          &bottom_radius, &top_radius, &height,
+                          &hole_radius, &hole_depth,
+                          &hole_fillet_radius,
+                          &hole_radius_bottom,
+                          &hole_position,
+                          &top_chamfer, &top_fillet,
+                          &bottom_chamfer, &bottom_fillet,
+                          &pos_x, &pos_y, &pos_z,
+                          &step_schema, &unit, &enable_logging)) {
+        PyErr_SetString(PyExc_TypeError,
+            "export_cone_blind_hole_step() expected: filename, bottom_radius, top_radius, height, "
+            "hole_radius, hole_depth, [hole_fillet_radius], [hole_radius_bottom], "
+            "[hole_position], [top_chamfer], [top_fillet], [bottom_chamfer], [bottom_fillet], "
+            "[pos_x], [pos_y], [pos_z], [step_schema], [unit], [enable_logging]");
+        return NULL;
+    }
+
+    try {
+        bool is_bottom = (strcmp(hole_position, "bottom") == 0);
+        TopoDS_Shape shape = create_cone_with_blind_hole_solid_parametric(
+            bottom_radius, top_radius, height,
+            hole_radius, hole_depth, hole_fillet_radius, is_bottom, hole_radius_bottom,
+            top_chamfer, top_fillet, bottom_chamfer, bottom_fillet);
+        if (shape.IsNull()) { Py_RETURN_FALSE; }
+
+        if (pos_x != 0.0 || pos_y != 0.0 || pos_z != 0.0) {
+            gp_Trsf trsf;
+            trsf.SetTranslation(gp_Vec(pos_x, pos_y, pos_z));
+            shape = BRepBuilderAPI_Transform(shape, trsf).Shape();
+        }
+
+        STEPControl_Writer writer;
+        Interface_Static::SetCVal("write.step.schema", step_schema);
+        if (writer.Transfer(shape, STEPControl_AsIs) != IFSelect_RetDone) { Py_RETURN_FALSE; }
+        if (writer.Write(filename) != IFSelect_RetDone) { Py_RETURN_FALSE; }
+
+        Py_RETURN_TRUE;
+    } catch (Standard_Failure& e) {
+        std::cerr << "[STEP Exporter] OCC error: " << e.GetMessageString() << std::endl;
+        Py_RETURN_FALSE;
+    } catch (...) {
+        std::cerr << "[STEP Exporter] Unknown error" << std::endl;
+        Py_RETURN_FALSE;
+    }
+}
+
 // 参数化导出：带底部倒角和顶部圆角的锥体
 PyObject* export_cone_chamfer_fillet_step(PyObject* self, PyObject* args) {
     const char* filename;
@@ -2130,6 +2192,7 @@ static PyMethodDef step_exporter_methods[] = {
     {"export_cylinder_fillet_both_step", export_cylinder_fillet_both_step, METH_VARARGS, "Export parametric cylinder with top and bottom fillets to STEP"},
     {"export_cylinder_blind_hole_step", export_cylinder_blind_hole_step, METH_VARARGS, "Export parametric cylinder with blind hole to STEP"},
     {"export_cylinder_dual_blind_holes_step", export_cylinder_dual_blind_holes_step, METH_VARARGS, "Export parametric cylinder with dual blind holes to STEP"},
+    {"export_cone_blind_hole_step", export_cone_blind_hole_step, METH_VARARGS, "Export parametric cone with blind hole to STEP"},
     {"export_cone_chamfer_fillet_step", export_cone_chamfer_fillet_step, METH_VARARGS, "Export parametric cone with bottom chamfer and top fillet to STEP"},
     {"export_cone_chamfer_step_both", export_cone_chamfer_step_both, METH_VARARGS, "Export parametric cone with top and bottom chamfers to STEP"},
     {"export_cone_fillet_step_both", export_cone_fillet_step_both, METH_VARARGS, "Export parametric cone with top and bottom fillets to STEP"},

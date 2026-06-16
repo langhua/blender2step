@@ -1,0 +1,17 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Build step_exporter Release",
+			"type": "shell",
+			"command": "cmake --build build --config Release",
+			"group": "build"
+		},
+		{
+			"label": "Build step_exporter Release",
+			"type": "shell",
+			"command": "cmake --build build --config Release",
+			"group": "build"
+		}
+	]
+}

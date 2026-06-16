@@ -256,6 +256,24 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
             px, py, pz,
             data['step_schema'], data['step_unit'],
             1 if data['enable_logging'] else 0)
+    elif obj_type == 'cone_blind_hole':
+        hole_pos = cparams.get('hole_position', 'top')
+        hole_r_bottom = cparams.get('hole_radius_bottom', 0.0)
+        top_ch = cparams.get('top_chamfer', 0.0)
+        top_fr = cparams.get('top_fillet', 0.0)
+        btm_ch = cparams.get('bottom_chamfer', 0.0)
+        btm_fr = cparams.get('bottom_fillet', 0.0)
+        return cpp_exporter.export_cone_blind_hole_step(
+            temp_file, cparams['bottom_radius'], cparams['top_radius'],
+            cparams['height'],
+            cparams['hole_radius'], cparams['hole_depth'],
+            cparams.get('hole_fillet_radius', 0),
+            hole_r_bottom,
+            hole_pos,
+            top_ch, top_fr, btm_ch, btm_fr,
+            px, py, pz,
+            data['step_schema'], data['step_unit'],
+            1 if data['enable_logging'] else 0)
     elif obj_type == 'cone_chamfer_fillet':
         # Determine feature order: C++ expects chamfer_size first, fillet_radius second
         # reversed=0: bottom chamfer + top fillet; reversed=1: bottom fillet + top chamfer

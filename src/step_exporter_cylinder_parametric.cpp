@@ -1131,6 +1131,17 @@ TopoDS_Shape create_cylinder_with_blind_hole_solid_parametric(
         cutter = BRepBuilderAPI_Transform(cutter, trsf).Shape();
     }
 
+    // Translate cone to correct position on cylinder
+    // Top hole: opening at z=+halfH, bottom at z=+halfH-hole_depth
+    // Bottom hole: opening at z=-halfH, bottom at z=-halfH+hole_depth
+    {
+        double translateZ = halfH - hole_depth;
+        if (is_bottom) translateZ = -translateZ;
+        gp_Trsf trsfT;
+        trsfT.SetTranslation(gp_Vec(0, 0, translateZ));
+        cutter = BRepBuilderAPI_Transform(cutter, trsfT).Shape();
+    }
+
     BRepAlgoAPI_Cut cutT(solid, shape_to_solid(cutter));
     if (!cutT.IsDone()) {
         std::cerr << "[STEP Exporter] Tapered blind hole cut failed" << std::endl;

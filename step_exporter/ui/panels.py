@@ -2,6 +2,7 @@
 import bpy
 from bpy.types import Panel
 from ..core import _globals as _g
+from .export_operator import STEP_EXPORTER_OT_export_enhanced
 
 def menu_func_export_enhanced(self, context):
     self.layout.operator(STEP_EXPORTER_OT_export_enhanced.bl_idname, text="STEP Enhanced (.step)")

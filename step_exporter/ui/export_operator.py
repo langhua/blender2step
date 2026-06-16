@@ -191,10 +191,13 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
             
             # 在modal handler中执行分阶段导出，确保UI能刷新进度条
             try:
-                next_tick = _parametric_export_staged()
-                if next_tick is None:
-                    # 导出完成
-                    _g._export_complete = True
+                if _g._bottom_shell_export_data:
+                    next_tick = _parametric_export_staged()
+                    if next_tick is None:
+                        _g._export_complete = True
+                        return {'PASS_THROUGH'}
+                else:
+                    # Regular export path: let app timer handle it
                     return {'PASS_THROUGH'}
                 
                 # 强制刷新3D视图UI以确保进度条更新可见

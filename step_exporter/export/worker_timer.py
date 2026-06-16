@@ -2,6 +2,7 @@
 import sys, os, math, time
 import bpy
 from ..core.utils import log_to_file
+from ..core.mesh_data import _get_mesh_data_enhanced, _get_curve_data_enhanced
 from .progress_report import start_progress, update_progress, end_progress
 from ..core import _globals as _g
 

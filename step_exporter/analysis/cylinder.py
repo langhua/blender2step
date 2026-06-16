@@ -197,7 +197,15 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
         log_to_file(f"[STEP Exporter] Bottom variance high (std_b={std_b:.4f}), top is clean (r={top_radius:.4f}), using top radius for cylinder body")
     
     # 标准差不大于平均半径的 15% 才认为是规则圆柱
-    if std_b > bottom_radius * 0.15 or std_t > top_radius * 0.15:
+    # 有存储属性（孔/倒角）时放宽：这些特征会导致Z层混合，方差偏高
+    has_stored_features = (obj.get('hole_type') or obj.get('hole_position') or obj.get('chamfer_type')) if hasattr(obj, 'get') else False
+    if has_stored_features:
+        # 放宽到 50%，允许倒角+孔洞导致的顶点混合
+        if std_b > bottom_radius * 0.5 and std_t > top_radius * 0.5:
+            log_to_file(f"[STEP Exporter] Radius variance too high even with stored features: std_b={std_b:.3f} std_t={std_t:.3f}")
+            bm.free()
+            return None
+    elif std_b > bottom_radius * 0.15 or std_t > top_radius * 0.15:
         log_to_file(f"[STEP Exporter] Radius variance too high: std_b={std_b:.3f} std_t={std_t:.3f}")
         bm.free()
         return None
@@ -419,6 +427,24 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
         if r is not None:
             log_to_file(f"[STEP Exporter]     z={zl:.6f} r={r:.6f} max_r={max_r:.6f}")
     log_to_file(f"[STEP Exporter]   detect: bottom_r={bottom_radius:.6f} top_r={top_radius:.6f} height={height:.6f}")
+    
+    # 底部孔洞修正：如果底部因盲孔/通孔干扰被错误设为顶部半径，用max_r恢复真实锥体底部半径
+    early_stored_pos = obj.get('hole_position') if hasattr(obj, 'get') else None
+    early_stored_type = obj.get('hole_type') if hasattr(obj, 'get') else None
+    has_bottom_hole = early_stored_pos in ('bottom', 'both') or early_stored_type == 'through'
+    if has_bottom_hole and len(sorted_z) > 0:
+        bottom_max_r = z_max_radius.get(sorted_z[0], 0)
+        top_max_r = z_max_radius.get(sorted_z[-1], 0)
+        if bottom_max_r > top_radius * 1.15:
+            old_bottom = bottom_radius
+            bottom_radius = bottom_max_r
+            # Also fix top_radius if top max_r differs (through-hole may affect both ends)
+            if top_max_r > top_radius * 1.02 and top_max_r > 0:
+                old_top = top_radius
+                top_radius = top_max_r
+                log_to_file(f"[STEP Exporter]   Hole max_r correction: b={old_bottom:.4f}->{bottom_radius:.4f} t={old_top:.4f}->{top_radius:.4f} (ratio={top_radius/bottom_radius:.3f})")
+            else:
+                log_to_file(f"[STEP Exporter]   Bottom hole max_r correction: {old_bottom:.4f} -> {bottom_radius:.4f} (top_r={top_radius:.4f}, ratio={top_radius/bottom_radius:.3f})")
     
     # 1. 从底部向上找恒定半径区域 → 判断是否为圆柱本体
     body_end_z = sorted_z[0]
@@ -1058,6 +1084,20 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
     if bottom_transition_zls and not bottom_feature:
         bottom_feature, bottom_feature_size = _classify_transition(bottom_transition_zls)
     
+    # 锥体倒角/圆角修正：过渡区边缘半径 = 锥体本体半径（非倒角面半径）
+    # 顶部过渡层升序排列，第一个是本体边界（最高完整锥体半径）
+    if not cylindrical_body and top_feature and top_transition_zls:
+        body_top_r = z_radius_data.get(top_transition_zls[0], None)
+        if body_top_r is not None and body_top_r > top_radius * 1.02:
+            log_to_file(f"[STEP Exporter]   Cone top radius corrected via chamfer: {top_radius:.4f} -> {body_top_r:.4f}")
+            top_radius = body_top_r
+    # 底部过渡层升序排列，最后一个是本体边界
+    if not cylindrical_body and bottom_feature and bottom_transition_zls:
+        body_bot_r = z_radius_data.get(bottom_transition_zls[-1], None)
+        if body_bot_r is not None and body_bot_r > bottom_radius * 1.02:
+            log_to_file(f"[STEP Exporter]   Cone bottom radius corrected via chamfer: {bottom_radius:.4f} -> {body_bot_r:.4f}")
+            bottom_radius = body_bot_r
+    
     # 对于圆柱本体有过渡 → 修正 radius 为 body_radius
     if cylindrical_body and (top_feature or bottom_feature):
         # 单侧过渡：用无过渡侧的极端Z层半径作为本体半径
@@ -1071,7 +1111,8 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
     
     # 回退检测：锥体分析检测到两端过渡特征，但 cylindrical_body 仍为 False
     # 当两端过渡区边缘半径接近时（差距<5%），推断为圆柱本体（非锥体）
-    if not cylindrical_body and top_feature and bottom_feature:
+    # 注意：已检测到孔洞时跳过，避免将孔洞开口误判为倒角/圆角过渡
+    if not cylindrical_body and not hole_pattern_detected and top_feature and bottom_feature:
         if top_transition_zls and bottom_transition_zls:
             # 过渡区z层级为升序排列
             # 顶部过渡：升序，第一个是本体边界，最后一个是极端
@@ -1209,6 +1250,49 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
         if hole_position == 'through':
             # 通孔：使用空心圆柱体（直孔或锥形孔）
             body_radius_for_export = max(bottom_radius, top_radius)
+            
+            # 锥体通孔：如果上下半径不同，使用空心锥体
+            if abs(bottom_radius - top_radius) / max(bottom_radius, 0.01) > 0.05:
+                hole_fillet_r = obj.get('hole_fillet_radius', 0.0) if hasattr(obj, 'get') else 0.0
+                # 收集倒角/圆角参数
+                # 优先使用存储的倒角类型，其次用 mesh 检测
+                # C++ 层通过边缘半径过滤，孔口假倒角不会被误施加到外壁
+                top_ch = 0.0; top_fr = 0.0; btm_ch = 0.0; btm_fr = 0.0
+                stored_ctype = obj.get('chamfer_type') if hasattr(obj, 'get') else None
+                if stored_ctype in ('chamfer', 'chamfer_both', 'chamfer_fillet'):
+                    top_ch = (obj.get('chamfer_size', 0) if hasattr(obj, 'get') else 0) * 0.001
+                elif stored_ctype in ('fillet', 'fillet_both'):
+                    top_fr = (obj.get('fillet_radius_edge', 0) if hasattr(obj, 'get') else 0) * 0.001
+                if stored_ctype in ('chamfer_both',):
+                    btm_ch = top_ch
+                elif stored_ctype in ('fillet_both',):
+                    btm_fr = top_fr
+                elif stored_ctype == 'chamfer_fillet':
+                    btm_fr = (obj.get('fillet_radius_edge', 0) if hasattr(obj, 'get') else 0) * 0.001
+                # Mesh fallback: only for features NOT from stored properties
+                if not stored_ctype:
+                    if top_feature == 'chamfer': top_ch = top_feature_size
+                    elif top_feature == 'fillet': top_fr = top_feature_size
+                    if bottom_feature == 'chamfer': btm_ch = bottom_feature_size
+                    elif bottom_feature == 'fillet': btm_fr = bottom_feature_size
+                log_to_file(f"[STEP Exporter]   -> hollow_cone! bR={bottom_radius:.3f} tR={top_radius:.3f} h={height:.3f} inner_r={hole_radius:.3f} top_ch={top_ch:.4f} top_fr={top_fr:.4f} btm_ch={btm_ch:.4f} btm_fr={btm_fr:.4f}")
+                return {
+                    'obj_type': 'hollow_cone',
+                    'outer_bottom_radius': bottom_radius * S,
+                    'outer_top_radius': top_radius * S,
+                    'inner_bottom_radius': hole_radius * S,
+                    'inner_top_radius': hole_radius * S,
+                    'height': height * S,
+                    'hole_fillet_radius': hole_fillet_r,
+                    'top_chamfer': top_ch * S,
+                    'top_fillet': top_fr * S,
+                    'bottom_chamfer': btm_ch * S,
+                    'bottom_fillet': btm_fr * S,
+                    'pos_x': pos_x * S,
+                    'pos_y': pos_y * S,
+                    'pos_z': pos_z * S,
+                }
+            
             hole_fillet_r = obj.get('hole_fillet_radius', 0.0) if hasattr(obj, 'get') else 0.0
             hole_is_tapered_thru = obj.get('hole_is_tapered', False) if hasattr(obj, 'get') else False
             opening_r = obj.get('hole_opening_radius', hole_radius) if hasattr(obj, 'get') else hole_radius
@@ -1415,12 +1499,22 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
             top_fr = stored_fr * 0.001; btm_fr = stored_fr * 0.001
         elif stored_ctype == 'chamfer_fillet':
             top_ch = stored_csz * 0.001; btm_fr = stored_fr * 0.001
+        # Fallback: use mesh-detected chamfer/fillet when no stored type
+        if stored_ctype is None:
+            if top_feature == 'chamfer':
+                top_ch = top_feature_size
+            elif top_feature == 'fillet':
+                top_fr = top_feature_size
+            if bottom_feature == 'chamfer':
+                btm_ch = bottom_feature_size
+            elif bottom_feature == 'fillet':
+                btm_fr = bottom_feature_size
         if stored_orig_r > 0:
             body_radius_for_export = stored_orig_r * 0.001  # use original radius
 
         # Check if cone body + blind hole (use cone_blind_hole C++ path)
         radius_ratio = top_radius / bottom_radius if bottom_radius > 0 else 1.0
-        if radius_ratio < 0.85 and hole_position != 'both':
+        if radius_ratio < 0.85:
             result = {
                 'obj_type': 'cone_blind_hole',
                 'bottom_radius': bottom_radius * S,
@@ -1438,6 +1532,8 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                 'pos_y': pos_y * S,
                 'pos_z': pos_z * S,
             }
+            if hole_position == 'both':
+                result['hole_depth_top'] = hole_depth_top * S
             if hole_is_tapered and hole_r_bottom > 0:
                 result['hole_radius_bottom'] = hole_r_bottom * S
             return result

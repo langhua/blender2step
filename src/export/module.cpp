@@ -883,16 +883,22 @@ PyObject* export_hollow_cone_step(PyObject* self, PyObject* args) {
     const char* unit = "MILLIMETER";
     int enable_logging = 1;
 
-    if (!PyArg_ParseTuple(args, "sddddd|dddssi",
+    double top_chamfer = 0.0, top_fillet = 0.0;
+    double bottom_chamfer = 0.0, bottom_fillet = 0.0;
+
+    if (!PyArg_ParseTuple(args, "sddddd|dddddddssi",
                           &filename,
                           &outer_bottom_radius, &outer_top_radius,
                           &inner_bottom_radius, &inner_top_radius,
                           &height,
+                          &top_chamfer, &top_fillet,
+                          &bottom_chamfer, &bottom_fillet,
                           &pos_x, &pos_y, &pos_z,
                           &step_schema, &unit, &enable_logging)) {
         PyErr_SetString(PyExc_TypeError,
             "export_hollow_cone_step() expected: filename, outer_bottom_radius, outer_top_radius, "
             "inner_bottom_radius, inner_top_radius, height, "
+            "[top_chamfer], [top_fillet], [bottom_chamfer], [bottom_fillet], "
             "[pos_x], [pos_y], [pos_z], [step_schema], [unit], [enable_logging]");
         return NULL;
     }
@@ -900,10 +906,13 @@ PyObject* export_hollow_cone_step(PyObject* self, PyObject* args) {
     try {
         std::cout << "[STEP Exporter] Exporting parametric hollow cone: oBR=" << outer_bottom_radius
                   << " oTR=" << outer_top_radius << " iBR=" << inner_bottom_radius
-                  << " iTR=" << inner_top_radius << " h=" << height << std::endl;
+                  << " iTR=" << inner_top_radius << " h=" << height
+                  << " top_ch=" << top_chamfer << " top_fr=" << top_fillet
+                  << " btm_ch=" << bottom_chamfer << " btm_fr=" << bottom_fillet << std::endl;
         TopoDS_Shape shape = create_hollow_cone_solid_parametric(
             outer_bottom_radius, outer_top_radius,
-            inner_bottom_radius, inner_top_radius, height);
+            inner_bottom_radius, inner_top_radius, height,
+            top_chamfer, top_fillet, bottom_chamfer, bottom_fillet);
         if (shape.IsNull()) {
             std::cerr << "[STEP Exporter] Failed to create hollow cone" << std::endl;
             Py_RETURN_FALSE;
@@ -1342,6 +1351,7 @@ PyObject* export_cone_blind_hole_step(PyObject* self, PyObject* args) {
     double bottom_radius, top_radius, height, hole_radius, hole_depth;
     double hole_fillet_radius = 0.0;
     double hole_radius_bottom = 0.0;
+    double hole_depth_top = 0.0;
     const char* hole_position = "top";
     double top_chamfer = 0.0, top_fillet = 0.0;
     double bottom_chamfer = 0.0, bottom_fillet = 0.0;
@@ -1350,12 +1360,13 @@ PyObject* export_cone_blind_hole_step(PyObject* self, PyObject* args) {
     const char* unit = "MILLIMETER";
     int enable_logging = 1;
 
-    if (!PyArg_ParseTuple(args, "sddddd|ddsdddddddssi",
+    if (!PyArg_ParseTuple(args, "sddddd|dddsdddddddssi",
                           &filename,
                           &bottom_radius, &top_radius, &height,
                           &hole_radius, &hole_depth,
                           &hole_fillet_radius,
                           &hole_radius_bottom,
+                          &hole_depth_top,
                           &hole_position,
                           &top_chamfer, &top_fillet,
                           &bottom_chamfer, &bottom_fillet,
@@ -1364,16 +1375,20 @@ PyObject* export_cone_blind_hole_step(PyObject* self, PyObject* args) {
         PyErr_SetString(PyExc_TypeError,
             "export_cone_blind_hole_step() expected: filename, bottom_radius, top_radius, height, "
             "hole_radius, hole_depth, [hole_fillet_radius], [hole_radius_bottom], "
-            "[hole_position], [top_chamfer], [top_fillet], [bottom_chamfer], [bottom_fillet], "
+            "[hole_depth_top], [hole_position], [top_chamfer], [top_fillet], "
+            "[bottom_chamfer], [bottom_fillet], "
             "[pos_x], [pos_y], [pos_z], [step_schema], [unit], [enable_logging]");
         return NULL;
     }
 
     try {
         bool is_bottom = (strcmp(hole_position, "bottom") == 0);
+        bool is_both = (strcmp(hole_position, "both") == 0);
+        double hd_top = is_both ? hole_depth_top : 0.0;
         TopoDS_Shape shape = create_cone_with_blind_hole_solid_parametric(
             bottom_radius, top_radius, height,
-            hole_radius, hole_depth, hole_fillet_radius, is_bottom, hole_radius_bottom,
+            hole_radius, hole_depth, hd_top,
+            hole_fillet_radius, is_bottom, hole_radius_bottom,
             top_chamfer, top_fillet, bottom_chamfer, bottom_fillet);
         if (shape.IsNull()) { Py_RETURN_FALSE; }
 

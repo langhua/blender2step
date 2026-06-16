@@ -170,7 +170,10 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
             temp_file,
             cparams['outer_bottom_radius'], cparams['outer_top_radius'],
             cparams['inner_bottom_radius'], cparams['inner_top_radius'],
-            cparams['height'], px, py, pz,
+            cparams['height'],
+            cparams.get('top_chamfer', 0), cparams.get('top_fillet', 0),
+            cparams.get('bottom_chamfer', 0), cparams.get('bottom_fillet', 0),
+            px, py, pz,
             data['step_schema'], data['step_unit'],
             1 if data['enable_logging'] else 0)
     elif obj_type == 'cylinder_chamfer':
@@ -259,6 +262,7 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
     elif obj_type == 'cone_blind_hole':
         hole_pos = cparams.get('hole_position', 'top')
         hole_r_bottom = cparams.get('hole_radius_bottom', 0.0)
+        hole_d_top = cparams.get('hole_depth_top', cparams.get('hole_depth', 0))
         top_ch = cparams.get('top_chamfer', 0.0)
         top_fr = cparams.get('top_fillet', 0.0)
         btm_ch = cparams.get('bottom_chamfer', 0.0)
@@ -269,6 +273,7 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
             cparams['hole_radius'], cparams['hole_depth'],
             cparams.get('hole_fillet_radius', 0),
             hole_r_bottom,
+            hole_d_top,
             hole_pos,
             top_ch, top_fr, btm_ch, btm_fr,
             px, py, pz,

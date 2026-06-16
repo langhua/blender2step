@@ -70,7 +70,9 @@ TopoDS_Shape create_cone_solid_parametric(double bottom_radius, double top_radiu
 TopoDS_Shape create_hollow_cylinder_solid_parametric(double outer_radius, double inner_radius, double height);
 TopoDS_Shape create_hollow_cone_solid_parametric(double outer_bottom_radius, double outer_top_radius,
                                                   double inner_bottom_radius, double inner_top_radius,
-                                                  double height);
+                                                  double height,
+                                                  double top_chamfer = 0.0, double top_fillet = 0.0,
+                                                  double bottom_chamfer = 0.0, double bottom_fillet = 0.0);
 TopoDS_Shape create_cylinder_chamfer_solid_parametric(double radius, double height, double chamfer_size);
 TopoDS_Shape create_cylinder_fillet_solid_parametric(double radius, double height, double fillet_radius);
 TopoDS_Shape create_cylinder_chamfer_fillet_solid_parametric(double radius, double height,
@@ -105,7 +107,8 @@ TopoDS_Shape create_cylinder_with_dual_blind_holes_solid_parametric(double radiu
 // Cone with blind hole (single end)
 TopoDS_Shape create_cone_with_blind_hole_solid_parametric(double bottom_radius, double top_radius, double height,
                                                            double hole_radius, double hole_depth,
-                                                           double hole_fillet_radius, bool is_bottom = false,
+                                                           double hole_depth_top = 0.0,
+                                                           double hole_fillet_radius = 0.0, bool is_bottom = false,
                                                            double hole_radius_bottom = 0.0,
                                                            double top_chamfer = 0.0, double top_fillet = 0.0,
                                                            double bottom_chamfer = 0.0, double bottom_fillet = 0.0);

@@ -173,6 +173,7 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
             cparams['height'],
             cparams.get('top_chamfer', 0), cparams.get('top_fillet', 0),
             cparams.get('bottom_chamfer', 0), cparams.get('bottom_fillet', 0),
+            cparams.get('hole_fillet_radius', 0),
             px, py, pz,
             data['step_schema'], data['step_unit'],
             1 if data['enable_logging'] else 0)

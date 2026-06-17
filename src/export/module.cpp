@@ -885,20 +885,23 @@ PyObject* export_hollow_cone_step(PyObject* self, PyObject* args) {
 
     double top_chamfer = 0.0, top_fillet = 0.0;
     double bottom_chamfer = 0.0, bottom_fillet = 0.0;
+    double hole_fillet_radius = 0.0;
 
-    if (!PyArg_ParseTuple(args, "sddddd|dddddddssi",
+    if (!PyArg_ParseTuple(args, "sddddd|ddddddddssi",
                           &filename,
                           &outer_bottom_radius, &outer_top_radius,
                           &inner_bottom_radius, &inner_top_radius,
                           &height,
                           &top_chamfer, &top_fillet,
                           &bottom_chamfer, &bottom_fillet,
+                          &hole_fillet_radius,
                           &pos_x, &pos_y, &pos_z,
                           &step_schema, &unit, &enable_logging)) {
         PyErr_SetString(PyExc_TypeError,
             "export_hollow_cone_step() expected: filename, outer_bottom_radius, outer_top_radius, "
             "inner_bottom_radius, inner_top_radius, height, "
             "[top_chamfer], [top_fillet], [bottom_chamfer], [bottom_fillet], "
+            "[hole_fillet_radius], "
             "[pos_x], [pos_y], [pos_z], [step_schema], [unit], [enable_logging]");
         return NULL;
     }
@@ -908,11 +911,13 @@ PyObject* export_hollow_cone_step(PyObject* self, PyObject* args) {
                   << " oTR=" << outer_top_radius << " iBR=" << inner_bottom_radius
                   << " iTR=" << inner_top_radius << " h=" << height
                   << " top_ch=" << top_chamfer << " top_fr=" << top_fillet
-                  << " btm_ch=" << bottom_chamfer << " btm_fr=" << bottom_fillet << std::endl;
+                  << " btm_ch=" << bottom_chamfer << " btm_fr=" << bottom_fillet
+                  << " hfr=" << hole_fillet_radius << std::endl;
         TopoDS_Shape shape = create_hollow_cone_solid_parametric(
             outer_bottom_radius, outer_top_radius,
             inner_bottom_radius, inner_top_radius, height,
-            top_chamfer, top_fillet, bottom_chamfer, bottom_fillet);
+            top_chamfer, top_fillet, bottom_chamfer, bottom_fillet,
+            hole_fillet_radius);
         if (shape.IsNull()) {
             std::cerr << "[STEP Exporter] Failed to create hollow cone" << std::endl;
             Py_RETURN_FALSE;

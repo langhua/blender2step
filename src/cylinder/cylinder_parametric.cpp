@@ -183,7 +183,8 @@ TopoDS_Shape create_hollow_cone_solid_parametric(
     double inner_bottom_radius, double inner_top_radius,
     double height,
     double top_chamfer, double top_fillet,
-    double bottom_chamfer, double bottom_fillet)
+    double bottom_chamfer, double bottom_fillet,
+    double hole_fillet_radius)
 {
     // 创建外锥体
     TopoDS_Shape outerShape = create_cone_solid_parametric(outer_bottom_radius, outer_top_radius, height);
@@ -247,18 +248,48 @@ TopoDS_Shape create_hollow_cone_solid_parametric(
         return TopoDS_Shape();
     }
 
-    std::cout << "[STEP Exporter] Created parametric hollow cone: oBR=" << outer_bottom_radius
-              << " oTR=" << outer_top_radius << " iBR=" << inner_bottom_radius
-              << " iTR=" << inner_top_radius << " h=" << height << std::endl;
-    
     TopoDS_Shape result = cutMaker.Shape();
-    if (result.ShapeType() != TopAbs_SOLID) {
+    TopoDS_Solid solid;
+    if (result.ShapeType() == TopAbs_SOLID) {
+        solid = TopoDS::Solid(result);
+    } else {
         BRepBuilderAPI_MakeSolid sm;
         for (TopExp_Explorer exp(result, TopAbs_SHELL); exp.More(); exp.Next())
             sm.Add(TopoDS::Shell(exp.Current()));
-        if (sm.IsDone()) return sm.Solid();
+        if (sm.IsDone()) solid = sm.Solid(); else return TopoDS_Shape();
     }
-    return result;
+
+    // Apply hole fillets (inner edges at top and bottom)
+    if (hole_fillet_radius > 0.001) {
+        double halfH = height / 2.0;
+        BRepFilletAPI_MakeFillet fm(solid);
+        int added = 0;
+        for (TopExp_Explorer exp(solid, TopAbs_EDGE); exp.More(); exp.Next()) {
+            TopoDS_Edge e = TopoDS::Edge(exp.Current());
+            BRepAdaptor_Curve c(e);
+            if (c.GetType() != GeomAbs_Circle) continue;
+            gp_Circ cr = c.Circle();
+            gp_Pnt ct = cr.Location();
+            if (std::abs(ct.X()) > 0.01 || std::abs(ct.Y()) > 0.01) continue;
+            // Inner hole edges: radius matches inner radius, near top/bottom faces
+            double avgInnerR = (inner_bottom_radius + inner_top_radius) / 2.0;
+            if (std::abs(cr.Radius() - avgInnerR) / std::max(avgInnerR, 0.001) > 0.3) continue;
+            if (std::abs(std::abs(ct.Z()) - halfH) < 0.5) {
+                fm.Add(hole_fillet_radius, e);
+                added++;
+            }
+        }
+        if (added > 0) {
+            fm.Build();
+            if (fm.IsDone()) { solid = shape_to_solid(fm.Shape()); }
+        }
+    }
+
+    std::cout << "[STEP Exporter] Created parametric hollow cone: oBR=" << outer_bottom_radius
+              << " oTR=" << outer_top_radius << " iBR=" << inner_bottom_radius
+              << " iTR=" << inner_top_radius << " h=" << height
+              << " hfr=" << hole_fillet_radius << std::endl;
+    return solid;
 }
 
 // ====================== Edge finding helpers ======================
@@ -1487,21 +1518,29 @@ TopoDS_Shape create_cone_with_blind_hole_solid_parametric(
         if (hd <= 0.001) return true;
         bool is_tapered = (hole_radius_bottom > 0.001 && std::abs(hole_radius_bottom - hole_radius) > 0.0001);
         TopoDS_Shape cutter;
-        double cutterH = hd + 5.0;
+        double cutterH = hd + 5.0;  // extended height for clean cut
         if (!is_tapered) {
             cutter = create_cylinder_solid_parametric(hole_radius, cutterH);
+            if (cutter.IsNull()) return false;
+            double cz = at_bottom ? (-halfH + hd - cutterH / 2.0) : (halfH - hd + cutterH / 2.0);
+            gp_Trsf trsf;
+            trsf.SetTranslation(gp_Vec(0, 0, cz));
+            cutter = BRepBuilderAPI_Transform(cutter, trsf).Shape();
         } else {
-            double r1 = at_bottom ? hole_radius_bottom : hole_radius;
-            double r2 = at_bottom ? hole_radius : hole_radius_bottom;
+            // Tapered cone cutter: r_bottom (at hole bottom) -> r_top (at opening face)
+            // BRepPrimAPI_MakeCone creates from z=0 (ax2 origin) to z=hd
+            double r_bottom = at_bottom ? hole_radius : hole_radius_bottom;  // at hole bottom end
+            double r_top = at_bottom ? hole_radius_bottom : hole_radius;      // at opening face
             gp_Ax2 ax2(gp_Pnt(0, 0, 0), gp::DZ());
-            BRepPrimAPI_MakeCone cm(ax2, r1, r2, hd);
+            BRepPrimAPI_MakeCone cm(ax2, r_bottom, r_top, hd);
             cutter = cm.Shape();
+            if (cutter.IsNull()) return false;
+            // Position: MakeCone bottom (z=0) at hole bottom
+            double cz = at_bottom ? -halfH : (halfH - hd);
+            gp_Trsf trsf;
+            trsf.SetTranslation(gp_Vec(0, 0, cz));
+            cutter = BRepBuilderAPI_Transform(cutter, trsf).Shape();
         }
-        if (cutter.IsNull()) return false;
-        double cz = at_bottom ? (-halfH + hd - cutterH / 2.0) : (halfH - hd + cutterH / 2.0);
-        gp_Trsf trsf;
-        trsf.SetTranslation(gp_Vec(0, 0, cz));
-        cutter = BRepBuilderAPI_Transform(cutter, trsf).Shape();
         BRepAlgoAPI_Cut cut(s, shape_to_solid(cutter));
         if (!cut.IsDone()) { std::cerr << "[STEP Exporter] Cone blind hole cut failed" << std::endl; return false; }
         s = shape_to_solid(cut.Shape());

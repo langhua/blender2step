@@ -112,7 +112,13 @@ TopoDS_Shape create_cone_solid_parametric(double bottom_radius, double top_radiu
 
     // 圆锥体以原点为中心，Z轴为轴向
     // BRepPrimAPI_MakeCone 从 (0,0,0) 向上延伸 height
+    // 注意：MakeCone 要求 bottom_radius >= top_radius
     gp_Ax2 ax2(gp_Pnt(0, 0, -height / 2.0), gp::DZ());
+    if (bottom_radius < top_radius) {
+        // 逆向锥体：交换半径并反转轴向，使宽端在顶部、窄端在底部
+        std::swap(bottom_radius, top_radius);
+        ax2 = gp_Ax2(gp_Pnt(0, 0, height / 2.0), -gp::DZ());
+    }
     BRepPrimAPI_MakeCone maker(ax2, bottom_radius, top_radius, height);
     TopoDS_Shape shape = maker.Shape();
     if (shape.IsNull()) {

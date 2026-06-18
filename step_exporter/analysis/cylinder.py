@@ -489,21 +489,20 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
     stored_hole_type = obj.get('hole_type') if hasattr(obj, 'get') else None
     stored_pos = obj.get('hole_position') if hasattr(obj, 'get') else None
     log_to_file(f"[STEP Exporter]   Stored props: hole_type={stored_hole_type}, hole_position={stored_pos}, is_tapered={obj.get('hole_is_tapered') if hasattr(obj,'get') else None}")
-    if stored_hole_type == 'through' or stored_pos == 'through':
+    if stored_hole_type in ('through', 'through_inv') or stored_pos == 'through':
         hole_pattern_detected = True
         hole_position = 'through'
         stored_hr = obj.get('hole_radius') if hasattr(obj, 'get') else None
-        hole_radius = stored_hr if stored_hr else body_radius * 0.35
+        hole_radius = stored_hr * 0.001 if stored_hr else body_radius * 0.35
         hole_depth = height
         log_to_file(f"[STEP Exporter]   Through-hole detected from stored property, r={hole_radius:.4f}")
     elif stored_pos in ('top', 'bottom', 'both'):
         hole_pattern_detected = True
         hole_position = stored_pos
-        # 使用存储的孔半径和深度，避免 mesh z-level 分析误差
         stored_hr = obj.get('hole_radius') if hasattr(obj, 'get') else None
         stored_hd = obj.get('hole_depth') if hasattr(obj, 'get') else None
-        hole_radius = stored_hr if stored_hr else body_radius * 0.35
-        hole_depth = stored_hd if stored_hd else height * 0.5
+        hole_radius = stored_hr * 0.001 if stored_hr else body_radius * 0.35
+        hole_depth = stored_hd * 0.001 if stored_hd else height * 0.5
         if stored_pos == 'both':
             hole_depth_top = hole_depth
         log_to_file(f"[STEP Exporter]   Blind hole from stored property: pos={stored_pos} r={hole_radius:.4f} d={hole_depth:.4f}")
@@ -616,8 +615,8 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                     hole_radius = inner_r
                     stored_depth = obj.get('hole_depth') if hasattr(obj, 'get') else None
                     if stored_depth is not None:
-                        hole_depth = stored_depth
-                        hole_depth_top = stored_depth
+                        hole_depth = stored_depth * 0.001  # mm → m
+                        hole_depth_top = stored_depth * 0.001  # mm → m
                         log_to_file(f"[STEP Exporter]   Using stored hole_depth={stored_depth:.4f} from object property")
                     else:
                         hole_depth = bottom_hole_d
@@ -1286,11 +1285,17 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                 inner_bot_r = hole_radius * S
                 inner_top_r = hole_radius * S
                 if hole_is_tapered_thru:
-                    opening_r = (obj.get('hole_opening_radius', hole_radius) if hasattr(obj, 'get') else hole_radius) * S
-                    end_r = (obj.get('hole_end_radius', hole_radius) if hasattr(obj, 'get') else hole_radius) * S
-                    # Opening is at top, end is at bottom for through-holes from top
-                    inner_top_r = max(opening_r, end_r)
-                    inner_bot_r = min(opening_r, end_r)
+                    # Stored properties are already in mm; hole_radius is in meters
+                    opening_r = (obj.get('hole_opening_radius', hole_radius * S) if hasattr(obj, 'get') else hole_radius * S)
+                    end_r = (obj.get('hole_end_radius', hole_radius * S) if hasattr(obj, 'get') else hole_radius * S)
+                    # For through_inv: opening is at top, end is at bottom
+                    if stored_hole_type == 'through_inv':
+                        inner_bot_r = end_r
+                        inner_top_r = opening_r
+                    else:
+                        inner_bot_r = opening_r
+                        inner_top_r = end_r
+                    # C++ create_cone_solid_parametric handles R1<R2 by axis flip
                     log_to_file(f"[STEP Exporter]   tapered through-hole: inner_top={inner_top_r:.3f} inner_bot={inner_bot_r:.3f}")
                 return {
                     'obj_type': 'hollow_cone',
@@ -1503,9 +1508,10 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
         if hole_is_tapered:
             # 使用存储的精确半径覆盖 mesh 扫描值
             # hole_opening_radius=开口半径(较大), hole_end_radius=孔底半径(较小)
+            # Stored properties are in mm; hole_radius is in meters
             if hole_r_opening_stored > 0:
-                hole_radius = hole_r_opening_stored
-            hole_r_bottom = hole_r_end_stored
+                hole_radius = hole_r_opening_stored * 0.001  # mm → m
+            hole_r_bottom = hole_r_end_stored * 0.001  # mm → m
             log_to_file(f"[STEP Exporter]   tapered hole: opening_r={hole_radius:.3f} end_r={hole_r_bottom:.3f}")
         # 读取存储的倒角/圆角参数（用于外缘）
         stored_ctype = obj.get('chamfer_type') if hasattr(obj, 'get') else None
@@ -1517,25 +1523,19 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
             top_ch = stored_csz * 0.001
         elif stored_ctype == 'fillet':
             top_fr = stored_fr * 0.001
+        elif stored_ctype == 'bottom_chamfer':
+            btm_ch = stored_csz * 0.001
+        elif stored_ctype == 'bottom_fillet':
+            btm_fr = stored_fr * 0.001
         elif stored_ctype == 'chamfer_both':
             top_ch = stored_csz * 0.001; btm_ch = stored_csz * 0.001
         elif stored_ctype == 'fillet_both':
             top_fr = stored_fr * 0.001; btm_fr = stored_fr * 0.001
         elif stored_ctype == 'chamfer_fillet':
             top_ch = stored_csz * 0.001; btm_fr = stored_fr * 0.001
-        # Fallback: use mesh-detected chamfer/fillet when no stored type
-        # Skip for hole ends (hole opening mimics chamfer/fillet)
-        if stored_ctype is None:
-            if hole_position != 'top' and hole_position != 'both':
-                if top_feature == 'chamfer':
-                    top_ch = top_feature_size
-                elif top_feature == 'fillet':
-                    top_fr = top_feature_size
-            if hole_position != 'bottom' and hole_position != 'both':
-                if bottom_feature == 'chamfer':
-                    btm_ch = bottom_feature_size
-                elif bottom_feature == 'fillet':
-                    btm_fr = bottom_feature_size
+        # NOTE: mesh-detected chamfer/fillet are unreliable near hole openings.
+        # stored_ctype from gallery creation fully specifies all edge features.
+        # No fallback to mesh-detected values.
         if stored_orig_r > 0:
             body_radius_for_export = stored_orig_r * 0.001  # use original radius
 

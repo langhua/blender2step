@@ -30,3 +30,4 @@ test*.txt
 step_exporter.dir/
 build_occt/
 vcpkg_overlay/
+test_output/

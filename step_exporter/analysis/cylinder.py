@@ -1265,8 +1265,12 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                     top_fr = (obj.get('fillet_radius_edge', 0) if hasattr(obj, 'get') else 0) * 0.001
                 if stored_ctype in ('chamfer_both',):
                     btm_ch = top_ch
+                elif stored_ctype in ('bottom_chamfer',):
+                    btm_ch = (obj.get('chamfer_size', 0) if hasattr(obj, 'get') else 0) * 0.001
                 elif stored_ctype in ('fillet_both',):
                     btm_fr = top_fr
+                elif stored_ctype in ('bottom_fillet',):
+                    btm_fr = (obj.get('fillet_radius_edge', 0) if hasattr(obj, 'get') else 0) * 0.001
                 elif stored_ctype == 'chamfer_fillet':
                     btm_fr = (obj.get('fillet_radius_edge', 0) if hasattr(obj, 'get') else 0) * 0.001
                 # Mesh fallback: only for features NOT from stored properties
@@ -1322,6 +1326,10 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                     top_feature = 'chamfer'; top_feature_size = stored_chamfer_sz * 0.001
                 elif stored_chamfer_type == 'fillet':
                     top_feature = 'fillet'; top_feature_size = stored_fillet_r * 0.001
+                elif stored_chamfer_type == 'bottom_chamfer':
+                    bottom_feature = 'chamfer'; bottom_feature_size = stored_chamfer_sz * 0.001
+                elif stored_chamfer_type == 'bottom_fillet':
+                    bottom_feature = 'fillet'; bottom_feature_size = stored_fillet_r * 0.001
                 elif stored_chamfer_type == 'chamfer_both':
                     top_feature = 'chamfer'; top_feature_size = stored_chamfer_sz * 0.001
                     bottom_feature = 'chamfer'; bottom_feature_size = stored_chamfer_sz * 0.001
@@ -1361,6 +1369,10 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                 top_feat = 'chamfer'; top_sz = stored_chamfer_sz * 0.001
             elif stored_chamfer_type == 'fillet':
                 top_feat = 'fillet'; top_sz = stored_fillet_r * 0.001
+            elif stored_chamfer_type == 'bottom_chamfer':
+                bot_feat = 'chamfer'; bot_sz = stored_chamfer_sz * 0.001
+            elif stored_chamfer_type == 'bottom_fillet':
+                bot_feat = 'fillet'; bot_sz = stored_fillet_r * 0.001
             elif stored_chamfer_type == 'chamfer_both':
                 top_feat = 'chamfer'; top_sz = stored_chamfer_sz * 0.001
                 bot_feat = 'chamfer'; bot_sz = stored_chamfer_sz * 0.001
@@ -1371,7 +1383,7 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                 top_feat = 'chamfer'; top_sz = stored_chamfer_sz * 0.001
                 bot_feat = 'fillet'; bot_sz = stored_fillet_r * 0.001
             log_to_file(f"[STEP Exporter]   outer feature: type={stored_chamfer_type} top={top_feat}/{top_sz:.4f} bot={bot_feat}/{bot_sz:.4f}")
-            has_outer_feature = (stored_chamfer_type in ('chamfer','fillet','chamfer_both','chamfer_fillet','fillet_both'))
+            has_outer_feature = (stored_chamfer_type in ('chamfer','fillet','chamfer_both','chamfer_fillet','fillet_both','bottom_chamfer','bottom_fillet'))
             obj_type_out = 'hollow_cylinder_tapered' if has_outer_feature else 'hollow_cylinder'
             result = {
                 'obj_type': obj_type_out,

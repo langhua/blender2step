@@ -47,5 +47,18 @@ class STEP_EXPORTER_OT_create_cylinder(Operator):
         return {'FINISHED'}
 
 
+class STEP_EXPORTER_OT_create_cone_gallery(Operator):
+    """创建锥体组合样品（倒角/圆角/孔）"""
+    bl_idname = "step_exporter.create_cone_gallery"
+    bl_label = "Create Cone Gallery"
+    bl_options = {'REGISTER', 'UNDO'}
+    
+    def execute(self, context):
+        script_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'examples', 'create_cone_gallery.py')
+        exec(compile(open(script_path).read(), script_path, 'exec'), {'__name__': '__main__', '__file__': script_path})
+        self.report({'INFO'}, "Cone gallery created")
+        return {'FINISHED'}
+
+
 # ====================== 参数化圆柱生成 Operator ======================
 

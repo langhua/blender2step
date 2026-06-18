@@ -12,7 +12,8 @@ def clear():
     bpy.ops.object.delete(use_global=False)
 
 def _add_edge_bevel_mod(obj, chamfer_type, fillet_r):
-    """Add a Bevel modifier (vertex-group-limited) — applied AFTER Boolean."""
+    """Add a Bevel modifier (weight-limited) — applied AFTER Boolean.
+    Uses edge bevel weights, which persist correctly through Boolean operations."""
     import bmesh
     ctype = str(chamfer_type)
     is_chamfer = 'chamfer' in ctype
@@ -24,29 +25,32 @@ def _add_edge_bevel_mod(obj, chamfer_type, fillet_r):
     if not (top or bottom):
         return
 
-    # Create vertex group for outer edges (before hole Boolean)
-    vg = obj.vertex_groups.new(name="outer_edges")
     hh = H / 2.0
 
     bpy.context.view_layer.objects.active = obj
     bpy.ops.object.mode_set(mode='EDIT')
-    bpy.ops.mesh.select_mode(type='VERT')
+    bpy.ops.mesh.select_mode(type='EDGE')
     bpy.ops.mesh.select_all(action='DESELECT')
+
     bm = bmesh.from_edit_mesh(obj.data)
-    bm.verts.ensure_lookup_table()
-    for v in bm.verts:
-        if (top and v.co.z > hh * 0.8) or (bottom and v.co.z < -hh * 0.8):
-            v.select = True
+    bm.edges.ensure_lookup_table()
+    for e in bm.edges:
+        v1z = e.verts[0].co.z
+        v2z = e.verts[1].co.z
+        is_top = top and v1z > hh * 0.8 and v2z > hh * 0.8
+        is_bot = bottom and v1z < -hh * 0.8 and v2z < -hh * 0.8
+        if is_top or is_bot:
+            e.select = True
     bmesh.update_edit_mesh(obj.data)
-    bpy.ops.object.vertex_group_assign()
+    # Set bevel weight on selected edges
+    bpy.ops.transform.edge_bevelweight(value=1.0)
     bpy.ops.object.mode_set(mode='OBJECT')
 
-    # Add Bevel modifier — stays in stack, applied after Boolean
+    # Bevel modifier with WEIGHT limit — edge weights survive Boolean
     mod = obj.modifiers.new("EdgeBevel", 'BEVEL')
     mod.width = CH_SZ if is_chamfer else fillet_r
     mod.segments = 1 if is_chamfer else 8
-    mod.limit_method = 'VGROUP'
-    mod.vertex_group = "outer_edges"
+    mod.limit_method = 'WEIGHT'
 
     # Store metadata for STEP export
     obj['chamfer_type'] = ctype
@@ -314,7 +318,7 @@ def _bevel_hole_openings():
 
         if edge_count > 0:
             bpy.ops.mesh.bevel(offset=HOLE_FILLET_R, offset_type='OFFSET',
-                               segments=8, profile=0.5, affect='EDGES')
+                               segments=12, profile=0.5, affect='EDGES')
 
         bpy.ops.object.mode_set(mode='OBJECT')
 
@@ -353,7 +357,7 @@ SHELVES = [
         _make_row("TprBBl", "bottom", HOLE_D, 0.08, "+Tpr.B.Bl"),
         _make_row("TprBothBl", "both", HOLE_D, 0.08, "+Tpr.BothBl"),
     ]),
-    # S2: Top Chamfer — 8 hole variants
+    # S2: Top Chamfer — 10 hole variants
     ("S2 T.Chamfer", "chamfer", 0, [
         _make_row("Plain", None, 0, None, "+T.Chamfer"),
         _make_row("TBl", "top", HOLE_D, None, "+T.Ch+TBl"),
@@ -361,10 +365,12 @@ SHELVES = [
         _make_row("BothBl", "both", HOLE_D, None, "+T.Ch+Both"),
         _make_row("Thru", "through", 0, None, "+T.Ch+Thru"),
         _make_row("TprThru", "through", 0, 0.1, "+T.Ch+Tpr"),
+        _make_row("InvTpr", "through_inv", 0, 0.1, "+T.Ch+InvTpr"),
         _make_row("TprTBl", "top", HOLE_D, 0.08, "+T.Ch+TprTB"),
         _make_row("TprBBl", "bottom", HOLE_D, 0.08, "+T.Ch+TprBB"),
+        _make_row("TprBoth", "both", HOLE_D, 0.08, "+T.Ch+TprBoth"),
     ]),
-    # S3: Bottom Chamfer — 8 hole variants
+    # S3: Bottom Chamfer — 10 hole variants
     ("S3 B.Chamfer", "bottom_chamfer", 0, [
         _make_row("Plain", None, 0, None, "+B.Chamfer"),
         _make_row("TBl", "top", HOLE_D, None, "+B.Ch+TBl"),
@@ -372,10 +378,12 @@ SHELVES = [
         _make_row("BothBl", "both", HOLE_D, None, "+B.Ch+Both"),
         _make_row("Thru", "through", 0, None, "+B.Ch+Thru"),
         _make_row("TprThru", "through", 0, 0.1, "+B.Ch+Tpr"),
+        _make_row("InvTpr", "through_inv", 0, 0.1, "+B.Ch+InvTpr"),
         _make_row("TprTBl", "top", HOLE_D, 0.08, "+B.Ch+TprTB"),
         _make_row("TprBBl", "bottom", HOLE_D, 0.08, "+B.Ch+TprBB"),
+        _make_row("TprBoth", "both", HOLE_D, 0.08, "+B.Ch+TprBoth"),
     ]),
-    # S4: Both Chamfer — 8 hole variants
+    # S4: Both Chamfer — 10 hole variants
     ("S4 Both Chamfer", "chamfer_both", 0, [
         _make_row("Plain", None, 0, None, "+Both Cham"),
         _make_row("TBl", "top", HOLE_D, None, "+BothCh+TBl"),
@@ -383,10 +391,12 @@ SHELVES = [
         _make_row("BothBl", "both", HOLE_D, None, "+BothCh+Both"),
         _make_row("Thru", "through", 0, None, "+BothCh+Thru"),
         _make_row("TprThru", "through", 0, 0.1, "+BothCh+Tpr"),
+        _make_row("InvTpr", "through_inv", 0, 0.1, "+BothCh+InvTpr"),
         _make_row("TprTBl", "top", HOLE_D, 0.08, "+BothCh+TprTB"),
         _make_row("TprBBl", "bottom", HOLE_D, 0.08, "+BothCh+TprBB"),
+        _make_row("TprBoth", "both", HOLE_D, 0.08, "+BothCh+TprBoth"),
     ]),
-    # S5: Top Fillet — 8 hole variants
+    # S5: Top Fillet — 10 hole variants
     ("S5 T.Fillet", "fillet", FR_R, [
         _make_row("Plain", None, 0, None, "+T.Fillet"),
         _make_row("TBl", "top", HOLE_D, None, "+T.Fil+TBl"),
@@ -394,10 +404,12 @@ SHELVES = [
         _make_row("BothBl", "both", HOLE_D, None, "+T.Fil+Both"),
         _make_row("Thru", "through", 0, None, "+T.Fil+Thru"),
         _make_row("TprThru", "through", 0, 0.1, "+T.Fil+Tpr"),
+        _make_row("InvTpr", "through_inv", 0, 0.1, "+T.Fil+InvTpr"),
         _make_row("TprTBl", "top", HOLE_D, 0.08, "+T.Fil+TprTB"),
         _make_row("TprBBl", "bottom", HOLE_D, 0.08, "+T.Fil+TprBB"),
+        _make_row("TprBoth", "both", HOLE_D, 0.08, "+T.Fil+TprBoth"),
     ]),
-    # S6: Bottom Fillet — 8 hole variants
+    # S6: Bottom Fillet — 10 hole variants
     ("S6 B.Fillet", "bottom_fillet", FR_R, [
         _make_row("Plain", None, 0, None, "+B.Fillet"),
         _make_row("TBl", "top", HOLE_D, None, "+B.Fil+TBl"),
@@ -405,10 +417,12 @@ SHELVES = [
         _make_row("BothBl", "both", HOLE_D, None, "+B.Fil+Both"),
         _make_row("Thru", "through", 0, None, "+B.Fil+Thru"),
         _make_row("TprThru", "through", 0, 0.1, "+B.Fil+Tpr"),
+        _make_row("InvTpr", "through_inv", 0, 0.1, "+B.Fil+InvTpr"),
         _make_row("TprTBl", "top", HOLE_D, 0.08, "+B.Fil+TprTB"),
         _make_row("TprBBl", "bottom", HOLE_D, 0.08, "+B.Fil+TprBB"),
+        _make_row("TprBoth", "both", HOLE_D, 0.08, "+B.Fil+TprBoth"),
     ]),
-    # S7: Both Fillet — 8 hole variants
+    # S7: Both Fillet — 10 hole variants
     ("S7 Both Fillet", "fillet_both", FR_R, [
         _make_row("Plain", None, 0, None, "+Both Fil"),
         _make_row("TBl", "top", HOLE_D, None, "+BothFil+TBl"),
@@ -416,8 +430,10 @@ SHELVES = [
         _make_row("BothBl", "both", HOLE_D, None, "+BothFil+Both"),
         _make_row("Thru", "through", 0, None, "+BothFil+Thru"),
         _make_row("TprThru", "through", 0, 0.1, "+BothFil+Tpr"),
+        _make_row("InvTpr", "through_inv", 0, 0.1, "+BothFil+InvTpr"),
         _make_row("TprTBl", "top", HOLE_D, 0.08, "+BothFil+TprTB"),
         _make_row("TprBBl", "bottom", HOLE_D, 0.08, "+BothFil+TprBB"),
+        _make_row("TprBoth", "both", HOLE_D, 0.08, "+BothFil+TprBoth"),
     ]),
     # S8: Inverted — selected combos
     ("S8 Inverted", None, 0, [

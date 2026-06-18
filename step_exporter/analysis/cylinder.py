@@ -1118,6 +1118,27 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                         log_to_file(f"[STEP Exporter]   Cone top radius corrected via stored edge feature (hole interference): {top_radius:.4f} -> {peak_r:.4f} (z={peak_z:.4f})")
                         top_radius = peak_r
     
+    # 兜底修正：当 stored_ctype 指示底部特征（倒角/圆角）但 mesh 因孔洞干扰未能检测时，
+    # 在底部区域扫描外壁峰值半径来修正 bottom_radius
+    if not cylindrical_body and bottom_radius < top_radius * 0.85:
+        stored_ctype_fb3 = obj.get('chamfer_type') if hasattr(obj, 'get') else None
+        # 仅当存在底部特征时触发（bottom_chamfer, bottom_fillet, chamfer_both, fillet_both, chamfer_fillet）
+        has_bottom_feature = (stored_ctype_fb3 and 
+                             stored_ctype_fb3 in ('bottom_chamfer', 'bottom_fillet', 'chamfer_both', 'fillet_both', 'chamfer_fillet'))
+        if has_bottom_feature:
+            valid_zls = [zl for zl in sorted_z if zl in z_radius_data]
+            if len(valid_zls) >= 3:
+                height_z = sorted_z[-1] - sorted_z[0]
+                bot_cut = sorted_z[0] + height_z * 0.15
+                # 收集底部15%区域内的z-level（排除底面本身）
+                bot_region = [(zl, z_radius_data[zl]) for zl in valid_zls
+                              if zl < bot_cut and zl > sorted_z[0] * 1.01]
+                if bot_region:
+                    peak_z, peak_r = max(bot_region, key=lambda x: x[1])
+                    if peak_r > bottom_radius * 1.02:
+                        log_to_file(f"[STEP Exporter]   Cone bottom radius corrected via stored edge feature (hole interference): {bottom_radius:.4f} -> {peak_r:.4f} (z={peak_z:.4f})")
+                        bottom_radius = peak_r
+    
     # 对于圆柱本体有过渡 → 修正 radius 为 body_radius
     if cylindrical_body and (top_feature or bottom_feature):
         # 单侧过渡：用无过渡侧的极端Z层半径作为本体半径

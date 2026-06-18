@@ -1,4 +1,4 @@
-"""Cone gallery — 6 shelves × 9 columns = 54 combos, with hole fillets."""
+"""Cone gallery — 8 shelves × variable columns = 65 combos, with hole fillets."""
 import bpy, math
 
 H = 1.0; BOT_R = 0.5; TOP_R = 0.25; CH_SZ = 0.05; FR_R = 0.06
@@ -149,16 +149,48 @@ def add_cone(y, z, name, br, tr, chamfer_type=None, fillet_r=0,
                 cd = hole_d * 1.5
                 _add_cutter(cz, cd)
         elif hole == 'both':
-            cd = hole_d * 1.5
-            cz_top = H / 2 - hole_d * 0.25
-            cz_bot = -(H / 2 - hole_d * 0.25)
-            _add_cutter(cz_top, cd)
-            _add_cutter(cz_bot, cd)
+            if hole_end is not None and abs(hole_end - TAPER_OPEN_R) > 0.0001:
+                # Tapered both blind: two conical cutters
+                cd = hole_d * 1.5
+                extra = hole_d * 0.3
+                grad = (hole_end - TAPER_OPEN_R) / hole_d
+                # Top tapered blind
+                surf_t = H / 2; hole_bot_t = surf_t - hole_d
+                cutter_top_t = surf_t + extra
+                cz_t = (cutter_top_t + hole_bot_t) / 2
+                cd_t = cutter_top_t - hole_bot_t
+                r_bot_t = hole_end
+                r_top_t = TAPER_OPEN_R + extra * (-grad)
+                _add_cutter(cz_t, cd_t, r_bot_t, r_top_t)
+                # Bottom tapered blind
+                surf_b = -H / 2; hole_top_b = surf_b + hole_d
+                cutter_bot_b = surf_b - extra
+                cz_b = (hole_top_b + cutter_bot_b) / 2
+                cd_b = hole_top_b - cutter_bot_b
+                r_bot_b = TAPER_OPEN_R + extra * (-grad)
+                r_top_b = hole_end
+                _add_cutter(cz_b, cd_b, r_bot_b, r_top_b)
+            else:
+                cd = hole_d * 1.5
+                cz_top = H / 2 - hole_d * 0.25
+                cz_bot = -(H / 2 - hole_d * 0.25)
+                _add_cutter(cz_top, cd)
+                _add_cutter(cz_bot, cd)
+        elif hole == 'through_inv':
+            # Inverted tapered through: wider at top, narrower at bottom
+            if hole_end is not None and abs(hole_end - TAPER_OPEN_R) > 0.0001:
+                cutter_d = H * 2
+                grad = (TAPER_OPEN_R - hole_end) / H  # positive: r increases with z
+                r1 = hole_end - (cutter_d / 2 - H / 2) * grad  # at cutter bottom
+                r2 = TAPER_OPEN_R + (cutter_d / 2 - H / 2) * grad  # at cutter top
+                _add_cutter(0, cutter_d, r1, r2)
+            else:
+                _add_cutter(0, H * 3)
 
         obj['hole_type'] = str(hole)
         obj['hole_radius'] = HOLE_R * 1000
         obj['hole_fillet_radius'] = HOLE_FILLET_R * 1000
-        if hole != 'through':
+        if hole not in ('through', 'through_inv'):
             obj['hole_depth'] = hole_d * 1000
             obj['hole_position'] = str(hole)
         if hole_end is not None:
@@ -174,7 +206,7 @@ def add_label(y, z, text):
     t.data.body = text
     t.data.size = 0.07
     t.data.align_x = 'CENTER'
-    t.rotation_euler = (math.pi / 2, 0, 0)
+    t.rotation_euler = (math.pi / 2, 0, math.pi / 2)
 
 def add_shelf_label(y, z, text):
     """Shelf label placed to the side of the row."""
@@ -230,9 +262,14 @@ def _bevel_hole_openings():
         hole_depth = (obj.get('hole_depth', 0) or 0) * 0.001  # mm → m
 
         if hole_type == 'through':
-            # Tapered through: wider opening at bottom (z=-H/2), narrower at top (z=H/2)
+            # Tapered through: wider at bottom (z=-H/2), narrower at top (z=H/2)
             r_top = end_r if (is_tapered and end_r > 0) else default_r
             r_bot = open_r if (is_tapered and open_r > 0) else default_r
+            openings = [(H / 2, r_top), (-H / 2, r_bot)]
+        elif hole_type == 'through_inv':
+            # Inverted tapered through: wider at top, narrower at bottom
+            r_top = open_r if (is_tapered and open_r > 0) else default_r
+            r_bot = end_r if (is_tapered and end_r > 0) else default_r
             openings = [(H / 2, r_top), (-H / 2, r_bot)]
         else:
             if hole_type in ('top', 'both'):
@@ -241,9 +278,10 @@ def _bevel_hole_openings():
                 openings.append((H / 2, r_surf))                     # surface opening
                 openings.append((H / 2 - hole_depth, r_bottom))      # hole bottom
             if hole_type in ('bottom', 'both'):
-                r_surf = default_r
+                r_surf = open_r if (is_tapered and open_r > 0) else default_r
+                r_hole_end = end_r if (is_tapered and end_r > 0) else default_r
                 openings.append((-H / 2, r_surf))                    # surface opening
-                openings.append((-H / 2 + hole_depth, r_surf))       # hole bottom
+                openings.append((-H / 2 + hole_depth, r_hole_end))  # hole end
 
         if not openings:
             continue
@@ -284,105 +322,139 @@ def _bevel_hole_openings():
 clear()
 Z_BASE = H / 2
 STEP_Y = max(BOT_R, TOP_R) * 2 + GAP_Y
-N_COLS = 9
-START_Y = -((N_COLS - 1) * STEP_Y) / 2
 
 # Z⁻ : top shelf at highest Z, descending
-NUM_SHELVES = 6
+NUM_SHELVES = 8
 Z_TOP = Z_BASE + (NUM_SHELVES - 1) * Z_GAP
 
-# Each item: (name_sfx, hole, hole_d, hole_end, label, edge_override)
-#   edge_override: None or (chamfer_type, fillet_r) to override shelf default
-#   hole_end on blind holes → tapered blind hole (conical cutter)
+# ============================================================
+# SHELVES: each row = one edge-feature type, columns = hole variants
+# Format: (shelf_label, chamfer_type, fillet_r, items)
+# Item:   (name_sfx, hole, hole_d, hole_end, label)
+# ============================================================
+# Standard 8 hole variants per edge type:
+#   Plain, T.Blind, B.Blind, BothBlind, Through, TaperedThru, TaperedTBl, TaperedBBl
+
+def _make_row(name_sfx, hole, hd, he, label):
+    """Shortcut for creating an item tuple."""
+    return (name_sfx, hole, hd, he, label)
 
 SHELVES = [
-    # Shelf 1: Normal · No Edge — 9 hole variants
-    ("S1 No Edge ─ 9 Variants", None, 0, [
-        ("Plain",  None,      0,     None,  "Plain"),
-        ("TBlind", "top",     HOLE_D, None,  "+T.Blind"),
-        ("BBlind", "bottom",  HOLE_D, None,  "+B.Blind"),
-        ("BothBl", "both",    HOLE_D, None,  "+BothBl"),
-        ("Thru",   "through", 0,      None,  "+Through"),
-        ("Taper",  "through", 0,      0.1,   "+Tapered"),
-        ("BChTh",  "through", 0,      None,  "+BothCh+Thru", ("chamfer_both", 0)),
-        ("BFiTh",  "through", 0,      None,  "+BothFil+Thru", ("fillet_both", FR_R)),
-        ("TprTBl", "top",     HOLE_D, 0.08,  "+Taper.T.Blind"),
+    # S1: No Edge — 10 hole variants
+    ("S1 No Edge", None, 0, [
+        _make_row("Plain", None, 0, None, "Plain"),
+        _make_row("TBl", "top", HOLE_D, None, "+T.Blind"),
+        _make_row("BBl", "bottom", HOLE_D, None, "+B.Blind"),
+        _make_row("BothBl", "both", HOLE_D, None, "+Both Bl"),
+        _make_row("Thru", "through", 0, None, "+Through"),
+        _make_row("TprThru", "through", 0, 0.1, "+Tapered"),
+        _make_row("InvTprThru", "through_inv", 0, 0.1, "+InvTapered"),
+        _make_row("TprTBl", "top", HOLE_D, 0.08, "+Tpr.T.Bl"),
+        _make_row("TprBBl", "bottom", HOLE_D, 0.08, "+Tpr.B.Bl"),
+        _make_row("TprBothBl", "both", HOLE_D, 0.08, "+Tpr.BothBl"),
     ]),
-    # Shelf 2: Normal · Top Chamfer — 9 hole variants
-    ("S2 T.Chamfer ─ 9 Variants", "chamfer", 0, [
-        ("Plain",  None,      0,     None,  "+T.Chamfer"),
-        ("TBlind", "top",     HOLE_D, None,  "+T.Ch+T.Bl"),
-        ("BBlind", "bottom",  HOLE_D, None,  "+T.Ch+B.Bl"),
-        ("BothBl", "both",    HOLE_D, None,  "+T.Ch+Both"),
-        ("Thru",   "through", 0,      None,  "+T.Ch+Thru"),
-        ("Taper",  "through", 0,      0.1,   "+T.Ch+Taper"),
-        ("BChTh",  "through", 0,      None,  "+BothCh+Thru", ("chamfer_both", 0)),
-        ("BFiTh",  "through", 0,      None,  "+BothFil+Thru", ("fillet_both", FR_R)),
-        ("TprTBl", "top",     HOLE_D, 0.08,  "+T.Ch+Tpr.Bl"),
+    # S2: Top Chamfer — 8 hole variants
+    ("S2 T.Chamfer", "chamfer", 0, [
+        _make_row("Plain", None, 0, None, "+T.Chamfer"),
+        _make_row("TBl", "top", HOLE_D, None, "+T.Ch+TBl"),
+        _make_row("BBl", "bottom", HOLE_D, None, "+T.Ch+BBl"),
+        _make_row("BothBl", "both", HOLE_D, None, "+T.Ch+Both"),
+        _make_row("Thru", "through", 0, None, "+T.Ch+Thru"),
+        _make_row("TprThru", "through", 0, 0.1, "+T.Ch+Tpr"),
+        _make_row("TprTBl", "top", HOLE_D, 0.08, "+T.Ch+TprTB"),
+        _make_row("TprBBl", "bottom", HOLE_D, 0.08, "+T.Ch+TprBB"),
     ]),
-    # Shelf 3: Normal · Bottom Chamfer — 9 hole variants
-    ("S3 B.Chamfer ─ 9 Variants", "bottom_chamfer", 0, [
-        ("Plain",  None,      0,     None,  "+B.Chamfer"),
-        ("TBlind", "top",     HOLE_D, None,  "+B.Ch+T.Bl"),
-        ("BBlind", "bottom",  HOLE_D, None,  "+B.Ch+B.Bl"),
-        ("BothBl", "both",    HOLE_D, None,  "+B.Ch+Both"),
-        ("Thru",   "through", 0,      None,  "+B.Ch+Thru"),
-        ("Taper",  "through", 0,      0.1,   "+B.Ch+Taper"),
-        ("BChTh",  "through", 0,      None,  "+BothCh+Thru", ("chamfer_both", 0)),
-        ("BFiTh",  "through", 0,      None,  "+BothFil+Thru", ("fillet_both", FR_R)),
-        ("TprTBl", "top",     HOLE_D, 0.08,  "+B.Ch+Tpr.Bl"),
+    # S3: Bottom Chamfer — 8 hole variants
+    ("S3 B.Chamfer", "bottom_chamfer", 0, [
+        _make_row("Plain", None, 0, None, "+B.Chamfer"),
+        _make_row("TBl", "top", HOLE_D, None, "+B.Ch+TBl"),
+        _make_row("BBl", "bottom", HOLE_D, None, "+B.Ch+BBl"),
+        _make_row("BothBl", "both", HOLE_D, None, "+B.Ch+Both"),
+        _make_row("Thru", "through", 0, None, "+B.Ch+Thru"),
+        _make_row("TprThru", "through", 0, 0.1, "+B.Ch+Tpr"),
+        _make_row("TprTBl", "top", HOLE_D, 0.08, "+B.Ch+TprTB"),
+        _make_row("TprBBl", "bottom", HOLE_D, 0.08, "+B.Ch+TprBB"),
     ]),
-    # Shelf 4: Normal · Both Chamfer — 9 hole variants
-    ("S4 Both Chamfer ─ 9 Variants", "chamfer_both", 0, [
-        ("Plain",  None,      0,     None,  "+Both Cham"),
-        ("TBlind", "top",     HOLE_D, None,  "+BothCh+TBl"),
-        ("BBlind", "bottom",  HOLE_D, None,  "+BothCh+BBl"),
-        ("BothBl", "both",    HOLE_D, None,  "+BothCh+Both"),
-        ("Thru",   "through", 0,      None,  "+BothCh+Thru"),
-        ("Taper",  "through", 0,      0.1,   "+BothCh+Tpr"),
-        ("TFilTh", "through", 0,      None,  "+T.Fil+Thru",  ("fillet", FR_R)),
-        ("BFilTh", "through", 0,      None,  "+B.Fil+Thru",  ("bottom_fillet", FR_R)),
-        ("TprTBl", "top",     HOLE_D, 0.08,  "+BothCh+TprBl"),
+    # S4: Both Chamfer — 8 hole variants
+    ("S4 Both Chamfer", "chamfer_both", 0, [
+        _make_row("Plain", None, 0, None, "+Both Cham"),
+        _make_row("TBl", "top", HOLE_D, None, "+BothCh+TBl"),
+        _make_row("BBl", "bottom", HOLE_D, None, "+BothCh+BBl"),
+        _make_row("BothBl", "both", HOLE_D, None, "+BothCh+Both"),
+        _make_row("Thru", "through", 0, None, "+BothCh+Thru"),
+        _make_row("TprThru", "through", 0, 0.1, "+BothCh+Tpr"),
+        _make_row("TprTBl", "top", HOLE_D, 0.08, "+BothCh+TprTB"),
+        _make_row("TprBBl", "bottom", HOLE_D, 0.08, "+BothCh+TprBB"),
     ]),
-    # Shelf 5: Normal · Top Fillet — 9 hole variants
-    ("S5 T.Fillet ─ 9 Variants", "fillet", FR_R, [
-        ("Plain",  None,      0,     None,  "+T.Fillet"),
-        ("TBlind", "top",     HOLE_D, None,  "+T.Fil+T.Bl"),
-        ("BBlind", "bottom",  HOLE_D, None,  "+T.Fil+B.Bl"),
-        ("BothBl", "both",    HOLE_D, None,  "+T.Fil+Both"),
-        ("Thru",   "through", 0,      None,  "+T.Fil+Thru"),
-        ("Taper",  "through", 0,      0.1,   "+T.Fil+Taper"),
-        ("BChTh",  "through", 0,      None,  "+BothCh+Thru", ("chamfer_both", 0)),
-        ("BFiTh",  "through", 0,      None,  "+BothFil+Thru", ("fillet_both", FR_R)),
-        ("TprTBl", "top",     HOLE_D, 0.08,  "+T.Fil+TprBl"),
+    # S5: Top Fillet — 8 hole variants
+    ("S5 T.Fillet", "fillet", FR_R, [
+        _make_row("Plain", None, 0, None, "+T.Fillet"),
+        _make_row("TBl", "top", HOLE_D, None, "+T.Fil+TBl"),
+        _make_row("BBl", "bottom", HOLE_D, None, "+T.Fil+BBl"),
+        _make_row("BothBl", "both", HOLE_D, None, "+T.Fil+Both"),
+        _make_row("Thru", "through", 0, None, "+T.Fil+Thru"),
+        _make_row("TprThru", "through", 0, 0.1, "+T.Fil+Tpr"),
+        _make_row("TprTBl", "top", HOLE_D, 0.08, "+T.Fil+TprTB"),
+        _make_row("TprBBl", "bottom", HOLE_D, 0.08, "+T.Fil+TprBB"),
     ]),
-    # Shelf 6: Inverted — Selected combos
-    ("S6 Inverted ─ Selected", None, 0, [
-        ("Plain",  None,      0,     None,  "Inv Plain"),
-        ("TCh",    None,      0,     None,  "+T.Chamfer",    ("chamfer", 0)),
-        ("BFil",   None,      0,     None,  "+B.Fillet",     ("bottom_fillet", FR_R)),
-        ("BothCh", None,      0,     None,  "+Both Cham",    ("chamfer_both", 0)),
-        ("TBlind", "top",     HOLE_D, None,  "+T.Blind"),
-        ("BBlind", "bottom",  HOLE_D, None,  "+B.Blind"),
-        ("Thru",   "through", 0,      None,  "+Through"),
-        ("Taper",  "through", 0,      0.1,   "+Tapered"),
-        ("ChThru", "through", 0,      None,  "+T.Ch+Thru",   ("chamfer", 0)),
+    # S6: Bottom Fillet — 8 hole variants
+    ("S6 B.Fillet", "bottom_fillet", FR_R, [
+        _make_row("Plain", None, 0, None, "+B.Fillet"),
+        _make_row("TBl", "top", HOLE_D, None, "+B.Fil+TBl"),
+        _make_row("BBl", "bottom", HOLE_D, None, "+B.Fil+BBl"),
+        _make_row("BothBl", "both", HOLE_D, None, "+B.Fil+Both"),
+        _make_row("Thru", "through", 0, None, "+B.Fil+Thru"),
+        _make_row("TprThru", "through", 0, 0.1, "+B.Fil+Tpr"),
+        _make_row("TprTBl", "top", HOLE_D, 0.08, "+B.Fil+TprTB"),
+        _make_row("TprBBl", "bottom", HOLE_D, 0.08, "+B.Fil+TprBB"),
+    ]),
+    # S7: Both Fillet — 8 hole variants
+    ("S7 Both Fillet", "fillet_both", FR_R, [
+        _make_row("Plain", None, 0, None, "+Both Fil"),
+        _make_row("TBl", "top", HOLE_D, None, "+BothFil+TBl"),
+        _make_row("BBl", "bottom", HOLE_D, None, "+BothFil+BBl"),
+        _make_row("BothBl", "both", HOLE_D, None, "+BothFil+Both"),
+        _make_row("Thru", "through", 0, None, "+BothFil+Thru"),
+        _make_row("TprThru", "through", 0, 0.1, "+BothFil+Tpr"),
+        _make_row("TprTBl", "top", HOLE_D, 0.08, "+BothFil+TprTB"),
+        _make_row("TprBBl", "bottom", HOLE_D, 0.08, "+BothFil+TprBB"),
+    ]),
+    # S8: Inverted — selected combos
+    ("S8 Inverted", None, 0, [
+        _make_row("Plain", None, 0, None, "Inv Plain"),
+        _make_row("TCh", None, 0, None, "+T.Chamfer"),   # edge via override below
+        _make_row("BFil", None, 0, None, "+B.Fillet"),
+        _make_row("BothCh", None, 0, None, "+Both Cham"),
+        _make_row("TBl", "top", HOLE_D, None, "+T.Blind"),
+        _make_row("BBl", "bottom", HOLE_D, None, "+B.Blind"),
+        _make_row("Thru", "through", 0, None, "+Through"),
+        _make_row("TprThru", "through", 0, 0.1, "+Tapered"),
+        _make_row("ChThru", "through", 0, None, "+T.Ch+Thru"),
     ]),
 ]
 
+# Edge overrides for inverted shelf items that need specific edge types
+INVERTED_EDGES = {
+    "TCh":    ("chamfer", 0),
+    "BFil":   ("bottom_fillet", FR_R),
+    "BothCh": ("chamfer_both", 0),
+    "ChThru": ("chamfer", 0),
+}
+
 for shelf_idx, (shelf_label, base_ctype, base_fr, items) in enumerate(SHELVES):
     z = Z_TOP - shelf_idx * Z_GAP  # Z⁻ : highest first
-    y = START_Y
-    label_y = START_Y + STEP_Y * (N_COLS - 1) / 2
+    n = len(items)
+    start_y = -((n - 1) * STEP_Y) / 2  # center this row
+    y = start_y
+    label_y = start_y + STEP_Y * (n - 1) / 2
     add_shelf_label(label_y, z, shelf_label)
 
-    for item in items:
-        name_sfx, hole, hd, he, label = item[:5]
-        edge_ov = item[5] if len(item) > 5 else None
+    for name_sfx, hole, hd, he, label in items:
         ctype = base_ctype; fr = base_fr
-        if edge_ov is not None:
-            ctype, fr = edge_ov
-        br, tr = (TOP_R, BOT_R) if shelf_idx == 5 else (BOT_R, TOP_R)
+        # Check for edge override (inverted shelf)
+        if shelf_idx == 7 and name_sfx in INVERTED_EDGES:
+            ctype, fr = INVERTED_EDGES[name_sfx]
+        br, tr = (TOP_R, BOT_R) if shelf_idx == 7 else (BOT_R, TOP_R)
         add_cone(y, z, f"S{shelf_idx+1}_{name_sfx}", br, tr,
                  ctype, fr, hole, hd, he)
         add_label(y, z, label)

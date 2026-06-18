@@ -48,7 +48,7 @@ class STEP_EXPORTER_OT_create_cylinder(Operator):
 
 
 class STEP_EXPORTER_OT_create_cone_gallery(Operator):
-    """创建锥体组合样品（倒角/圆角/孔）"""
+    """创建锥体组合样品（倒角/圆角/孔）- 正锥形（上细下粗）"""
     bl_idname = "step_exporter.create_cone_gallery"
     bl_label = "Create Cone Gallery"
     bl_options = {'REGISTER', 'UNDO'}
@@ -57,6 +57,19 @@ class STEP_EXPORTER_OT_create_cone_gallery(Operator):
         script_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'examples', 'create_cone_gallery.py')
         exec(compile(open(script_path).read(), script_path, 'exec'), {'__name__': '__main__', '__file__': script_path})
         self.report({'INFO'}, "Cone gallery created")
+        return {'FINISHED'}
+
+
+class STEP_EXPORTER_OT_create_cone_gallery_inverted(Operator):
+    """创建锥体组合样品（倒角/圆角/孔）- 倒锥形（上粗下细）"""
+    bl_idname = "step_exporter.create_cone_gallery_inverted"
+    bl_label = "Create Cone Gallery (Inverted)"
+    bl_options = {'REGISTER', 'UNDO'}
+    
+    def execute(self, context):
+        script_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'examples', 'create_cone_gallery_inverted.py')
+        exec(compile(open(script_path).read(), script_path, 'exec'), {'__name__': '__main__', '__file__': script_path})
+        self.report({'INFO'}, "Inverted cone gallery created")
         return {'FINISHED'}
 
 

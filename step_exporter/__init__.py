@@ -82,6 +82,7 @@ from .ui import (
     STEP_EXPORTER_OT_export_enhanced, STEP_EXPORTER_PT_main_panel,
     STEP_EXPORTER_OT_create_top_shell, STEP_EXPORTER_OT_create_bottom_shell,
     STEP_EXPORTER_OT_create_cylinder, STEP_EXPORTER_OT_create_cone_gallery,
+    STEP_EXPORTER_OT_create_cone_gallery_inverted,
     STEP_EXPORTER_OT_create_parametric_cylinder,
     STEP_EXPORTER_PT_cylinder_panel, menu_func_export_enhanced,
     _generate_parametric_cylinder, _apply_edge_treatment,
@@ -94,7 +95,7 @@ _classes = (
     STEP_EXPORTER_OT_create_top_shell,
     STEP_EXPORTER_OT_create_bottom_shell,
     STEP_EXPORTER_OT_create_cylinder,
-    STEP_EXPORTER_OT_create_cone_gallery,
+    STEP_EXPORTER_OT_create_cone_gallery, STEP_EXPORTER_OT_create_cone_gallery_inverted,
     STEP_EXPORTER_OT_create_parametric_cylinder,
     STEP_EXPORTER_PT_cylinder_panel,
 )

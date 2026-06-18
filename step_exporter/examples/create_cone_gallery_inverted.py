@@ -1,4 +1,4 @@
-"""Cone gallery — Normal (narrowing up): 7 shelves × 10 columns = 70 combos."""
+"""Cone gallery �?Inverted (widening up): 7 shelves × 10 columns = 70 combos."""
 import bpy, math
 
 H = 1.0; BOT_R = 0.5; TOP_R = 0.25; CH_SZ = 0.05; FR_R = 0.06
@@ -12,7 +12,7 @@ def clear():
     bpy.ops.object.delete(use_global=False)
 
 def _add_edge_bevel_mod(obj, chamfer_type, fillet_r):
-    """Add a Bevel modifier (weight-limited) — applied AFTER Boolean.
+    """Add a Bevel modifier (weight-limited) �?applied AFTER Boolean.
     Uses edge bevel weights, which persist correctly through Boolean operations."""
     import bmesh
     ctype = str(chamfer_type)
@@ -46,7 +46,7 @@ def _add_edge_bevel_mod(obj, chamfer_type, fillet_r):
     bpy.ops.transform.edge_bevelweight(value=1.0)
     bpy.ops.object.mode_set(mode='OBJECT')
 
-    # Bevel modifier with WEIGHT limit — edge weights survive Boolean
+    # Bevel modifier with WEIGHT limit �?edge weights survive Boolean
     mod = obj.modifiers.new("EdgeBevel", 'BEVEL')
     mod.width = CH_SZ if is_chamfer else fillet_r
     mod.segments = 1 if is_chamfer else 8
@@ -263,7 +263,7 @@ def _bevel_hole_openings():
 
         # Build list of (z_position, radius) for each hole opening + bottom
         openings = []  # (z, radius)
-        hole_depth = (obj.get('hole_depth', 0) or 0) * 0.001  # mm → m
+        hole_depth = (obj.get('hole_depth', 0) or 0) * 0.001  # mm �?m
 
         if hole_type == 'through':
             # Tapered through: wider at bottom (z=-H/2), narrower at top (z=H/2)
@@ -327,7 +327,7 @@ clear()
 Z_BASE = H / 2
 STEP_Y = max(BOT_R, TOP_R) * 2 + GAP_Y
 
-# Z⁻ : top shelf at highest Z, descending
+# Z�?: top shelf at highest Z, descending
 NUM_SHELVES = 7
 Z_TOP = Z_BASE + (NUM_SHELVES - 1) * Z_GAP
 
@@ -344,8 +344,8 @@ def _make_row(name_sfx, hole, hd, he, label):
     return (name_sfx, hole, hd, he, label)
 
 SHELVES = [
-    # S1: No Edge — 10 hole variants
-    ("S1 No Edge", None, 0, [
+    # S1: No Edge �?10 hole variants
+    ("S1 Inv No Edge", None, 0, [
         _make_row("Plain", None, 0, None, "Plain"),
         _make_row("TBl", "top", HOLE_D, None, "+T.Blind"),
         _make_row("BBl", "bottom", HOLE_D, None, "+B.Blind"),
@@ -357,8 +357,8 @@ SHELVES = [
         _make_row("TprBBl", "bottom", HOLE_D, 0.08, "+Tpr.B.Bl"),
         _make_row("TprBothBl", "both", HOLE_D, 0.08, "+Tpr.BothBl"),
     ]),
-    # S2: Top Chamfer — 10 hole variants
-    ("S2 T.Chamfer", "chamfer", 0, [
+    # S2: Top Chamfer �?10 hole variants
+    ("S2 Inv T.Chamfer", "chamfer", 0, [
         _make_row("Plain", None, 0, None, "+T.Chamfer"),
         _make_row("TBl", "top", HOLE_D, None, "+T.Ch+TBl"),
         _make_row("BBl", "bottom", HOLE_D, None, "+T.Ch+BBl"),
@@ -370,8 +370,8 @@ SHELVES = [
         _make_row("TprBBl", "bottom", HOLE_D, 0.08, "+T.Ch+TprBB"),
         _make_row("TprBoth", "both", HOLE_D, 0.08, "+T.Ch+TprBoth"),
     ]),
-    # S3: Bottom Chamfer — 10 hole variants
-    ("S3 B.Chamfer", "bottom_chamfer", 0, [
+    # S3: Bottom Chamfer �?10 hole variants
+    ("S3 Inv B.Chamfer", "bottom_chamfer", 0, [
         _make_row("Plain", None, 0, None, "+B.Chamfer"),
         _make_row("TBl", "top", HOLE_D, None, "+B.Ch+TBl"),
         _make_row("BBl", "bottom", HOLE_D, None, "+B.Ch+BBl"),
@@ -383,8 +383,8 @@ SHELVES = [
         _make_row("TprBBl", "bottom", HOLE_D, 0.08, "+B.Ch+TprBB"),
         _make_row("TprBoth", "both", HOLE_D, 0.08, "+B.Ch+TprBoth"),
     ]),
-    # S4: Both Chamfer — 10 hole variants
-    ("S4 Both Chamfer", "chamfer_both", 0, [
+    # S4: Both Chamfer �?10 hole variants
+    ("S4 Inv Both Chamfer", "chamfer_both", 0, [
         _make_row("Plain", None, 0, None, "+Both Cham"),
         _make_row("TBl", "top", HOLE_D, None, "+BothCh+TBl"),
         _make_row("BBl", "bottom", HOLE_D, None, "+BothCh+BBl"),
@@ -396,8 +396,8 @@ SHELVES = [
         _make_row("TprBBl", "bottom", HOLE_D, 0.08, "+BothCh+TprBB"),
         _make_row("TprBoth", "both", HOLE_D, 0.08, "+BothCh+TprBoth"),
     ]),
-    # S5: Top Fillet — 10 hole variants
-    ("S5 T.Fillet", "fillet", FR_R, [
+    # S5: Top Fillet �?10 hole variants
+    ("S5 Inv T.Fillet", "fillet", FR_R, [
         _make_row("Plain", None, 0, None, "+T.Fillet"),
         _make_row("TBl", "top", HOLE_D, None, "+T.Fil+TBl"),
         _make_row("BBl", "bottom", HOLE_D, None, "+T.Fil+BBl"),
@@ -409,8 +409,8 @@ SHELVES = [
         _make_row("TprBBl", "bottom", HOLE_D, 0.08, "+T.Fil+TprBB"),
         _make_row("TprBoth", "both", HOLE_D, 0.08, "+T.Fil+TprBoth"),
     ]),
-    # S6: Bottom Fillet — 10 hole variants
-    ("S6 B.Fillet", "bottom_fillet", FR_R, [
+    # S6: Bottom Fillet �?10 hole variants
+    ("S6 Inv B.Fillet", "bottom_fillet", FR_R, [
         _make_row("Plain", None, 0, None, "+B.Fillet"),
         _make_row("TBl", "top", HOLE_D, None, "+B.Fil+TBl"),
         _make_row("BBl", "bottom", HOLE_D, None, "+B.Fil+BBl"),
@@ -422,8 +422,8 @@ SHELVES = [
         _make_row("TprBBl", "bottom", HOLE_D, 0.08, "+B.Fil+TprBB"),
         _make_row("TprBoth", "both", HOLE_D, 0.08, "+B.Fil+TprBoth"),
     ]),
-    # S7: Both Fillet — 10 hole variants
-    ("S7 Both Fillet", "fillet_both", FR_R, [
+    # S7: Both Fillet �?10 hole variants
+    ("S7 Inv Both Fillet", "fillet_both", FR_R, [
         _make_row("Plain", None, 0, None, "+Both Fil"),
         _make_row("TBl", "top", HOLE_D, None, "+BothFil+TBl"),
         _make_row("BBl", "bottom", HOLE_D, None, "+BothFil+BBl"),
@@ -438,7 +438,7 @@ SHELVES = [
 ]
 
 for shelf_idx, (shelf_label, base_ctype, base_fr, items) in enumerate(SHELVES):
-    z = Z_TOP - shelf_idx * Z_GAP  # Z⁻ : highest first
+    z = Z_TOP - shelf_idx * Z_GAP  # Z�?: highest first
     n = len(items)
     start_y = -((n - 1) * STEP_Y) / 2  # center this row
     y = start_y
@@ -446,7 +446,7 @@ for shelf_idx, (shelf_label, base_ctype, base_fr, items) in enumerate(SHELVES):
     add_shelf_label(label_y, z, shelf_label)
 
     for name_sfx, hole, hd, he, label in items:
-        br, tr = BOT_R, TOP_R
+        br, tr = TOP_R, BOT_R  # inverted: wider at top
         add_cone(y, z, f"S{shelf_idx+1}_{name_sfx}", br, tr,
                  base_ctype, base_fr, hole, hd, he)
         add_label(y, z, label)

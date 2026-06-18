@@ -236,6 +236,7 @@ def apply_all_modifiers():
         # Stack order: [0]=EdgeBevel, [1]=Hole. Apply Hole FIRST, then Bevel.
         for mod in reversed(list(obj.modifiers)):
             try:
+                obj.modifiers.move(obj.modifiers.find(mod.name), 0)
                 bpy.ops.object.modifier_apply(modifier=mod.name)
             except RuntimeError as e:
                 print(f"    Skip {obj.name}/{mod.name}: {e}")
@@ -437,25 +438,23 @@ SHELVES = [
     ]),
 ]
 
-for shelf_idx, (shelf_label, base_ctype, base_fr, items) in enumerate(SHELVES):
-    z = Z_TOP - shelf_idx * Z_GAP  # Z⁻ : highest first
-    n = len(items)
-    start_y = -((n - 1) * STEP_Y) / 2  # center this row
-    y = start_y
-    label_y = start_y + STEP_Y * (n - 1) / 2
-    add_shelf_label(label_y, z, shelf_label)
+if __name__ == '__main__':
+    for shelf_idx, (shelf_label, base_ctype, base_fr, items) in enumerate(SHELVES):
+        z = Z_TOP - shelf_idx * Z_GAP
+        n = len(items)
+        start_y = -((n - 1) * STEP_Y) / 2
+        y = start_y
+        label_y = start_y + STEP_Y * (n - 1) / 2
+        add_shelf_label(label_y, z, shelf_label)
 
-    for name_sfx, hole, hd, he, label in items:
-        br, tr = BOT_R, TOP_R
-        add_cone(y, z, f"S{shelf_idx+1}_{name_sfx}", br, tr,
-                 base_ctype, base_fr, hole, hd, he)
-        add_label(y, z, label)
-        y += STEP_Y
+        for name_sfx, hole, hd, he, label in items:
+            br, tr = BOT_R, TOP_R
+            add_cone(y, z, f"S{shelf_idx+1}_{name_sfx}", br, tr,
+                     base_ctype, base_fr, hole, hd, he)
+            add_label(y, z, label)
+            y += STEP_Y
 
-# Apply all modifiers for final geometry
-apply_all_modifiers()
-# Bevel hole openings for visual fillet
-_bevel_hole_openings()
-
-print(f"Cone gallery: {len(bpy.data.objects)} objects")
+    apply_all_modifiers()
+    _bevel_hole_openings()
+    print(f"Cone gallery: {len(bpy.data.objects)} objects")
 

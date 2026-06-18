@@ -51,10 +51,10 @@ def _draw_progress_callback():
         from gpu_extras.batch import batch_for_shader
         
         # 进度条位置（左上角，已调整）
-        margin_x = 160
-        margin_y = 40
-        bar_width = 500
-        bar_height = 20
+        margin_x = 240  # 160 + 80
+        margin_y = 55   # 60 - 5
+        bar_width = 750
+        bar_height = 30
         
         # 使用保存的区域引用
         region = _draw_region
@@ -99,18 +99,6 @@ def _draw_progress_bar(x, y, width, height, progress, text):
         # 背景着色器
         shader = gpu.shader.from_builtin('UNIFORM_COLOR')
         
-        # 背景矩形（半透明黑色）
-        vertices_bg = (
-            (x - 5, y - 5),
-            (x + width + 5, y - 5),
-            (x + width + 5, y + height + 5),
-            (x - 5, y + height + 5),
-        )
-        batch_bg = batch_for_shader(shader, 'TRI_FAN', {"pos": vertices_bg})
-        shader.bind()
-        shader.uniform_float("color", (0.0, 0.0, 0.0, 0.7))
-        batch_bg.draw(shader)
-        
         # 进度条背景（蓝色 - 表示未导出部分）
         vertices_bar_bg = (
             (x, y),
@@ -133,20 +121,6 @@ def _draw_progress_bar(x, y, width, height, progress, text):
         batch_progress = batch_for_shader(shader, 'TRI_FAN', {"pos": vertices_progress})
         shader.uniform_float("color", (0.9, 0.3, 0.2, 0.95))  # 红色
         batch_progress.draw(shader)
-        
-        # 边框
-        vertices_border = (
-            (x, y),
-            (x + width, y),
-            (x + width, y + height),
-            (x, y + height),
-        )
-        indices_border = (
-            (0, 1), (1, 2), (2, 3), (3, 0),
-        )
-        batch_border = batch_for_shader(shader, 'LINES', {"pos": vertices_border}, indices=indices_border)
-        shader.uniform_float("color", (0.5, 0.5, 0.5, 0.9))
-        batch_border.draw(shader)
         
         # 文字
         font_id = 0

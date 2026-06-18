@@ -382,12 +382,16 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
                 data['step_schema'], data['step_unit'],
                 1 if data['enable_logging'] else 0)
         else:
+            # has_bottom XOR has_top: only one side has fillet
+            is_bottom = has_bottom
+            fr = cparams.get('bottom_feature_size', 0) if has_bottom else cparams.get('top_feature_size', 0)
             return cpp_exporter.export_cone_chamfer_fillet_step(
                 temp_file,
                 cparams.get('bottom_radius', 0), cparams.get('top_radius', 0),
-                cparams['height'], 0.0, cparams.get('top_feature_size', 0),
+                cparams['height'], 0.0, fr,
                 px, py, pz, data['step_schema'], data['step_unit'],
-                1 if data['enable_logging'] else 0, 0)  # reversed=0: bottom chamfer=0, top fillet
+                1 if data['enable_logging'] else 0,
+                1 if is_bottom else 0)  # reversed=1: bottom fillet; 0: top fillet
     elif obj_type == 'hollow_cylinder_fillet':
         return cpp_exporter.export_hollow_cylinder_fillet_step(
             temp_file,

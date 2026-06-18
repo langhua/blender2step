@@ -1097,6 +1097,27 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
             log_to_file(f"[STEP Exporter]   Cone bottom radius corrected via chamfer: {bottom_radius:.4f} -> {body_bot_r:.4f}")
             bottom_radius = body_bot_r
     
+    # 兜底修正：当 stored_ctype 指示顶部特征（倒角/圆角）但 mesh 因孔洞干扰未能检测时，
+    # 在顶部区域扫描外壁峰值半径来修正 top_radius
+    if not cylindrical_body and top_radius < bottom_radius * 0.85:
+        stored_ctype_fb = obj.get('chamfer_type') if hasattr(obj, 'get') else None
+        # 排除仅底部特征的类型，其余皆有顶部特征（chamfer/fillet/both/chamfer_fillet）
+        has_top_feature = (stored_ctype_fb and 
+                          stored_ctype_fb not in ('bottom_chamfer', 'bottom_fillet'))
+        if has_top_feature:
+            valid_zls = [zl for zl in sorted_z if zl in z_radius_data]
+            if len(valid_zls) >= 3:
+                height_z = sorted_z[-1] - sorted_z[0]
+                top_cut = sorted_z[-1] - height_z * 0.15
+                # 收集顶部15%区域内的z-level（排除顶面本身）
+                top_region = [(zl, z_radius_data[zl]) for zl in valid_zls
+                              if zl > top_cut and zl < sorted_z[-1] * 0.99]
+                if top_region:
+                    peak_z, peak_r = max(top_region, key=lambda x: x[1])
+                    if peak_r > top_radius * 1.02:
+                        log_to_file(f"[STEP Exporter]   Cone top radius corrected via stored edge feature (hole interference): {top_radius:.4f} -> {peak_r:.4f} (z={peak_z:.4f})")
+                        top_radius = peak_r
+    
     # 对于圆柱本体有过渡 → 修正 radius 为 body_radius
     if cylindrical_body and (top_feature or bottom_feature):
         # 单侧过渡：用无过渡侧的极端Z层半径作为本体半径

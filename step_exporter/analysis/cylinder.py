@@ -603,19 +603,19 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                 if stored_pos3 == 'top':
                     hole_pattern_detected = True
                     hole_position = 'top'
-                    hole_radius = inner_r
+                    hole_radius = inner_r * 0.001  # mm → m
                     hole_depth = stored_hd3 * 0.001 if stored_hd3 else top_hole_d
                     log_to_file(f"[STEP Exporter]   Using stored hole_position=top, overriding dual-blind detection")
                 elif stored_pos3 == 'bottom':
                     hole_pattern_detected = True
                     hole_position = 'bottom'
-                    hole_radius = inner_r
+                    hole_radius = inner_r * 0.001  # mm → m
                     hole_depth = stored_hd3 * 0.001 if stored_hd3 else bottom_hole_d
                     log_to_file(f"[STEP Exporter]   Using stored hole_position=bottom, overriding dual-blind detection")
                 else:
                     hole_pattern_detected = True
                     hole_position = 'both'
-                    hole_radius = inner_r
+                    hole_radius = inner_r * 0.001  # mm → m
                     stored_depth = obj.get('hole_depth') if hasattr(obj, 'get') else None
                     if stored_depth is not None:
                         hole_depth = stored_depth * 0.001  # mm → m
@@ -630,7 +630,7 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
         elif btm_has_hole:
             hole_pattern_detected = True
             hole_position = 'bottom'
-            hole_radius = inner_r
+            hole_radius = inner_r * 0.001  # mm → m
             # Prefer stored hole_depth over z-level scan
             stored_hd_btm = obj.get('hole_depth') if hasattr(obj, 'get') else None
             hole_depth = stored_hd_btm * 0.001 if stored_hd_btm else bottom_hole_d
@@ -638,7 +638,7 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
         elif top_has_hole:
             hole_pattern_detected = True
             hole_position = 'top'
-            hole_radius = inner_r
+            hole_radius = inner_r * 0.001  # mm → m
             # Prefer stored hole_depth over z-level scan
             stored_hd_top = obj.get('hole_depth') if hasattr(obj, 'get') else None
             hole_depth = stored_hd_top * 0.001 if stored_hd_top else top_hole_d

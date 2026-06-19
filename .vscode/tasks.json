@@ -18,6 +18,17 @@
 			"type": "shell",
 			"command": "cmake --build build --config Release",
 			"group": "build"
+		},
+		{
+			"label": "build",
+			"type": "shell",
+			"command": "npm run build",
+			"options": {
+				"env": {
+				"NODE_OPTIONS": "--max-old-space-size=4096"
+				}
+			},
+			"problemMatcher": []
 		}
 	]
 }

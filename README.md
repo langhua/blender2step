@@ -1,7 +1,7 @@
 # blender2step
 Blender step exporter based on OpenCASCADE.
 
-
+本模块仅支持Blender 4.2.1，主要由DeepSeek V4 Pro等AI模型生成。
 
 
 ## Development

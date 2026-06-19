@@ -12,8 +12,8 @@ def clear():
     bpy.ops.object.delete(use_global=False)
 
 def _add_edge_bevel_mod(obj, chamfer_type, fillet_r):
-    """Add a Bevel modifier (weight-limited) — applied AFTER Boolean.
-    Uses edge bevel weights, which persist correctly through Boolean operations."""
+    """Add Bevel modifier(s) for edge chamfer/fillet.
+    chamfer_fillet uses VGROUP (vertex groups on original mesh, applied before Boolean)."""
     import bmesh
     ctype = str(chamfer_type)
     is_chamfer = 'chamfer' in ctype
@@ -22,18 +22,47 @@ def _add_edge_bevel_mod(obj, chamfer_type, fillet_r):
     top = ('top' in ctype or 'both' in ctype or ctype in ('chamfer', 'fillet'))
     bottom = ('bottom' in ctype or 'both' in ctype)
 
-    if not (top or bottom):
+    if not (top or bottom) and ctype != 'chamfer_fillet':
         return
 
     hh = H / 2.0
-
     bpy.context.view_layer.objects.active = obj
     bpy.ops.object.mode_set(mode='EDIT')
     bpy.ops.mesh.select_mode(type='EDGE')
     bpy.ops.mesh.select_all(action='DESELECT')
-
     bm = bmesh.from_edit_mesh(obj.data)
     bm.edges.ensure_lookup_table()
+
+    if ctype == 'chamfer_fillet':
+        # VGROUP approach: vertex groups survive because Bevel applied before Boolean
+        min_xy_v = min(BOT_R, TOP_R) * 0.7
+        vg_top = obj.vertex_groups.new(name="TopRim")
+        vg_bot = obj.vertex_groups.new(name="BotRim")
+        top_verts = set(); bot_verts = set()
+        for e in bm.edges:
+            v1z, v2z = e.verts[0].co.z, e.verts[1].co.z
+            v1r = math.sqrt(e.verts[0].co.x**2 + e.verts[0].co.y**2)
+            v2r = math.sqrt(e.verts[1].co.x**2 + e.verts[1].co.y**2)
+            if v1z > hh * 0.85 and v2z > hh * 0.85 and v1r > min_xy_v and v2r > min_xy_v:
+                top_verts.add(e.verts[0].index); top_verts.add(e.verts[1].index)
+            if v1z < -hh * 0.85 and v2z < -hh * 0.85 and v1r > min_xy_v and v2r > min_xy_v:
+                bot_verts.add(e.verts[0].index); bot_verts.add(e.verts[1].index)
+        bmesh.update_edit_mesh(obj.data)
+        bpy.ops.object.mode_set(mode='OBJECT')
+        if top_verts: vg_top.add(list(top_verts), 1.0, 'ADD')
+        if bot_verts: vg_bot.add(list(bot_verts), 1.0, 'ADD')
+        m1 = obj.modifiers.new("EdgeCham", 'BEVEL')
+        m1.width = CH_SZ; m1.segments = 1; m1.limit_method = 'VGROUP'
+        m1.vertex_group = "TopRim"
+        m2 = obj.modifiers.new("EdgeFillet", 'BEVEL')
+        m2.width = fillet_r; m2.segments = 8; m2.limit_method = 'VGROUP'
+        m2.vertex_group = "BotRim"
+        obj['chamfer_type'] = ctype
+        obj['chamfer_size'] = CH_SZ * 1000
+        obj['fillet_radius_edge'] = FR_R * 1000
+        return
+
+    # Single type: use edge bevel weight
     for e in bm.edges:
         v1z = e.verts[0].co.z
         v2z = e.verts[1].co.z
@@ -42,17 +71,13 @@ def _add_edge_bevel_mod(obj, chamfer_type, fillet_r):
         if is_top or is_bot:
             e.select = True
     bmesh.update_edit_mesh(obj.data)
-    # Set bevel weight on selected edges
     bpy.ops.transform.edge_bevelweight(value=1.0)
     bpy.ops.object.mode_set(mode='OBJECT')
-
-    # Bevel modifier with WEIGHT limit — edge weights survive Boolean
     mod = obj.modifiers.new("EdgeBevel", 'BEVEL')
     mod.width = CH_SZ if is_chamfer else fillet_r
     mod.segments = 1 if is_chamfer else 8
     mod.limit_method = 'WEIGHT'
 
-    # Store metadata for STEP export
     obj['chamfer_type'] = ctype
     if is_chamfer:
         obj['chamfer_size'] = CH_SZ * 1000
@@ -223,7 +248,7 @@ def add_shelf_label(y, z, text):
     t.rotation_euler = (math.pi / 2, 0, math.pi / 2)
 
 def apply_all_modifiers():
-    """Apply modifiers in order: Boolean (hole) first, then Bevel (chamfer/fillet)."""
+    """Apply Bevel modifiers FIRST (vertex groups intact), then Boolean (holes)."""
     cones = [o for o in bpy.data.objects
              if o.name.startswith('S') and not o.name.startswith('CUT_')
              and not o.name.startswith('L')]
@@ -233,13 +258,18 @@ def apply_all_modifiers():
         bpy.ops.object.select_all(action='DESELECT')
         obj.select_set(True)
         bpy.context.view_layer.objects.active = obj
-        # Stack order: [0]=EdgeBevel, [1]=Hole. Apply Hole FIRST, then Bevel.
-        for mod in reversed(list(obj.modifiers)):
-            try:
-                obj.modifiers.move(obj.modifiers.find(mod.name), 0)
-                bpy.ops.object.modifier_apply(modifier=mod.name)
-            except RuntimeError as e:
-                print(f"    Skip {obj.name}/{mod.name}: {e}")
+        for mod in list(obj.modifiers):
+            if mod.type == 'BEVEL':
+                try:
+                    bpy.ops.object.modifier_apply(modifier=mod.name)
+                except RuntimeError as e:
+                    print(f"    Skip {obj.name}/{mod.name}: {e}")
+        for mod in list(obj.modifiers):
+            if mod.type == 'BOOLEAN':
+                try:
+                    bpy.ops.object.modifier_apply(modifier=mod.name)
+                except RuntimeError as e:
+                    print(f"    Skip {obj.name}/{mod.name}: {e}")
 
     # Remove cutter objects
     for obj in list(bpy.data.objects):
@@ -329,7 +359,7 @@ Z_BASE = H / 2
 STEP_Y = max(BOT_R, TOP_R) * 2 + GAP_Y
 
 # Z⁻ : top shelf at highest Z, descending
-NUM_SHELVES = 7
+NUM_SHELVES = 8
 Z_TOP = Z_BASE + (NUM_SHELVES - 1) * Z_GAP
 
 # ============================================================
@@ -436,7 +466,21 @@ SHELVES = [
         _make_row("TprBBl", "bottom", HOLE_D, 0.08, "+BothFil+TprBB"),
         _make_row("TprBoth", "both", HOLE_D, 0.08, "+BothFil+TprBoth"),
     ]),
+    # S8: Top Chamfer + Bottom Fillet — 10 hole variants
+    ("S8 T.Ch+B.Fil", "chamfer_fillet", FR_R, [
+        _make_row("Plain", None, 0, None, "+T.Ch+B.Fil"),
+        _make_row("TBl", "top", HOLE_D, None, "+ChFil+TBl"),
+        _make_row("BBl", "bottom", HOLE_D, None, "+ChFil+BBl"),
+        _make_row("BothBl", "both", HOLE_D, None, "+ChFil+Both"),
+        _make_row("Thru", "through", 0, None, "+ChFil+Thru"),
+        _make_row("TprThru", "through", 0, 0.1, "+ChFil+Tpr"),
+        _make_row("InvTpr", "through_inv", 0, 0.1, "+ChFil+InvTpr"),
+        _make_row("TprTBl", "top", HOLE_D, 0.08, "+ChFil+TprTB"),
+        _make_row("TprBBl", "bottom", HOLE_D, 0.08, "+ChFil+TprBB"),
+        _make_row("TprBoth", "both", HOLE_D, 0.08, "+ChFil+TprBoth"),
+    ]),
 ]
+
 
 if __name__ == '__main__':
     for shelf_idx, (shelf_label, base_ctype, base_fr, items) in enumerate(SHELVES):
@@ -456,5 +500,8 @@ if __name__ == '__main__':
 
     apply_all_modifiers()
     _bevel_hole_openings()
+    for obj in list(bpy.data.objects):
+        if obj.name.startswith('CUT_'):
+            bpy.data.objects.remove(obj, do_unlink=True)
     print(f"Cone gallery: {len(bpy.data.objects)} objects")
 

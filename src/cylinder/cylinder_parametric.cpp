@@ -1207,13 +1207,29 @@ TopoDS_Shape create_cylinder_with_blind_hole_solid_parametric(
     bool is_tapered = (hole_radius_bottom > 0.001 && std::abs(hole_radius_bottom - hole_radius) > 0.0001);
 
     if (!is_tapered) {
-        // === FALLBACK: Plain cylinder (correct dimensions, no hole) ===
-        // OCCT 7.8.1 Boolean operations for blind holes are fundamentally broken.
-        // Exporting as plain cylinder avoids crashes and ensures all objects appear.
-        std::cerr << "[STEP Exporter] WARNING: Blind hole as plain cylinder (OCCT bug)" << std::endl;
-        TopoDS_Shape hole_solid = solid;  // use the outer cylinder as-is
-
-        std::cout << "[STEP Exporter] [FALLBACK] blind hole as plain cylinder" << std::endl;
+        // === Straight blind hole: extend cutter past face (same approach as cone blind hole) ===
+        // OCCT 7.8.1 BRepAlgoAPI_Cut works when cutter intersects the face cleanly.
+        // Extend cutter height by 5mm so it protrudes past the cylinder end face.
+        double cutterH = hole_depth + 5.0;
+        TopoDS_Shape cutter = create_cylinder_solid_parametric(hole_radius, cutterH);
+        if (cutter.IsNull()) return TopoDS_Shape();
+        
+        // Position: cutter center at halfH - hole_depth + cutterH/2 (for top hole)
+        //           or -halfH + hole_depth - cutterH/2 (for bottom hole)
+        double cz;
+        if (is_bottom) {
+            cz = -halfH + hole_depth - cutterH / 2.0;
+        } else {
+            cz = halfH - hole_depth + cutterH / 2.0;
+        }
+        gp_Trsf trsf;
+        trsf.SetTranslation(gp_Vec(0, 0, cz));
+        cutter = BRepBuilderAPI_Transform(cutter, trsf).Shape();
+        
+        BRepAlgoAPI_Cut cut(solid, shape_to_solid(cutter));
+        if (!cut.IsDone()) { std::cerr << "[STEP Exporter] Blind hole cut failed" << std::endl; return TopoDS_Shape(); }
+        TopoDS_Shape hole_solid = shape_to_solid(cut.Shape());
+        if (hole_solid.IsNull()) return TopoDS_Shape();
 
         // Apply fillet at hole OPENING (top/bottom face of cylinder)
         if (hole_fillet_radius > 0.001) {
@@ -1370,7 +1386,7 @@ TopoDS_Shape create_cylinder_with_dual_blind_holes_solid_parametric(
     apply_edge_feature(true);   // top
     apply_edge_feature(false);  // bottom
 
-    double ext = std::max(radius * 0.001, 0.0001);
+    double ext = 5.0; // extend cutter past face (same as cone blind hole)
     double halfH = height / 2.0;
     bool is_tapered = (hole_radius_bottom > 0.001 && std::abs(hole_radius_bottom - hole_radius) > 0.0001);
 
@@ -1414,15 +1430,58 @@ TopoDS_Shape create_cylinder_with_dual_blind_holes_solid_parametric(
         return c;
     };
 
-    // === FALLBACK: Dual blind holes as plain cylinder (OCCT bug) ===
-    // BRepAlgoAPI_Cut crashes for blind holes. Skip the cuts entirely.
-    // ================================================================
-    (void)bottom_hole_depth;
-    (void)top_hole_depth;
-    (void)hole_fillet_radius;
-    (void)hole_radius_bottom;
-    std::cerr << "[STEP Exporter] WARNING: Dual blind holes as plain cylinder (OCCT bug)" << std::endl;
-    std::cout << "[STEP Exporter] Created cylinder (dual blind fallback): r=" << radius << " h=" << height << std::endl;
+    // === Dual blind holes: cut bottom first, then top (extended cutters past faces) ===
+    // Uses same technique as cone blind hole: cutter extends past cylinder face for clean BRepAlgoAPI_Cut
+    if (bottom_hole_depth > 0.001) {
+        TopoDS_Shape cutter_b = make_cutter(bottom_hole_depth, false);
+        if (!cutter_b.IsNull()) {
+            BRepAlgoAPI_Cut cut(solid, shape_to_solid(cutter_b));
+            if (cut.IsDone()) {
+                solid = shape_to_solid(cut.Shape());
+                // Apply fillet at bottom opening
+                if (!solid.IsNull() && hole_fillet_radius > 0.001) {
+                    for (TopExp_Explorer exp(solid, TopAbs_EDGE); exp.More(); exp.Next()) {
+                        TopoDS_Edge e = TopoDS::Edge(exp.Current());
+                        BRepAdaptor_Curve c(e);
+                        if (c.GetType() != GeomAbs_Circle) continue;
+                        gp_Circ cr = c.Circle();
+                        if (std::abs(cr.Radius() - hole_radius) / std::max(hole_radius, 0.001) > 0.15) continue;
+                        if (std::abs(cr.Location().Z() + halfH) < 0.01) {
+                            BRepFilletAPI_MakeFillet fm(solid); fm.Add(hole_fillet_radius, e); fm.Build();
+                            if (fm.IsDone()) solid = shape_to_solid(fm.Shape());
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if (top_hole_depth > 0.001) {
+        TopoDS_Shape cutter_t = make_cutter(top_hole_depth, true);
+        if (!cutter_t.IsNull()) {
+            BRepAlgoAPI_Cut cut(solid, shape_to_solid(cutter_t));
+            if (cut.IsDone()) {
+                solid = shape_to_solid(cut.Shape());
+                // Apply fillet at top opening
+                if (!solid.IsNull() && hole_fillet_radius > 0.001) {
+                    for (TopExp_Explorer exp(solid, TopAbs_EDGE); exp.More(); exp.Next()) {
+                        TopoDS_Edge e = TopoDS::Edge(exp.Current());
+                        BRepAdaptor_Curve c(e);
+                        if (c.GetType() != GeomAbs_Circle) continue;
+                        gp_Circ cr = c.Circle();
+                        if (std::abs(cr.Radius() - hole_radius) / std::max(hole_radius, 0.001) > 0.15) continue;
+                        if (std::abs(cr.Location().Z() - halfH) < 0.01) {
+                            BRepFilletAPI_MakeFillet fm(solid); fm.Add(hole_fillet_radius, e); fm.Build();
+                            if (fm.IsDone()) solid = shape_to_solid(fm.Shape());
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    std::cout << "[STEP Exporter] Created cylinder with dual blind holes: r=" << radius << " h=" << height
+              << " hole_r=" << hole_radius << " btm_d=" << bottom_hole_depth << " top_d=" << top_hole_depth << std::endl;
     return solid;
 }
 

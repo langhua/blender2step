@@ -114,15 +114,31 @@ def _export_parametric_sync(filepath, bottom_shells, top_shells, cylinders, step
                 px, py, pz,
                 step_schema, step_unit, 1 if enable_logging else 0)
         elif obj_type == 'cylinder_chamfer':
-            success = cpp_exporter.export_cylinder_chamfer_step(
-                temp_file, cparams['radius'], cparams['height'],
-                cparams.get('top_feature_size', 0), px, py, pz,
-                step_schema, step_unit, 1 if enable_logging else 0)
+            top_sz = cparams.get('top_feature_size', 0) if cparams.get('top_feature') == 'chamfer' else 0
+            btm_sz = cparams.get('bottom_feature_size', 0) if cparams.get('bottom_feature') == 'chamfer' else 0
+            if btm_sz > 0.001 and top_sz < 0.001:
+                success = cpp_exporter.export_cylinder_chamfer_both_step(
+                    temp_file, cparams['radius'], cparams['height'],
+                    0.0, btm_sz, px, py, pz,
+                    step_schema, step_unit, 1 if enable_logging else 0)
+            else:
+                success = cpp_exporter.export_cylinder_chamfer_step(
+                    temp_file, cparams['radius'], cparams['height'],
+                    max(top_sz, btm_sz), px, py, pz,
+                    step_schema, step_unit, 1 if enable_logging else 0)
         elif obj_type == 'cylinder_fillet':
-            success = cpp_exporter.export_cylinder_fillet_step(
-                temp_file, cparams['radius'], cparams['height'],
-                cparams.get('top_feature_size', 0), px, py, pz,
-                step_schema, step_unit, 1 if enable_logging else 0)
+            top_sz = cparams.get('top_feature_size', 0) if cparams.get('top_feature') == 'fillet' else 0
+            btm_sz = cparams.get('bottom_feature_size', 0) if cparams.get('bottom_feature') == 'fillet' else 0
+            if btm_sz > 0.001 and top_sz < 0.001:
+                success = cpp_exporter.export_cylinder_fillet_both_step(
+                    temp_file, cparams['radius'], cparams['height'],
+                    0.0, btm_sz, px, py, pz,
+                    step_schema, step_unit, 1 if enable_logging else 0)
+            else:
+                success = cpp_exporter.export_cylinder_fillet_step(
+                    temp_file, cparams['radius'], cparams['height'],
+                    max(top_sz, btm_sz), px, py, pz,
+                    step_schema, step_unit, 1 if enable_logging else 0)
         elif obj_type == 'cylinder_chamfer_fillet':
             reversed_flag = 1 if cparams.get('top_feature') == 'fillet' else 0
             chamfer_sz = cparams.get('top_feature_size', 0)

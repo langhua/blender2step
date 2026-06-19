@@ -597,17 +597,20 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
             if bottom_hole_d > height * 0.05 and top_hole_d > height * 0.05:
                 # 优先使用存储的 hole_position（避免误判为双端孔）
                 stored_pos3 = obj.get('hole_position') if hasattr(obj, 'get') else None
+                # CRITICAL: Use stored hole_depth when available. z-level scanning can be
+                # misled by inner hole walls (e.g., top blind hole detected as dual-hole).
+                stored_hd3 = obj.get('hole_depth') if hasattr(obj, 'get') else None
                 if stored_pos3 == 'top':
                     hole_pattern_detected = True
                     hole_position = 'top'
                     hole_radius = inner_r
-                    hole_depth = top_hole_d
+                    hole_depth = stored_hd3 * 0.001 if stored_hd3 else top_hole_d
                     log_to_file(f"[STEP Exporter]   Using stored hole_position=top, overriding dual-blind detection")
                 elif stored_pos3 == 'bottom':
                     hole_pattern_detected = True
                     hole_position = 'bottom'
                     hole_radius = inner_r
-                    hole_depth = bottom_hole_d
+                    hole_depth = stored_hd3 * 0.001 if stored_hd3 else bottom_hole_d
                     log_to_file(f"[STEP Exporter]   Using stored hole_position=bottom, overriding dual-blind detection")
                 else:
                     hole_pattern_detected = True
@@ -628,14 +631,18 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
             hole_pattern_detected = True
             hole_position = 'bottom'
             hole_radius = inner_r
-            hole_depth = bottom_hole_d
-            log_to_file(f"[STEP Exporter]   Bottom blind hole: inner_r={inner_r:.4f} hole_depth={bottom_hole_d:.4f} ({bottom_hole_d/height*100:.0f}%)")
+            # Prefer stored hole_depth over z-level scan
+            stored_hd_btm = obj.get('hole_depth') if hasattr(obj, 'get') else None
+            hole_depth = stored_hd_btm * 0.001 if stored_hd_btm else bottom_hole_d
+            log_to_file(f"[STEP Exporter]   Bottom blind hole: inner_r={inner_r:.4f} hole_depth={hole_depth:.4f} ({hole_depth/height*100:.0f}%)")
         elif top_has_hole:
             hole_pattern_detected = True
             hole_position = 'top'
             hole_radius = inner_r
-            hole_depth = top_hole_d
-            log_to_file(f"[STEP Exporter]   Top blind hole: inner_r={inner_r:.4f} hole_depth={top_hole_d:.4f} ({top_hole_d/height*100:.0f}%)")
+            # Prefer stored hole_depth over z-level scan
+            stored_hd_top = obj.get('hole_depth') if hasattr(obj, 'get') else None
+            hole_depth = stored_hd_top * 0.001 if stored_hd_top else top_hole_d
+            log_to_file(f"[STEP Exporter]   Top blind hole: inner_r={inner_r:.4f} hole_depth={hole_depth:.4f} ({hole_depth/height*100:.0f}%)")
         else:
             log_to_file(f"[STEP Exporter]   Blind hole check: inner_r={inner_r:.6f} btm_d={bottom_hole_d:.6f} top_d={top_hole_d:.6f} — not detected")
     
@@ -1713,7 +1720,100 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                 result['inner_top_radius'] = stepped_hole_params['inner_top_radius']
             return result
     else:
-        if bottom_radius * 0.98 <= top_radius <= bottom_radius * 1.02:
+        # 圆柱带倒角/圆角回退：mesh 检测可能漏掉底部特征，用 stored_ctype 修正
+        stored_ctype_cls = obj.get('chamfer_type') if hasattr(obj, 'get') else None
+        stored_orig_cls = obj.get('cylinder_original_radius', 0) if hasattr(obj, 'get') else 0
+        is_cyl_feature = stored_ctype_cls in ('chamfer', 'bottom_chamfer', 'chamfer_both',
+                                               'fillet', 'bottom_fillet', 'fillet_both',
+                                               'chamfer_fillet')
+        if is_cyl_feature:
+            # Determine the original cylinder radius
+            if stored_orig_cls > 0:
+                orig_r = stored_orig_cls  # already in mm (all radii scaled by S)
+            elif body_radius and body_radius > 0:
+                orig_r = body_radius  # use body radius as fallback (no-hole objects lack cylinder_original_radius)
+            else:
+                orig_r = max(bottom_radius, top_radius)
+            if bottom_radius * 0.85 <= orig_r <= bottom_radius * 1.25 or top_radius * 0.85 <= orig_r <= top_radius * 1.25:
+                avg_radius = orig_r
+                bottom_radius = orig_r
+                top_radius = orig_r
+            elif bottom_radius * 0.98 <= top_radius <= bottom_radius * 1.02:
+                if body_radius and abs(body_radius - bottom_radius) / max(bottom_radius, 0.001) > 0.02:
+                    avg_radius = body_radius
+                else:
+                    avg_radius = (bottom_radius + top_radius) / 2.0
+            else:
+                avg_radius = (bottom_radius + top_radius) / 2.0
+                # Still mismatched: fall through to cone
+                if abs(bottom_radius - top_radius) / max(bottom_radius, 0.001) > 0.05:
+                    obj_type = 'cone'
+                    if top_feature and bottom_feature:
+                        if top_feature == 'chamfer' and bottom_feature == 'chamfer':
+                            obj_type = 'cone_chamfer'
+                        elif top_feature == 'fillet' and bottom_feature == 'fillet':
+                            obj_type = 'cone_fillet'
+                        else:
+                            obj_type = 'cone_chamfer_fillet'
+                    elif top_feature:
+                        obj_type = 'cone_chamfer' if top_feature == 'chamfer' else 'cone_fillet'
+                    elif bottom_feature:
+                        obj_type = 'cone_chamfer' if bottom_feature == 'chamfer' else 'cone_fillet'
+                    log_to_file(f"[STEP Exporter]   CLASSIFIED: {obj_type} bR={bottom_radius*1000:.6f} tR={top_radius*1000:.6f} h={height*1000:.6f}")
+                    return {
+                        'obj_type': obj_type,
+                        'bottom_radius': bottom_radius * S,
+                        'top_radius': top_radius * S,
+                        'height': height * S,
+                        'top_feature': top_feature,
+                        'top_feature_size': top_feature_size,
+                        'bottom_feature': bottom_feature,
+                        'bottom_feature_size': bottom_feature_size,
+                        'pos_x': pos_x, 'pos_y': pos_y, 'pos_z': pos_z,
+                    }
+            # Cylinder with chamfer/fillet: use stored_ctype to determine obj_type
+            # Read stored feature sizes from object properties (mm, already scaled by S in this context)
+            stored_ch_sz = obj.get('chamfer_size', 0) if hasattr(obj, 'get') else 0
+            stored_fr_r = obj.get('fillet_radius_edge', 0) if hasattr(obj, 'get') else 0
+            obj_type = 'cylinder'
+            # Reset features based on stored_ctype (mesh may not detect them)
+            out_top_feat = None; out_top_sz = 0.0
+            out_bot_feat = None; out_bot_sz = 0.0
+            if stored_ctype_cls == 'chamfer':
+                obj_type = 'cylinder_chamfer'
+                out_top_feat = 'chamfer'; out_top_sz = stored_ch_sz
+            elif stored_ctype_cls == 'bottom_chamfer':
+                obj_type = 'cylinder_chamfer'
+                out_bot_feat = 'chamfer'; out_bot_sz = stored_ch_sz
+            elif stored_ctype_cls == 'chamfer_both':
+                obj_type = 'cylinder_chamfer_both'
+                out_top_feat = 'chamfer'; out_top_sz = stored_ch_sz
+                out_bot_feat = 'chamfer'; out_bot_sz = stored_ch_sz
+            elif stored_ctype_cls == 'fillet':
+                obj_type = 'cylinder_fillet'
+                out_top_feat = 'fillet'; out_top_sz = stored_fr_r
+            elif stored_ctype_cls == 'bottom_fillet':
+                obj_type = 'cylinder_fillet'
+                out_bot_feat = 'fillet'; out_bot_sz = stored_fr_r
+            elif stored_ctype_cls == 'fillet_both':
+                obj_type = 'cylinder_fillet_both'
+                out_top_feat = 'fillet'; out_top_sz = stored_fr_r
+                out_bot_feat = 'fillet'; out_bot_sz = stored_fr_r
+            elif stored_ctype_cls == 'chamfer_fillet':
+                obj_type = 'cylinder_chamfer_fillet'
+                out_top_feat = 'chamfer'; out_top_sz = stored_ch_sz
+                out_bot_feat = 'fillet'; out_bot_sz = stored_fr_r
+            return {
+                'obj_type': obj_type,
+                'radius': avg_radius,
+                'height': height,
+                'pos_x': pos_x, 'pos_y': pos_y, 'pos_z': pos_z,
+                'top_feature': out_top_feat,
+                'top_feature_size': out_top_sz,
+                'bottom_feature': out_bot_feat,
+                'bottom_feature_size': out_bot_sz,
+            }
+        elif bottom_radius * 0.98 <= top_radius <= bottom_radius * 1.02:
             # 使用体半径（过渡检测中已修正），避免极端z层混入面顶点导致半径偏小
             if body_radius and abs(body_radius - bottom_radius) / max(bottom_radius, 0.001) > 0.02:
                 avg_radius = body_radius

@@ -162,6 +162,9 @@ def add_cylinder(y, z, name, r, chamfer_type=None, fillet_r=0,
             obj['hole_opening_radius'] = TAPER_OPEN_R * 1000
             obj['hole_end_radius'] = hole_er * 1000
         obj['cylinder_original_radius'] = r * 1000
+    # Always store original radius for chamfer/fillet detection (not just holes)
+    if chamfer_type is not None:
+        obj['cylinder_original_radius'] = r * 1000
     return obj
 
 def add_label(y, z, text):

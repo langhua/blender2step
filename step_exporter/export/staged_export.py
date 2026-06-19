@@ -178,15 +178,33 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
             data['step_schema'], data['step_unit'],
             1 if data['enable_logging'] else 0)
     elif obj_type == 'cylinder_chamfer':
+        top_sz = cparams.get('top_feature_size', 0) if cparams.get('top_feature') == 'chamfer' else 0
+        btm_sz = cparams.get('bottom_feature_size', 0) if cparams.get('bottom_feature') == 'chamfer' else 0
+        if btm_sz > 0.001 and top_sz < 0.001:
+            # Bottom-only chamfer → use _both with only bottom
+            return cpp_exporter.export_cylinder_chamfer_both_step(
+                temp_file, cparams['radius'], cparams['height'],
+                0.0, btm_sz, px, py, pz,
+                data['step_schema'], data['step_unit'],
+                1 if data['enable_logging'] else 0)
         return cpp_exporter.export_cylinder_chamfer_step(
             temp_file, cparams['radius'], cparams['height'],
-            cparams.get('top_feature_size', 0), px, py, pz,
+            max(top_sz, btm_sz), px, py, pz,
             data['step_schema'], data['step_unit'],
             1 if data['enable_logging'] else 0)
     elif obj_type == 'cylinder_fillet':
+        top_sz = cparams.get('top_feature_size', 0) if cparams.get('top_feature') == 'fillet' else 0
+        btm_sz = cparams.get('bottom_feature_size', 0) if cparams.get('bottom_feature') == 'fillet' else 0
+        if btm_sz > 0.001 and top_sz < 0.001:
+            # Bottom-only fillet → use _both with only bottom
+            return cpp_exporter.export_cylinder_fillet_both_step(
+                temp_file, cparams['radius'], cparams['height'],
+                0.0, btm_sz, px, py, pz,
+                data['step_schema'], data['step_unit'],
+                1 if data['enable_logging'] else 0)
         return cpp_exporter.export_cylinder_fillet_step(
             temp_file, cparams['radius'], cparams['height'],
-            cparams.get('top_feature_size', 0), px, py, pz,
+            max(top_sz, btm_sz), px, py, pz,
             data['step_schema'], data['step_unit'],
             1 if data['enable_logging'] else 0)
     elif obj_type == 'cylinder_chamfer_fillet':

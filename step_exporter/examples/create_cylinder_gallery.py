@@ -17,8 +17,7 @@ def clear():
 
 def _add_edge_bevel_mod(obj, chamfer_type, fillet_r):
     """Add Bevel modifier(s) for edge chamfer/fillet.
-    Uses edge bevel weights (proven with Boolean). For chamfer_fillet
-    uses vertex groups to apply chamfer to top and fillet to bottom."""
+    chamfer_fillet is handled in post-processing (bmesh), not via modifiers."""
     import bmesh
     ctype = str(chamfer_type)
 
@@ -31,7 +30,14 @@ def _add_edge_bevel_mod(obj, chamfer_type, fillet_r):
     if not (top or bot):
         return
 
-    is_mixed = (ctype == 'chamfer_fillet')
+    # chamfer_fillet: skip modifier, handled by _bevel_mixed_edges post-processing
+    if ctype == 'chamfer_fillet':
+        obj['chamfer_type'] = ctype
+        obj['chamfer_size'] = CH_SZ * 1000
+        obj['fillet_radius_edge'] = FR_R * 1000
+        return
+
+    # Single type: use edge bevel weight (proven reliable with Boolean)
     hh = H / 2.0
     bpy.context.view_layer.objects.active = obj
     bpy.ops.object.mode_set(mode='EDIT')
@@ -39,44 +45,20 @@ def _add_edge_bevel_mod(obj, chamfer_type, fillet_r):
     bpy.ops.mesh.select_all(action='DESELECT')
     bm = bmesh.from_edit_mesh(obj.data)
     bm.edges.ensure_lookup_table()
-
-    if is_mixed:
-        # chamfer_fillet: need vertex groups for two different bevel types
-        vg_top = obj.vertex_groups.new(name="TopEdge")
-        vg_bot = obj.vertex_groups.new(name="BotEdge")
-        top_verts = set(); bot_verts = set()
-        for e in bm.edges:
-            v1z = e.verts[0].co.z; v2z = e.verts[1].co.z
-            if v1z > hh * 0.8 and v2z > hh * 0.8:
-                top_verts.add(e.verts[0].index); top_verts.add(e.verts[1].index)
-            if v1z < -hh * 0.8 and v2z < -hh * 0.8:
-                bot_verts.add(e.verts[0].index); bot_verts.add(e.verts[1].index)
-        bmesh.update_edit_mesh(obj.data)
-        bpy.ops.object.mode_set(mode='OBJECT')
-        if top_verts: vg_top.add(list(top_verts), 1.0, 'ADD')
-        if bot_verts: vg_bot.add(list(bot_verts), 1.0, 'ADD')
-        m1 = obj.modifiers.new("EdgeChamfer_Top", 'BEVEL')
-        m1.width = CH_SZ; m1.segments = 1; m1.limit_method = 'VGROUP'
-        m1.vertex_group = "TopEdge"
-        m2 = obj.modifiers.new("EdgeFillet_Bot", 'BEVEL')
-        m2.width = fillet_r; m2.segments = 8; m2.limit_method = 'VGROUP'
-        m2.vertex_group = "BotEdge"
-    else:
-        # Single type: use edge bevel weight (proven reliable with Boolean)
-        for e in bm.edges:
-            v1z = e.verts[0].co.z; v2z = e.verts[1].co.z
-            is_top = top and v1z > hh * 0.8 and v2z > hh * 0.8
-            is_bot = bot and v1z < -hh * 0.8 and v2z < -hh * 0.8
-            if is_top or is_bot:
-                e.select = True
-        bmesh.update_edit_mesh(obj.data)
-        bpy.ops.transform.edge_bevelweight(value=1.0)
-        bpy.ops.object.mode_set(mode='OBJECT')
-        is_chamfer = top_chamfer or bot_chamfer
-        mod = obj.modifiers.new("EdgeBevel", 'BEVEL')
-        mod.width = CH_SZ if is_chamfer else fillet_r
-        mod.segments = 1 if is_chamfer else 8
-        mod.limit_method = 'WEIGHT'
+    for e in bm.edges:
+        v1z = e.verts[0].co.z; v2z = e.verts[1].co.z
+        is_top = top and v1z > hh * 0.8 and v2z > hh * 0.8
+        is_bot = bot and v1z < -hh * 0.8 and v2z < -hh * 0.8
+        if is_top or is_bot:
+            e.select = True
+    bmesh.update_edit_mesh(obj.data)
+    bpy.ops.transform.edge_bevelweight(value=1.0)
+    bpy.ops.object.mode_set(mode='OBJECT')
+    is_chamfer = top_chamfer or bot_chamfer
+    mod = obj.modifiers.new("EdgeBevel", 'BEVEL')
+    mod.width = CH_SZ if is_chamfer else fillet_r
+    mod.segments = 1 if is_chamfer else 8
+    mod.limit_method = 'WEIGHT'
 
     obj['chamfer_type'] = ctype
     if top_chamfer or bot_chamfer:
@@ -201,7 +183,8 @@ def add_shelf_label(y, z, text):
     t.rotation_euler = (math.pi / 2, 0, math.pi / 2)
 
 def apply_all_modifiers():
-    """Apply modifiers in order: Boolean (hole) first, then Bevel (chamfer/fillet)."""
+    """Apply Bevel modifiers FIRST (vertex groups intact), then Boolean (holes).
+    This order is critical: Booleans change vertex indices, breaking VGROUP bevels."""
     cylinders = [o for o in bpy.data.objects
                  if o.name.startswith('C') and not o.name.startswith('CUT_')
                  and not o.name.startswith('L')]
@@ -211,12 +194,20 @@ def apply_all_modifiers():
         bpy.ops.object.select_all(action='DESELECT')
         obj.select_set(True)
         bpy.context.view_layer.objects.active = obj
-        for mod in reversed(list(obj.modifiers)):
-            try:
-                obj.modifiers.move(obj.modifiers.find(mod.name), 0)
-                bpy.ops.object.modifier_apply(modifier=mod.name)
-            except RuntimeError as e:
-                print(f"    Skip {obj.name}/{mod.name}: {e}")
+        # Apply Bevel modifiers first (before Booleans change vertex indices)
+        for mod in list(obj.modifiers):
+            if mod.type == 'BEVEL':
+                try:
+                    bpy.ops.object.modifier_apply(modifier=mod.name)
+                except RuntimeError as e:
+                    print(f"    Skip {obj.name}/{mod.name}: {e}")
+        # Then apply Boolean modifiers (hole cutters)
+        for mod in list(obj.modifiers):
+            if mod.type == 'BOOLEAN':
+                try:
+                    bpy.ops.object.modifier_apply(modifier=mod.name)
+                except RuntimeError as e:
+                    print(f"    Skip {obj.name}/{mod.name}: {e}")
     for obj in list(bpy.data.objects):
         if obj.name.startswith('CUT_'):
             bpy.data.objects.remove(obj, do_unlink=True)
@@ -261,6 +252,50 @@ def _bevel_hole_openings():
         bmesh.update_edit_mesh(obj.data)
         bpy.ops.mesh.bevel(offset=HOLE_FILLET_R, offset_type='OFFSET',
                            segments=12, profile=0.5, affect='EDGES')
+        bpy.ops.object.mode_set(mode='OBJECT')
+
+def _bevel_mixed_edges():
+    """Post-processing for chamfer_fillet: top=chamfer, bottom=fillet via bmesh.
+    Runs AFTER all modifiers applied, so edge geometry is final."""
+    import bmesh
+    for obj in list(bpy.data.objects):
+        if not obj.name.startswith('C') or obj.name.startswith('CUT_') or obj.name.startswith('L'):
+            continue
+        if obj.get('chamfer_type') != 'chamfer_fillet':
+            continue
+
+        bpy.context.view_layer.objects.active = obj
+        hh = H / 2.0
+
+        # Top: chamfer (segments=1, width=CH_SZ) — only outer cylinder edges
+        bpy.ops.object.mode_set(mode='EDIT')
+        bpy.ops.mesh.select_mode(type='EDGE')
+        bpy.ops.mesh.select_all(action='DESELECT')
+        bm = bmesh.from_edit_mesh(obj.data)
+        bm.edges.ensure_lookup_table()
+        for e in bm.edges:
+            v1z = e.verts[0].co.z; v2z = e.verts[1].co.z
+            mid_xy = math.sqrt(((e.verts[0].co.x + e.verts[1].co.x) / 2) ** 2 +
+                               ((e.verts[0].co.y + e.verts[1].co.y) / 2) ** 2)
+            if v1z > hh * 0.75 and v2z > hh * 0.75 and mid_xy > R * 0.7:
+                e.select = True
+        bmesh.update_edit_mesh(obj.data)
+        bpy.ops.mesh.bevel(offset=CH_SZ, offset_type='OFFSET',
+                           segments=1, profile=0.5, affect='EDGES')
+
+        # Bottom: fillet (segments=8, width=FR_R) — only outer cylinder edges
+        bpy.ops.mesh.select_all(action='DESELECT')
+        bm = bmesh.from_edit_mesh(obj.data)
+        bm.edges.ensure_lookup_table()
+        for e in bm.edges:
+            v1z = e.verts[0].co.z; v2z = e.verts[1].co.z
+            mid_xy = math.sqrt(((e.verts[0].co.x + e.verts[1].co.x) / 2) ** 2 +
+                               ((e.verts[0].co.y + e.verts[1].co.y) / 2) ** 2)
+            if v1z < -hh * 0.75 and v2z < -hh * 0.75 and mid_xy > R * 0.7:
+                e.select = True
+        bmesh.update_edit_mesh(obj.data)
+        bpy.ops.mesh.bevel(offset=FR_R, offset_type='OFFSET',
+                           segments=8, profile=0.5, affect='EDGES')
         bpy.ops.object.mode_set(mode='OBJECT')
 
 # ===== SHELVES =====
@@ -397,6 +432,7 @@ def build():
 
     apply_all_modifiers()
     _bevel_hole_openings()
+    _bevel_mixed_edges()
     for obj in list(bpy.data.objects):
         if obj.name.startswith('CUT_'):
             bpy.data.objects.remove(obj, do_unlink=True)

@@ -88,6 +88,8 @@ class STEP_EXPORTER_OT_create_cylinder_gallery(Operator):
                 return {'RUNNING_MODAL'}
             update_progress(96, "添加孔口圆倒角...", context)
             m._bevel_hole_openings()
+            update_progress(97, "混合倒角处理...", context)
+            m._bevel_mixed_edges()
             for obj in list(bpy.data.objects):
                 if obj.name.startswith('CUT_'):
                     bpy.data.objects.remove(obj, do_unlink=True)

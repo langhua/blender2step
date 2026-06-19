@@ -47,6 +47,21 @@ class STEP_EXPORTER_OT_create_cylinder(Operator):
         return {'FINISHED'}
 
 
+class STEP_EXPORTER_OT_create_cylinder_gallery(Operator):
+    """创建圆柱体组合样品（不同半径/高度 × 孔洞类型）"""
+    bl_idname = "step_exporter.create_cylinder_gallery"
+    bl_label = "Create Cylinder Gallery"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        import sys as _sys
+        _sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__)), 'examples'))
+        import create_cylinder_gallery
+        create_cylinder_gallery.build()
+        self.report({'INFO'}, "Cylinder gallery created — 80 items")
+        return {'FINISHED'}
+
+
 class STEP_EXPORTER_OT_create_cone_gallery(Operator):
     """创建锥体组合样品（倒角/圆角/孔）- 正锥形（上细下粗）"""
     bl_idname = "step_exporter.create_cone_gallery"

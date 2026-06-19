@@ -52,6 +52,7 @@ class STEP_EXPORTER_PT_main_panel(Panel):
         col.operator("step_exporter.create_top_shell", text="Create Top Shell", icon='MESH_PLANE')
         col.operator("step_exporter.create_bottom_shell", text="Create Bottom Shell", icon='MESH_PLANE')
         col.operator("step_exporter.create_cylinder", text="Create Cylinder", icon='MESH_CYLINDER')
+        col.operator("step_exporter.create_cylinder_gallery", text="Create Cylinder Gallery", icon='MESH_CYLINDER')
         col.operator("step_exporter.create_cone_gallery", text="Create Cone Gallery △", icon='MESH_CONE')
         col.operator("step_exporter.create_cone_gallery_inverted", text="Create Cone Gallery ▽", icon='MESH_CONE')
 

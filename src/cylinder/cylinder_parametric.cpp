@@ -1159,7 +1159,13 @@ TopoDS_Shape create_cylinder_with_blind_hole_solid_parametric(
     double bottom_chamfer, double bottom_fillet)
 {
     double halfH = height / 2.0;
-    double ext = 5.0; // 超出量确保切割完整
+    double ext = 5.0; // extend for clean cut
+
+    // DEBUG
+    std::cout << "[STEP Exporter] [DEBUG blind_hole] radius=" << radius
+              << " height=" << height << " hole_radius=" << hole_radius
+              << " hole_depth=" << hole_depth << " fillet=" << hole_fillet_radius
+              << " is_bottom=" << is_bottom << " halfH=" << halfH << std::endl;
 
     // Create outer cylinder
     TopoDS_Shape outer = create_cylinder_solid_parametric(radius, height);
@@ -1195,33 +1201,103 @@ TopoDS_Shape create_cylinder_with_blind_hole_solid_parametric(
     apply_edge_feature(true);   // top
     apply_edge_feature(false);  // bottom
 
-    // Create hole cutter: cone if tapered, cylinder if straight
-    double cutterH = hole_depth + ext;
-    double cutterR1, cutterR2; // radius1 = bottom, radius2 = top of cone (OCCT convention)
+    // Build either straight or tapered blind hole
+    double cutterH, cutterR1, cutterR2;
     bool is_tapered = (hole_radius_bottom > 0.001 && std::abs(hole_radius_bottom - hole_radius) > 0.0001);
 
     if (!is_tapered) {
-        // Straight hole: cylinder
-        TopoDS_Shape cutter = create_cylinder_solid_parametric(hole_radius, cutterH);
-        if (cutter.IsNull()) return TopoDS_Shape();
+        // === Manual BRep construction: create faces, sew into shell, make solid ===
+        // Avoids ALL Boolean operations entirely.
 
-        double cutterZ;
-        if (is_bottom) {
-            cutterZ = -halfH + hole_depth - cutterH / 2.0;
-        } else {
-            cutterZ = halfH - hole_depth + cutterH / 2.0;
+        double hole_bottom_z = is_bottom ? (-halfH + hole_depth) : (halfH - hole_depth);
+        double opening_z = is_bottom ? -halfH : halfH;
+
+        BRepBuilderAPI_Sewing sewer(0.001);
+
+        // Helper: create cylindrical face via BRepPrimAPI_MakeCylinder
+        auto add_cyl = [&](double r, double z1, double z2) {
+            gp_Ax2 ax2(gp_Pnt(0,0,z1), gp::DZ());
+            BRepPrimAPI_MakeCylinder cyl(ax2, r, z2 - z1);
+            for (TopExp_Explorer fe(cyl.Shape(), TopAbs_FACE); fe.More(); fe.Next())
+                sewer.Add(TopoDS::Face(fe.Current()));
+        };
+
+        // Helper: add planar face (disk or annulus)
+        auto add_planar = [&](double r_inner, double r_outer, double z, bool rev) {
+            gp_Dir n(0, 0, rev ? -1.0 : 1.0);
+            gp_Circ oc(gp_Ax2(gp_Pnt(0,0,z), n), r_outer);
+            BRepBuilderAPI_MakeWire ow(BRepBuilderAPI_MakeEdge(oc).Edge());
+            if (r_inner < 0.001) {
+                BRepBuilderAPI_MakeFace fm(ow.Wire());
+                if (fm.IsDone()) sewer.Add(fm.Face());
+            } else {
+                gp_Circ ic(gp_Ax2(gp_Pnt(0,0,z), n), r_inner);
+                BRepBuilderAPI_MakeWire iw(BRepBuilderAPI_MakeEdge(ic).Edge());
+                BRepBuilderAPI_MakeFace fm(ow.Wire());
+                fm.Add(iw.Wire());
+                if (fm.IsDone()) sewer.Add(fm.Face());
+            }
+        };
+
+        // 1. Outer wall (full height) - normal points outward (away from axis)
+        add_cyl(radius, -halfH, halfH);
+
+        // 2. Bottom face - outward normal = -Z, so rev=true
+        add_planar(is_bottom ? hole_radius : 0.0, radius, -halfH, true);
+
+        // 3. Top face - outward normal = +Z, so rev=false
+        add_planar(is_bottom ? 0.0 : hole_radius, radius, halfH, false);
+
+        // 4. Inner wall (hole wall) - normal must point INTO hole (toward axis)
+        //    BRepPrimAPI_MakeCylinder gives normal AWAY from axis, so reverse it
+        {
+            double hz1 = std::min(opening_z, hole_bottom_z);
+            double hz2 = std::max(opening_z, hole_bottom_z);
+            gp_Ax2 ax2(gp_Pnt(0,0,hz1), gp::DZ());
+            BRepPrimAPI_MakeCylinder cyl(ax2, hole_radius, hz2 - hz1);
+            for (TopExp_Explorer fe(cyl.Shape(), TopAbs_FACE); fe.More(); fe.Next()) {
+                TopoDS_Face fc = TopoDS::Face(fe.Current());
+                fc.Reverse();
+                sewer.Add(fc);
+            }
         }
-        gp_Trsf trsf;
-        trsf.SetTranslation(gp_Vec(0, 0, cutterZ));
-        cutter = BRepBuilderAPI_Transform(cutter, trsf).Shape();
 
-        BRepAlgoAPI_Cut cut(solid, shape_to_solid(cutter));
-        if (!cut.IsDone()) {
-            std::cerr << "[STEP Exporter] Blind hole cut failed" << std::endl;
+        // 5. Hole bottom disk - outward normal points INTO hole
+        //    top hole: hole at top, solid below -> normal=+Z -> rev=false
+        //    bottom hole: hole at bottom, solid above -> normal=-Z -> rev=true
+        add_planar(0.0, hole_radius, hole_bottom_z, !is_bottom);
+
+        sewer.Perform();
+        TopoDS_Shape sewedShape = sewer.SewedShape();
+        if (sewedShape.IsNull()) {
+            std::cerr << "[STEP Exporter] Sewing failed for blind hole" << std::endl;
             return TopoDS_Shape();
         }
-        TopoDS_Shape hole_solid = shape_to_solid(cut.Shape());
-        if (hole_solid.IsNull()) return TopoDS_Shape();
+        TopoDS_Shell sewedShell;
+        if (sewedShape.ShapeType() == TopAbs_SHELL) {
+            sewedShell = TopoDS::Shell(sewedShape);
+        } else {
+            for (TopExp_Explorer ex(sewedShape, TopAbs_SHELL); ex.More(); ex.Next()) {
+                sewedShell = TopoDS::Shell(ex.Current());
+                break;
+            }
+        }
+        if (sewedShell.IsNull()) {
+            std::cerr << "[STEP Exporter] No shell in sewed result" << std::endl;
+            return TopoDS_Shape();
+        }
+
+        BRepBuilderAPI_MakeSolid sm(sewedShell);
+        if (!sm.IsDone()) {
+            std::cerr << "[STEP Exporter] MakeSolid failed for blind hole" << std::endl;
+            return TopoDS_Shape();
+        }
+        TopoDS_Shape hole_solid = sm.Solid();
+
+        std::cout << "[STEP Exporter] [DEBUG sew] created blind hole via sewing, faces=";
+        int fc = 0;
+        for (TopExp_Explorer fexp(hole_solid, TopAbs_FACE); fexp.More(); fexp.Next()) fc++;
+        std::cout << fc << std::endl;
 
         // Apply fillet at hole OPENING (top/bottom face of cylinder)
         if (hole_fillet_radius > 0.001) {

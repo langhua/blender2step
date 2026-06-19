@@ -17,11 +17,11 @@ def clear():
 
 def _add_edge_bevel_mod(obj, chamfer_type, fillet_r):
     """Add Bevel modifier(s) for edge chamfer/fillet.
-    For chamfer_fillet: top=chamfer, bottom=fillet (two modifiers with vertex groups)."""
+    Uses edge bevel weights (proven with Boolean). For chamfer_fillet
+    uses vertex groups to apply chamfer to top and fillet to bottom."""
     import bmesh
     ctype = str(chamfer_type)
 
-    # Determine feature per side
     top_chamfer = ctype in ('chamfer', 'chamfer_both', 'chamfer_fillet')
     top_fillet = ctype in ('fillet', 'fillet_both')
     bot_chamfer = ctype in ('bottom_chamfer', 'chamfer_both')
@@ -31,48 +31,58 @@ def _add_edge_bevel_mod(obj, chamfer_type, fillet_r):
     if not (top or bot):
         return
 
+    is_mixed = (ctype == 'chamfer_fillet')
     hh = H / 2.0
     bpy.context.view_layer.objects.active = obj
     bpy.ops.object.mode_set(mode='EDIT')
+    bpy.ops.mesh.select_mode(type='EDGE')
+    bpy.ops.mesh.select_all(action='DESELECT')
     bm = bmesh.from_edit_mesh(obj.data)
     bm.edges.ensure_lookup_table()
 
-    # Assign top edges to vertex group "TopEdge", bottom to "BotEdge"
-    vg_top = obj.vertex_groups.new(name="TopEdge") if top else None
-    vg_bot = obj.vertex_groups.new(name="BotEdge") if bot else None
-    top_verts = set()
-    bot_verts = set()
-    for e in bm.edges:
-        v1z = e.verts[0].co.z; v2z = e.verts[1].co.z
-        if top and v1z > hh * 0.8 and v2z > hh * 0.8:
-            top_verts.add(e.verts[0].index)
-            top_verts.add(e.verts[1].index)
-        if bot and v1z < -hh * 0.8 and v2z < -hh * 0.8:
-            bot_verts.add(e.verts[0].index)
-            bot_verts.add(e.verts[1].index)
+    if is_mixed:
+        # chamfer_fillet: need vertex groups for two different bevel types
+        vg_top = obj.vertex_groups.new(name="TopEdge")
+        vg_bot = obj.vertex_groups.new(name="BotEdge")
+        top_verts = set(); bot_verts = set()
+        for e in bm.edges:
+            v1z = e.verts[0].co.z; v2z = e.verts[1].co.z
+            if v1z > hh * 0.8 and v2z > hh * 0.8:
+                top_verts.add(e.verts[0].index); top_verts.add(e.verts[1].index)
+            if v1z < -hh * 0.8 and v2z < -hh * 0.8:
+                bot_verts.add(e.verts[0].index); bot_verts.add(e.verts[1].index)
+        bmesh.update_edit_mesh(obj.data)
+        bpy.ops.object.mode_set(mode='OBJECT')
+        if top_verts: vg_top.add(list(top_verts), 1.0, 'ADD')
+        if bot_verts: vg_bot.add(list(bot_verts), 1.0, 'ADD')
+        m1 = obj.modifiers.new("EdgeChamfer_Top", 'BEVEL')
+        m1.width = CH_SZ; m1.segments = 1; m1.limit_method = 'VGROUP'
+        m1.vertex_group = "TopEdge"
+        m2 = obj.modifiers.new("EdgeFillet_Bot", 'BEVEL')
+        m2.width = fillet_r; m2.segments = 8; m2.limit_method = 'VGROUP'
+        m2.vertex_group = "BotEdge"
+    else:
+        # Single type: use edge bevel weight (proven reliable with Boolean)
+        for e in bm.edges:
+            v1z = e.verts[0].co.z; v2z = e.verts[1].co.z
+            is_top = top and v1z > hh * 0.8 and v2z > hh * 0.8
+            is_bot = bot and v1z < -hh * 0.8 and v2z < -hh * 0.8
+            if is_top or is_bot:
+                e.select = True
+        bmesh.update_edit_mesh(obj.data)
+        bpy.ops.transform.edge_bevelweight(value=1.0)
+        bpy.ops.object.mode_set(mode='OBJECT')
+        is_chamfer = top_chamfer or bot_chamfer
+        mod = obj.modifiers.new("EdgeBevel", 'BEVEL')
+        mod.width = CH_SZ if is_chamfer else fillet_r
+        mod.segments = 1 if is_chamfer else 8
+        mod.limit_method = 'WEIGHT'
 
-    bmesh.update_edit_mesh(obj.data)
-    bpy.ops.object.mode_set(mode='OBJECT')
-    if vg_top: vg_top.add(list(top_verts), 1.0, 'ADD')
-    if vg_bot: vg_bot.add(list(bot_verts), 1.0, 'ADD')
-
-    # Create bevel modifiers
-    if top_chamfer:
-        m = obj.modifiers.new("EdgeChamfer_Top", 'BEVEL')
-        m.width = CH_SZ; m.segments = 1; m.limit_method = 'VGROUP'
-        m.vertex_group = "TopEdge"
-    if top_fillet:
-        m = obj.modifiers.new("EdgeFillet_Top", 'BEVEL')
-        m.width = fillet_r; m.segments = 8; m.limit_method = 'VGROUP'
-        m.vertex_group = "TopEdge"
-    if bot_chamfer:
-        m = obj.modifiers.new("EdgeChamfer_Bot", 'BEVEL')
-        m.width = CH_SZ; m.segments = 1; m.limit_method = 'VGROUP'
-        m.vertex_group = "BotEdge"
-    if bot_fillet:
-        m = obj.modifiers.new("EdgeFillet_Bot", 'BEVEL')
-        m.width = fillet_r; m.segments = 8; m.limit_method = 'VGROUP'
-        m.vertex_group = "BotEdge"
+    obj['chamfer_type'] = ctype
+    if top_chamfer or bot_chamfer:
+        obj['chamfer_size'] = CH_SZ * 1000
+    if top_fillet or bot_fillet:
+        obj['fillet_radius_edge'] = FR_R * 1000
 
     obj['chamfer_type'] = ctype
     if top_chamfer or bot_chamfer:

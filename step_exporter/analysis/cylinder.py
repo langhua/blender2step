@@ -1365,8 +1365,9 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
             
             hole_fillet_r = obj.get('hole_fillet_radius', 0.0) if hasattr(obj, 'get') else 0.0
             hole_is_tapered_thru = obj.get('hole_is_tapered', False) if hasattr(obj, 'get') else False
-            opening_r = obj.get('hole_opening_radius', hole_radius) if hasattr(obj, 'get') else hole_radius
-            end_r = obj.get('hole_end_radius', hole_radius) if hasattr(obj, 'get') else hole_radius
+            # Stored properties are in mm; hole_radius is in meters → normalize both to mm
+            opening_r = obj.get('hole_opening_radius', hole_radius * S) if hasattr(obj, 'get') else hole_radius * S
+            end_r = obj.get('hole_end_radius', hole_radius * S) if hasattr(obj, 'get') else hole_radius * S
             
             if hole_is_tapered_thru and abs(opening_r - end_r) > 0.0001:
                 # 读取存储的倒角/圆角参数（mesh 分析可能受通孔干扰）
@@ -1394,11 +1395,18 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                     top_feature = 'chamfer'; top_feature_size = stored_chamfer_sz * 0.001
                     bottom_feature = 'fillet'; bottom_feature_size = stored_fillet_r * 0.001
                 log_to_file(f"[STEP Exporter]   -> hollow_cylinder_tapered! r={body_radius_for_export:.3f} h={height:.3f} opening_r={opening_r:.3f} end_r={end_r:.3f} chamfer={top_feature} chamfer_sz={top_feature_size}")
+                # 区分 through 和 through_inv 的锥度方向
+                # through: opening在底部宽, end在顶部窄 → bottom=wide, top=narrow
+                # through_inv: opening在顶部宽, end在底部窄 → bottom=narrow, top=wide
+                if stored_hole_type == 'through_inv':
+                    inner_t = opening_r; inner_b = end_r
+                else:
+                    inner_t = end_r; inner_b = opening_r
                 return {
                     'obj_type': 'hollow_cylinder_tapered',
                     'outer_radius': body_radius_for_export * S,
-                    'inner_radius_top': opening_r * S,
-                    'inner_radius_bottom': end_r * S,
+                    'inner_radius_top': inner_t,
+                    'inner_radius_bottom': inner_b,
                     'height': height * S,
                     'hole_fillet_radius': hole_fillet_r,
                     'top_feature': top_feature,
@@ -1438,7 +1446,7 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                 bot_feat = 'fillet'; bot_sz = stored_fillet_r * 0.001
             log_to_file(f"[STEP Exporter]   outer feature: type={stored_chamfer_type} top={top_feat}/{top_sz:.4f} bot={bot_feat}/{bot_sz:.4f}")
             has_outer_feature = (stored_chamfer_type in ('chamfer','fillet','chamfer_both','chamfer_fillet','fillet_both','bottom_chamfer','bottom_fillet'))
-            obj_type_out = 'hollow_cylinder_tapered' if has_outer_feature else 'hollow_cylinder'
+            obj_type_out = 'hollow_cylinder_tapered'  # Always use tapered -- handles both straight & tapered
             result = {
                 'obj_type': obj_type_out,
                 'outer_radius': body_radius_for_export * S,

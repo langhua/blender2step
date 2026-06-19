@@ -142,6 +142,7 @@ target_link_libraries(step_exporter
     PRIVATE
         ${OpenCASCADE_LIBRARIES}  # 使用 vcpkg 找到的所有库
         ${PYTHON_LIBRARY}  # Python 导入库，用于解析符号
+        TKMesh TKFeat  # Required for BRepFeat_MakeCylindricalHole
     PUBLIC
         # Windows 系统库
         kernel32.lib

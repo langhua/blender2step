@@ -607,18 +607,29 @@ def _parametric_export_staged():
             
             if successful_count > 1:
                 try:
+                    # Python merge (fixed entity renumbering) as primary
                     _merge_step_files(data['filepath'], successful_temp_files)
-                    log_to_file(f"[STEP Exporter] Merged {successful_count} objects into {data['filepath']}")
+                    log_to_file(f"[STEP Exporter] Python merge: {successful_count} objects into {data['filepath']}")
                 except Exception as merge_err:
-                    log_to_file(f"[STEP Exporter] Failed to merge STEP files: {merge_err}")
+                    log_to_file(f"[STEP Exporter] Python merge failed: {merge_err}, trying C++ fallback")
                     import traceback
                     log_to_file(traceback.format_exc())
-                    if os.path.exists(successful_temp_files[0]):
-                        try:
-                            import shutil
-                            shutil.copy2(successful_temp_files[0], data['filepath'])
-                        except:
-                            pass
+                    try:
+                        result = cpp_exporter.merge_step_files(data['filepath'], successful_temp_files,
+                            data['step_schema'], data['step_unit'],
+                            1 if data['enable_logging'] else 0)
+                        if result and result > 0:
+                            log_to_file(f"[STEP Exporter] C++ fallback: merged {result} shapes")
+                        else:
+                            log_to_file(f"[STEP Exporter] Both merges failed")
+                    except Exception as cpp_err:
+                        log_to_file(f"[STEP Exporter] C++ fallback also failed: {cpp_err}")
+                        if os.path.exists(successful_temp_files[0]):
+                            try:
+                                import shutil
+                                shutil.copy2(successful_temp_files[0], data['filepath'])
+                            except:
+                                pass
                 finally:
                     try:
                         _merge_log_files(os.path.dirname(data['filepath']), data['filepath'])
@@ -731,99 +742,6 @@ def _verify_step_shell(filepath):
         return len(shells), face_counts
     except Exception:
         return 0, []
-
-
-def _merge_step_files(output_path, temp_files):
-    """将多个 STEP 文件合并为一个，重新编号实体 ID"""
-    import re
-    
-    header = None
-    all_data_sections = []
-    max_entity_id = 0
-    
-    # 实体 ID 匹配: #12345=... 
-    entity_re = re.compile(r'^#(\d+)\s*=(.*)$')
-    entity_ref_re = re.compile(r'#(\d+)')
-    
-    for filepath in temp_files:
-        with open(filepath, 'r', encoding='utf-8') as f:
-            content = f.read()
-        
-        # 分离 HEADER 和 DATA
-        parts = content.split('DATA;')
-        if len(parts) < 2:
-            raise ValueError(f"Invalid STEP file: {filepath}")
-        
-        data_part = parts[1]
-        ends_index = data_part.rfind('ENDSEC;')
-        if ends_index == -1:
-            raise ValueError(f"No ENDSEC found in {filepath}")
-        
-        data_content = data_part[:ends_index].strip()
-        
-        if header is None:
-            header = parts[0] + 'DATA;'
-        
-        all_data_sections.append(data_content)
-    
-    # 收集所有实体，重新编号
-    merged_entities = []
-    for section in all_data_sections:
-        # 分割实体（以分号结尾，后面跟换行或下一个 #）
-        # 更简单的方法：按 #\d+= 分割
-        entities = []
-        current_entity = None
-        current_id = None
-        
-        for line in section.replace('\r', '').split('\n'):
-            m = entity_re.match(line.strip())
-            if m:
-                # 保存上一个实体
-                if current_entity is not None:
-                    entities.append((current_id, current_entity))
-                current_id = int(m.group(1))
-                current_entity = line.strip()
-            else:
-                if current_entity is not None:
-                    current_entity += '\n' + line.strip()
-        
-        # 保存最后一个实体
-        if current_entity is not None:
-            entities.append((current_id, current_entity))
-        
-        # 重新编号这个 section 的实体
-        # 需要先计算偏移量
-        id_shift = max_entity_id
-        
-        for old_id, entity_text in entities:
-            new_id = old_id + id_shift
-            max_entity_id = max(max_entity_id, new_id)
-            
-            # 替换实体自身的 ID: #old_id ␣= -> #new_id ␣=
-            eq_pos = entity_text.find('=')
-            # entity_text 格式: "#_{old_id}_=_REST"
-            # 精确保留 '=' 之后的空格/字符，只替换 ID 部分
-            entity_text = f'#{new_id}' + entity_text[eq_pos:]
-            
-            # 替换引用中的 #N（在 '=' 之后的部分）
-            def replace_ref(match):
-                ref_id = int(match.group(1))
-                return f'#{ref_id + id_shift}'
-            
-            rest = entity_text[eq_pos + 1:]
-            rest = entity_ref_re.sub(replace_ref, rest)
-            entity_text = entity_text[:eq_pos + 1] + rest
-            
-            merged_entities.append((new_id, entity_text))
-    
-    # 写入合并后的文件
-    with open(output_path, 'w', encoding='utf-8') as f:
-        f.write(header + '\n')
-        for _, entity in merged_entities:
-            if not entity.endswith(';'):
-                entity += ';'
-            f.write(entity + '\n')
-        f.write('ENDSEC;\nEND-ISO-10303-21;\n')
 
 
 def _merge_log_files(output_dir, output_path):

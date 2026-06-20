@@ -25,10 +25,16 @@
 			"command": "npm run build",
 			"options": {
 				"env": {
-				"NODE_OPTIONS": "--max-old-space-size=4096"
+					"NODE_OPTIONS": "--max-old-space-size=4096"
 				}
 			},
 			"problemMatcher": []
+		},
+		{
+			"label": "Build step_exporter Release",
+			"type": "shell",
+			"command": "cmake --build build --config Release",
+			"group": "build"
 		}
 	]
 }

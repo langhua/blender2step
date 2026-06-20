@@ -113,6 +113,12 @@ def _export_parametric_sync(filepath, bottom_shells, top_shells, cylinders, step
                 chamfer_sz, fillet_sz, btm_chamfer_sz, btm_fillet_sz,
                 px, py, pz,
                 step_schema, step_unit, 1 if enable_logging else 0)
+        elif obj_type == 'hollow_cylinder_fillet':
+            fillet_sz = cparams.get('top_feature_size', 0)
+            success = cpp_exporter.export_hollow_cylinder_fillet_step(
+                temp_file, cparams['outer_radius'], cparams['inner_radius'],
+                cparams['height'], fillet_sz,
+                px, py, pz, step_schema, step_unit, 1 if enable_logging else 0)
         elif obj_type == 'cylinder_chamfer':
             top_sz = cparams.get('top_feature_size', 0) if cparams.get('top_feature') == 'chamfer' else 0
             btm_sz = cparams.get('bottom_feature_size', 0) if cparams.get('bottom_feature') == 'chamfer' else 0
@@ -205,6 +211,84 @@ def _export_parametric_sync(filepath, bottom_shells, top_shells, cylinders, step
                     top_ch, top_fr, btm_ch, btm_fr,
                     px, py, pz, step_schema, step_unit,
                     1 if enable_logging else 0)
+        elif obj_type == 'cone_chamfer':
+            top_ch = cparams.get('top_feature_size', 0) if cparams.get('top_feature') == 'chamfer' else 0
+            btm_ch = cparams.get('bottom_feature_size', 0) if cparams.get('bottom_feature') == 'chamfer' else 0
+            success = cpp_exporter.export_cone_chamfer_step_both(
+                temp_file, cparams['bottom_radius'], cparams['top_radius'], cparams['height'],
+                btm_ch, top_ch,
+                px, py, pz, step_schema, step_unit, 1 if enable_logging else 0)
+        elif obj_type == 'cone_fillet':
+            top_fr = cparams.get('top_feature_size', 0) if cparams.get('top_feature') == 'fillet' else 0
+            btm_fr = cparams.get('bottom_feature_size', 0) if cparams.get('bottom_feature') == 'fillet' else 0
+            success = cpp_exporter.export_cone_fillet_step_both(
+                temp_file, cparams['bottom_radius'], cparams['top_radius'], cparams['height'],
+                btm_fr, top_fr,
+                px, py, pz, step_schema, step_unit, 1 if enable_logging else 0)
+        elif obj_type == 'cone_chamfer_fillet':
+            reversed_flag = 1 if cparams.get('top_feature') == 'chamfer' else 0
+            chamfer_sz = cparams.get('top_feature_size', 0) if cparams.get('top_feature') == 'chamfer' else cparams.get('bottom_feature_size', 0)
+            fillet_sz = cparams.get('top_feature_size', 0) if cparams.get('top_feature') == 'fillet' else cparams.get('bottom_feature_size', 0)
+            success = cpp_exporter.export_cone_chamfer_fillet_step(
+                temp_file, cparams['bottom_radius'], cparams['top_radius'], cparams['height'],
+                chamfer_sz, fillet_sz,
+                px, py, pz, step_schema, step_unit, 1 if enable_logging else 0, reversed_flag)
+        elif obj_type == 'cone_blind_hole':
+            hole_pos = cparams.get('hole_position', 'top')
+            hole_r_bottom = cparams.get('hole_radius_bottom', 0.0)
+            hole_depth_top = cparams.get('hole_depth_top', 0.0)
+            top_ch = cparams.get('top_chamfer', 0.0)
+            top_fr = cparams.get('top_fillet', 0.0)
+            btm_ch = cparams.get('bottom_chamfer', 0.0)
+            btm_fr = cparams.get('bottom_fillet', 0.0)
+            success = cpp_exporter.export_cone_blind_hole_step(
+                temp_file, cparams['bottom_radius'], cparams['top_radius'], cparams['height'],
+                cparams['hole_radius'], cparams['hole_depth'],
+                cparams.get('hole_fillet_radius', 0),
+                hole_r_bottom, hole_depth_top,
+                hole_pos,
+                top_ch, top_fr, btm_ch, btm_fr,
+                px, py, pz, step_schema, step_unit,
+                1 if enable_logging else 0)
+        elif obj_type == 'hollow_cone':
+            top_ch = cparams.get('top_feature_size', 0) if cparams.get('top_feature') == 'chamfer' else 0
+            top_fr = cparams.get('top_feature_size', 0) if cparams.get('top_feature') == 'fillet' else 0
+            btm_ch = cparams.get('bottom_feature_size', 0) if cparams.get('bottom_feature') == 'chamfer' else 0
+            btm_fr = cparams.get('bottom_feature_size', 0) if cparams.get('bottom_feature') == 'fillet' else 0
+            success = cpp_exporter.export_hollow_cone_step(
+                temp_file, cparams['outer_bottom_radius'], cparams['outer_top_radius'],
+                cparams['inner_bottom_radius'], cparams['inner_top_radius'], cparams['height'],
+                top_ch, top_fr, btm_ch, btm_fr,
+                cparams.get('hole_fillet_radius', 0),
+                px, py, pz, step_schema, step_unit, 1 if enable_logging else 0)
+        elif obj_type == 'hollow_cone_fillet':
+            fillet_sz = cparams.get('top_feature_size', 0)
+            success = cpp_exporter.export_hollow_cone_fillet_step(
+                temp_file, cparams['outer_bottom_radius'], cparams['outer_top_radius'],
+                cparams['inner_bottom_radius'], cparams['inner_top_radius'], cparams['height'],
+                fillet_sz,
+                px, py, pz, step_schema, step_unit, 1 if enable_logging else 0)
+        elif obj_type == 'hollow_cone_fillet_grooved':
+            fillet_sz = cparams.get('top_feature_size', 0)
+            groove_depth = cparams.get('groove_depth', 0)
+            groove_bottom_width = cparams.get('groove_bottom_width', 0)
+            groove_top_width = cparams.get('groove_top_width', 0)
+            groove_extrusion_length = cparams.get('groove_extrusion_length', 0)
+            success = cpp_exporter.export_hollow_cone_fillet_with_groove_step(
+                temp_file, cparams['outer_bottom_radius'], cparams['outer_top_radius'],
+                cparams['inner_bottom_radius'], cparams['inner_top_radius'], cparams['height'],
+                fillet_sz, groove_depth, groove_bottom_width, groove_top_width,
+                groove_extrusion_length,
+                px, py, pz, step_schema, step_unit, 1 if enable_logging else 0)
+        elif obj_type == 'cone_stepped_hole':
+            top_fr = cparams.get('top_feature_size', 0) if cparams.get('top_feature') == 'fillet' else 0
+            success = cpp_exporter.export_cone_stepped_hole_step(
+                temp_file, cparams['outer_bottom_radius'], cparams['outer_top_radius'],
+                cparams['height'],
+                cparams['small_hole_radius'], cparams['small_hole_height'],
+                cparams['inner_bottom_radius'], cparams['inner_top_radius'],
+                top_fr,
+                px, py, pz, step_schema, step_unit, 1 if enable_logging else 0)
         else:
             success = False
         if not success:

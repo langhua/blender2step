@@ -1742,7 +1742,7 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                 orig_r = body_radius  # use body radius as fallback (no-hole objects lack cylinder_original_radius)
             else:
                 orig_r = max(bottom_radius, top_radius)
-            if bottom_radius * 0.85 <= orig_r <= bottom_radius * 1.25 or top_radius * 0.85 <= orig_r <= top_radius * 1.25:
+            if bottom_radius * 0.85 <= orig_r <= bottom_radius * 1.25 and top_radius * 0.85 <= orig_r <= top_radius * 1.25:
                 avg_radius = orig_r
                 bottom_radius = orig_r
                 top_radius = orig_r
@@ -1767,12 +1767,12 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                         obj_type = 'cone_chamfer' if top_feature == 'chamfer' else 'cone_fillet'
                     elif bottom_feature:
                         obj_type = 'cone_chamfer' if bottom_feature == 'chamfer' else 'cone_fillet'
-                    log_to_file(f"[STEP Exporter]   CLASSIFIED: {obj_type} bR={bottom_radius*1000:.6f} tR={top_radius*1000:.6f} h={height*1000:.6f}")
+                    log_to_file(f"[STEP Exporter]   CLASSIFIED: {obj_type} bR={bottom_radius:.6f} tR={top_radius:.6f} h={height:.6f}")
                     return {
                         'obj_type': obj_type,
-                        'bottom_radius': bottom_radius * S,
-                        'top_radius': top_radius * S,
-                        'height': height * S,
+                        'bottom_radius': bottom_radius,
+                        'top_radius': top_radius,
+                        'height': height,
                         'top_feature': top_feature,
                         'top_feature_size': top_feature_size,
                         'bottom_feature': bottom_feature,

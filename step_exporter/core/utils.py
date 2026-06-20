@@ -52,7 +52,32 @@ def _merge_step_files(output_path, temp_files):
     
     # 实体 ID 匹配: #12345=... 
     entity_re = re.compile(r'^#(\d+)\s*=(.*)$')
-    entity_ref_re = re.compile(r'#(\d+)')
+    
+    def _renumber_refs(text, shift):
+        """Renumber entity references #\d+ in text, respecting STEP single-quote strings.
+        Only replaces #\d+ outside of quoted strings."""
+        result = []
+        in_string = False
+        i = 0
+        n = len(text)
+        while i < n:
+            ch = text[i]
+            if ch == "'":
+                in_string = not in_string
+                result.append(ch)
+                i += 1
+            elif not in_string and ch == '#' and i + 1 < n and text[i + 1].isdigit():
+                j = i + 1
+                while j < n and text[j].isdigit():
+                    j += 1
+                ref_id = int(text[i + 1:j])
+                result.append('#')
+                result.append(str(ref_id + shift))
+                i = j
+            else:
+                result.append(ch)
+                i += 1
+        return ''.join(result)
     
     for filepath in temp_files:
         with open(filepath, 'r', encoding='utf-8') as f:
@@ -105,12 +130,8 @@ def _merge_step_files(output_path, temp_files):
             eq_pos = entity_text.find('=')
             entity_text = f'#{new_id}' + entity_text[eq_pos:]
             
-            def replace_ref(match):
-                ref_id = int(match.group(1))
-                return f'#{ref_id + id_shift}'
-            
             rest = entity_text[eq_pos + 1:]
-            rest = entity_ref_re.sub(replace_ref, rest)
+            rest = _renumber_refs(rest, id_shift)
             entity_text = entity_text[:eq_pos + 1] + rest
             
             merged_entities.append((new_id, entity_text))

@@ -1,6 +1,9 @@
 // STEP Exporter module initialization and Python interface
 #include "../include/step_exporter_internal.h"
 #include <STEPControl_Writer.hxx>
+#include <STEPControl_Reader.hxx>
+#include <TopoDS_Compound.hxx>
+#include <BRep_Builder.hxx>
 #include <BRepBuilderAPI_MakeVertex.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
 #include <BRepPrimAPI_MakeCylinder.hxx>
@@ -2189,6 +2192,117 @@ PyObject* export_top_shell_filleted_step(PyObject* self, PyObject* args) {
     }
 }
 
+// OCCT-based STEP merge: reads all temp STEP files and writes a single compound STEP
+PyObject* merge_step_files(PyObject* self, PyObject* args) {
+    const char* output_path;
+    PyObject* temp_files_list;
+    const char* step_schema = "AP214IS";
+    const char* step_unit = "MILLIMETER";
+    int enable_logging = 1;
+
+    if (!PyArg_ParseTuple(args, "sO|ssi", &output_path, &temp_files_list, &step_schema, &step_unit, &enable_logging)) {
+        PyErr_SetString(PyExc_TypeError,
+            "merge_step_files() expected: output_path, temp_files_list, [step_schema], [step_unit], [enable_logging]");
+        return NULL;
+    }
+
+    if (!PyList_Check(temp_files_list)) {
+        PyErr_SetString(PyExc_TypeError, "temp_files_list must be a Python list");
+        return NULL;
+    }
+
+    try {
+        Py_ssize_t count = PyList_Size(temp_files_list);
+        if (count == 0) {
+            Py_RETURN_FALSE;
+        }
+
+        // Build compound from all shapes
+        TopoDS_Compound compound;
+        BRep_Builder builder;
+        builder.MakeCompound(compound);
+
+        int success_count = 0;
+
+        for (Py_ssize_t i = 0; i < count; i++) {
+            PyObject* item = PyList_GetItem(temp_files_list, i);
+            if (!PyUnicode_Check(item)) continue;
+
+            const char* temp_path = PyUnicode_AsUTF8(item);
+            if (enable_logging) {
+                std::cout << "[STEP Exporter] Reading temp file " << (i + 1) << "/" << count
+                          << ": " << temp_path << std::endl;
+            }
+
+            STEPControl_Reader reader;
+            IFSelect_ReturnStatus status = reader.ReadFile(temp_path);
+            if (status != IFSelect_RetDone) {
+                std::cerr << "[STEP Exporter] Failed to read: " << temp_path << std::endl;
+                continue;
+            }
+
+            Standard_Integer nbRoots = reader.NbRootsForTransfer();
+            if (nbRoots == 0) {
+                std::cerr << "[STEP Exporter] No roots in: " << temp_path << std::endl;
+                continue;
+            }
+
+            Standard_Integer nbTransferred = reader.TransferRoots();
+            if (nbTransferred == 0) {
+                std::cerr << "[STEP Exporter] Failed to transfer roots from: " << temp_path << std::endl;
+                continue;
+            }
+
+            Standard_Integer nbShapes = reader.NbShapes();
+            for (Standard_Integer s = 1; s <= nbShapes; s++) {
+                TopoDS_Shape shape = reader.Shape(s);
+                if (!shape.IsNull()) {
+                    builder.Add(compound, shape);
+                    success_count++;
+                }
+            }
+        }
+
+        if (success_count == 0) {
+            std::cerr << "[STEP Exporter] merge_step_files: no shapes collected" << std::endl;
+            Py_RETURN_FALSE;
+        }
+
+        if (enable_logging) {
+            std::cout << "[STEP Exporter] Collected " << success_count << " shapes, writing assembly..." << std::endl;
+        }
+
+        // Write compound with assembly mode — OCCT decomposes into separate PRODUCTs
+        STEPControl_Writer writer;
+        Interface_Static::SetCVal("write.step.schema", step_schema);
+        Interface_Static::SetCVal("write.step.unit", step_unit);
+        // Assembly level 2 = auto: each compound child gets its own PRODUCT
+        Interface_Static::SetIVal("write.step.assembly", 2);
+
+        if (writer.Transfer(compound, STEPControl_AsIs) != IFSelect_RetDone) {
+            std::cerr << "[STEP Exporter] Failed to transfer compound to writer" << std::endl;
+            Py_RETURN_FALSE;
+        }
+        if (writer.Write(output_path) != IFSelect_RetDone) {
+            std::cerr << "[STEP Exporter] Failed to write merged STEP file" << std::endl;
+            Py_RETURN_FALSE;
+        }
+
+        if (enable_logging) {
+            std::cout << "[STEP Exporter] merge_step_files: wrote " << success_count
+                      << " products to " << output_path << std::endl;
+        }
+
+        return PyLong_FromLong(success_count);
+    } catch (Standard_Failure& e) {
+        std::cerr << "[STEP Exporter] OCC error in merge: " << e.GetMessageString() << std::endl;
+        Py_RETURN_FALSE;
+    } catch (...) {
+        std::cerr << "[STEP Exporter] Unknown error in merge" << std::endl;
+        Py_RETURN_FALSE;
+    }
+}
+
 // 模块方法定义表
 static PyMethodDef step_exporter_methods[] = {
     {"export_step", export_step, METH_VARARGS, "Export simple shape to STEP"},
@@ -2223,6 +2337,7 @@ static PyMethodDef step_exporter_methods[] = {
     {"init_incremental_export", init_incremental_export, METH_VARARGS, "Initialize incremental export"},
     {"add_object_to_export", add_object_to_export, METH_VARARGS, "Add single object to incremental export"},
     {"finalize_incremental_export", finalize_incremental_export, METH_NOARGS, "Finalize incremental export and write file"},
+    {"merge_step_files", merge_step_files, METH_VARARGS, "Merge multiple STEP temp files into one using OCCT reader/writer"},
     {"get_version", get_version, METH_NOARGS, "Get module version"},
     {"get_occt_version", get_occt_version, METH_NOARGS, "Get OpenCASCADE version"},
     {NULL, NULL, 0, NULL}

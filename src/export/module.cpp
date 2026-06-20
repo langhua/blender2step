@@ -1365,7 +1365,7 @@ PyObject* export_cylinder_stepped_hole_step(PyObject* self, PyObject* args) {
     const char* unit = "MILLIMETER";
     int enable_logging = 1;
 
-    if (!PyArg_ParseTuple(args, "sddddd|dddddssi",
+    if (!PyArg_ParseTuple(args, "sddddd|ddddddddssi",
                           &filename, &radius, &height,
                           &large_hole_r, &large_hole_h, &small_hole_r,
                           &hole_fillet_r,

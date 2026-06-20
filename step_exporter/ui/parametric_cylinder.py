@@ -89,6 +89,8 @@ class STEP_EXPORTER_OT_create_parametric_cylinder(Operator):
             ('bottom', "Bottom", "Blind hole from bottom"),
             ('both', "Both", "Blind holes from top and bottom"),
             ('through', "Through", "Through hole (top to bottom)"),
+            ('stepped', "Stepped", "Stepped through hole (large from top, small through bottom)"),
+            ('tapered_stepped', "Tapered Stepped", "Tapered stepped hole (conical top + small cylinder bottom)"),
         ],
         default='none',
         update=lambda self, ctx: _on_hole_param_change(self),
@@ -115,6 +117,28 @@ class STEP_EXPORTER_OT_create_parametric_cylinder(Operator):
     hole_fillet_radius: FloatProperty(
         name="Hole Fillet R", default=0.5, min=0.0, max=50.0,
         description="Fillet radius for hole opening edge (0 = no fillet)",
+    )
+    # Stepped hole parameters
+    stepped_large_radius: FloatProperty(
+        name="Large Hole R", default=7.0, min=0.1, max=100.0,
+        description="Radius of the large (top) section of the stepped hole",
+    )
+    stepped_large_height: FloatProperty(
+        name="Large Hole H %", default=80, min=1, max=99, subtype='PERCENTAGE',
+        description="Height of the large hole section as percentage of cylinder height",
+    )
+    stepped_small_radius: FloatProperty(
+        name="Small Hole R", default=3.0, min=0.1, max=100.0,
+        description="Radius of the small (bottom) section of the stepped hole",
+    )
+    # Tapered stepped hole parameters
+    tapered_step_top_radius: FloatProperty(
+        name="Tapered Top R", default=8.0, min=0.1, max=100.0,
+        description="Radius of the tapered hole at the top surface (wider)",
+    )
+    tapered_step_bottom_radius: FloatProperty(
+        name="Tapered Step R", default=5.0, min=0.1, max=100.0,
+        description="Radius of the tapered hole at the step (narrower)",
     )
     
     def invoke(self, context, event):
@@ -150,15 +174,24 @@ class STEP_EXPORTER_OT_create_parametric_cylinder(Operator):
         box.label(text="Hole", icon='MESH_CYLINDER')
         box.prop(self, 'hole_type')
         if self.hole_type != 'none':
-            box.prop(self, 'hole_is_tapered')
-            if self.hole_is_tapered:
-                box.prop(self, 'hole_opening_radius')
-                box.prop(self, 'hole_end_radius')
+            if self.hole_type in ('stepped', 'tapered_stepped'):
+                box.prop(self, 'stepped_large_radius')
+                box.prop(self, 'stepped_large_height')
+                box.prop(self, 'stepped_small_radius')
+                if self.hole_type == 'tapered_stepped':
+                    box.prop(self, 'tapered_step_top_radius')
+                    box.prop(self, 'tapered_step_bottom_radius')
+                box.prop(self, 'hole_fillet_radius')
             else:
-                box.prop(self, 'hole_radius')
-            if self.hole_type in ('top', 'bottom', 'both'):
-                box.prop(self, 'hole_depth')
-            box.prop(self, 'hole_fillet_radius')
+                box.prop(self, 'hole_is_tapered')
+                if self.hole_is_tapered:
+                    box.prop(self, 'hole_opening_radius')
+                    box.prop(self, 'hole_end_radius')
+                else:
+                    box.prop(self, 'hole_radius')
+                if self.hole_type in ('top', 'bottom', 'both'):
+                    box.prop(self, 'hole_depth')
+                box.prop(self, 'hole_fillet_radius')
     
     def execute(self, context):
         try:
@@ -444,6 +477,43 @@ def _create_holes(obj, props, S):
             "HoleCutter_Bottom",
             -hh / 2 - ext, -hh / 2 + hole_d, hr_opening, hr_end
         ))
+
+    elif props.hole_type == 'stepped':
+        # 台阶孔：大孔从顶部到台阶，小孔从台阶到底部
+        large_r = props.stepped_large_radius * S
+        large_h = props.stepped_large_height / 100.0 * H
+        small_r = props.stepped_small_radius * S
+        step_z = hh / 2 - large_h
+        ext2 = H * 0.5  # 延伸量确保穿透
+        # 大孔切割体（从顶部延伸到台阶下方）
+        cutters.append(make_hole_cutter(
+            "HoleCutter_StepLarge",
+            step_z - ext2 * 0.1, hh / 2 + ext2 * 0.1, large_r, large_r
+        ))
+        # 小孔切割体（从台阶上方延伸到底部下方）
+        cutters.append(make_hole_cutter(
+            "HoleCutter_StepSmall",
+            -hh / 2 - ext2 * 0.1, step_z + ext2 * 0.1, small_r, small_r
+        ))
+
+    elif props.hole_type == 'tapered_stepped':
+        # 锥形台阶孔：锥形孔从顶部到台阶（大口在上），小直孔从台阶到底部
+        taper_top_r = props.tapered_step_top_radius * S
+        taper_step_r = props.tapered_step_bottom_radius * S
+        large_h = props.stepped_large_height / 100.0 * H
+        small_r = props.stepped_small_radius * S
+        step_z = hh / 2 - large_h
+        ext2 = H * 0.5
+        # 锥形切割体（大口在上，小口在台阶处）
+        cutters.append(make_hole_cutter(
+            "HoleCutter_TprStepTop",
+            step_z - ext2 * 0.05, hh / 2 + ext2 * 0.1, taper_step_r, taper_top_r
+        ))
+        # 小直孔切割体
+        cutters.append(make_hole_cutter(
+            "HoleCutter_TprStepSmall",
+            -hh / 2 - ext2 * 0.1, step_z + ext2 * 0.05, small_r, small_r
+        ))
     
     # 布尔减：先创建所有 modifier，再一次性通过 depsgraph 应用
     mod_names = []
@@ -487,6 +557,34 @@ def _create_holes(obj, props, S):
         obj['hole_is_tapered'] = props.hole_is_tapered
         obj['hole_type'] = props.hole_type
         log_to_file(f"[STEP Exporter] _create_holes: stored type={props.hole_type} opening_r={hr_opening:.4f} end_r={hr_end:.4f} tapered={props.hole_is_tapered}")
+    elif props.hole_type == 'stepped':
+        large_r = props.stepped_large_radius * S
+        large_h = props.stepped_large_height / 100.0 * H
+        small_r = props.stepped_small_radius * S
+        obj['hole_type'] = 'stepped'
+        obj['hole_position'] = 'stepped'
+        obj['hole_depth'] = large_h
+        obj['hole_is_stepped'] = True
+        obj['hole_stepped_large_r'] = props.stepped_large_radius  # store in mm (user-facing unit)
+        obj['hole_stepped_large_h'] = props.stepped_large_height / 100.0 * props.height  # mm
+        obj['hole_stepped_small_r'] = props.stepped_small_radius  # mm
+        log_to_file(f"[STEP Exporter] _create_holes: stored stepped large_r={props.stepped_large_radius:.1f}mm large_h={props.stepped_large_height/100.0*props.height:.1f}mm small_r={props.stepped_small_radius:.1f}mm")
+    elif props.hole_type == 'tapered_stepped':
+        large_h = props.stepped_large_height / 100.0 * H
+        small_r = props.stepped_small_radius * S
+        taper_top_r = props.tapered_step_top_radius * S
+        taper_step_r = props.tapered_step_bottom_radius * S
+        obj['hole_type'] = 'tapered_stepped'
+        obj['hole_position'] = 'tapered_stepped'
+        obj['hole_depth'] = large_h
+        obj['hole_is_tapered_stepped'] = True
+        obj['hole_opening_radius'] = props.tapered_step_top_radius  # mm
+        obj['hole_end_radius'] = props.tapered_step_bottom_radius  # mm
+        obj['hole_stepped_large_r'] = props.tapered_step_top_radius  # mm (compat)
+        obj['hole_stepped_large_h'] = props.stepped_large_height / 100.0 * props.height  # mm
+        obj['hole_stepped_small_r'] = props.stepped_small_radius  # mm
+        obj['step_use_mesh'] = True  # mesh export (no parametric yet)
+        log_to_file(f"[STEP Exporter] _create_holes: stored tapered_stepped top_r={props.tapered_step_top_radius:.1f}mm step_r={props.tapered_step_bottom_radius:.1f}mm small_r={props.stepped_small_radius:.1f}mm large_h={props.stepped_large_height/100.0*props.height:.1f}mm")
     
     # 孔口圆倒角
     if props.hole_fillet_radius > 0 and cutters:
@@ -530,29 +628,64 @@ def _apply_hole_fillet(obj, props, S):
         e.select = False
     for v in bm.verts:
         v.select = False
-    
-    for edge in bm.edges:
-        vz0 = edge.verts[0].co.z
-        vz1 = edge.verts[1].co.z
-        # 孔口边缘：靠近顶部或底面但不是外圆柱边缘的边
-        if props.hole_type in ('top', 'through', 'both'):
-            dz_top_min = min(abs(vz0 - top_z), abs(vz1 - top_z))
-            # 顶部孔口边：在顶面附近且半径小于外半径
-            if dz_top_min < 0.01:
-                dist0 = math.sqrt(edge.verts[0].co.x**2 + edge.verts[0].co.y**2)
-                dist1 = math.sqrt(edge.verts[1].co.x**2 + edge.verts[1].co.y**2)
-                outer_r = (props.radius if props.cylinder_type == 'standard' else props.top_radius) * S
-                if dist0 < outer_r * 0.9 and dist1 < outer_r * 0.9:
+
+    outer_r_top = (props.radius if props.cylinder_type == 'standard' else props.top_radius) * S
+    outer_r_btm = (props.radius if props.cylinder_type == 'standard' else props.bottom_radius) * S
+
+    if props.hole_type in ('stepped', 'tapered_stepped'):
+        # === Stepped / Tapered Stepped: fillet all hole edges ===
+        step_z = H / 2.0 - (props.stepped_large_height / 100.0 * H)
+        small_r = props.stepped_small_radius * S
+
+        if props.hole_type == 'stepped':
+            large_r = props.stepped_large_radius * S
+            step_r = large_r  # step outer edge has same radius as large hole
+        else:
+            large_r = props.tapered_step_top_radius * S
+            step_r = props.tapered_step_bottom_radius * S  # tapered hole narrows to this at step
+
+        # Build list of (z_position, expected_radius) for each edge
+        targets = [
+            (top_z, large_r),    # top surface opening
+            (step_z, step_r),     # step outer edge (bottom of large/tapered section)
+            (step_z, small_r),    # step inner edge (top of small hole)
+            (btm_z, small_r),     # bottom surface opening
+        ]
+
+        for edge in bm.edges:
+            vz0 = edge.verts[0].co.z
+            vz1 = edge.verts[1].co.z
+            mid_z = (vz0 + vz1) / 2.0
+            mid_xy = math.sqrt(
+                ((edge.verts[0].co.x + edge.verts[1].co.x) / 2) ** 2 +
+                ((edge.verts[0].co.y + edge.verts[1].co.y) / 2) ** 2
+            )
+            dz = abs(vz0 - vz1)
+            for tz, tr in targets:
+                if abs(mid_z - tz) < 0.02 and abs(mid_xy - tr) < tr * 0.5 and dz < 0.01:
                     edge.select = True
-        
-        if props.hole_type in ('bottom', 'through', 'both'):
-            dz_btm_min = min(abs(vz0 - btm_z), abs(vz1 - btm_z))
-            if dz_btm_min < 0.01:
-                dist0 = math.sqrt(edge.verts[0].co.x**2 + edge.verts[0].co.y**2)
-                dist1 = math.sqrt(edge.verts[1].co.x**2 + edge.verts[1].co.y**2)
-                outer_r = (props.radius if props.cylinder_type == 'standard' else props.bottom_radius) * S
-                if dist0 < outer_r * 0.9 and dist1 < outer_r * 0.9:
-                    edge.select = True
+                    break
+
+    else:
+        # Original logic for through / top / bottom / both
+        for edge in bm.edges:
+            vz0 = edge.verts[0].co.z
+            vz1 = edge.verts[1].co.z
+            if props.hole_type in ('top', 'through', 'both'):
+                dz_top_min = min(abs(vz0 - top_z), abs(vz1 - top_z))
+                if dz_top_min < 0.01:
+                    dist0 = math.sqrt(edge.verts[0].co.x**2 + edge.verts[0].co.y**2)
+                    dist1 = math.sqrt(edge.verts[1].co.x**2 + edge.verts[1].co.y**2)
+                    if dist0 < outer_r_top * 0.9 and dist1 < outer_r_top * 0.9:
+                        edge.select = True
+            
+            if props.hole_type in ('bottom', 'through', 'both'):
+                dz_btm_min = min(abs(vz0 - btm_z), abs(vz1 - btm_z))
+                if dz_btm_min < 0.01:
+                    dist0 = math.sqrt(edge.verts[0].co.x**2 + edge.verts[0].co.y**2)
+                    dist1 = math.sqrt(edge.verts[1].co.x**2 + edge.verts[1].co.y**2)
+                    if dist0 < outer_r_btm * 0.9 and dist1 < outer_r_btm * 0.9:
+                        edge.select = True
     
     sel_edges = [e for e in bm.edges if e.select]
     if sel_edges and props.hole_fillet_radius > 0:

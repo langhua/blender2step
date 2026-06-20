@@ -49,6 +49,7 @@
 #include <BRepPrimAPI_MakeRevol.hxx>
 #include <iostream>
 #include <vector>
+#include <tuple>
 #include <cmath>
 
 // ====================== Helper: convert any shape to TopoDS_Solid ======================
@@ -1563,9 +1564,14 @@ TopoDS_Shape create_cone_with_blind_hole_solid_parametric(
         if (!cut.IsDone()) { std::cerr << "[STEP Exporter] Cone blind hole cut failed" << std::endl; return false; }
         s = shape_to_solid(cut.Shape());
         if (s.IsNull()) return false;
-        // Apply hole fillet
+        // Apply hole fillets at BOTH surface opening AND hole bottom
         if (hole_fillet_radius > 0.001) {
-            double targetZ = at_bottom ? -halfH : halfH;
+            double surfaceZ = at_bottom ? -halfH : halfH;
+            double bottomZ = at_bottom ? (-halfH + hd) : (halfH - hd);
+            double bottomR = (hole_radius_bottom > 0.001) ? hole_radius_bottom : hole_radius;
+            
+            // Collect candidate edges: (edge, z, radius)
+            std::vector<std::tuple<TopoDS_Edge, double, double>> candidates;
             for (TopExp_Explorer exp(s, TopAbs_EDGE); exp.More(); exp.Next()) {
                 TopoDS_Edge e = TopoDS::Edge(exp.Current());
                 BRepAdaptor_Curve c(e);
@@ -1573,13 +1579,32 @@ TopoDS_Shape create_cone_with_blind_hole_solid_parametric(
                 gp_Circ cr = c.Circle();
                 gp_Pnt ct = cr.Location();
                 if (std::abs(ct.X()) > 0.01 || std::abs(ct.Y()) > 0.01) continue;
-                if (std::abs(cr.Radius() - hole_radius) / std::max(hole_radius, 0.001) > 0.15) continue;
-                if (std::abs(ct.Z() - targetZ) < 0.01) {
+                candidates.push_back({e, ct.Z(), cr.Radius()});
+            }
+            
+            // Fillet surface opening edge
+            for (const auto& [e, ez, er] : candidates) {
+                if (std::abs(er - hole_radius) / std::max(hole_radius, 0.001) > 0.15) continue;
+                if (std::abs(ez - surfaceZ) < 0.01) {
                     BRepFilletAPI_MakeFillet fm(s);
                     fm.Add(hole_fillet_radius, e);
                     fm.Build();
                     if (fm.IsDone()) { s = shape_to_solid(fm.Shape()); }
                     break;
+                }
+            }
+            
+            // Fillet hole bottom edge
+            if (std::abs(bottomZ - surfaceZ) > 0.01) {  // only if bottom is distinct from surface (non-zero depth)
+                for (const auto& [e, ez, er] : candidates) {
+                    if (std::abs(er - bottomR) / std::max(bottomR, 0.001) > 0.15) continue;
+                    if (std::abs(ez - bottomZ) < 0.01) {
+                        BRepFilletAPI_MakeFillet fm(s);
+                        fm.Add(hole_fillet_radius, e);
+                        fm.Build();
+                        if (fm.IsDone()) { s = shape_to_solid(fm.Shape()); }
+                        break;
+                    }
                 }
             }
         }

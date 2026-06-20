@@ -306,6 +306,9 @@ class STEP_EXPORTER_OT_create_cone_gallery_inverted(Operator):
                 pct = 80 + (self._mod_idx / len(self._cones)) * 15
                 update_progress(pct, f"应用修改器: {self._mod_idx}/{len(self._cones)}", context)
                 return {'RUNNING_MODAL'}
+            # Modifiers done, now edge chamfer/fillet (S8) then hole bevels
+            update_progress(95, "添加边缘倒角/圆角...", context)
+            m._bevel_mixed_edges()
             update_progress(96, "添加孔口圆倒角...", context)
             m._bevel_hole_openings()
             for obj in list(bpy.data.objects):

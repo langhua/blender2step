@@ -1353,6 +1353,112 @@ PyObject* export_cylinder_dual_blind_holes_step(PyObject* self, PyObject* args) 
     }
 }
 
+// 参数化导出：圆柱阶梯孔
+PyObject* export_cylinder_stepped_hole_step(PyObject* self, PyObject* args) {
+    const char* filename;
+    double radius, height, large_hole_r, large_hole_h, small_hole_r;
+    double hole_fillet_r = 0.0;
+    double top_chamfer = 0.0, top_fillet = 0.0;
+    double bottom_chamfer = 0.0, bottom_fillet = 0.0;
+    double pos_x = 0.0, pos_y = 0.0, pos_z = 0.0;
+    const char* step_schema = "AP214IS";
+    const char* unit = "MILLIMETER";
+    int enable_logging = 1;
+
+    if (!PyArg_ParseTuple(args, "sddddd|dddddssi",
+                          &filename, &radius, &height,
+                          &large_hole_r, &large_hole_h, &small_hole_r,
+                          &hole_fillet_r,
+                          &top_chamfer, &top_fillet,
+                          &bottom_chamfer, &bottom_fillet,
+                          &pos_x, &pos_y, &pos_z,
+                          &step_schema, &unit, &enable_logging)) {
+        PyErr_SetString(PyExc_TypeError,
+            "export_cylinder_stepped_hole_step() expected: filename, radius, height, "
+            "large_hole_r, large_hole_h, small_hole_r, [hole_fillet_r], "
+            "[top_chamfer], [top_fillet], [bottom_chamfer], [bottom_fillet], "
+            "[pos_x], [pos_y], [pos_z], [step_schema], [unit], [enable_logging]");
+        return NULL;
+    }
+
+    try {
+        TopoDS_Shape shape = create_cylinder_stepped_hole_parametric(
+            radius, height, large_hole_r, large_hole_h, small_hole_r,
+            hole_fillet_r, top_chamfer, top_fillet, bottom_chamfer, bottom_fillet);
+        if (shape.IsNull()) Py_RETURN_FALSE;
+
+        if (pos_x != 0.0 || pos_y != 0.0 || pos_z != 0.0) {
+            gp_Trsf trsf;
+            trsf.SetTranslation(gp_Vec(pos_x, pos_y, pos_z));
+            shape = BRepBuilderAPI_Transform(shape, trsf).Shape();
+        }
+
+        STEPControl_Writer writer;
+        Interface_Static::SetCVal("write.step.schema", step_schema);
+        if (writer.Transfer(shape, STEPControl_AsIs) != IFSelect_RetDone) Py_RETURN_FALSE;
+        if (writer.Write(filename) != IFSelect_RetDone) Py_RETURN_FALSE;
+        Py_RETURN_TRUE;
+    } catch (Standard_Failure& e) {
+        std::cerr << "[STEP Exporter] OCC error: " << e.GetMessageString() << std::endl;
+        Py_RETURN_FALSE;
+    } catch (...) {
+        std::cerr << "[STEP Exporter] Unknown error" << std::endl;
+        Py_RETURN_FALSE;
+    }
+}
+
+// 参数化导出：圆柱外壁槽
+PyObject* export_cylinder_groove_step(PyObject* self, PyObject* args) {
+    const char* filename;
+    double radius, height, groove_depth, groove_bottom_width, groove_top_width, groove_extrusion_length;
+    double top_chamfer = 0.0, top_fillet = 0.0;
+    double bottom_chamfer = 0.0, bottom_fillet = 0.0;
+    double pos_x = 0.0, pos_y = 0.0, pos_z = 0.0;
+    const char* step_schema = "AP214IS";
+    const char* unit = "MILLIMETER";
+    int enable_logging = 1;
+
+    if (!PyArg_ParseTuple(args, "sdddddd|dddddssi",
+                          &filename, &radius, &height,
+                          &groove_depth, &groove_bottom_width, &groove_top_width, &groove_extrusion_length,
+                          &top_chamfer, &top_fillet,
+                          &bottom_chamfer, &bottom_fillet,
+                          &pos_x, &pos_y, &pos_z,
+                          &step_schema, &unit, &enable_logging)) {
+        PyErr_SetString(PyExc_TypeError,
+            "export_cylinder_groove_step() expected: filename, radius, height, "
+            "groove_depth, groove_bottom_width, groove_top_width, groove_extrusion_length, "
+            "[top_chamfer], [top_fillet], [bottom_chamfer], [bottom_fillet], "
+            "[pos_x], [pos_y], [pos_z], [step_schema], [unit], [enable_logging]");
+        return NULL;
+    }
+
+    try {
+        TopoDS_Shape shape = create_cylinder_with_groove_parametric(
+            radius, height, groove_depth, groove_bottom_width, groove_top_width, groove_extrusion_length,
+            top_chamfer, top_fillet, bottom_chamfer, bottom_fillet);
+        if (shape.IsNull()) Py_RETURN_FALSE;
+
+        if (pos_x != 0.0 || pos_y != 0.0 || pos_z != 0.0) {
+            gp_Trsf trsf;
+            trsf.SetTranslation(gp_Vec(pos_x, pos_y, pos_z));
+            shape = BRepBuilderAPI_Transform(shape, trsf).Shape();
+        }
+
+        STEPControl_Writer writer;
+        Interface_Static::SetCVal("write.step.schema", step_schema);
+        if (writer.Transfer(shape, STEPControl_AsIs) != IFSelect_RetDone) Py_RETURN_FALSE;
+        if (writer.Write(filename) != IFSelect_RetDone) Py_RETURN_FALSE;
+        Py_RETURN_TRUE;
+    } catch (Standard_Failure& e) {
+        std::cerr << "[STEP Exporter] OCC error: " << e.GetMessageString() << std::endl;
+        Py_RETURN_FALSE;
+    } catch (...) {
+        std::cerr << "[STEP Exporter] Unknown error" << std::endl;
+        Py_RETURN_FALSE;
+    }
+}
+
 // 参数化导出：带盲孔的锥体
 PyObject* export_cone_blind_hole_step(PyObject* self, PyObject* args) {
     const char* filename;
@@ -2326,6 +2432,8 @@ static PyMethodDef step_exporter_methods[] = {
     {"export_cylinder_fillet_both_step", export_cylinder_fillet_both_step, METH_VARARGS, "Export parametric cylinder with top and bottom fillets to STEP"},
     {"export_cylinder_blind_hole_step", export_cylinder_blind_hole_step, METH_VARARGS, "Export parametric cylinder with blind hole to STEP"},
     {"export_cylinder_dual_blind_holes_step", export_cylinder_dual_blind_holes_step, METH_VARARGS, "Export parametric cylinder with dual blind holes to STEP"},
+    {"export_cylinder_stepped_hole_step", export_cylinder_stepped_hole_step, METH_VARARGS, "Export parametric cylinder with stepped through hole to STEP"},
+    {"export_cylinder_groove_step", export_cylinder_groove_step, METH_VARARGS, "Export parametric cylinder with external groove to STEP"},
     {"export_cone_blind_hole_step", export_cone_blind_hole_step, METH_VARARGS, "Export parametric cone with blind hole to STEP"},
     {"export_cone_chamfer_fillet_step", export_cone_chamfer_fillet_step, METH_VARARGS, "Export parametric cone with bottom chamfer and top fillet to STEP"},
     {"export_cone_chamfer_step_both", export_cone_chamfer_step_both, METH_VARARGS, "Export parametric cone with top and bottom chamfers to STEP"},

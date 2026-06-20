@@ -5,8 +5,12 @@ Hole types: plain, blind, tapered blind, through, tapered through.
 import bpy, math
 
 R = 0.4; H = 1.0; CH_SZ = 0.05; FR_R = 0.06
-HOLE_R = 0.1; TAPER_OPEN_R = 0.15; HOLE_D = H * 0.25
+HOLE_R = 0.1; TAPER_OPEN_R = 0.12; HOLE_D = H * 0.25
 HOLE_FILLET_R = 0.015
+# Stepped hole parameters
+STEP_LARGE_R = 0.14; STEP_LARGE_H = H * 0.8; STEP_SMALL_R = 0.05
+# Groove parameters — trapezoidal through-slot
+GRV_DEPTH = 0.06; GRV_BOT_W = 0.15; GRV_TOP_W = 0.08; GRV_EXT = 2.0
 GAP_Y = 0.2
 Z_GAP = H * 2 + 0.8
 X_LABEL = R + 0.35
@@ -92,8 +96,9 @@ def add_cylinder(y, z, name, r, chamfer_type=None, fillet_r=0,
                     vertices=32, radius1=r1, radius2=r2,
                     depth=depth, location=(0, 0, local_z))
             else:
+                r = r1 if r1 is not None else HOLE_R
                 bpy.ops.mesh.primitive_cylinder_add(
-                    vertices=32, radius=HOLE_R, depth=depth, location=(0, 0, local_z))
+                    vertices=32, radius=r, depth=depth, location=(0, 0, local_z))
             cutter = bpy.context.active_object
             cutter.name = f"CUT_{name}"
             cutter.hide_render = True
@@ -150,6 +155,34 @@ def add_cylinder(y, z, name, r, chamfer_type=None, fillet_r=0,
                 cz_bot = -(H / 2 - hole_d * 0.25)
                 _add_cutter(cz_top, cd)
                 _add_cutter(cz_bot, cd)
+
+        elif hole == 'stepped':
+            # Stepped through hole: large hole from top, small through bottom
+            cd_large = STEP_LARGE_H + 0.05
+            _add_cutter(H / 2 - STEP_LARGE_H / 2.0, cd_large, STEP_LARGE_R, STEP_LARGE_R)
+            _add_cutter(-H / 2 + (H - STEP_LARGE_H) / 2.0, H - STEP_LARGE_H + 0.1,
+                        STEP_SMALL_R, STEP_SMALL_R)
+            obj['hole_is_stepped'] = True
+            obj['hole_stepped_large_r'] = STEP_LARGE_R * 1000
+            obj['hole_stepped_large_h'] = STEP_LARGE_H * 1000
+            obj['hole_stepped_small_r'] = STEP_SMALL_R * 1000
+
+        elif hole == 'tapered_stepped':
+            # Tapered stepped through hole: conical top (wider at surface), small cylinder bottom
+            # r1=bottom(step) r2=top(surface) in Blender cone — large at top, tapers down to step
+            step_z = H / 2 - STEP_LARGE_H
+            taper_step_r = 0.12   # hole radius at the step (bottom of tapered section)
+            taper_top_r = 0.15    # hole radius at the top surface (wider opening)
+            # Top tapered cutter: cone from top to step (large at top → narrow at step)
+            _add_cutter(H / 2 - STEP_LARGE_H / 2.0, STEP_LARGE_H + 0.1,
+                        taper_step_r, taper_top_r)
+            # Bottom straight cutter: cylinder from step to bottom
+            _add_cutter(-H / 2 + (H - STEP_LARGE_H) / 2.0, (H - STEP_LARGE_H) + 0.1,
+                        STEP_SMALL_R, STEP_SMALL_R)
+            obj['hole_is_tapered_stepped'] = True
+            obj['hole_opening_radius'] = taper_top_r * 1000      # 150 (mm) — wide opening at top surface
+            obj['hole_end_radius'] = taper_step_r * 1000          # 120 (mm) — narrow end at step
+            obj['step_use_mesh'] = True  # mesh export (no parametric yet)
 
         obj['hole_type'] = str(hole)
         obj['hole_radius'] = HOLE_R * 1000
@@ -229,6 +262,28 @@ def _bevel_hole_openings():
         hole_depth = (obj.get('hole_depth', 0) or 0) * 0.001
         if hole_type == 'through' or hole_type == 'through_inv':
             openings = [(H / 2, default_r), (-H / 2, default_r)]
+        elif hole_type == 'stepped':
+            # Stepped hole: top opening (large), step inner+outer edge (large→small), bottom opening (small)
+            step_z = H / 2 - STEP_LARGE_H
+            openings = [
+                (H / 2, STEP_LARGE_R),      # top surface opening
+                (step_z, STEP_LARGE_R),      # step outer edge (large hole bottom)
+                (step_z, STEP_SMALL_R),      # step inner edge (small hole top)
+                (-H / 2, STEP_SMALL_R),      # bottom opening
+            ]
+        elif hole_type == 'tapered_stepped':
+            # Tapered stepped: top (wide 0.15), step outer (taper-bot 0.12), step inner (small-top 0.05), bottom (0.05)
+            step_z = H / 2 - STEP_LARGE_H
+            top_r = (obj.get('hole_opening_radius', 0) or 0) * 0.001  # 0.15 — wide at top
+            step_r = (obj.get('hole_end_radius', 0) or 0) * 0.001      # 0.12 — narrow at step
+            top_r = top_r if top_r > 0 else TAPER_OPEN_R  # fallback if not set
+            step_r = step_r if step_r > 0 else TAPER_OPEN_R  # fallback if not set
+            openings = [
+                (H / 2, top_r),            # top surface opening (tapered, wide)
+                (step_z, step_r),           # step outer edge (bottom of tapered section)
+                (step_z, STEP_SMALL_R),     # step inner edge (top of small straight hole)
+                (-H / 2, STEP_SMALL_R),     # bottom opening (small hole)
+            ]
         else:
             if hole_type in ('top', 'both'):
                 openings.append((H / 2, default_r))
@@ -323,6 +378,8 @@ SHELVES = [
         _make_row("Thru", "through", 0, None, "+Through"),
         _make_row("TprThru", "through", 0, 0.08, "+TaperedThru"),
         _make_row("InvTprThru", "through_inv", 0, 0.08, "+InvTapered"),
+        _make_row("Stepped", "stepped", STEP_LARGE_H, None, "+Stepped"),
+        _make_row("TprStep", "tapered_stepped", STEP_LARGE_H, None, "+TprStep"),
     ]),
     # C2: Top Chamfer
     ("C2 T.Chamfer", "chamfer", 0, [
@@ -336,6 +393,8 @@ SHELVES = [
         _make_row("Thru", "through", 0, None, "+Ch+Thru"),
         _make_row("TprThru", "through", 0, 0.08, "+Ch+TprTh"),
         _make_row("InvTprThru", "through_inv", 0, 0.08, "+Ch+InvTpr"),
+        _make_row("Stepped", "stepped", STEP_LARGE_H, None, "+Ch+Stepped"),
+        _make_row("TprStep", "tapered_stepped", STEP_LARGE_H, None, "+Ch+TprStep"),
     ]),
     # C3: Bottom Chamfer
     ("C3 B.Chamfer", "bottom_chamfer", 0, [
@@ -349,6 +408,8 @@ SHELVES = [
         _make_row("Thru", "through", 0, None, "+BCh+Thru"),
         _make_row("TprThru", "through", 0, 0.08, "+BCh+TprTh"),
         _make_row("InvTprThru", "through_inv", 0, 0.08, "+BCh+InvTpr"),
+        _make_row("Stepped", "stepped", STEP_LARGE_H, None, "+BCh+Stepped"),
+        _make_row("TprStep", "tapered_stepped", STEP_LARGE_H, None, "+BCh+TprStep"),
     ]),
     # C4: Top Fillet
     ("C4 T.Fillet", "fillet", FR_R, [
@@ -362,6 +423,8 @@ SHELVES = [
         _make_row("Thru", "through", 0, None, "+Fil+Thru"),
         _make_row("TprThru", "through", 0, 0.08, "+Fil+TprTh"),
         _make_row("InvTprThru", "through_inv", 0, 0.08, "+Fil+InvTpr"),
+        _make_row("Stepped", "stepped", STEP_LARGE_H, None, "+Fil+Stepped"),
+        _make_row("TprStep", "tapered_stepped", STEP_LARGE_H, None, "+Fil+TprStep"),
     ]),
     # C5: Bottom Fillet
     ("C5 B.Fillet", "bottom_fillet", FR_R, [
@@ -375,6 +438,8 @@ SHELVES = [
         _make_row("Thru", "through", 0, None, "+BFil+Thru"),
         _make_row("TprThru", "through", 0, 0.08, "+BFil+TprTh"),
         _make_row("InvTprThru", "through_inv", 0, 0.08, "+BFil+InvTpr"),
+        _make_row("Stepped", "stepped", STEP_LARGE_H, None, "+BFil+Stepped"),
+        _make_row("TprStep", "tapered_stepped", STEP_LARGE_H, None, "+BFil+TprStep"),
     ]),
     # C6: Top Chamfer + Bottom Fillet
     ("C6 T.Ch+B.Fil", "chamfer_fillet", FR_R, [
@@ -388,6 +453,8 @@ SHELVES = [
         _make_row("Thru", "through", 0, None, "+ChFil+Thru"),
         _make_row("TprThru", "through", 0, 0.08, "+ChFil+TprTh"),
         _make_row("InvTprThru", "through_inv", 0, 0.08, "+ChFil+InvTpr"),
+        _make_row("Stepped", "stepped", STEP_LARGE_H, None, "+ChFil+Stepped"),
+        _make_row("TprStep", "tapered_stepped", STEP_LARGE_H, None, "+ChFil+TprStep"),
     ]),
     # C7: Both Chamfer
     ("C7 BothChamfer", "chamfer_both", 0, [
@@ -401,6 +468,8 @@ SHELVES = [
         _make_row("Thru", "through", 0, None, "+BCh+Thru"),
         _make_row("TprThru", "through", 0, 0.08, "+BCh+TprTh"),
         _make_row("InvTprThru", "through_inv", 0, 0.08, "+BCh+InvTpr"),
+        _make_row("Stepped", "stepped", STEP_LARGE_H, None, "+BCh+Stepped"),
+        _make_row("TprStep", "tapered_stepped", STEP_LARGE_H, None, "+BCh+TprStep"),
     ]),
     # C8: Both Fillet
     ("C8 BothFillet", "fillet_both", FR_R, [
@@ -414,6 +483,8 @@ SHELVES = [
         _make_row("Thru", "through", 0, None, "+BFil+Thru"),
         _make_row("TprThru", "through", 0, 0.08, "+BFil+TprTh"),
         _make_row("InvTprThru", "through_inv", 0, 0.08, "+BFil+InvTpr"),
+        _make_row("Stepped", "stepped", STEP_LARGE_H, None, "+BFil+Stepped"),
+        _make_row("TprStep", "tapered_stepped", STEP_LARGE_H, None, "+BFil+TprStep"),
     ]),
 ]
 

@@ -1630,3 +1630,198 @@ TopoDS_Shape create_cone_with_blind_hole_solid_parametric(
               << " is_bottom=" << is_bottom << std::endl;
     return solid;
 }
+
+// ====================== 圆柱阶梯孔 ======================
+TopoDS_Shape create_cylinder_stepped_hole_parametric(
+    double radius, double height,
+    double large_hole_r, double large_hole_h,
+    double small_hole_r, double hole_fillet_r,
+    double top_chamfer, double top_fillet,
+    double bottom_chamfer, double bottom_fillet)
+{
+    double halfH = height / 2.0;
+
+    // Create cylinder body
+    TopoDS_Shape outer = create_cylinder_solid_parametric(radius, height);
+    if (outer.IsNull()) return TopoDS_Shape();
+    TopoDS_Solid solid = shape_to_solid(outer);
+    if (solid.IsNull()) return TopoDS_Shape();
+
+    // Apply edge features
+    auto apply_edge = [&](bool at_top) {
+        double ch = at_top ? top_chamfer : bottom_chamfer;
+        double fr = at_top ? top_fillet : bottom_fillet;
+        double sz = std::max(ch, fr);
+        if (sz <= 0.001) return;
+        bool is_chamfer = (ch > 0.001);
+        std::vector<TopoDS_Edge> topEdges, bottomEdges;
+        find_circular_edges(solid, topEdges, bottomEdges);
+        const auto& target = at_top ? topEdges : bottomEdges;
+        for (const auto& e : target) {
+            BRepAdaptor_Curve c(e);
+            if (c.GetType() != GeomAbs_Circle) continue;
+            double er = c.Circle().Radius();
+            if (std::abs(er - radius) / std::max(radius, 0.001) < 0.2) {
+                if (is_chamfer) {
+                    BRepFilletAPI_MakeChamfer cm(solid);
+                    cm.Add(ch, e); cm.Build();
+                    if (cm.IsDone()) { solid = shape_to_solid(cm.Shape()); break; }
+                } else {
+                    BRepFilletAPI_MakeFillet fm(solid);
+                    fm.Add(fr, e); fm.Build();
+                    if (fm.IsDone()) { solid = shape_to_solid(fm.Shape()); break; }
+                }
+            }
+        }
+    };
+    apply_edge(true);
+    apply_edge(false);
+
+    // Create stepped hole cutter: large cylinder + small cylinder fused
+    double step_z = halfH - large_hole_h;
+    double extend = 1.0;
+
+    // Large hole cylinder: from halfH+extend down to step_z
+    gp_Ax2 large_axis(gp_Pnt(0, 0, step_z), gp::DZ());
+    BRepPrimAPI_MakeCylinder large_maker(large_axis, large_hole_r, large_hole_h + extend);
+    TopoDS_Solid large_cutter = large_maker.Solid();
+
+    // Small hole cylinder: from step_z down through bottom
+    double small_h = halfH + step_z + extend;  // from step_z to -halfH-extend
+    gp_Ax2 small_axis(gp_Pnt(0, 0, -halfH - extend), gp::DZ());
+    BRepPrimAPI_MakeCylinder small_maker(small_axis, small_hole_r, small_h);
+    TopoDS_Solid small_cutter = small_maker.Solid();
+
+    // Fuse large + small into one cutter
+    BRepAlgoAPI_Fuse fuse(large_cutter, small_cutter);
+    if (!fuse.IsDone()) return TopoDS_Shape();
+    TopoDS_Solid fused_cutter = shape_to_solid(fuse.Shape());
+    if (fused_cutter.IsNull()) return TopoDS_Shape();
+
+    // Cut
+    BRepAlgoAPI_Cut cut(solid, fused_cutter);
+    if (!cut.IsDone()) return TopoDS_Shape();
+    solid = shape_to_solid(cut.Shape());
+    if (solid.IsNull()) return TopoDS_Shape();
+
+    // Apply hole fillets at all openings and step edge — add all at once
+    if (hole_fillet_r > 0.001) {
+        std::vector<TopoDS_Edge> edges_to_fillet;
+        for (TopExp_Explorer exp(solid, TopAbs_EDGE); exp.More(); exp.Next()) {
+            TopoDS_Edge e = TopoDS::Edge(exp.Current());
+            BRepAdaptor_Curve c(e);
+            if (c.GetType() != GeomAbs_Circle) continue;
+            gp_Circ cr = c.Circle();
+            gp_Pnt ct = cr.Location();
+            if (std::abs(ct.X()) > 0.01 || std::abs(ct.Y()) > 0.01) continue;
+            double ez = ct.Z();
+            double er = cr.Radius();
+            // Top opening (large hole)
+            if (std::abs(er - large_hole_r) / std::max(large_hole_r, 0.001) < 0.15 && std::abs(ez - halfH) < 0.01)
+                edges_to_fillet.push_back(e);
+            // Step edge — outer (large hole bottom, where it meets the step)
+            if (std::abs(er - large_hole_r) / std::max(large_hole_r, 0.001) < 0.15 && std::abs(ez - step_z) < 0.01)
+                edges_to_fillet.push_back(e);
+            // Step edge — inner (small hole top, where it meets the step)
+            if (std::abs(er - small_hole_r) / std::max(small_hole_r, 0.001) < 0.15 && std::abs(ez - step_z) < 0.01)
+                edges_to_fillet.push_back(e);
+            // Bottom opening (small hole)
+            if (std::abs(er - small_hole_r) / std::max(small_hole_r, 0.001) < 0.15 && std::abs(ez + halfH) < 0.01)
+                edges_to_fillet.push_back(e);
+        }
+        if (!edges_to_fillet.empty()) {
+            BRepFilletAPI_MakeFillet fm(solid);
+            for (const auto& e : edges_to_fillet)
+                fm.Add(hole_fillet_r, e);
+            fm.Build();
+            if (fm.IsDone()) solid = shape_to_solid(fm.Shape());
+        }
+    }
+
+    return solid;
+}
+
+// ====================== 圆柱外壁梯形槽 ======================
+TopoDS_Shape create_cylinder_with_groove_parametric(
+    double radius, double height,
+    double groove_depth, double groove_bottom_width,
+    double groove_top_width, double groove_extrusion_length,
+    double top_chamfer, double top_fillet,
+    double bottom_chamfer, double bottom_fillet)
+{
+    double halfH = height / 2.0;
+
+    // Create cylinder body
+    TopoDS_Shape outer = create_cylinder_solid_parametric(radius, height);
+    if (outer.IsNull()) return TopoDS_Shape();
+    TopoDS_Solid solid = shape_to_solid(outer);
+    if (solid.IsNull()) return TopoDS_Shape();
+
+    // Apply edge features BEFORE groove (groove is cut into final body)
+    auto apply_edge = [&](bool at_top) {
+        double ch = at_top ? top_chamfer : bottom_chamfer;
+        double fr = at_top ? top_fillet : bottom_fillet;
+        double sz = std::max(ch, fr);
+        if (sz <= 0.001) return;
+        bool is_chamfer = (ch > 0.001);
+        std::vector<TopoDS_Edge> topEdges, bottomEdges;
+        find_circular_edges(solid, topEdges, bottomEdges);
+        const auto& target = at_top ? topEdges : bottomEdges;
+        for (const auto& e : target) {
+            BRepAdaptor_Curve c(e);
+            if (c.GetType() != GeomAbs_Circle) continue;
+            double er = c.Circle().Radius();
+            if (std::abs(er - radius) / std::max(radius, 0.001) < 0.2) {
+                if (is_chamfer) {
+                    BRepFilletAPI_MakeChamfer cm(solid);
+                    cm.Add(ch, e); cm.Build();
+                    if (cm.IsDone()) { solid = shape_to_solid(cm.Shape()); break; }
+                } else {
+                    BRepFilletAPI_MakeFillet fm(solid);
+                    fm.Add(fr, e); fm.Build();
+                    if (fm.IsDone()) { solid = shape_to_solid(fm.Shape()); break; }
+                }
+            }
+        }
+    };
+    apply_edge(true);
+    apply_edge(false);
+
+    // Create trapezoidal prism cutter at mid-height (cuts through entire cylinder)
+    double r_inner = radius - groove_depth;
+    double hb = groove_bottom_width / 2.0;  // half-width at surface (wider)
+    double ht = groove_top_width / 2.0;     // half-width at groove bottom (narrower)
+    double half_ext = groove_extrusion_length / 2.0;
+
+    // Build face from 4 points (trapezoid cross-section in XZ plane at Y=-half_ext)
+    // Inner edge (groove bottom) = narrower (ht), outer edge (surface) = wider (hb)
+    double r_outer = radius + 5.0;
+    std::vector<gp_Pnt> pts_low = {
+        gp_Pnt(r_inner, -half_ext, -ht),
+        gp_Pnt(r_outer, -half_ext, -hb),
+        gp_Pnt(r_outer, -half_ext,  hb),
+        gp_Pnt(r_inner, -half_ext,  ht)
+    };
+    BRepBuilderAPI_MakePolygon poly_low;
+    for (const auto& p : pts_low) poly_low.Add(p);
+    poly_low.Close();
+    TopoDS_Wire wire_low = poly_low.Wire();
+    TopoDS_Face face_low = BRepBuilderAPI_MakeFace(wire_low);
+
+    if (face_low.IsNull()) return solid;
+
+    // Extrude face in Y direction
+    gp_Vec extrudeVec(0, groove_extrusion_length, 0);
+    BRepPrimAPI_MakePrism prism(face_low, extrudeVec);
+    if (!prism.IsDone()) return solid;
+    TopoDS_Solid groove_cutter = shape_to_solid(prism.Shape());
+    if (groove_cutter.IsNull()) return solid;
+
+    // Cut
+    BRepAlgoAPI_Cut cut(solid, groove_cutter);
+    if (!cut.IsDone()) return solid;
+    TopoDS_Solid result = shape_to_solid(cut.Shape());
+    if (!result.IsNull()) solid = result;
+
+    return solid;
+}

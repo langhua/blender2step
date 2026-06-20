@@ -44,17 +44,29 @@ class STEP_EXPORTER_PT_main_panel(Panel):
             box = layout.box()
             box.label(text="C++ module required", icon='ERROR')
             box.label(text="Compile and install first")
-        
-        # 样品生成
-        layout.separator()
-        layout.label(text="Sample Generators", icon='MESH_DATA')
+
+# ====================== Sample Generators 子面板 ======================
+
+class STEP_EXPORTER_PT_sample_generators(Panel):
+    bl_label = "Sample Generators"
+    bl_idname = "STEP_EXPORTER_PT_sample_generators"
+    bl_parent_id = "STEP_EXPORTER_PT_main_panel"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = "STEP Export"
+    bl_order = 1  # 放在 Cylinder Panel 下面
+    
+    def draw(self, context):
+        layout = self.layout
+        # 注意：通过 bl_parent_id 嵌套时，不用 self.layout 直接放子项
+        # 子面板已自带折叠箭头
         col = layout.column(align=True)
-        col.operator("step_exporter.create_top_shell", text="Create Top Shell", icon='MESH_PLANE')
-        col.operator("step_exporter.create_bottom_shell", text="Create Bottom Shell", icon='MESH_PLANE')
-        col.operator("step_exporter.create_cylinder", text="Create Cylinder", icon='MESH_CYLINDER')
-        col.operator("step_exporter.create_cylinder_gallery", text="Create Cylinder Gallery", icon='MESH_CYLINDER')
-        col.operator("step_exporter.create_cone_gallery", text="Create Cone Gallery △", icon='MESH_CONE')
-        col.operator("step_exporter.create_cone_gallery_inverted", text="Create Cone Gallery ▽", icon='MESH_CONE')
+        col.operator("step_exporter.create_top_shell", text="Top Shell", icon='MESH_PLANE')
+        col.operator("step_exporter.create_bottom_shell", text="Bottom Shell", icon='MESH_PLANE')
+        col.operator("step_exporter.create_cylinder", text="Cylinder", icon='MESH_CYLINDER')
+        col.operator("step_exporter.create_cylinder_gallery", text="Cylinder Gallery", icon='MESH_CYLINDER')
+        col.operator("step_exporter.create_cone_gallery", text="Cone Gallery △", icon='MESH_CONE')
+        col.operator("step_exporter.create_cone_gallery_inverted", text="Cone Gallery ▽", icon='MESH_CONE')
 
 # ====================== 样品生成 Operators ======================
 

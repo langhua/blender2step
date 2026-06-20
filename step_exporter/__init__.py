@@ -79,7 +79,7 @@ from .core.mesh_data import _get_mesh_data_enhanced, _get_curve_data_enhanced
 from .analysis import _analyze_top_shell_from_mesh, _analyze_bottom_shell_from_mesh, _analyze_cylinder_from_mesh
 from .export import _export_parametric_sync, _export_bottom_shells_sync, _export_cylinder_staged, _parametric_export_staged, _export_worker_timer
 from .ui import (
-    STEP_EXPORTER_OT_export_enhanced, STEP_EXPORTER_PT_main_panel,
+    STEP_EXPORTER_OT_export_enhanced, STEP_EXPORTER_PT_main_panel, STEP_EXPORTER_PT_sample_generators,
     STEP_EXPORTER_OT_create_top_shell, STEP_EXPORTER_OT_create_bottom_shell,
     STEP_EXPORTER_OT_create_cylinder, STEP_EXPORTER_OT_create_cylinder_gallery,
     STEP_EXPORTER_OT_create_cone_gallery, STEP_EXPORTER_OT_create_cone_gallery_inverted,
@@ -92,6 +92,7 @@ from .ui import (
 _classes = (
     STEP_EXPORTER_OT_export_enhanced,
     STEP_EXPORTER_PT_main_panel,
+    STEP_EXPORTER_PT_sample_generators,
     STEP_EXPORTER_OT_create_top_shell,
     STEP_EXPORTER_OT_create_bottom_shell,
     STEP_EXPORTER_OT_create_cylinder,

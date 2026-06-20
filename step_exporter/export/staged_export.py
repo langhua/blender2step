@@ -278,6 +278,33 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
             px, py, pz,
             data['step_schema'], data['step_unit'],
             1 if data['enable_logging'] else 0)
+    elif obj_type == 'cylinder_stepped_hole':
+        top_ch = cparams.get('top_chamfer', 0.0)
+        top_fr = cparams.get('top_fillet', 0.0)
+        btm_ch = cparams.get('bottom_chamfer', 0.0)
+        btm_fr = cparams.get('bottom_fillet', 0.0)
+        return cpp_exporter.export_cylinder_stepped_hole_step(
+            temp_file, cparams['radius'], cparams['height'],
+            cparams['stepped_large_r'], cparams['stepped_large_h'],
+            cparams['stepped_small_r'],
+            cparams.get('hole_fillet_radius', 0),
+            top_ch, top_fr, btm_ch, btm_fr,
+            px, py, pz,
+            data['step_schema'], data['step_unit'],
+            1 if data['enable_logging'] else 0)
+    elif obj_type == 'grooved_cylinder':
+        top_ch = cparams.get('top_chamfer', 0.0)
+        top_fr = cparams.get('top_fillet', 0.0)
+        btm_ch = cparams.get('bottom_chamfer', 0.0)
+        btm_fr = cparams.get('bottom_fillet', 0.0)
+        return cpp_exporter.export_cylinder_groove_step(
+            temp_file, cparams['radius'], cparams['height'],
+            cparams['groove_depth'], cparams['groove_bottom_width'],
+            cparams['groove_top_width'], cparams['groove_extrusion_length'],
+            top_ch, top_fr, btm_ch, btm_fr,
+            px, py, pz,
+            data['step_schema'], data['step_unit'],
+            1 if data['enable_logging'] else 0)
     elif obj_type == 'cone_blind_hole':
         hole_pos = cparams.get('hole_position', 'top')
         hole_r_bottom = cparams.get('hole_radius_bottom', 0.0)

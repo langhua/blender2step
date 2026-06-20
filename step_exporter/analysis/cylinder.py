@@ -238,6 +238,16 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
             'groove_top_width': obj.get('step_groove_top_width', 0),
             'groove_extrusion_length': obj.get('step_groove_extrusion_length', 0),
         }
+    
+    # 阶梯孔检测
+    has_stepped_hole = obj.get('hole_is_stepped', False)
+    stepped_hole_params = {}
+    if has_stepped_hole:
+        stepped_hole_params = {
+            'stepped_large_r': obj.get('hole_stepped_large_r', 0),
+            'stepped_large_h': obj.get('hole_stepped_large_h', 0),
+            'stepped_small_r': obj.get('hole_stepped_small_r', 0),
+        }
 
     mid_all_radii = []
     for zl_key in z_layers:
@@ -1728,6 +1738,36 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                 result['inner_top_radius'] = stepped_hole_params['inner_top_radius']
             return result
     else:
+        # 实心圆柱阶梯孔检测（优先）
+        if has_stepped_hole:
+            return {
+                'obj_type': 'cylinder_stepped_hole',
+                'radius': max(bottom_radius, top_radius),
+                'height': height,
+                'stepped_large_r': obj.get('hole_stepped_large_r', 0) if hasattr(obj, 'get') else 0,
+                'stepped_large_h': obj.get('hole_stepped_large_h', 0) if hasattr(obj, 'get') else 0,
+                'stepped_small_r': obj.get('hole_stepped_small_r', 0) if hasattr(obj, 'get') else 0,
+                'hole_fillet_radius': obj.get('hole_fillet_radius', 0) if hasattr(obj, 'get') else 0,
+                'top_chamfer': top_feature_size if top_feature == 'chamfer' else 0,
+                'top_fillet': top_feature_size if top_feature == 'fillet' else 0,
+                'bottom_chamfer': bottom_feature_size if bottom_feature == 'chamfer' else 0,
+                'bottom_fillet': bottom_feature_size if bottom_feature == 'fillet' else 0,
+                'pos_x': pos_x, 'pos_y': pos_y, 'pos_z': pos_z,
+            }
+        # 实心圆柱外壁槽检测
+        if has_groove_custom:
+            result = {
+                'obj_type': 'grooved_cylinder',
+                'radius': max(bottom_radius, top_radius),
+                'height': height,
+                'pos_x': pos_x, 'pos_y': pos_y, 'pos_z': pos_z,
+                'top_chamfer': top_feature_size if top_feature == 'chamfer' else 0,
+                'top_fillet': top_feature_size if top_feature == 'fillet' else 0,
+                'bottom_chamfer': bottom_feature_size if bottom_feature == 'chamfer' else 0,
+                'bottom_fillet': bottom_feature_size if bottom_feature == 'fillet' else 0,
+            }
+            result.update(groove_params)
+            return result
         # 圆柱带倒角/圆角回退：mesh 检测可能漏掉底部特征，用 stored_ctype 修正
         stored_ctype_cls = obj.get('chamfer_type') if hasattr(obj, 'get') else None
         stored_orig_cls = obj.get('cylinder_original_radius', 0) if hasattr(obj, 'get') else 0

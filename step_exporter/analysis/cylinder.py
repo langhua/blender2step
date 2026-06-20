@@ -1693,6 +1693,22 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
             
             # 实心圆柱阶梯孔检测（优先于空心圆柱——台阶孔内壁会被检测为空心）
             if has_stepped_hole:
+                if hasattr(obj, 'get') and obj.get('hole_is_tapered', False):
+                    return {
+                        'obj_type': 'cylinder_tapered_stepped_hole',
+                        'radius': max(bottom_radius, top_radius),
+                        'height': height,
+                        'stepped_large_h': obj.get('hole_stepped_large_h', 0),
+                        'taper_top_r': obj.get('hole_taper_top_r', 0),
+                        'taper_step_r': obj.get('hole_taper_step_r', 0),
+                        'stepped_small_r': obj.get('hole_stepped_small_r', 0),
+                        'hole_fillet_radius': obj.get('hole_fillet_radius', 0),
+                        'top_chamfer': top_feature_size if top_feature == 'chamfer' else 0,
+                        'top_fillet': top_feature_size if top_feature == 'fillet' else 0,
+                        'bottom_chamfer': bottom_feature_size if bottom_feature == 'chamfer' else 0,
+                        'bottom_fillet': bottom_feature_size if bottom_feature == 'fillet' else 0,
+                        'pos_x': pos_x, 'pos_y': pos_y, 'pos_z': pos_z,
+                    }
                 return {
                     'obj_type': 'cylinder_stepped_hole',
                     'radius': max(bottom_radius, top_radius),
@@ -1757,6 +1773,22 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
     else:
         # 实心圆柱阶梯孔检测（优先）
         if has_stepped_hole:
+            if hasattr(obj, 'get') and obj.get('hole_is_tapered', False):
+                return {
+                    'obj_type': 'cylinder_tapered_stepped_hole',
+                    'radius': max(bottom_radius, top_radius),
+                    'height': height,
+                    'stepped_large_h': obj.get('hole_stepped_large_h', 0),
+                    'taper_top_r': obj.get('hole_taper_top_r', 0),
+                    'taper_step_r': obj.get('hole_taper_step_r', 0),
+                    'stepped_small_r': obj.get('hole_stepped_small_r', 0),
+                    'hole_fillet_radius': obj.get('hole_fillet_radius', 0),
+                    'top_chamfer': top_feature_size if top_feature == 'chamfer' else 0,
+                    'top_fillet': top_feature_size if top_feature == 'fillet' else 0,
+                    'bottom_chamfer': bottom_feature_size if bottom_feature == 'chamfer' else 0,
+                    'bottom_fillet': bottom_feature_size if bottom_feature == 'fillet' else 0,
+                    'pos_x': pos_x, 'pos_y': pos_y, 'pos_z': pos_z,
+                }
             return {
                 'obj_type': 'cylinder_stepped_hole',
                 'radius': max(bottom_radius, top_radius),

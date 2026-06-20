@@ -111,6 +111,13 @@ TopoDS_Shape create_cylinder_stepped_hole_parametric(double radius, double heigh
                                                       double small_hole_r, double hole_fillet_r = 0.0,
                                                       double top_chamfer = 0.0, double top_fillet = 0.0,
                                                       double bottom_chamfer = 0.0, double bottom_fillet = 0.0);
+// Cylinder with tapered stepped hole (conical top + small cylinder bottom)
+TopoDS_Shape create_cylinder_tapered_stepped_hole_parametric(double radius, double height,
+                                                      double large_hole_h,
+                                                      double taper_top_r, double taper_step_r,
+                                                      double small_hole_r, double hole_fillet_r = 0.0,
+                                                      double top_chamfer = 0.0, double top_fillet = 0.0,
+                                                      double bottom_chamfer = 0.0, double bottom_fillet = 0.0);
 // Cylinder with external trapezoidal groove at mid-height
 TopoDS_Shape create_cylinder_with_groove_parametric(double radius, double height,
                                                      double groove_depth, double groove_bottom_width,

@@ -292,6 +292,21 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
             px, py, pz,
             data['step_schema'], data['step_unit'],
             1 if data['enable_logging'] else 0)
+    elif obj_type == 'cylinder_tapered_stepped_hole':
+        top_ch = cparams.get('top_chamfer', 0.0)
+        top_fr = cparams.get('top_fillet', 0.0)
+        btm_ch = cparams.get('bottom_chamfer', 0.0)
+        btm_fr = cparams.get('bottom_fillet', 0.0)
+        return cpp_exporter.export_cylinder_tapered_stepped_hole_step(
+            temp_file, cparams['radius'], cparams['height'],
+            cparams['stepped_large_h'],
+            cparams['taper_top_r'], cparams['taper_step_r'],
+            cparams['stepped_small_r'],
+            cparams.get('hole_fillet_radius', 0),
+            top_ch, top_fr, btm_ch, btm_fr,
+            px, py, pz,
+            data['step_schema'], data['step_unit'],
+            1 if data['enable_logging'] else 0)
     elif obj_type == 'grooved_cylinder':
         top_ch = cparams.get('top_chamfer', 0.0)
         top_fr = cparams.get('top_fillet', 0.0)

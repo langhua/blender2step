@@ -1741,6 +1741,123 @@ TopoDS_Shape create_cylinder_stepped_hole_parametric(
     return solid;
 }
 
+// ====================== 圆柱锥形台阶孔 ======================
+TopoDS_Shape create_cylinder_tapered_stepped_hole_parametric(
+    double radius, double height,
+    double large_hole_h,
+    double taper_top_r, double taper_step_r,
+    double small_hole_r, double hole_fillet_r,
+    double top_chamfer, double top_fillet,
+    double bottom_chamfer, double bottom_fillet)
+{
+    double halfH = height / 2.0;
+
+    // Create cylinder body
+    TopoDS_Shape outer = create_cylinder_solid_parametric(radius, height);
+    if (outer.IsNull()) return TopoDS_Shape();
+    TopoDS_Solid solid = shape_to_solid(outer);
+    if (solid.IsNull()) return TopoDS_Shape();
+
+    // Apply edge features
+    auto apply_edge = [&](bool at_top) {
+        double ch = at_top ? top_chamfer : bottom_chamfer;
+        double fr = at_top ? top_fillet : bottom_fillet;
+        double sz = std::max(ch, fr);
+        if (sz <= 0.001) return;
+        bool is_chamfer = (ch > 0.001);
+        std::vector<TopoDS_Edge> topEdges, bottomEdges;
+        find_circular_edges(solid, topEdges, bottomEdges);
+        const auto& target = at_top ? topEdges : bottomEdges;
+        for (const auto& e : target) {
+            BRepAdaptor_Curve c(e);
+            if (c.GetType() != GeomAbs_Circle) continue;
+            double er = c.Circle().Radius();
+            if (std::abs(er - radius) / std::max(radius, 0.001) < 0.2) {
+                if (is_chamfer) {
+                    BRepFilletAPI_MakeChamfer cm(solid);
+                    cm.Add(ch, e); cm.Build();
+                    if (cm.IsDone()) { solid = shape_to_solid(cm.Shape()); break; }
+                } else {
+                    BRepFilletAPI_MakeFillet fm(solid);
+                    fm.Add(fr, e); fm.Build();
+                    if (fm.IsDone()) { solid = shape_to_solid(fm.Shape()); break; }
+                }
+            }
+        }
+    };
+    apply_edge(true);
+    apply_edge(false);
+
+    // Create tapered stepped hole cutter: cone + small cylinder fused
+    double step_z = halfH - large_hole_h;
+    double extend = 1.0;
+
+    // Tapered cone cutter (wider at top): axis starts at step_z, exactly like
+    // the straight version's cylinder — ensures clean edge geometry at the step.
+    double grad = (taper_top_r - taper_step_r) / large_hole_h;
+    double cone_top_ext_r = taper_top_r + extend * grad;  // extrapolated top radius
+
+    gp_Ax2 cone_axis(gp_Pnt(0, 0, step_z), gp::DZ());
+    BRepPrimAPI_MakeCone cone_maker(cone_axis, taper_step_r, cone_top_ext_r, large_hole_h + extend);
+    TopoDS_Solid cone_cutter = cone_maker.Solid();
+
+    // Small hole cylinder: from step_z down through bottom
+    double small_h = halfH + step_z + extend;  // from step_z to -halfH-extend
+    gp_Ax2 small_axis(gp_Pnt(0, 0, -halfH - extend), gp::DZ());
+    BRepPrimAPI_MakeCylinder small_maker(small_axis, small_hole_r, small_h);
+    TopoDS_Solid small_cutter = small_maker.Solid();
+
+    // Fuse cone + small cylinder into one cutter
+    BRepAlgoAPI_Fuse fuse(cone_cutter, small_cutter);
+    if (!fuse.IsDone()) return TopoDS_Shape();
+    TopoDS_Solid fused_cutter = shape_to_solid(fuse.Shape());
+    if (fused_cutter.IsNull()) return TopoDS_Shape();
+
+    // Cut
+    BRepAlgoAPI_Cut cut(solid, fused_cutter);
+    if (!cut.IsDone()) return TopoDS_Shape();
+    solid = shape_to_solid(cut.Shape());
+    if (solid.IsNull()) return TopoDS_Shape();
+
+    // Apply hole fillets — same pattern as create_cylinder_stepped_hole_parametric.
+    // Cone now starts at step_z (like the straight cylinder), so step edges are
+    // clean GeomAbs_Circle intersections.
+    if (hole_fillet_r > 0.001) {
+        std::vector<TopoDS_Edge> edges_to_fillet;
+        for (TopExp_Explorer exp(solid, TopAbs_EDGE); exp.More(); exp.Next()) {
+            TopoDS_Edge e = TopoDS::Edge(exp.Current());
+            BRepAdaptor_Curve c(e);
+            if (c.GetType() != GeomAbs_Circle) continue;
+            gp_Circ cr = c.Circle();
+            gp_Pnt ct = cr.Location();
+            if (std::abs(ct.X()) > 0.01 || std::abs(ct.Y()) > 0.01) continue;
+            double ez = ct.Z();
+            double er = cr.Radius();
+            // Top opening (tapered, wider)
+            if (std::abs(er - taper_top_r) / std::max(taper_top_r, 0.001) < 0.15 && std::abs(ez - halfH) < 0.01)
+                edges_to_fillet.push_back(e);
+            // Step edge — outer (bottom of tapered section, radius = taper_step_r)
+            if (std::abs(er - taper_step_r) / std::max(taper_step_r, 0.001) < 0.15 && std::abs(ez - step_z) < 0.01)
+                edges_to_fillet.push_back(e);
+            // Step edge — inner (top of small hole, radius = small_hole_r)
+            if (std::abs(er - small_hole_r) / std::max(small_hole_r, 0.001) < 0.15 && std::abs(ez - step_z) < 0.01)
+                edges_to_fillet.push_back(e);
+            // Bottom opening (small hole)
+            if (std::abs(er - small_hole_r) / std::max(small_hole_r, 0.001) < 0.15 && std::abs(ez + halfH) < 0.01)
+                edges_to_fillet.push_back(e);
+        }
+        if (!edges_to_fillet.empty()) {
+            BRepFilletAPI_MakeFillet fm(solid);
+            for (const auto& e : edges_to_fillet)
+                fm.Add(hole_fillet_r, e);
+            fm.Build();
+            if (fm.IsDone()) solid = shape_to_solid(fm.Shape());
+        }
+    }
+
+    return solid;
+}
+
 // ====================== 圆柱外壁梯形槽 ======================
 TopoDS_Shape create_cylinder_with_groove_parametric(
     double radius, double height,

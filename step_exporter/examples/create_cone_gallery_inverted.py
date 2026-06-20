@@ -1,9 +1,10 @@
-"""Cone gallery �?Inverted (widening up): 7 shelves × 10 columns = 70 combos."""
+"""Cone gallery — Inverted (widening up): 8 shelves × 12 columns = 96 combos."""
 import bpy, math
 
 H = 1.0; BOT_R = 0.5; TOP_R = 0.25; CH_SZ = 0.05; FR_R = 0.06
 HOLE_R = 0.1; TAPER_OPEN_R = 0.15; HOLE_D = H * 0.25; GAP_Y = 0.2
 HOLE_FILLET_R = 0.015  # fillet radius at hole openings
+STEP_LARGE_R = 0.14; STEP_LARGE_H = H * 0.8; STEP_SMALL_R = 0.05  # stepped hole params
 Z_GAP = H * 2 + 0.8  # doubled row spacing
 X_LABEL = max(BOT_R, TOP_R) + 0.3  # label column to the side
 
@@ -111,8 +112,9 @@ def add_cone(y, z, name, br, tr, chamfer_type=None, fillet_r=0,
                     vertices=32, radius1=r1, radius2=r2,
                     depth=depth, location=(0, 0, local_z))
             else:
+                r = r1 if r1 is not None else HOLE_R
                 bpy.ops.mesh.primitive_cylinder_add(
-                    vertices=32, radius=HOLE_R, depth=depth, location=(0, 0, local_z))
+                    vertices=32, radius=r, depth=depth, location=(0, 0, local_z))
             cutter = bpy.context.active_object
             cutter.name = f"CUT_{name}"
             cutter.hide_render = True
@@ -202,6 +204,30 @@ def add_cone(y, z, name, br, tr, chamfer_type=None, fillet_r=0,
                 _add_cutter(0, cutter_d, r1, r2)
             else:
                 _add_cutter(0, H * 3)
+
+        elif hole == 'stepped':
+            # Stepped through hole: large hole from top, small through bottom
+            cd_large = STEP_LARGE_H + 0.05
+            _add_cutter(H / 2 - STEP_LARGE_H / 2.0, cd_large, STEP_LARGE_R, STEP_LARGE_R)
+            _add_cutter(-H / 2 + (H - STEP_LARGE_H) / 2.0, H - STEP_LARGE_H + 0.1,
+                        STEP_SMALL_R, STEP_SMALL_R)
+            obj['hole_is_stepped'] = True
+            obj['hole_stepped_large_r'] = STEP_LARGE_R * 1000
+            obj['hole_stepped_large_h'] = STEP_LARGE_H * 1000
+            obj['hole_stepped_small_r'] = STEP_SMALL_R * 1000
+
+        elif hole == 'tapered_stepped':
+            # Tapered stepped through hole: conical top (wider at surface), small cylinder bottom
+            step_z = H / 2 - STEP_LARGE_H
+            taper_step_r = 0.12; taper_top_r = 0.15
+            _add_cutter(H / 2 - STEP_LARGE_H / 2.0, STEP_LARGE_H + 0.1,
+                        taper_step_r, taper_top_r)
+            _add_cutter(-H / 2 + (H - STEP_LARGE_H) / 2.0, (H - STEP_LARGE_H) + 0.1,
+                        STEP_SMALL_R, STEP_SMALL_R)
+            obj['hole_is_tapered_stepped'] = True
+            obj['hole_opening_radius'] = taper_top_r * 1000
+            obj['hole_end_radius'] = taper_step_r * 1000
+            obj['step_use_mesh'] = True
 
         obj['hole_type'] = str(hole)
         obj['hole_radius'] = HOLE_R * 1000
@@ -339,6 +365,28 @@ def _bevel_hole_openings():
             r_top = open_r if (is_tapered and open_r > 0) else default_r
             r_bot = end_r if (is_tapered and end_r > 0) else default_r
             openings = [(H / 2, r_top), (-H / 2, r_bot)]
+        elif hole_type == 'stepped':
+            # Stepped hole: top opening (large), step inner+outer edge, bottom opening (small)
+            step_z = H / 2 - STEP_LARGE_H
+            openings = [
+                (H / 2, STEP_LARGE_R),
+                (step_z, STEP_LARGE_R),
+                (step_z, STEP_SMALL_R),
+                (-H / 2, STEP_SMALL_R),
+            ]
+        elif hole_type == 'tapered_stepped':
+            # Tapered stepped: top (wide), step outer (taper-bot), step inner (small-top), bottom (small)
+            step_z = H / 2 - STEP_LARGE_H
+            top_r = (obj.get('hole_opening_radius', 0) or 0) * 0.001
+            step_r = (obj.get('hole_end_radius', 0) or 0) * 0.001
+            top_r = top_r if top_r > 0 else TAPER_OPEN_R
+            step_r = step_r if step_r > 0 else TAPER_OPEN_R
+            openings = [
+                (H / 2, top_r),
+                (step_z, step_r),
+                (step_z, STEP_SMALL_R),
+                (-H / 2, STEP_SMALL_R),
+            ]
         else:
             if hole_type in ('top', 'both'):
                 r_surf = open_r if (is_tapered and open_r > 0) else default_r
@@ -400,15 +448,16 @@ Z_TOP = Z_BASE + (NUM_SHELVES - 1) * Z_GAP
 # Format: (shelf_label, chamfer_type, fillet_r, items)
 # Item:   (name_sfx, hole, hole_d, hole_end, label)
 # ============================================================
-# Standard 8 hole variants per edge type:
-#   Plain, T.Blind, B.Blind, BothBlind, Through, TaperedThru, TaperedTBl, TaperedBBl
+# Standard 12 hole variants per edge type:
+#   Plain, T.Blind, B.Blind, BothBlind, Through, TaperedThru, InvTapered,
+#   TaperedTBl, TaperedBBl, TaperedBothBl, Stepped, TaperedStepped
 
 def _make_row(name_sfx, hole, hd, he, label):
     """Shortcut for creating an item tuple."""
     return (name_sfx, hole, hd, he, label)
 
 SHELVES = [
-    # S1: No Edge �?10 hole variants
+    # S1: No Edge — 12 hole variants
     ("S1 Inv No Edge", None, 0, [
         _make_row("Plain", None, 0, None, "Plain"),
         _make_row("TBl", "top", HOLE_D, None, "+T.Blind"),
@@ -420,8 +469,10 @@ SHELVES = [
         _make_row("TprTBl", "top", HOLE_D, 0.08, "+Tpr.T.Bl"),
         _make_row("TprBBl", "bottom", HOLE_D, 0.08, "+Tpr.B.Bl"),
         _make_row("TprBothBl", "both", HOLE_D, 0.08, "+Tpr.BothBl"),
+        _make_row("Stepped", "stepped", STEP_LARGE_H, None, "+Stepped"),
+        _make_row("TprStep", "tapered_stepped", STEP_LARGE_H, None, "+TprStep"),
     ]),
-    # S2: Top Chamfer �?10 hole variants
+    # S2: Top Chamfer — 12 hole variants
     ("S2 Inv T.Chamfer", "chamfer", 0, [
         _make_row("Plain", None, 0, None, "+T.Chamfer"),
         _make_row("TBl", "top", HOLE_D, None, "+T.Ch+TBl"),
@@ -433,8 +484,10 @@ SHELVES = [
         _make_row("TprTBl", "top", HOLE_D, 0.08, "+T.Ch+TprTB"),
         _make_row("TprBBl", "bottom", HOLE_D, 0.08, "+T.Ch+TprBB"),
         _make_row("TprBoth", "both", HOLE_D, 0.08, "+T.Ch+TprBoth"),
+        _make_row("Stepped", "stepped", STEP_LARGE_H, None, "+T.Ch+Stepped"),
+        _make_row("TprStep", "tapered_stepped", STEP_LARGE_H, None, "+T.Ch+TprStep"),
     ]),
-    # S3: Bottom Chamfer �?10 hole variants
+    # S3: Bottom Chamfer — 12 hole variants
     ("S3 Inv B.Chamfer", "bottom_chamfer", 0, [
         _make_row("Plain", None, 0, None, "+B.Chamfer"),
         _make_row("TBl", "top", HOLE_D, None, "+B.Ch+TBl"),
@@ -446,8 +499,10 @@ SHELVES = [
         _make_row("TprTBl", "top", HOLE_D, 0.08, "+B.Ch+TprTB"),
         _make_row("TprBBl", "bottom", HOLE_D, 0.08, "+B.Ch+TprBB"),
         _make_row("TprBoth", "both", HOLE_D, 0.08, "+B.Ch+TprBoth"),
+        _make_row("Stepped", "stepped", STEP_LARGE_H, None, "+B.Ch+Stepped"),
+        _make_row("TprStep", "tapered_stepped", STEP_LARGE_H, None, "+B.Ch+TprStep"),
     ]),
-    # S4: Both Chamfer �?10 hole variants
+    # S4: Both Chamfer — 12 hole variants
     ("S4 Inv Both Chamfer", "chamfer_both", 0, [
         _make_row("Plain", None, 0, None, "+Both Cham"),
         _make_row("TBl", "top", HOLE_D, None, "+BothCh+TBl"),
@@ -459,8 +514,10 @@ SHELVES = [
         _make_row("TprTBl", "top", HOLE_D, 0.08, "+BothCh+TprTB"),
         _make_row("TprBBl", "bottom", HOLE_D, 0.08, "+BothCh+TprBB"),
         _make_row("TprBoth", "both", HOLE_D, 0.08, "+BothCh+TprBoth"),
+        _make_row("Stepped", "stepped", STEP_LARGE_H, None, "+BothCh+Stepped"),
+        _make_row("TprStep", "tapered_stepped", STEP_LARGE_H, None, "+BothCh+TprStep"),
     ]),
-    # S5: Top Fillet �?10 hole variants
+    # S5: Top Fillet — 12 hole variants
     ("S5 Inv T.Fillet", "fillet", FR_R, [
         _make_row("Plain", None, 0, None, "+T.Fillet"),
         _make_row("TBl", "top", HOLE_D, None, "+T.Fil+TBl"),
@@ -472,8 +529,10 @@ SHELVES = [
         _make_row("TprTBl", "top", HOLE_D, 0.08, "+T.Fil+TprTB"),
         _make_row("TprBBl", "bottom", HOLE_D, 0.08, "+T.Fil+TprBB"),
         _make_row("TprBoth", "both", HOLE_D, 0.08, "+T.Fil+TprBoth"),
+        _make_row("Stepped", "stepped", STEP_LARGE_H, None, "+T.Fil+Stepped"),
+        _make_row("TprStep", "tapered_stepped", STEP_LARGE_H, None, "+T.Fil+TprStep"),
     ]),
-    # S6: Bottom Fillet �?10 hole variants
+    # S6: Bottom Fillet — 12 hole variants
     ("S6 Inv B.Fillet", "bottom_fillet", FR_R, [
         _make_row("Plain", None, 0, None, "+B.Fillet"),
         _make_row("TBl", "top", HOLE_D, None, "+B.Fil+TBl"),
@@ -485,8 +544,10 @@ SHELVES = [
         _make_row("TprTBl", "top", HOLE_D, 0.08, "+B.Fil+TprTB"),
         _make_row("TprBBl", "bottom", HOLE_D, 0.08, "+B.Fil+TprBB"),
         _make_row("TprBoth", "both", HOLE_D, 0.08, "+B.Fil+TprBoth"),
+        _make_row("Stepped", "stepped", STEP_LARGE_H, None, "+B.Fil+Stepped"),
+        _make_row("TprStep", "tapered_stepped", STEP_LARGE_H, None, "+B.Fil+TprStep"),
     ]),
-    # S7: Both Fillet �?10 hole variants
+    # S7: Both Fillet — 12 hole variants
     ("S7 Inv Both Fillet", "fillet_both", FR_R, [
         _make_row("Plain", None, 0, None, "+Both Fil"),
         _make_row("TBl", "top", HOLE_D, None, "+BothFil+TBl"),
@@ -498,8 +559,10 @@ SHELVES = [
         _make_row("TprTBl", "top", HOLE_D, 0.08, "+BothFil+TprTB"),
         _make_row("TprBBl", "bottom", HOLE_D, 0.08, "+BothFil+TprBB"),
         _make_row("TprBoth", "both", HOLE_D, 0.08, "+BothFil+TprBoth"),
+        _make_row("Stepped", "stepped", STEP_LARGE_H, None, "+BothFil+Stepped"),
+        _make_row("TprStep", "tapered_stepped", STEP_LARGE_H, None, "+BothFil+TprStep"),
     ]),
-    # S8: Top Chamfer + Bottom Fillet — 10 hole variants
+    # S8: Top Chamfer + Bottom Fillet — 12 hole variants
     ("S8 T.Ch+B.Fil", "chamfer_fillet", FR_R, [
         _make_row("Plain", None, 0, None, "+T.Ch+B.Fil"),
         _make_row("TBl", "top", HOLE_D, None, "+ChFil+TBl"),
@@ -511,6 +574,8 @@ SHELVES = [
         _make_row("TprTBl", "top", HOLE_D, 0.08, "+ChFil+TprTB"),
         _make_row("TprBBl", "bottom", HOLE_D, 0.08, "+ChFil+TprBB"),
         _make_row("TprBoth", "both", HOLE_D, 0.08, "+ChFil+TprBoth"),
+        _make_row("Stepped", "stepped", STEP_LARGE_H, None, "+ChFil+Stepped"),
+        _make_row("TprStep", "tapered_stepped", STEP_LARGE_H, None, "+ChFil+TprStep"),
     ]),
 ]
 

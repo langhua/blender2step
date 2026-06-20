@@ -217,7 +217,7 @@ def add_cone(y, z, name, br, tr, chamfer_type=None, fillet_r=0,
         elif hole == 'tapered_stepped':
             # Tapered stepped through hole: conical top (wider at surface), small cylinder bottom
             step_z = H / 2 - STEP_LARGE_H
-            taper_step_r = 0.12; taper_top_r = 0.15
+            taper_step_r = 0.08; taper_top_r = 0.20
             _add_cutter(H / 2 - STEP_LARGE_H / 2.0, STEP_LARGE_H + 0.1,
                         taper_step_r, taper_top_r)
             _add_cutter(-H / 2 + (H - STEP_LARGE_H) / 2.0, (H - STEP_LARGE_H) + 0.1,

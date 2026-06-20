@@ -171,8 +171,8 @@ def add_cylinder(y, z, name, r, chamfer_type=None, fillet_r=0,
             # Tapered stepped through hole: conical top (wider at surface), small cylinder bottom
             # r1=bottom(step) r2=top(surface) in Blender cone — large at top, tapers down to step
             step_z = H / 2 - STEP_LARGE_H
-            taper_step_r = 0.12   # hole radius at the step (bottom of tapered section)
-            taper_top_r = 0.15    # hole radius at the top surface (wider opening)
+            taper_step_r = 0.08   # hole radius at the step (bottom of tapered section)
+            taper_top_r = 0.20    # hole radius at the top surface (wider opening)
             # Top tapered cutter: cone from top to step (large at top → narrow at step)
             _add_cutter(H / 2 - STEP_LARGE_H / 2.0, STEP_LARGE_H + 0.1,
                         taper_step_r, taper_top_r)
@@ -180,8 +180,8 @@ def add_cylinder(y, z, name, r, chamfer_type=None, fillet_r=0,
             _add_cutter(-H / 2 + (H - STEP_LARGE_H) / 2.0, (H - STEP_LARGE_H) + 0.1,
                         STEP_SMALL_R, STEP_SMALL_R)
             obj['hole_is_tapered_stepped'] = True
-            obj['hole_opening_radius'] = taper_top_r * 1000      # 150 (mm) — wide opening at top surface
-            obj['hole_end_radius'] = taper_step_r * 1000          # 120 (mm) — narrow end at step
+            obj['hole_opening_radius'] = taper_top_r * 1000      # 200 (mm) — wide opening at top surface
+            obj['hole_end_radius'] = taper_step_r * 1000          # 80 (mm) — narrow end at step
             obj['step_use_mesh'] = True  # mesh export (no parametric yet)
 
         obj['hole_type'] = str(hole)

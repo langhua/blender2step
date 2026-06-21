@@ -1904,41 +1904,45 @@ TopoDS_Shape create_cylinder_with_groove_parametric(
     apply_edge(true);
     apply_edge(false);
 
-    // Create trapezoidal prism cutter at mid-height (cuts through entire cylinder)
-    double r_inner = radius - groove_depth;
-    double hb = groove_bottom_width / 2.0;  // half-width at surface (wider)
-    double ht = groove_top_width / 2.0;     // half-width at groove bottom (narrower)
+    // Create trapezoidal groove cutter using MakePrism (same pattern as cone groove)
+    double r_surface = radius + 1.5;  // slight overcut beyond cylinder surface
+    double r_floor = radius - groove_depth;
+    double hb = groove_bottom_width / 2.0;  // Z half-extent at surface (wider)
+    double ht = groove_top_width / 2.0;     // Z half-extent at groove floor (narrower)
     double half_ext = groove_extrusion_length / 2.0;
 
-    // Build face from 4 points (trapezoid cross-section in XZ plane at Y=-half_ext)
-    // Inner edge (groove bottom) = narrower (ht), outer edge (surface) = wider (hb)
-    double r_outer = radius + 5.0;
-    std::vector<gp_Pnt> pts_low = {
-        gp_Pnt(r_inner, -half_ext, -ht),
-        gp_Pnt(r_outer, -half_ext, -hb),
-        gp_Pnt(r_outer, -half_ext,  hb),
-        gp_Pnt(r_inner, -half_ext,  ht)
-    };
-    BRepBuilderAPI_MakePolygon poly_low;
-    for (const auto& p : pts_low) poly_low.Add(p);
-    poly_low.Close();
-    TopoDS_Wire wire_low = poly_low.Wire();
-    TopoDS_Face face_low = BRepBuilderAPI_MakeFace(wire_low);
+    // Build trapezoid face at Y = -half_ext, cross-section in XZ plane
+    // Counter-clockwise when viewed from +Y (normal toward +Y)
+    BRepBuilderAPI_MakePolygon wireMaker;
+    wireMaker.Add(gp_Pnt(r_surface, -half_ext,  hb));
+    wireMaker.Add(gp_Pnt(r_floor,   -half_ext,  ht));
+    wireMaker.Add(gp_Pnt(r_floor,   -half_ext, -ht));
+    wireMaker.Add(gp_Pnt(r_surface, -half_ext, -hb));
+    wireMaker.Close();
 
-    if (face_low.IsNull()) return solid;
+    if (!wireMaker.IsDone()) return solid;
+    TopoDS_Face face = BRepBuilderAPI_MakeFace(wireMaker.Wire());
+    if (face.IsNull()) return solid;
 
-    // Extrude face in Y direction
-    gp_Vec extrudeVec(0, groove_extrusion_length, 0);
-    BRepPrimAPI_MakePrism prism(face_low, extrudeVec);
-    if (!prism.IsDone()) return solid;
-    TopoDS_Solid groove_cutter = shape_to_solid(prism.Shape());
-    if (groove_cutter.IsNull()) return solid;
+    // Extrude in +Y to create prism cutter
+    BRepPrimAPI_MakePrism prismMaker(face, gp_Vec(0, groove_extrusion_length, 0));
+    if (!prismMaker.IsDone()) return solid;
+    TopoDS_Shape prism = prismMaker.Shape();
+    if (prism.IsNull()) return solid;
 
-    // Cut
-    BRepAlgoAPI_Cut cut(solid, groove_cutter);
-    if (!cut.IsDone()) return solid;
-    TopoDS_Solid result = shape_to_solid(cut.Shape());
-    if (!result.IsNull()) solid = result;
+    // Boolean cut
+    BRepAlgoAPI_Cut cutMaker(solid, prism);
+    if (cutMaker.IsDone() && !cutMaker.Shape().IsNull()) {
+        TopoDS_Shape result = cutMaker.Shape();
+        if (result.ShapeType() == TopAbs_SOLID) {
+            solid = TopoDS::Solid(result);
+        } else {
+            BRepBuilderAPI_MakeSolid sm;
+            for (TopExp_Explorer exp(result, TopAbs_SHELL); exp.More(); exp.Next())
+                sm.Add(TopoDS::Shell(exp.Current()));
+            if (sm.IsDone()) solid = sm.Solid();
+        }
+    }
 
     return solid;
 }

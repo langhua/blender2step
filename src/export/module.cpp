@@ -1472,7 +1472,7 @@ PyObject* export_cylinder_groove_step(PyObject* self, PyObject* args) {
     const char* unit = "MILLIMETER";
     int enable_logging = 1;
 
-    if (!PyArg_ParseTuple(args, "sdddddd|dddddssi",
+    if (!PyArg_ParseTuple(args, "sdddddd|dddddddssi",
                           &filename, &radius, &height,
                           &groove_depth, &groove_bottom_width, &groove_top_width, &groove_extrusion_length,
                           &top_chamfer, &top_fillet,

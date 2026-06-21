@@ -1662,8 +1662,9 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
     if top_feature: top_feature_size *= S
     if bottom_feature: bottom_feature_size *= S
     if groove_params:
-        for k in ('groove_depth', 'groove_bottom_width', 'groove_top_width', 'groove_extrusion_length'):
-            if k in groove_params: groove_params[k] *= S
+        # Groove custom properties are already in display units (mm), matching
+        # the post-scaling mesh values. Do NOT multiply by S again.
+        pass
     if stepped_hole_params:
         for k in ('small_hole_radius', 'small_hole_height', 'inner_bottom_radius', 'inner_top_radius'):
             if k in stepped_hole_params: stepped_hole_params[k] *= S

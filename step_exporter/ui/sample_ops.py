@@ -530,51 +530,95 @@ class STEP_EXPORTER_OT_create_cone_gallery(Operator):
 
 
 
-        if self._phase == 1:
+        # ===== Phase 0: create cones one per tick (0→45%) =====
 
-            # Phase 2: apply modifiers incrementally (80% 100%)
+        if self._phase == 0:
 
-            if self._mod_idx < len(self._cones):
+            if self._shelf_idx >= len(m.SHELVES):
 
-                obj = self._cones[self._mod_idx]
+                self._cones = [o for o in bpy.data.objects
 
-                bpy.ops.object.select_all(action='DESELECT')
+                              if o.name.startswith('S') and not o.name.startswith('CUT_')
 
-                obj.select_set(True)
+                              and not o.name.startswith('L') and not o.name.startswith('GS')]
 
-                bpy.context.view_layer.objects.active = obj
+                self._mod_idx = 0
 
-                for mod in reversed(list(obj.modifiers)):
+                self._phase = 1
 
-                    try:
-
-                        obj.modifiers.move(obj.modifiers.find(mod.name), 0)
-
-                        bpy.ops.object.modifier_apply(modifier=mod.name)
-
-                    except RuntimeError:
-
-                        pass
-
-                self._mod_idx += 1
-
-                pct = 80 + (self._mod_idx / len(self._cones)) * 15
-
-                update_progress(pct, f"应用修改 {self._mod_idx}/{len(self._cones)}", context)
+                update_progress(45, "应用修改器...", context)
 
                 return {'RUNNING_MODAL'}
 
-            # Modifiers done, now edge chamfer/fillet (S8) then hole bevels
 
-            update_progress(95, "添加边缘倒角/圆角...", context)
 
-            m._bevel_mixed_edges()
+            shelf_label, base_ctype, base_fr, items = m.SHELVES[self._shelf_idx]
 
-            update_progress(96, "添加孔口圆倒角...", context)
+            if self._item_idx == 0:
 
-            m._bevel_hole_openings()
+                z = m.Z_TOP - self._shelf_idx * m.Z_GAP
 
-            # Cleanup cutters
+                n = len(items)
+
+                start_y = -((n - 1) * m.STEP_Y) / 2
+
+                label_y = start_y + m.STEP_Y * (n - 1) / 2
+
+                m.add_shelf_label(label_y, z, shelf_label)
+
+
+
+            if self._item_idx < len(items):
+
+                name_sfx, hole, hd, he, label = items[self._item_idx]
+
+                z = m.Z_TOP - self._shelf_idx * m.Z_GAP
+
+                n = len(items)
+
+                start_y = -((n - 1) * m.STEP_Y) / 2
+
+                y = start_y + self._item_idx * m.STEP_Y
+
+                m.add_cone(y, z, f"S{self._shelf_idx+1}_{name_sfx}",
+
+                           m.BOT_R, m.TOP_R, base_ctype, base_fr, hole, hd, he)
+
+                m.add_label(y, z, label)
+
+                self._done += 1
+
+                pct = self._done / self._total * 45
+
+                update_progress(pct, f"创建: {self._done}/{self._total}", context)
+
+                self._item_idx += 1
+
+            else:
+
+                self._item_idx = 0
+
+                self._shelf_idx += 1
+
+            return {'RUNNING_MODAL'}
+
+
+
+        # ===== Phase 1: apply modifiers one per tick (45→47%) =====
+
+        if self._phase == 1:
+
+            if self._mod_idx < len(self._cones):
+
+                m._apply_modifiers_to(self._cones[self._mod_idx])
+
+                self._mod_idx += 1
+
+                pct = 45 + (self._mod_idx / len(self._cones)) * 2
+
+                update_progress(pct, f"应用修改器: {self._mod_idx}/{len(self._cones)}", context)
+
+                return {'RUNNING_MODAL'}
 
             for obj in list(bpy.data.objects):
 
@@ -582,89 +626,203 @@ class STEP_EXPORTER_OT_create_cone_gallery(Operator):
 
                     bpy.data.objects.remove(obj, do_unlink=True)
 
-            update_progress(100, "完成!", context)
-
-            context.window_manager.event_timer_remove(self._timer)
-
-            end_progress(context)
-
-            context.window.cursor_set('DEFAULT')
-
-            self.report({'INFO'}, f"Cone gallery created {self._total} items")
-
-            return {'FINISHED'}
-
-
-
-        if self._shelf_idx >= len(m.SHELVES):
-
-            # Gather cones with modifiers
-
-            self._cones = [o for o in bpy.data.objects
-
-                           if o.name.startswith('S') and not o.name.startswith('CUT_')
-
-                           and not o.name.startswith('L') and o.modifiers]
-
             self._mod_idx = 0
 
-            self._phase = 1
+            self._phase = 2
 
-            update_progress(80, "应用修改..", context)
+            update_progress(47, "后处理...", context)
 
             return {'RUNNING_MODAL'}
 
 
 
-        shelf_label, base_ctype, base_fr, items = m.SHELVES[self._shelf_idx]
+        # ===== Phase 2: post-process one per tick (47→50%) =====
 
-        if self._item_idx == 0:
+        if self._phase == 2:
 
-            z = m.Z_TOP - self._shelf_idx * m.Z_GAP
+            if self._mod_idx < len(self._cones):
 
-            n = len(items)
+                m._post_process_one(self._cones[self._mod_idx])
 
-            start_y = -((n - 1) * m.STEP_Y) / 2
+                self._mod_idx += 1
 
-            label_y = start_y + m.STEP_Y * (n - 1) / 2
+                pct = 47 + (self._mod_idx / len(self._cones)) * 3
 
-            m.add_shelf_label(0, label_y, z, shelf_label)
+                update_progress(pct, f"后处理: {self._mod_idx}/{len(self._cones)}", context)
+
+                return {'RUNNING_MODAL'}
+
+            self._phase = 3
+
+            update_progress(50, "左侧完成", context)
+
+            return {'RUNNING_MODAL'}
 
 
 
-        if self._item_idx < len(items):
+        # ===== Phase 3: setup copy lists, copy shelf labels =====
 
-            name_sfx, hole, hd, he, label = items[self._item_idx]
+        if self._phase == 3:
 
-            z = m.Z_TOP - self._shelf_idx * m.Z_GAP
+            self._left_cones = [o for o in bpy.data.objects
 
-            n = len(items)
+                               if o.name.startswith('S') and not o.name.startswith('CUT_')
 
-            start_y = -((n - 1) * m.STEP_Y) / 2
+                               and not o.name.startswith('GS') and not o.name.startswith('L')
 
-            y = start_y + self._item_idx * m.STEP_Y
+                               and o.name[1:2].isdigit()]
 
-            m.add_cone(y, z, f"S{self._shelf_idx+1}_{name_sfx}",
+            self._labels_left = [o for o in bpy.data.objects
 
-                       m.BOT_R, m.TOP_R, base_ctype, base_fr, hole, hd, he)
+                                if o.name.startswith('L') and not o.name.startswith('LS')
 
-            m.add_label(0, y, z, label)
+                                and not o.name.startswith('GL')]
 
-            self._done += 1
+            self._shelf_labels_left = [o for o in bpy.data.objects
 
-            pct = self._done / self._total * 80
+                                      if o.name.startswith('LS')]
 
-            update_progress(pct, f"生成对象: {self._done}/{self._total}", context)
+            for obj in self._shelf_labels_left:
 
-            self._item_idx += 1
+                copy = obj.copy()
 
-        else:
+                copy.data = obj.data.copy()
 
-            self._item_idx = 0
+                copy.location.y += m.Y_OFFSET
 
-            self._shelf_idx += 1
+                copy.name = obj.name.replace('LS_', 'GLS_')
 
-        return {'RUNNING_MODAL'}
+                bpy.context.collection.objects.link(copy)
+
+            self._copy_idx = 0
+
+            self._phase = 4
+
+            update_progress(50, "复制锥体...", context)
+
+            return {'RUNNING_MODAL'}
+
+
+
+        # ===== Phase 4: copy one cone+label per tick (50→80%) =====
+
+        if self._phase == 4:
+
+            if self._copy_idx < len(self._left_cones):
+
+                obj = self._left_cones[self._copy_idx]
+
+                copy = obj.copy()
+
+                copy.data = obj.data.copy()
+
+                copy.location.y += m.Y_OFFSET
+
+                copy.name = 'G' + obj.name
+
+                bpy.context.collection.objects.link(copy)
+
+                for lbl in self._labels_left:
+
+                    if abs(lbl.location.y - obj.location.y) < 0.01 and abs(lbl.location.z - obj.location.z) < 0.01:
+
+                        lbl_copy = lbl.copy()
+
+                        lbl_copy.data = lbl.data.copy()
+
+                        lbl_copy.location.y += m.Y_OFFSET
+
+                        lbl_copy.name = 'GL' + lbl.name[1:]
+
+                        bpy.context.collection.objects.link(lbl_copy)
+
+                        break
+
+                self._copy_idx += 1
+
+                total_c = len(self._left_cones)
+
+                pct = 50 + (self._copy_idx / total_c) * 30
+
+                update_progress(pct, f"复制: {self._copy_idx}/{total_c}", context)
+
+                return {'RUNNING_MODAL'}
+
+            self._grooved_list = [o for o in bpy.data.objects
+
+                                 if o.name.startswith('GS') and not o.name.startswith('CUT_')]
+
+            self._mod_idx = 0
+
+            self._phase = 5
+
+            return {'RUNNING_MODAL'}
+
+
+
+        # ===== Phase 5: add groove one per tick (80→90%) =====
+
+        if self._phase == 5:
+
+            if self._mod_idx < len(self._grooved_list):
+
+                m._add_groove_to_cone(self._grooved_list[self._mod_idx])
+
+                self._mod_idx += 1
+
+                total_g = len(self._grooved_list)
+
+                pct = 80 + (self._mod_idx / total_g) * 10
+
+                update_progress(pct, f"添加槽: {self._mod_idx}/{total_g}", context)
+
+                return {'RUNNING_MODAL'}
+
+            self._mod_idx = 0
+
+            self._phase = 6
+
+            return {'RUNNING_MODAL'}
+
+
+
+        # ===== Phase 6: apply groove one per tick (90→95%) =====
+
+        if self._phase == 6:
+
+            if self._mod_idx < len(self._grooved_list):
+
+                m._apply_groove(self._grooved_list[self._mod_idx])
+
+                self._mod_idx += 1
+
+                total_g = len(self._grooved_list)
+
+                pct = 90 + (self._mod_idx / total_g) * 5
+
+                update_progress(pct, f"应用槽: {self._mod_idx}/{total_g}", context)
+
+                return {'RUNNING_MODAL'}
+
+            self._phase = 7
+
+            return {'RUNNING_MODAL'}
+
+
+
+        # ===== Phase 7: finish (95→100%) =====
+
+        update_progress(100, "完成!", context)
+
+        context.window_manager.event_timer_remove(self._timer)
+
+        end_progress(context)
+
+        context.window.cursor_set('DEFAULT')
+
+        self.report({'INFO'}, f"Cone gallery created {self._total * 2} items")
+
+        return {'FINISHED'}
 
 
 
@@ -694,7 +852,7 @@ class STEP_EXPORTER_OT_create_cone_gallery(Operator):
 
         from ..export.progress_report import start_progress
 
-        start_progress(context, "创建正锥形库...")
+        start_progress(context, "Creating cone gallery (with grooves)...")
 
         wm = context.window_manager
 
@@ -754,47 +912,95 @@ class STEP_EXPORTER_OT_create_cone_gallery_inverted(Operator):
 
 
 
+        # ===== Phase 0: create cones one per tick (0→80%) =====
+
+        if self._phase == 0:
+
+            if self._shelf_idx >= len(m.SHELVES):
+
+                self._cones = [o for o in bpy.data.objects
+
+                              if o.name.startswith('S') and not o.name.startswith('CUT_')
+
+                              and not o.name.startswith('L') and not o.name.startswith('GS')]
+
+                self._mod_idx = 0
+
+                self._phase = 1
+
+                update_progress(45, "应用修改器...", context)
+
+                return {'RUNNING_MODAL'}
+
+
+
+            shelf_label, base_ctype, base_fr, items = m.SHELVES[self._shelf_idx]
+
+            if self._item_idx == 0:
+
+                z = m.Z_TOP - self._shelf_idx * m.Z_GAP
+
+                n = len(items)
+
+                start_y = -((n - 1) * m.STEP_Y) / 2
+
+                label_y = start_y + m.STEP_Y * (n - 1) / 2
+
+                m.add_shelf_label(label_y, z, shelf_label)
+
+
+
+            if self._item_idx < len(items):
+
+                name_sfx, hole, hd, he, label = items[self._item_idx]
+
+                z = m.Z_TOP - self._shelf_idx * m.Z_GAP
+
+                n = len(items)
+
+                start_y = -((n - 1) * m.STEP_Y) / 2
+
+                y = start_y + self._item_idx * m.STEP_Y
+
+                m.add_cone(y, z, f"S{self._shelf_idx+1}_{name_sfx}",
+
+                           m.TOP_R, m.BOT_R, base_ctype, base_fr, hole, hd, he)
+
+                m.add_label(y, z, label)
+
+                self._done += 1
+
+                pct = self._done / self._total * 45
+
+                update_progress(pct, f"创建: {self._done}/{self._total}", context)
+
+                self._item_idx += 1
+
+            else:
+
+                self._item_idx = 0
+
+                self._shelf_idx += 1
+
+            return {'RUNNING_MODAL'}
+
+
+
+        # ===== Phase 1: apply modifiers one per tick (80→85%) =====
+
         if self._phase == 1:
 
             if self._mod_idx < len(self._cones):
 
-                obj = self._cones[self._mod_idx]
-
-                bpy.ops.object.select_all(action='DESELECT')
-
-                obj.select_set(True)
-
-                bpy.context.view_layer.objects.active = obj
-
-                for mod in reversed(list(obj.modifiers)):
-
-                    try:
-
-                        obj.modifiers.move(obj.modifiers.find(mod.name), 0)
-
-                        bpy.ops.object.modifier_apply(modifier=mod.name)
-
-                    except RuntimeError:
-
-                        pass
+                m._apply_modifiers_to(self._cones[self._mod_idx])
 
                 self._mod_idx += 1
 
-                pct = 80 + (self._mod_idx / len(self._cones)) * 15
+                pct = 45 + (self._mod_idx / len(self._cones)) * 2
 
-                update_progress(pct, f"应用修改 {self._mod_idx}/{len(self._cones)}", context)
+                update_progress(pct, f"应用修改器: {self._mod_idx}/{len(self._cones)}", context)
 
                 return {'RUNNING_MODAL'}
-
-            # Modifiers done, now edge chamfer/fillet (S8) then hole bevels
-
-            update_progress(95, "添加边缘倒角/圆角...", context)
-
-            m._bevel_mixed_edges()
-
-            update_progress(96, "添加孔口圆倒角...", context)
-
-            m._bevel_hole_openings()
 
             for obj in list(bpy.data.objects):
 
@@ -802,87 +1008,203 @@ class STEP_EXPORTER_OT_create_cone_gallery_inverted(Operator):
 
                     bpy.data.objects.remove(obj, do_unlink=True)
 
-            update_progress(100, "完成!", context)
-
-            context.window_manager.event_timer_remove(self._timer)
-
-            end_progress(context)
-
-            context.window.cursor_set('DEFAULT')
-
-            self.report({'INFO'}, f"Inverted cone gallery created {self._total} items")
-
-            return {'FINISHED'}
-
-
-
-        if self._shelf_idx >= len(m.SHELVES):
-
-            self._cones = [o for o in bpy.data.objects
-
-                           if o.name.startswith('S') and not o.name.startswith('CUT_')
-
-                           and not o.name.startswith('L') and o.modifiers]
-
             self._mod_idx = 0
 
-            self._phase = 1
+            self._phase = 2
 
-            update_progress(80, "应用修改..", context)
+            update_progress(47, "后处理...", context)
 
             return {'RUNNING_MODAL'}
 
 
 
-        shelf_label, base_ctype, base_fr, items = m.SHELVES[self._shelf_idx]
+        # ===== Phase 2: post-process one per tick (47→50%) =====
 
-        if self._item_idx == 0:
+        if self._phase == 2:
 
-            z = m.Z_TOP - self._shelf_idx * m.Z_GAP
+            if self._mod_idx < len(self._cones):
 
-            n = len(items)
+                m._post_process_one(self._cones[self._mod_idx])
 
-            start_y = -((n - 1) * m.STEP_Y) / 2
+                self._mod_idx += 1
 
-            label_y = start_y + m.STEP_Y * (n - 1) / 2
+                pct = 47 + (self._mod_idx / len(self._cones)) * 3
 
-            m.add_shelf_label(0, label_y, z, shelf_label)
+                update_progress(pct, f"后处理: {self._mod_idx}/{len(self._cones)}", context)
+
+                return {'RUNNING_MODAL'}
+
+            self._phase = 3
+
+            update_progress(50, "左侧完成", context)
+
+            return {'RUNNING_MODAL'}
 
 
 
-        if self._item_idx < len(items):
+        # ===== Phase 3: setup copy lists, copy shelf labels =====
 
-            name_sfx, hole, hd, he, label = items[self._item_idx]
+        if self._phase == 3:
 
-            z = m.Z_TOP - self._shelf_idx * m.Z_GAP
+            self._left_cones = [o for o in bpy.data.objects
 
-            n = len(items)
+                               if o.name.startswith('S') and not o.name.startswith('CUT_')
 
-            start_y = -((n - 1) * m.STEP_Y) / 2
+                               and not o.name.startswith('GS') and not o.name.startswith('L')
 
-            y = start_y + self._item_idx * m.STEP_Y
+                               and o.name[1:2].isdigit()]
 
-            m.add_cone(y, z, f"S{self._shelf_idx+1}_{name_sfx}",
+            self._labels_left = [o for o in bpy.data.objects
 
-                       m.TOP_R, m.BOT_R, base_ctype, base_fr, hole, hd, he)
+                                if o.name.startswith('L') and not o.name.startswith('LS')
 
-            m.add_label(0, y, z, label)
+                                and not o.name.startswith('GL')]
 
-            self._done += 1
+            self._shelf_labels_left = [o for o in bpy.data.objects
 
-            pct = self._done / self._total * 80
+                                      if o.name.startswith('LS')]
 
-            update_progress(pct, f"生成对象: {self._done}/{self._total}", context)
+            for obj in self._shelf_labels_left:
 
-            self._item_idx += 1
+                copy = obj.copy()
 
-        else:
+                copy.data = obj.data.copy()
 
-            self._item_idx = 0
+                copy.location.y += m.Y_OFFSET
 
-            self._shelf_idx += 1
+                copy.name = obj.name.replace('LS_', 'GLS_')
 
-        return {'RUNNING_MODAL'}
+                bpy.context.collection.objects.link(copy)
+
+            self._copy_idx = 0
+
+            self._phase = 4
+
+            update_progress(50, "复制锥体...", context)
+
+            return {'RUNNING_MODAL'}
+
+
+
+        # ===== Phase 4: copy one cone+label per tick (50→80%) =====
+
+        if self._phase == 4:
+
+            if self._copy_idx < len(self._left_cones):
+
+                obj = self._left_cones[self._copy_idx]
+
+                copy = obj.copy()
+
+                copy.data = obj.data.copy()
+
+                copy.location.y += m.Y_OFFSET
+
+                copy.name = 'G' + obj.name
+
+                bpy.context.collection.objects.link(copy)
+
+                for lbl in self._labels_left:
+
+                    if abs(lbl.location.y - obj.location.y) < 0.01 and abs(lbl.location.z - obj.location.z) < 0.01:
+
+                        lbl_copy = lbl.copy()
+
+                        lbl_copy.data = lbl.data.copy()
+
+                        lbl_copy.location.y += m.Y_OFFSET
+
+                        lbl_copy.name = 'GL' + lbl.name[1:]
+
+                        bpy.context.collection.objects.link(lbl_copy)
+
+                        break
+
+                self._copy_idx += 1
+
+                total_c = len(self._left_cones)
+
+                pct = 50 + (self._copy_idx / total_c) * 30
+
+                update_progress(pct, f"复制: {self._copy_idx}/{total_c}", context)
+
+                return {'RUNNING_MODAL'}
+
+            self._grooved_list = [o for o in bpy.data.objects
+
+                                 if o.name.startswith('GS') and not o.name.startswith('CUT_')]
+
+            self._mod_idx = 0
+
+            self._phase = 5
+
+            return {'RUNNING_MODAL'}
+
+
+
+        # ===== Phase 5: add groove one per tick (80→90%) =====
+
+        if self._phase == 5:
+
+            if self._mod_idx < len(self._grooved_list):
+
+                m._add_groove_to_cone(self._grooved_list[self._mod_idx])
+
+                self._mod_idx += 1
+
+                total_g = len(self._grooved_list)
+
+                pct = 80 + (self._mod_idx / total_g) * 10
+
+                update_progress(pct, f"添加槽: {self._mod_idx}/{total_g}", context)
+
+                return {'RUNNING_MODAL'}
+
+            self._mod_idx = 0
+
+            self._phase = 6
+
+            return {'RUNNING_MODAL'}
+
+
+
+        # ===== Phase 6: apply groove one per tick (90→95%) =====
+
+        if self._phase == 6:
+
+            if self._mod_idx < len(self._grooved_list):
+
+                m._apply_groove(self._grooved_list[self._mod_idx])
+
+                self._mod_idx += 1
+
+                total_g = len(self._grooved_list)
+
+                pct = 90 + (self._mod_idx / total_g) * 5
+
+                update_progress(pct, f"应用槽: {self._mod_idx}/{total_g}", context)
+
+                return {'RUNNING_MODAL'}
+
+            self._phase = 7
+
+            return {'RUNNING_MODAL'}
+
+
+
+        # ===== Phase 7: finish (95→100%) =====
+
+        update_progress(100, "完成!", context)
+
+        context.window_manager.event_timer_remove(self._timer)
+
+        end_progress(context)
+
+        context.window.cursor_set('DEFAULT')
+
+        self.report({'INFO'}, f"Inverted cone gallery created {self._total * 2} items")
+
+        return {'FINISHED'}
 
 
 
@@ -912,7 +1234,7 @@ class STEP_EXPORTER_OT_create_cone_gallery_inverted(Operator):
 
         from ..export.progress_report import start_progress
 
-        start_progress(context, "创建倒锥形库...")
+        start_progress(context, "Creating inverted cone gallery...")
 
         wm = context.window_manager
 
@@ -944,11 +1266,13 @@ class STEP_EXPORTER_OT_create_cone_gallery_inverted(Operator):
 
         self._done = 0
 
+        self._phase = 0
+
         context.window.cursor_set('WAIT')
 
         from ..export.progress_report import start_progress
 
-        start_progress(context, "创建倒锥形库...")
+        start_progress(context, "Creating inverted cone gallery (with grooves)...")
 
         wm = context.window_manager
 

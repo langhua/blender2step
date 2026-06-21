@@ -12,7 +12,6 @@ HOLE_FILLET_R = 0.015
 STEP_LARGE_R = 0.14; STEP_LARGE_H = H * 0.8; STEP_SMALL_R = 0.05
 # Groove parameters — trapezoidal through-slot
 GRV_DEPTH = 0.06; GRV_TOP_W = 0.08; GRV_ANGLE = math.radians(45)
-GRV_EXT = 2.0
 GAP_Y = 0.2
 Z_GAP = H * 2 + 0.8
 X_LABEL = R + 0.35
@@ -173,7 +172,7 @@ def add_cylinder(x, y, z, name, r, chamfer_type=None, fillet_r=0,
         elif hole == 'tapered_stepped':
             # Tapered stepped through hole: conical top (wider at surface), small cylinder bottom
             step_z = H / 2 - STEP_LARGE_H
-            taper_step_r = 0.08   # hole radius at the step (bottom of tapered section)
+            taper_step_r = 0.10   # hole radius at the step (bottom of tapered section)
             taper_top_r = 0.20    # hole radius at the top surface (wider opening)
             # Top tapered cutter: cone from top to step (large at top → narrow at step)
             _add_cutter(H / 2 - STEP_LARGE_H / 2.0, STEP_LARGE_H + 0.1,
@@ -183,7 +182,7 @@ def add_cylinder(x, y, z, name, r, chamfer_type=None, fillet_r=0,
                         STEP_SMALL_R, STEP_SMALL_R)
             obj['hole_is_tapered_stepped'] = True
             obj['hole_opening_radius'] = taper_top_r * 1000      # 200 (mm)
-            obj['hole_end_radius'] = taper_step_r * 1000          # 80 (mm)
+            obj['hole_end_radius'] = taper_step_r * 1000          # 100 (mm)
             obj['hole_is_stepped'] = True
             obj['hole_is_tapered'] = True  # 触发 cylinder_tapered_stepped_hole 参数化导出
             obj['hole_stepped_large_h'] = STEP_LARGE_H * 1000     # mm
@@ -288,7 +287,6 @@ def _bevel_hole_openings():
             openings = [
                 (H / 2, top_r),            # top surface opening (tapered, wide)
                 (step_z, step_r),           # step outer edge (bottom of tapered section)
-                (step_z, STEP_SMALL_R),     # step inner edge (top of small straight hole)
                 (-H / 2, STEP_SMALL_R),     # bottom opening (small hole)
             ]
         else:
@@ -340,9 +338,9 @@ def _bevel_mixed_edges():
         bm.edges.ensure_lookup_table()
         for e in bm.edges:
             v1z = e.verts[0].co.z; v2z = e.verts[1].co.z
-            mid_xy = math.sqrt(((e.verts[0].co.x + e.verts[1].co.x) / 2) ** 2 +
-                               ((e.verts[0].co.y + e.verts[1].co.y) / 2) ** 2)
-            if v1z > hh * 0.75 and v2z > hh * 0.75 and mid_xy > R * 0.7:
+            v1r = math.sqrt(e.verts[0].co.x**2 + e.verts[0].co.y**2)
+            v2r = math.sqrt(e.verts[1].co.x**2 + e.verts[1].co.y**2)
+            if v1z > hh * 0.75 and v2z > hh * 0.75 and v1r > R * 0.85 and v2r > R * 0.85:
                 e.select = True
         bmesh.update_edit_mesh(obj.data)
         bpy.ops.mesh.bevel(offset=CH_SZ, offset_type='OFFSET',
@@ -354,9 +352,9 @@ def _bevel_mixed_edges():
         bm.edges.ensure_lookup_table()
         for e in bm.edges:
             v1z = e.verts[0].co.z; v2z = e.verts[1].co.z
-            mid_xy = math.sqrt(((e.verts[0].co.x + e.verts[1].co.x) / 2) ** 2 +
-                               ((e.verts[0].co.y + e.verts[1].co.y) / 2) ** 2)
-            if v1z < -hh * 0.75 and v2z < -hh * 0.75 and mid_xy > R * 0.7:
+            v1r = math.sqrt(e.verts[0].co.x**2 + e.verts[0].co.y**2)
+            v2r = math.sqrt(e.verts[1].co.x**2 + e.verts[1].co.y**2)
+            if v1z < -hh * 0.75 and v2z < -hh * 0.75 and v1r > R * 0.85 and v2r > R * 0.85:
                 e.select = True
         bmesh.update_edit_mesh(obj.data)
         bpy.ops.mesh.bevel(offset=FR_R, offset_type='OFFSET',
@@ -502,14 +500,16 @@ Y_OFFSET = 15.0
 
 def _add_groove_to_cylinder(obj):
     """Add a trapezoidal groove cutter to a single cylinder via Boolean modifier.
-    Does NOT apply the modifier — caller must do that."""
+    Follows parametric_cylinder.py pattern."""
     import bmesh
     r_surface = R + 0.0001
     r_floor = R - GRV_DEPTH
-    bot_w = GRV_TOP_W + 2.0 * GRV_DEPTH * math.tan(GRV_ANGLE)
+    cutter_span = r_surface - r_floor  # actual radial span
+    bot_w = GRV_TOP_W + 2.0 * cutter_span * math.tan(GRV_ANGLE)
     hb = bot_w / 2.0
     ht = GRV_TOP_W / 2.0
-    half_ext = GRV_EXT / 2.0
+    ext_len = 2.0 * R + 0.04  # through entire diameter + margin
+    half_ext = ext_len / 2.0
     cy = obj.location.y
     cz = obj.location.z
 
@@ -545,7 +545,7 @@ def _add_groove_to_cylinder(obj):
     obj['step_groove_depth'] = GRV_DEPTH * 1000
     obj['step_groove_bottom_width'] = bot_w_mm
     obj['step_groove_top_width'] = top_w_mm
-    obj['step_groove_extrusion_length'] = 2.0 * R * 1000 + 4.0
+    obj['step_groove_extrusion_length'] = ext_len * 1000
 
 
 def _apply_groove(obj):
@@ -569,7 +569,7 @@ def _apply_groove(obj):
 
 
 def _apply_modifiers_to(obj):
-    """Apply Bevel then Boolean modifiers for a single cylinder object."""
+    """Apply Bevel then Boolean modifiers, then bevel hole openings."""
     if not obj.modifiers:
         return
     bpy.ops.object.select_all(action='DESELECT')
@@ -588,9 +588,7 @@ def _apply_modifiers_to(obj):
             except RuntimeError as e:
                 print(f"    Skip {obj.name}/{mod.name}: {e}")
 
-
-def _post_process_one(obj):
-    """Bevel hole openings and mixed edges for a single cylinder."""
+    # Immediately bevel hole openings while mesh is still "hot"
     import bmesh
     hole_type = obj.get('hole_type')
     if hole_type:
@@ -616,7 +614,6 @@ def _post_process_one(obj):
             openings = [
                 (H / 2, top_r),
                 (step_z, step_r),
-                (step_z, STEP_SMALL_R),
                 (-H / 2, STEP_SMALL_R),
             ]
         else:
@@ -633,6 +630,7 @@ def _post_process_one(obj):
             bpy.ops.mesh.select_all(action='DESELECT')
             bm = bmesh.from_edit_mesh(obj.data)
             bm.edges.ensure_lookup_table()
+            edge_count = 0
             for e in bm.edges:
                 v1, v2 = e.verts
                 mid_z = (v1.co.z + v2.co.z) / 2.0
@@ -640,42 +638,54 @@ def _post_process_one(obj):
                 dz = abs(v1.co.z - v2.co.z)
                 for hz, hr in openings:
                     if abs(mid_z - hz) < 0.06 and abs(mid_xy - hr) < hr * 0.35 and dz < 0.03:
-                        e.select = True; break
+                        e.select = True
+                        edge_count += 1
+                        break
             bmesh.update_edit_mesh(obj.data)
-            bpy.ops.mesh.bevel(offset=HOLE_FILLET_R, offset_type='OFFSET',
-                               segments=12, profile=0.5, affect='EDGES')
+            if edge_count > 0:
+                bpy.ops.mesh.bevel(offset=HOLE_FILLET_R, offset_type='OFFSET',
+                                   segments=12, profile=0.5, affect='EDGES')
+                bpy.ops.mesh.select_all(action='SELECT')
+                bpy.ops.mesh.remove_doubles(threshold=0.0001)
+                bpy.ops.mesh.delete_loose()
+                bpy.ops.mesh.normals_make_consistent(inside=False)
             bpy.ops.object.mode_set(mode='OBJECT')
 
-    if obj.get('chamfer_type') == 'chamfer_fillet':
-        bpy.context.view_layer.objects.active = obj
-        hh = H / 2.0
-        bpy.ops.object.mode_set(mode='EDIT')
-        bpy.ops.mesh.select_mode(type='EDGE')
-        bpy.ops.mesh.select_all(action='DESELECT')
-        bm = bmesh.from_edit_mesh(obj.data)
-        bm.edges.ensure_lookup_table()
-        for e in bm.edges:
-            v1z = e.verts[0].co.z; v2z = e.verts[1].co.z
-            mid_xy = math.sqrt(((e.verts[0].co.x + e.verts[1].co.x) / 2) ** 2 +
-                               ((e.verts[0].co.y + e.verts[1].co.y) / 2) ** 2)
-            if v1z > hh * 0.75 and v2z > hh * 0.75 and mid_xy > R * 0.7:
-                e.select = True
-        bmesh.update_edit_mesh(obj.data)
-        bpy.ops.mesh.bevel(offset=CH_SZ, offset_type='OFFSET',
-                           segments=1, profile=0.5, affect='EDGES')
-        bpy.ops.mesh.select_all(action='DESELECT')
-        bm = bmesh.from_edit_mesh(obj.data)
-        bm.edges.ensure_lookup_table()
-        for e in bm.edges:
-            v1z = e.verts[0].co.z; v2z = e.verts[1].co.z
-            mid_xy = math.sqrt(((e.verts[0].co.x + e.verts[1].co.x) / 2) ** 2 +
-                               ((e.verts[0].co.y + e.verts[1].co.y) / 2) ** 2)
-            if v1z < -hh * 0.75 and v2z < -hh * 0.75 and mid_xy > R * 0.7:
-                e.select = True
-        bmesh.update_edit_mesh(obj.data)
-        bpy.ops.mesh.bevel(offset=FR_R, offset_type='OFFSET',
-                           segments=8, profile=0.5, affect='EDGES')
-        bpy.ops.object.mode_set(mode='OBJECT')
+
+def _post_process_one(obj):
+    """Bevel mixed edges (chamfer_fillet) only — hole bevel is done in _apply_modifiers_to."""
+    if obj.get('chamfer_type') != 'chamfer_fillet':
+        return
+    import bmesh
+    bpy.context.view_layer.objects.active = obj
+    hh = H / 2.0
+    bpy.ops.object.mode_set(mode='EDIT')
+    bpy.ops.mesh.select_mode(type='EDGE')
+    bpy.ops.mesh.select_all(action='DESELECT')
+    bm = bmesh.from_edit_mesh(obj.data)
+    bm.edges.ensure_lookup_table()
+    for e in bm.edges:
+        v1z = e.verts[0].co.z; v2z = e.verts[1].co.z
+        v1r = math.sqrt(e.verts[0].co.x**2 + e.verts[0].co.y**2)
+        v2r = math.sqrt(e.verts[1].co.x**2 + e.verts[1].co.y**2)
+        if v1z > hh * 0.75 and v2z > hh * 0.75 and v1r > R * 0.85 and v2r > R * 0.85:
+            e.select = True
+    bmesh.update_edit_mesh(obj.data)
+    bpy.ops.mesh.bevel(offset=CH_SZ, offset_type='OFFSET',
+                       segments=1, profile=0.5, affect='EDGES')
+    bpy.ops.mesh.select_all(action='DESELECT')
+    bm = bmesh.from_edit_mesh(obj.data)
+    bm.edges.ensure_lookup_table()
+    for e in bm.edges:
+        v1z = e.verts[0].co.z; v2z = e.verts[1].co.z
+        v1r = math.sqrt(e.verts[0].co.x**2 + e.verts[0].co.y**2)
+        v2r = math.sqrt(e.verts[1].co.x**2 + e.verts[1].co.y**2)
+        if v1z < -hh * 0.75 and v2z < -hh * 0.75 and v1r > R * 0.85 and v2r > R * 0.85:
+            e.select = True
+    bmesh.update_edit_mesh(obj.data)
+    bpy.ops.mesh.bevel(offset=FR_R, offset_type='OFFSET',
+                       segments=8, profile=0.5, affect='EDGES')
+    bpy.ops.object.mode_set(mode='OBJECT')
 
 
 def build(progress_cb=None):

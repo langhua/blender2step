@@ -925,8 +925,8 @@ TopoDS_Shape create_hollow_cone_fillet_with_groove_parametric(
     // Groove is at mid-height (z=0) of the cone, centered in Y
     // The cross-section is in the XZ plane, extruded along Y axis
     double mid_outer_radius = (outer_bottom_radius + outer_top_radius) / 2.0;
-    double R_surface = mid_outer_radius + 1.5;   // surface overcut margin (same as Blender script)
-    double r_inner = R_surface - groove_depth;
+    double R_surface = mid_outer_radius;           // groove starts from cylinder/cone surface
+    double r_inner = mid_outer_radius - groove_depth;  // groove floor = surface - depth
     double hb = groove_bottom_width / 2.0;        // Z half-extent at surface (wider)
     double ht = groove_top_width / 2.0;           // Z half-extent at groove bottom (narrower)
     double half_ext = groove_extrusion_length / 2.0; // Y half-extent
@@ -983,24 +983,39 @@ TopoDS_Shape create_hollow_cone_fillet_with_groove_parametric(
         }
     }
 
-    // Step 4: Apply fillet to top edges
+    // Step 4: Apply hole fillet to inner hole edges (top & bottom) only
     std::vector<TopoDS_Edge> topEdges, bottomEdges;
     find_circular_edges(solid, topEdges, bottomEdges);
 
-    if (fillet_radius > 0.001 && !topEdges.empty()) {
+    if (fillet_radius > 0.001) {
         BRepFilletAPI_MakeFillet filletMaker(solid);
+        int filletCount = 0;
+        // Top hole edge: radius matches inner_top_radius
         for (const auto& edge : topEdges) {
-            filletMaker.Add(fillet_radius, edge);
+            double er = BRepAdaptor_Curve(edge).Circle().Radius();
+            if (std::abs(er - inner_top_radius) / std::max(inner_top_radius, 0.001) < 0.1) {
+                filletMaker.Add(fillet_radius, edge);
+                filletCount++;
+            }
         }
-        filletMaker.Build();
-        if (filletMaker.IsDone()) {
-            std::cout << "[STEP Exporter] Created hollow cone with top fillet and groove: "
-                      << "oBR=" << outer_bottom_radius << " oTR=" << outer_top_radius
-                      << " iBR=" << inner_bottom_radius << " iTR=" << inner_top_radius
-                      << " h=" << height << " fillet=" << fillet_radius
-                      << " groove_depth=" << groove_depth
-                      << " groove_width=" << groove_extrusion_length << std::endl;
-            return filletMaker.Shape();
+        // Bottom hole edge: radius matches inner_bottom_radius
+        for (const auto& edge : bottomEdges) {
+            double er = BRepAdaptor_Curve(edge).Circle().Radius();
+            if (std::abs(er - inner_bottom_radius) / std::max(inner_bottom_radius, 0.001) < 0.1) {
+                filletMaker.Add(fillet_radius, edge);
+                filletCount++;
+            }
+        }
+        if (filletCount > 0) {
+            filletMaker.Build();
+            if (filletMaker.IsDone()) {
+                std::cout << "[STEP Exporter] Created hollow cone with groove and hole fillet: "
+                          << "oBR=" << outer_bottom_radius << " oTR=" << outer_top_radius
+                          << " iBR=" << inner_bottom_radius << " iTR=" << inner_top_radius
+                          << " h=" << height << " fillet=" << fillet_radius
+                          << " edges=" << filletCount << std::endl;
+                return filletMaker.Shape();
+            }
         }
     }
 

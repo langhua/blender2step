@@ -427,6 +427,36 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
             cparams.get('groove_extrusion_length', 0),
             px, py, pz, data['step_schema'], data['step_unit'],
             1 if data['enable_logging'] else 0)
+    elif obj_type == 'hollow_cone_grooved':
+        # Hollow cone (through-hole) with trapezoidal groove
+        return cpp_exporter.export_hollow_cone_fillet_with_groove_step(
+            temp_file,
+            cparams.get('outer_bottom_radius', cparams.get('outer_radius', 0)),
+            cparams.get('outer_top_radius', cparams.get('outer_radius', 0)),
+            cparams.get('inner_bottom_radius', cparams.get('inner_radius', 0)),
+            cparams.get('inner_top_radius', cparams.get('inner_radius', 0)),
+            cparams['height'], cparams.get('hole_fillet_radius', 0),
+            cparams.get('groove_depth', 0),
+            cparams.get('groove_bottom_width', 0),
+            cparams.get('groove_top_width', 0),
+            cparams.get('groove_extrusion_length', 0),
+            px, py, pz, data['step_schema'], data['step_unit'],
+            1 if data['enable_logging'] else 0)
+    elif obj_type == 'hollow_cylinder_grooved':
+        # Hollow cylinder (through-hole) with trapezoidal groove
+        return cpp_exporter.export_hollow_cone_fillet_with_groove_step(
+            temp_file,
+            cparams.get('outer_bottom_radius', cparams.get('outer_radius', 0)),
+            cparams.get('outer_top_radius', cparams.get('outer_radius', 0)),
+            cparams.get('inner_bottom_radius', cparams.get('inner_radius', 0)),
+            cparams.get('inner_top_radius', cparams.get('inner_radius', 0)),
+            cparams['height'], cparams.get('hole_fillet_radius', 0),
+            cparams.get('groove_depth', 0),
+            cparams.get('groove_bottom_width', 0),
+            cparams.get('groove_top_width', 0),
+            cparams.get('groove_extrusion_length', 0),
+            px, py, pz, data['step_schema'], data['step_unit'],
+            1 if data['enable_logging'] else 0)
     elif obj_type == 'cone_stepped_hole':
         top_fr = cparams.get('top_feature_size', 0.0) if cparams.get('top_feature') == 'fillet' else 0.0
         return cpp_exporter.export_cone_stepped_hole_step(

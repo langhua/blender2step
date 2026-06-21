@@ -1523,7 +1523,7 @@ PyObject* export_cone_groove_step(PyObject* self, PyObject* args) {
     const char* unit = "MILLIMETER";
     int enable_logging = 1;
 
-    if (!PyArg_ParseTuple(args, "sdddddddd|dddssi",
+    if (!PyArg_ParseTuple(args, "sddddddd|dddssi",
                           &filename, &bottom_radius, &top_radius, &height,
                           &groove_depth, &groove_bottom_width, &groove_top_width, &groove_extrusion_length,
                           &pos_x, &pos_y, &pos_z,

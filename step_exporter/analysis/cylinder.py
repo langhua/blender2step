@@ -503,7 +503,7 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
         hole_pattern_detected = True
         hole_position = 'through'
         stored_hr = obj.get('hole_radius') if hasattr(obj, 'get') else None
-        hole_radius = stored_hr * 0.001 if stored_hr else body_radius * 0.35
+        hole_radius = stored_hr if stored_hr else body_radius * 0.35
         hole_depth = height
         log_to_file(f"[STEP Exporter]   Through-hole detected from stored property, r={hole_radius:.4f}")
     elif stored_pos in ('top', 'bottom', 'both'):
@@ -511,8 +511,8 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
         hole_position = stored_pos
         stored_hr = obj.get('hole_radius') if hasattr(obj, 'get') else None
         stored_hd = obj.get('hole_depth') if hasattr(obj, 'get') else None
-        hole_radius = stored_hr * 0.001 if stored_hr else body_radius * 0.35
-        hole_depth = stored_hd * 0.001 if stored_hd else height * 0.5
+        hole_radius = stored_hr if stored_hr else body_radius * 0.35
+        hole_depth = stored_hd if stored_hd else height * 0.5
         if stored_pos == 'both':
             hole_depth_top = hole_depth
         log_to_file(f"[STEP Exporter]   Blind hole from stored property: pos={stored_pos} r={hole_radius:.4f} d={hole_depth:.4f}")
@@ -1356,7 +1356,7 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                         inner_top_r = end_r
                     # C++ create_cone_solid_parametric handles R1<R2 by axis flip
                     log_to_file(f"[STEP Exporter]   tapered through-hole: inner_top={inner_top_r:.3f} inner_bot={inner_bot_r:.3f}")
-                return {
+                result = {
                     'obj_type': 'hollow_cone',
                     'outer_bottom_radius': bottom_radius * S,
                     'outer_top_radius': top_radius * S,
@@ -1372,6 +1372,12 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                     'pos_y': pos_y * S,
                     'pos_z': pos_z * S,
                 }
+                # 通孔锥体+梯形槽：合并 groove 参数
+                if groove_params:
+                    result['obj_type'] = 'hollow_cone_grooved'
+                    result.update(groove_params)
+                    log_to_file(f"[STEP Exporter]   -> hollow_cone_grooved! groove_depth={groove_params.get('groove_depth', 0):.4f}")
+                return result
             
             hole_fillet_r = obj.get('hole_fillet_radius', 0.0) if hasattr(obj, 'get') else 0.0
             hole_is_tapered_thru = obj.get('hole_is_tapered', False) if hasattr(obj, 'get') else False
@@ -1412,7 +1418,7 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                     inner_t = opening_r; inner_b = end_r
                 else:
                     inner_t = end_r; inner_b = opening_r
-                return {
+                result = {
                     'obj_type': 'hollow_cylinder_tapered',
                     'outer_radius': body_radius_for_export * S,
                     'inner_radius_top': inner_t,
@@ -1427,6 +1433,15 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                     'pos_y': pos_y * S,
                     'pos_z': pos_z * S,
                 }
+                if groove_params:
+                    result['obj_type'] = 'hollow_cylinder_grooved'
+                    result['outer_bottom_radius'] = result['outer_radius']
+                    result['outer_top_radius'] = result['outer_radius']
+                    result['inner_bottom_radius'] = result['inner_radius_bottom']
+                    result['inner_top_radius'] = result['inner_radius_top']
+                    result.update(groove_params)
+                    log_to_file(f"[STEP Exporter]   -> hollow_cylinder_grooved (tapered)! groove_depth={groove_params.get('groove_depth', 0):.4f}")
+                return result
             
             log_to_file(f"[STEP Exporter]   -> hollow_cylinder (through-hole)! r={body_radius_for_export:.3f} h={height:.3f} inner_r={hole_radius:.3f}")
             # 读取存储的倒角/圆角参数
@@ -1472,6 +1487,16 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                 'bottom_feature': bot_feat,
                 'bottom_feature_size': bot_sz * S,
             }
+            # 通孔圆柱+梯形槽：使用 hollow_cylinder_grooved 路径
+            if groove_params:
+                result['obj_type'] = 'hollow_cylinder_grooved'
+                result['outer_bottom_radius'] = result['outer_radius']
+                result['outer_top_radius'] = result['outer_radius']
+                result['inner_bottom_radius'] = result['inner_radius_bottom']
+                result['inner_top_radius'] = result['inner_radius_top']
+                result.update(groove_params)
+                log_to_file(f"[STEP Exporter]   -> hollow_cylinder_grooved! groove_depth={groove_params.get('groove_depth', 0):.4f}")
+                return result
             if hole_fillet_r > 0 and not has_outer_feature:
                 result['top_feature'] = 'fillet'
                 result['top_feature_size'] = hole_fillet_r

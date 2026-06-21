@@ -124,6 +124,10 @@ TopoDS_Shape create_cylinder_with_groove_parametric(double radius, double height
                                                      double groove_top_width, double groove_extrusion_length,
                                                      double top_chamfer = 0.0, double top_fillet = 0.0,
                                                      double bottom_chamfer = 0.0, double bottom_fillet = 0.0);
+// Cone with external trapezoidal groove at mid-height
+TopoDS_Shape create_cone_with_groove_parametric(double bottom_radius, double top_radius, double height,
+                                                 double groove_depth, double groove_bottom_width,
+                                                 double groove_top_width, double groove_extrusion_length);
 // Cone with blind hole (single end)
 TopoDS_Shape create_cone_with_blind_hole_solid_parametric(double bottom_radius, double top_radius, double height,
                                                            double hole_radius, double hole_depth,

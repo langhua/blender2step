@@ -145,23 +145,38 @@ class STEP_EXPORTER_OT_create_parametric_cylinder(Operator):
         name="External Groove", default=False,
         description="Add a trapezoidal groove around the cylinder at mid-height",
     )
-    groove_depth: FloatProperty(
-        name="Groove Depth", default=3.0, min=0.1, max=50.0,
-        description="Radial depth of the external groove",
-    )
-    groove_bottom_width: FloatProperty(
-        name="Groove Width", default=8.0, min=0.1, max=100.0,
-        description="Width of the groove at the cylinder surface",
-    )
     groove_angle: FloatProperty(
         name="Groove Angle", default=math.radians(45.0),
         min=math.radians(30.0), max=math.radians(90.0),
         subtype='ANGLE',
-        description="Angle between groove sides and the bottom face",
+        description="Angle of each side-wall measured from the groove floor (vertical)",
+    )
+    groove_top_width: FloatProperty(
+        name="Top Width", default=2.0, min=0.1, max=100.0,
+        description="Width of the groove at the groove floor (inner edge)",
+    )
+    groove_depth_pct: FloatProperty(
+        name="Depth % of R", default=20.0, min=5.0, max=80.0, step=5.0,
+        description="Groove depth as percentage of mid-radius",
+    )
+    groove_cone_depth_mult: FloatProperty(
+        name="Cone Depth ×", default=1.5, min=1.0, max=3.0, step=0.1,
+        description="Multiplier for groove depth on tapered cylinders (compensates slanted surface)",
     )
     
     def invoke(self, context, event):
         return context.window_manager.invoke_props_dialog(self, width=320)
+
+    def _get_auto_depth(self):
+        """Return auto-scaled groove depth = pct% of mid-radius"""
+        if self.cylinder_type == 'tapered':
+            mid_r = (self.bottom_radius + self.top_radius) / 2.0
+        else:
+            mid_r = self.radius
+        depth = round(mid_r * self.groove_depth_pct / 100.0, 1)
+        if self.cylinder_type == 'tapered':
+            depth *= self.groove_cone_depth_mult
+        return round(depth, 1)
     
     def draw(self, context):
         layout = self.layout
@@ -217,9 +232,18 @@ class STEP_EXPORTER_OT_create_parametric_cylinder(Operator):
         box.label(text="Groove", icon='MOD_BOOLEAN')
         box.prop(self, 'groove_enabled')
         if self.groove_enabled:
-            box.prop(self, 'groove_depth')
-            box.prop(self, 'groove_bottom_width')
             box.prop(self, 'groove_angle')
+            box.prop(self, 'groove_top_width')
+            box.prop(self, 'groove_depth_pct')
+            if self.cylinder_type == 'tapered':
+                box.prop(self, 'groove_cone_depth_mult')
+            # Derived dimensions (read-only info)
+            auto_depth = self._get_auto_depth()
+            angle_rad = self.groove_angle
+            derived_bot_w = self.groove_top_width + 2.0 * auto_depth * math.tan(angle_rad)
+            info = layout.box()
+            info.label(text=f"Depth: {auto_depth:.1f} mm  |  Bottom W: {derived_bot_w:.1f} mm")
+            info.label(text=f"  (bot_w = top_w + 2×depth×tan(angle))")
     
     def execute(self, context):
         try:
@@ -649,19 +673,47 @@ def _create_groove(obj, props, S):
     """创建外壁梯形槽：用梯形棱柱切割体做布尔减（单侧直槽，非环切）"""
     import bmesh
 
-    R = props.radius * S
-    depth = props.groove_depth * S
-    bot_w = props.groove_bottom_width * S   # wider at cylinder surface
-    # tan(angle) = (bot_w-top_w)/(2*depth). At 90° tan→∞ → top_w=bot_w (rectangle)
-    top_w = max(bot_w - 2.0 * depth / math.tan(props.groove_angle), 0.0001)
-    ext_len = 2.0 * R + 0.04               # through entire cylinder diameter + margin
-    ext_rad = 0.0001                         # tiny overshoot, avoid coincident faces
+    # Use mid-height radius: for cones, the groove is at z=0 where radius = (BR+TR)/2
+    if props.cylinder_type == 'tapered':
+        R_mid = (props.bottom_radius + props.top_radius) / 2.0 * S
+        R_mid_mm = (props.bottom_radius + props.top_radius) / 2.0
+    else:
+        R_mid = props.radius * S
+        R_mid_mm = props.radius
 
+    # Penetration depth (actual groove depth into the body)
+    groove_depth_mm = round(R_mid_mm * props.groove_depth_pct / 100.0, 1)
+    # User-set top width
+    groove_top_w_mm = props.groove_top_width
+    angle_rad = props.groove_angle
+
+    if props.cylinder_type == 'tapered':
+        # Cutter extends beyond the surface (multiplier enlarges cutter, not penetration)
+        cutter_depth_mm = groove_depth_mm * props.groove_cone_depth_mult
+        r_surface = R_mid + (cutter_depth_mm - groove_depth_mm) * S + 0.0001  # extend outward
+        r_floor = R_mid - groove_depth_mm * S  # penetration unchanged
+    else:
+        cutter_depth_mm = groove_depth_mm
+        r_surface = R_mid + 0.0001
+        r_floor = R_mid - groove_depth_mm * S
+
+    # bottom_w follows from (r_surface - r_floor) and angle
+    cutter_span_mm = (r_surface - r_floor) / S  # radial span of cutter in mm
+    groove_bot_w_mm = groove_top_w_mm + 2.0 * cutter_span_mm * math.tan(angle_rad)
+
+    bot_w = groove_bot_w_mm * S
+    top_w = groove_top_w_mm * S
+    hb = bot_w / 2.0
+    ht = top_w / 2.0
+
+    ext_len = 2.0 * R_mid + 0.04            # through entire diameter + margin
     half_ext = ext_len / 2.0
-    hb = bot_w / 2.0  # half bottom width (at cylinder surface)
-    ht = top_w / 2.0  # half top width (at groove floor)
-    r_surface = R + ext_rad
-    r_floor = R - depth
+
+    log_to_file(f"[STEP Exporter] _create_groove: type={props.cylinder_type} R_mid={R_mid_mm:.1f}mm "
+                f"depth={groove_depth_mm:.1f}mm r_floor={r_floor/S:.1f}mm r_surf={r_surface/S:.1f}mm "
+                f"bot_w={groove_bot_w_mm:.1f}mm top_w={groove_top_w_mm:.2f}mm "
+                f"angle={math.degrees(angle_rad):.1f}°"
+                f"{' mult='+str(props.groove_cone_depth_mult) if props.cylinder_type=='tapered' else ''}")
 
     # Use cube primitive (proven to work with EXACT solver) + vertex move
     bpy.ops.mesh.primitive_cube_add(size=1.0, location=(0, 0, 0))
@@ -702,12 +754,10 @@ def _create_groove(obj, props, S):
     bpy.ops.object.mode_set(mode='OBJECT')
 
     # Store groove parameters (mm) for analysis & parametric export
-    obj['step_groove_depth'] = props.groove_depth
-    obj['step_groove_bottom_width'] = props.groove_bottom_width
-    obj['step_groove_top_width'] = max(props.groove_bottom_width - 2.0 * props.groove_depth / math.tan(props.groove_angle), 0.1)
-    obj['step_groove_extrusion_length'] = 2.0 * props.radius + 4.0  # through-slot
-    log_to_file(f"[STEP Exporter] _create_groove: depth={props.groove_depth:.1f}mm "
-                f"angle={math.degrees(props.groove_angle):.0f}° bot_w={props.groove_bottom_width:.1f}mm")
+    obj['step_groove_depth'] = groove_depth_mm
+    obj['step_groove_bottom_width'] = groove_bot_w_mm
+    obj['step_groove_top_width'] = props.groove_top_width
+    obj['step_groove_extrusion_length'] = 2.0 * (R_mid / S) + 4.0  # through-slot, convert back to mm
 
 
 def _boolean_difference(target, cutter):

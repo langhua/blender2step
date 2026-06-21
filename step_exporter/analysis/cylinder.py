@@ -1806,16 +1806,30 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
             }
         # 实心圆柱外壁槽检测
         if has_groove_custom:
-            result = {
-                'obj_type': 'grooved_cylinder',
-                'radius': max(bottom_radius, top_radius),
-                'height': height,
-                'pos_x': pos_x, 'pos_y': pos_y, 'pos_z': pos_z,
-                'top_chamfer': top_feature_size if top_feature == 'chamfer' else 0,
-                'top_fillet': top_feature_size if top_feature == 'fillet' else 0,
-                'bottom_chamfer': bottom_feature_size if bottom_feature == 'chamfer' else 0,
-                'bottom_fillet': bottom_feature_size if bottom_feature == 'fillet' else 0,
-            }
+            is_cone = abs(bottom_radius - top_radius) > max(bottom_radius, top_radius) * 0.01
+            if is_cone:
+                result = {
+                    'obj_type': 'cone_groove',
+                    'bottom_radius': bottom_radius,
+                    'top_radius': top_radius,
+                    'height': height,
+                    'pos_x': pos_x, 'pos_y': pos_y, 'pos_z': pos_z,
+                    'top_chamfer': top_feature_size if top_feature == 'chamfer' else 0,
+                    'top_fillet': top_feature_size if top_feature == 'fillet' else 0,
+                    'bottom_chamfer': bottom_feature_size if bottom_feature == 'chamfer' else 0,
+                    'bottom_fillet': bottom_feature_size if bottom_feature == 'fillet' else 0,
+                }
+            else:
+                result = {
+                    'obj_type': 'grooved_cylinder',
+                    'radius': max(bottom_radius, top_radius),
+                    'height': height,
+                    'pos_x': pos_x, 'pos_y': pos_y, 'pos_z': pos_z,
+                    'top_chamfer': top_feature_size if top_feature == 'chamfer' else 0,
+                    'top_fillet': top_feature_size if top_feature == 'fillet' else 0,
+                    'bottom_chamfer': bottom_feature_size if bottom_feature == 'chamfer' else 0,
+                    'bottom_fillet': bottom_feature_size if bottom_feature == 'fillet' else 0,
+                }
             result.update(groove_params)
             return result
         # 圆柱带倒角/圆角回退：mesh 检测可能漏掉底部特征，用 stored_ctype 修正

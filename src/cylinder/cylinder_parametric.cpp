@@ -1946,3 +1946,55 @@ TopoDS_Shape create_cylinder_with_groove_parametric(
 
     return solid;
 }
+
+TopoDS_Shape create_cone_with_groove_parametric(
+    double bottom_radius, double top_radius, double height,
+    double groove_depth, double groove_bottom_width,
+    double groove_top_width, double groove_extrusion_length)
+{
+    double mid_r = (bottom_radius + top_radius) / 2.0;
+
+    // Create cone body
+    TopoDS_Shape outer = create_cone_solid_parametric(bottom_radius, top_radius, height);
+    if (outer.IsNull()) return TopoDS_Shape();
+    TopoDS_Solid solid = shape_to_solid(outer);
+    if (solid.IsNull()) return TopoDS_Shape();
+
+    // Create trapezoidal groove cutter at mid-height
+    double r_surface = mid_r + 1.5;
+    double r_floor = mid_r - groove_depth;
+    double hb = groove_bottom_width / 2.0;
+    double ht = groove_top_width / 2.0;
+    double half_ext = groove_extrusion_length / 2.0;
+
+    BRepBuilderAPI_MakePolygon wireMaker;
+    wireMaker.Add(gp_Pnt(r_surface, -half_ext,  hb));
+    wireMaker.Add(gp_Pnt(r_floor,   -half_ext,  ht));
+    wireMaker.Add(gp_Pnt(r_floor,   -half_ext, -ht));
+    wireMaker.Add(gp_Pnt(r_surface, -half_ext, -hb));
+    wireMaker.Close();
+
+    if (!wireMaker.IsDone()) return solid;
+    TopoDS_Face face = BRepBuilderAPI_MakeFace(wireMaker.Wire());
+    if (face.IsNull()) return solid;
+
+    BRepPrimAPI_MakePrism prismMaker(face, gp_Vec(0, groove_extrusion_length, 0));
+    if (!prismMaker.IsDone()) return solid;
+    TopoDS_Shape prism = prismMaker.Shape();
+    if (prism.IsNull()) return solid;
+
+    BRepAlgoAPI_Cut cutMaker(solid, prism);
+    if (cutMaker.IsDone() && !cutMaker.Shape().IsNull()) {
+        TopoDS_Shape result = cutMaker.Shape();
+        if (result.ShapeType() == TopAbs_SOLID) {
+            solid = TopoDS::Solid(result);
+        } else {
+            BRepBuilderAPI_MakeSolid sm;
+            for (TopExp_Explorer exp(result, TopAbs_SHELL); exp.More(); exp.Next())
+                sm.Add(TopoDS::Shell(exp.Current()));
+            if (sm.IsDone()) solid = sm.Solid();
+        }
+    }
+
+    return solid;
+}

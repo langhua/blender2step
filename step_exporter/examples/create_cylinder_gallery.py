@@ -1,6 +1,7 @@
 """Cylinder gallery: 8 rows × 10 columns = 80 combos.
 Edge features: none, chamfer, fillet, both.
 Hole types: plain, blind, tapered blind, through, tapered through.
+Right side: same 8×12 grid with trapezoidal groove on all cylinders.
 """
 import bpy, math
 
@@ -10,10 +11,12 @@ HOLE_FILLET_R = 0.015
 # Stepped hole parameters
 STEP_LARGE_R = 0.14; STEP_LARGE_H = H * 0.8; STEP_SMALL_R = 0.05
 # Groove parameters — trapezoidal through-slot
-GRV_DEPTH = 0.06; GRV_BOT_W = 0.15; GRV_TOP_W = 0.08; GRV_EXT = 2.0
+GRV_DEPTH = 0.06; GRV_TOP_W = 0.08; GRV_ANGLE = math.radians(45)
+GRV_EXT = 2.0
 GAP_Y = 0.2
 Z_GAP = H * 2 + 0.8
 X_LABEL = R + 0.35
+Y_OFFSET = 4 * 2.0 + 4.0  # right grid Y+ offset: 4 cylinder widths + 4m spacing
 
 def clear():
     bpy.ops.object.select_all(action='SELECT')
@@ -76,12 +79,12 @@ def _add_edge_bevel_mod(obj, chamfer_type, fillet_r):
     if top_fillet or bot_fillet:
         obj['fillet_radius_edge'] = FR_R * 1000
 
-def add_cylinder(y, z, name, r, chamfer_type=None, fillet_r=0,
+def add_cylinder(x, y, z, name, r, chamfer_type=None, fillet_r=0,
                  hole=None, hole_d=0, hole_er=None):
-    """Create a cylinder at (0, y, z) with optional features and holes.
+    """Create a cylinder at (x, y, z) with optional features and holes.
     hole_er: end radius for tapered holes (opening radius = TAPER_OPEN_R)."""
     bpy.ops.mesh.primitive_cylinder_add(
-        vertices=64, radius=r, depth=H, location=(0, y, z))
+        vertices=64, radius=r, depth=H, location=(x, y, z))
     obj = bpy.context.active_object
     obj.name = name
 
@@ -204,8 +207,8 @@ def add_cylinder(y, z, name, r, chamfer_type=None, fillet_r=0,
         obj['cylinder_original_radius'] = r * 1000
     return obj
 
-def add_label(y, z, text):
-    bpy.ops.object.text_add(location=(X_LABEL, y, z + H * 0.1))
+def add_label(x, y, z, text):
+    bpy.ops.object.text_add(location=(x + X_LABEL, y, z + H * 0.1))
     t = bpy.context.active_object
     t.name = f"L_{text}"
     t.data.body = text
@@ -213,8 +216,8 @@ def add_label(y, z, text):
     t.data.align_x = 'CENTER'
     t.rotation_euler = (math.pi / 2, 0, math.pi / 2)
 
-def add_shelf_label(y, z, text):
-    bpy.ops.object.text_add(location=(X_LABEL + 0.35, y, z + H / 2 + 0.35))
+def add_shelf_label(x, y, z, text):
+    bpy.ops.object.text_add(location=(x + X_LABEL + 0.35, y, z + H / 2 + 0.35))
     t = bpy.context.active_object
     t.name = f"LS_{text}"
     t.data.body = text
@@ -492,29 +495,291 @@ SHELVES = [
     ]),
 ]
 
-def build():
-    """Create all cylinders and apply modifiers."""
+# Y offset for grooved copy grid: left grid width + 4 columns spacing
+# left grid: n=12 columns, span=(n-1)*STEP_Y=11.0, right edge at +5.5
+# 4 column gap = 4*STEP_Y=4.0, then right grid center at 5.5+4.0+5.5=15.0
+Y_OFFSET = 15.0
+
+def _add_groove_to_cylinder(obj):
+    """Add a trapezoidal groove cutter to a single cylinder via Boolean modifier.
+    Does NOT apply the modifier — caller must do that."""
+    import bmesh
+    r_surface = R + 0.0001
+    r_floor = R - GRV_DEPTH
+    bot_w = GRV_TOP_W + 2.0 * GRV_DEPTH * math.tan(GRV_ANGLE)
+    hb = bot_w / 2.0
+    ht = GRV_TOP_W / 2.0
+    half_ext = GRV_EXT / 2.0
+    cy = obj.location.y
+    cz = obj.location.z
+
+    bpy.ops.mesh.primitive_cube_add(size=1.0, location=(0, cy, cz))
+    cutter = bpy.context.active_object
+    cutter.name = f"GCUT_{obj.name}"
+    cutter.hide_render = True
+
+    bpy.ops.object.mode_set(mode='EDIT')
+    bm = bmesh.from_edit_mesh(cutter.data)
+    for v in bm.verts:
+        x_sign = 1 if v.co.x > 0 else -1
+        y_sign = 1 if v.co.y > 0 else -1
+        z_sign = 1 if v.co.z > 0 else -1
+        v.co = (
+            r_surface if x_sign > 0 else r_floor,
+            half_ext if y_sign > 0 else -half_ext,
+            hb if x_sign > 0 and z_sign > 0 else
+            -hb if x_sign > 0 and z_sign < 0 else
+            ht if z_sign > 0 else -ht
+        )
+    bmesh.update_edit_mesh(cutter.data)
+    bpy.ops.object.mode_set(mode='OBJECT')
+
+    mod = obj.modifiers.new(name="Groove", type='BOOLEAN')
+    mod.object = cutter
+    mod.operation = 'DIFFERENCE'
+    mod.solver = 'EXACT'
+
+    # Store groove params (mm)
+    bot_w_mm = bot_w * 1000
+    top_w_mm = GRV_TOP_W * 1000
+    obj['step_groove_depth'] = GRV_DEPTH * 1000
+    obj['step_groove_bottom_width'] = bot_w_mm
+    obj['step_groove_top_width'] = top_w_mm
+    obj['step_groove_extrusion_length'] = 2.0 * R * 1000 + 4.0
+
+
+def _apply_groove(obj):
+    """Apply the Groove modifier and clean up mesh + cutter."""
+    bpy.context.view_layer.objects.active = obj
+    # Find cutter object
+    for mod in obj.modifiers:
+        if mod.name == "Groove" and mod.type == 'BOOLEAN':
+            cutter = mod.object
+            bpy.ops.object.modifier_apply(modifier="Groove")
+            if cutter:
+                bpy.data.objects.remove(cutter, do_unlink=True)
+            break
+    # Clean up mesh
+    bpy.ops.object.mode_set(mode='EDIT')
+    bpy.ops.mesh.select_all(action='SELECT')
+    bpy.ops.mesh.remove_doubles(threshold=0.0001)
+    bpy.ops.mesh.delete_loose()
+    bpy.ops.mesh.normals_make_consistent(inside=False)
+    bpy.ops.object.mode_set(mode='OBJECT')
+
+
+def _apply_modifiers_to(obj):
+    """Apply Bevel then Boolean modifiers for a single cylinder object."""
+    if not obj.modifiers:
+        return
+    bpy.ops.object.select_all(action='DESELECT')
+    obj.select_set(True)
+    bpy.context.view_layer.objects.active = obj
+    for mod in list(obj.modifiers):
+        if mod.type == 'BEVEL':
+            try:
+                bpy.ops.object.modifier_apply(modifier=mod.name)
+            except RuntimeError as e:
+                print(f"    Skip {obj.name}/{mod.name}: {e}")
+    for mod in list(obj.modifiers):
+        if mod.type == 'BOOLEAN':
+            try:
+                bpy.ops.object.modifier_apply(modifier=mod.name)
+            except RuntimeError as e:
+                print(f"    Skip {obj.name}/{mod.name}: {e}")
+
+
+def _post_process_one(obj):
+    """Bevel hole openings and mixed edges for a single cylinder."""
+    import bmesh
+    hole_type = obj.get('hole_type')
+    if hole_type:
+        default_r = (obj.get('hole_radius', 0) or 0) * 0.001
+        openings = []
+        hole_depth = (obj.get('hole_depth', 0) or 0) * 0.001
+        if hole_type == 'through' or hole_type == 'through_inv':
+            openings = [(H / 2, default_r), (-H / 2, default_r)]
+        elif hole_type == 'stepped':
+            step_z = H / 2 - STEP_LARGE_H
+            openings = [
+                (H / 2, STEP_LARGE_R),
+                (step_z, STEP_LARGE_R),
+                (step_z, STEP_SMALL_R),
+                (-H / 2, STEP_SMALL_R),
+            ]
+        elif hole_type == 'tapered_stepped':
+            step_z = H / 2 - STEP_LARGE_H
+            top_r = (obj.get('hole_opening_radius', 0) or 0) * 0.001
+            step_r = (obj.get('hole_end_radius', 0) or 0) * 0.001
+            top_r = top_r if top_r > 0 else TAPER_OPEN_R
+            step_r = step_r if step_r > 0 else TAPER_OPEN_R
+            openings = [
+                (H / 2, top_r),
+                (step_z, step_r),
+                (step_z, STEP_SMALL_R),
+                (-H / 2, STEP_SMALL_R),
+            ]
+        else:
+            if hole_type in ('top', 'both'):
+                openings.append((H / 2, default_r))
+                openings.append((H / 2 - hole_depth, default_r))
+            if hole_type in ('bottom', 'both'):
+                openings.append((-H / 2, default_r))
+                openings.append((-H / 2 + hole_depth, default_r))
+        if openings:
+            bpy.context.view_layer.objects.active = obj
+            bpy.ops.object.mode_set(mode='EDIT')
+            bpy.ops.mesh.select_mode(type='EDGE')
+            bpy.ops.mesh.select_all(action='DESELECT')
+            bm = bmesh.from_edit_mesh(obj.data)
+            bm.edges.ensure_lookup_table()
+            for e in bm.edges:
+                v1, v2 = e.verts
+                mid_z = (v1.co.z + v2.co.z) / 2.0
+                mid_xy = math.sqrt(((v1.co.x + v2.co.x) / 2) ** 2 + ((v1.co.y + v2.co.y) / 2) ** 2)
+                dz = abs(v1.co.z - v2.co.z)
+                for hz, hr in openings:
+                    if abs(mid_z - hz) < 0.06 and abs(mid_xy - hr) < hr * 0.35 and dz < 0.03:
+                        e.select = True; break
+            bmesh.update_edit_mesh(obj.data)
+            bpy.ops.mesh.bevel(offset=HOLE_FILLET_R, offset_type='OFFSET',
+                               segments=12, profile=0.5, affect='EDGES')
+            bpy.ops.object.mode_set(mode='OBJECT')
+
+    if obj.get('chamfer_type') == 'chamfer_fillet':
+        bpy.context.view_layer.objects.active = obj
+        hh = H / 2.0
+        bpy.ops.object.mode_set(mode='EDIT')
+        bpy.ops.mesh.select_mode(type='EDGE')
+        bpy.ops.mesh.select_all(action='DESELECT')
+        bm = bmesh.from_edit_mesh(obj.data)
+        bm.edges.ensure_lookup_table()
+        for e in bm.edges:
+            v1z = e.verts[0].co.z; v2z = e.verts[1].co.z
+            mid_xy = math.sqrt(((e.verts[0].co.x + e.verts[1].co.x) / 2) ** 2 +
+                               ((e.verts[0].co.y + e.verts[1].co.y) / 2) ** 2)
+            if v1z > hh * 0.75 and v2z > hh * 0.75 and mid_xy > R * 0.7:
+                e.select = True
+        bmesh.update_edit_mesh(obj.data)
+        bpy.ops.mesh.bevel(offset=CH_SZ, offset_type='OFFSET',
+                           segments=1, profile=0.5, affect='EDGES')
+        bpy.ops.mesh.select_all(action='DESELECT')
+        bm = bmesh.from_edit_mesh(obj.data)
+        bm.edges.ensure_lookup_table()
+        for e in bm.edges:
+            v1z = e.verts[0].co.z; v2z = e.verts[1].co.z
+            mid_xy = math.sqrt(((e.verts[0].co.x + e.verts[1].co.x) / 2) ** 2 +
+                               ((e.verts[0].co.y + e.verts[1].co.y) / 2) ** 2)
+            if v1z < -hh * 0.75 and v2z < -hh * 0.75 and mid_xy > R * 0.7:
+                e.select = True
+        bmesh.update_edit_mesh(obj.data)
+        bpy.ops.mesh.bevel(offset=FR_R, offset_type='OFFSET',
+                           segments=8, profile=0.5, affect='EDGES')
+        bpy.ops.object.mode_set(mode='OBJECT')
+
+
+def build(progress_cb=None):
+    """Create left-side cylinders only. Use add_grooved_copies() for right side."""
     clear()
+    total = sum(len(s[3]) for s in SHELVES)
+    done = 0
+
+    def _step():
+        nonlocal done
+        done += 1
+        if progress_cb:
+            progress_cb(min(done / total * 45, 45), f"创建: {done}/{total}")
+
     for shelf_idx, (shelf_label, base_ctype, base_fr, items) in enumerate(SHELVES):
         z = Z_TOP - shelf_idx * Z_GAP
         n = len(items)
         start_y = -((n - 1) * STEP_Y) / 2
         label_y = start_y + STEP_Y * (n - 1) / 2
-        add_shelf_label(label_y, z, shelf_label)
+        add_shelf_label(0, label_y, z, shelf_label)
 
         for item_idx, (name_sfx, hole, hd, he, label) in enumerate(items):
             y = start_y + item_idx * STEP_Y
-            add_cylinder(y, z, f"C{shelf_idx+1}_{name_sfx}",
+            add_cylinder(0, y, z, f"C{shelf_idx+1}_{name_sfx}",
                         R, base_ctype, base_fr, hole, hd, he)
-            add_label(y, z, label)
+            add_label(0, y, z, label)
+            _step()
 
+    if progress_cb:
+        progress_cb(45, "应用修改器...")
     apply_all_modifiers()
+    if progress_cb:
+        progress_cb(48, "添加孔口圆角...")
     _bevel_hole_openings()
     _bevel_mixed_edges()
+
     for obj in list(bpy.data.objects):
         if obj.name.startswith('CUT_'):
             bpy.data.objects.remove(obj, do_unlink=True)
-    print("Cylinder gallery created.")
+    if progress_cb:
+        progress_cb(50, "左侧完成")
+    print("Cylinder gallery (left side) created.")
+
+
+def add_grooved_copies(progress_cb=None):
+    """Copy left-side cylinders to Y+ offset, rename GCx, add grooves."""
+    import bmesh
+    left_cyls = [o for o in bpy.data.objects
+                 if o.name.startswith('C') and not o.name.startswith('CUT_')
+                 and not o.name.startswith('GC') and not o.name.startswith('L')
+                 and o.name[1:2].isdigit()]  # C1_, C2_, etc.
+    labels_left = [o for o in bpy.data.objects if o.name.startswith('L') and not o.name.startswith('LS') and not o.name.startswith('GC')]
+    shelf_labels_left = [o for o in bpy.data.objects if o.name.startswith('LS')]
+
+    # Copy shelf labels first (no progress)
+    for obj in shelf_labels_left:
+        copy = obj.copy()
+        copy.data = obj.data.copy()
+        copy.location.y += Y_OFFSET
+        copy.name = obj.name.replace('LS_', 'GLS_')
+        bpy.context.collection.objects.link(copy)
+
+    # Phase 1a: copy cylinders + labels (50→80%)
+    total = len(left_cyls)
+    done = 0
+    for obj in left_cyls:
+        # Copy cylinder
+        copy = obj.copy()
+        copy.data = obj.data.copy()
+        copy.location.y += Y_OFFSET
+        copy.name = 'G' + obj.name  # C1_Plain → GC1_Plain
+        bpy.context.collection.objects.link(copy)
+
+        # Find and copy associated label
+        for lbl in labels_left:
+            if abs(lbl.location.y - obj.location.y) < 0.01 and abs(lbl.location.z - obj.location.z) < 0.01:
+                lbl_copy = lbl.copy()
+                lbl_copy.data = lbl.data.copy()
+                lbl_copy.location.y += Y_OFFSET
+                lbl_copy.name = 'GL' + lbl.name[1:]
+                bpy.context.collection.objects.link(lbl_copy)
+                break
+        done += 1
+        if progress_cb:
+            progress_cb(50 + min(done / total * 30, 30), f"复制: {done}/{total}")
+
+    # Phase 1b: add groove modifiers (80→90%)
+    grooved = [o for o in bpy.data.objects
+               if o.name.startswith('GC') and not o.name.startswith('CUT_')]
+    total_g = len(grooved)
+    for i, obj in enumerate(grooved):
+        _add_groove_to_cylinder(obj)
+        if progress_cb:
+            progress_cb(80 + min((i + 1) / total_g * 10, 10), f"添加槽: {i+1}/{total_g}")
+
+    # Phase 1c: apply groove modifiers (90→95%)
+    for i, obj in enumerate(grooved):
+        _apply_groove(obj)
+        if progress_cb:
+            progress_cb(90 + min((i + 1) / total_g * 5, 5), f"应用槽: {i+1}/{total_g}")
+
+    if progress_cb:
+        progress_cb(95, "右侧完成")
+    print("Grooved cylinder gallery (right side) created.")
 
 if __name__ == '__main__':
     build()

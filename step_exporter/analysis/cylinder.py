@@ -9,6 +9,13 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
     """
     从 mesh 分析识别是否为圆柱/圆锥/空心圆柱类型，并测量所有参数
     
+    === 单位约定 (Unit Convention) ===
+    内部计算: 米 (Blender 原生单位)
+    对象自定义属性 (Custom Properties): 毫米 (mm) — 存储时 ×1000
+    分析结果 (返回 dict): 毫米 (mm) — 调用 ×S (S=1000) 缩放
+    C++ 导出函数: 毫米 (mm)
+    STEP 文件输出: 毫米 (mm)
+    
     返回:
         dict: 包含圆柱参数的字典，如果不是圆柱则返回 None
         {
@@ -499,6 +506,7 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
     hole_depth_top = 0.0  # 双端孔时顶部孔深
     
     # 通孔/盲孔检测：检查对象上存储的自定义属性
+    # 注意: 自定义属性以毫米 (mm) 存储，需 ×0.001 转换为米进行内部分析
     stored_hole_type = obj.get('hole_type') if hasattr(obj, 'get') else None
     stored_pos = obj.get('hole_position') if hasattr(obj, 'get') else None
     log_to_file(f"[STEP Exporter]   Stored props: hole_type={stored_hole_type}, hole_position={stored_pos}, is_tapered={obj.get('hole_is_tapered') if hasattr(obj,'get') else None}")
@@ -1731,10 +1739,10 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
         if bottom_radius * 0.98 <= top_radius <= bottom_radius * 1.02:
             # 检查锥形通孔
             hole_is_tapered_thru = obj.get('hole_is_tapered', False) if hasattr(obj, 'get') else False
-            stored_end = obj.get('hole_end_radius') if hasattr(obj, 'get') else None
-            stored_opening = obj.get('hole_opening_radius') if hasattr(obj, 'get') else None
-            inner_end_r = stored_end * 0.001 if stored_end else inner_radius
-            inner_opening_r = stored_opening * 0.001 if stored_opening else inner_radius
+            # At this point inner_radius is already ×S (mm). Stored properties are also in mm.
+            # Use stored values directly, or fall back to mesh-detected inner_radius (also mm).
+            inner_end_r = obj.get('hole_end_radius', inner_radius) if hasattr(obj, 'get') else inner_radius
+            inner_opening_r = obj.get('hole_opening_radius', inner_radius) if hasattr(obj, 'get') else inner_radius
             
             if hole_is_tapered_thru and abs(inner_opening_r - inner_end_r) > 0.0001:
                 obj_type = 'hollow_cylinder_tapered'

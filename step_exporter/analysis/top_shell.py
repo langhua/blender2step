@@ -1,11 +1,13 @@
-"""Top shell shape analysis."""
-import sys, math
-import bmesh
-from mathutils import Vector
-from ..core.utils import log_to_file
-from ..core import _globals as _g
+"""Top shell shape analysis.
 
-"""Cylinder and shell shape analysis for STEP Exporter."""
+=== 单位约定 (Unit Convention) ===
+内部计算: 米 (Blender 原生单位)
+分析结果 (返回 dict): 毫米 (mm) — ×S (S=1000)
+C++ 导出函数: 毫米 (mm)
+STEP 文件输出: 毫米 (mm)
+
+注意: window_data 字符串中的数值由调用方 (create_top_shell.py) 负责使用 mm 单位。
+"""
 import sys, math
 import bmesh
 from mathutils import Vector
@@ -170,10 +172,11 @@ def _analyze_top_shell_from_mesh(obj, context, scale):
     
     # === 壁厚分析 ===
     # 优先从自定义属性读取（由 create_filleted_top_shell 设置）
+    # 自定义属性以毫米 (mm) 存储，需 ×0.001 转换为米用于内部分析
     custom_wt = obj.get('wall_thickness', 0.0)
     if custom_wt > 0:
-        wall_thickness = custom_wt
-        log_to_file(f"[STEP Exporter] Wall thickness from custom property: {wall_thickness:.2f}mm")
+        wall_thickness = custom_wt * 0.001  # mm → m
+        log_to_file(f"[STEP Exporter] Wall thickness from custom property: {wall_thickness:.2f}m")
     else:
         # 壁厚 = 外轮廓边界框 - 内轮廓边界框，避开台阶环和圆角顶点
         # 找底部区域上方第一个不含台阶环的Z层（顶点数80-150，非最大Z层）
@@ -217,14 +220,15 @@ def _analyze_top_shell_from_mesh(obj, context, scale):
 
     # === 台阶环检测 ===
     # 优先从自定义属性读取（由 create_filleted_top_shell 设置）
+    # 自定义属性以毫米 (mm) 存储，需 ×0.001 转换为米用于内部分析
     step_ring_height = 0.0
     step_ring_width = 0.0
     custom_ring_h = obj.get('step_ring_height', 0.0)
     custom_ring_w = obj.get('step_ring_width', 0.0)
     if custom_ring_h > 0 and custom_ring_w > 0:
-        step_ring_height = custom_ring_h
-        step_ring_width = custom_ring_w
-        log_to_file(f"[STEP Exporter] Step ring from custom property: height={step_ring_height:.1f}mm, width={step_ring_width:.1f}mm")
+        step_ring_height = custom_ring_h * 0.001  # mm → m
+        step_ring_width = custom_ring_w * 0.001   # mm → m
+        log_to_file(f"[STEP Exporter] Step ring from custom property: height={step_ring_height:.2f}m, width={step_ring_width:.2f}m")
     elif len(bottom_region_zls) >= 2:
         # 角度扇区分析，P40-P90百份位避开圆角顶点
         z0 = bottom_region_zls[0]
@@ -365,25 +369,28 @@ def _analyze_top_shell_from_mesh(obj, context, scale):
     
     log_to_file(f"[STEP Exporter] Detected TOP shell: {width:.4f}x{depth:.4f} h={outer_height:.4f} tt={top_thickness:.1f} wt={wall_thickness:.1f} cr={corner_radius:.1f} recess={top_recess:.1f} yOff={top_offset_y:.1f} ofr={outer_fillet_radius:.1f} ifr={inner_fillet_radius:.1f} win={window_len:.1f}x{window_wid:.1f} step_ring={step_ring_height:.1f}x{step_ring_width:.1f}")
     
+    # 应用单位缩放：所有尺寸参数 × scale (mm=1000, m=1)
+    S = scale if scale > 0 else 1.0
+
     return {
         'obj': obj,
-        'width': width,
-        'depth': depth,
-        'outer_height': outer_height,
-        'top_thickness': top_thickness,
-        'wall_thickness': wall_thickness,
-        'corner_radius': corner_radius,
-        'outer_fillet_radius': outer_fillet_radius,
-        'inner_fillet_radius': inner_fillet_radius,
-        'top_recess': top_recess,
-        'top_offset_y': top_offset_y,
-        'window_len': window_len,
-        'window_wid': window_wid,
+        'width': width * S,
+        'depth': depth * S,
+        'outer_height': outer_height * S,
+        'top_thickness': top_thickness * S,
+        'wall_thickness': wall_thickness * S,
+        'corner_radius': corner_radius * S,
+        'outer_fillet_radius': outer_fillet_radius * S,
+        'inner_fillet_radius': inner_fillet_radius * S,
+        'top_recess': top_recess * S,
+        'top_offset_y': top_offset_y * S,
+        'window_len': window_len * S,
+        'window_wid': window_wid * S,
         'window_data': window_data,
-        'step_ring_height': step_ring_height,
-        'step_ring_width': step_ring_width,
-        'pos_x': obj.location.x,
-        'pos_y': obj.location.y,
-        'pos_z': obj.location.z,
+        'step_ring_height': step_ring_height * S,
+        'step_ring_width': step_ring_width * S,
+        'pos_x': obj.location.x * S,
+        'pos_y': obj.location.y * S,
+        'pos_z': obj.location.z * S,
     }
 

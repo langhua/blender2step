@@ -1,4 +1,11 @@
-"""Bottom shell shape analysis."""
+"""Bottom shell shape analysis.
+
+=== 单位约定 (Unit Convention) ===
+内部计算: 米 (Blender 原生单位)
+分析结果 (返回 dict): 毫米 (mm) — ×S (S=1000)
+C++ 导出函数: 毫米 (mm)
+STEP 文件输出: 毫米 (mm)
+"""
 import sys, math
 import bmesh
 from mathutils import Vector
@@ -435,26 +442,29 @@ def _analyze_bottom_shell_from_mesh(obj, context, scale):
     else:
         log_to_file(f"[STEP Exporter] No holes detected (bottom_verts={bottom_vert_count})")
     
+    # 应用单位缩放：所有尺寸参数 × scale (mm=1000, m=1)
+    S = scale if scale > 0 else 1.0
+    
     params = {
-        'width': width,
-        'depth': depth,
-        'outer_height': outer_height,
-        'bottom_thickness': bottom_thickness,
-        'wall_thickness': wall_thickness,
-        'corner_radius': corner_radius,
-        'outer_fillet_radius': outer_fillet_radius,
-        'inner_fillet_radius': inner_fillet_radius,
-        'step_height': 1.0,
-        'pos_x': obj.location.x,
-        'pos_y': obj.location.y,
-        'pos_z': obj.location.z,
+        'width': width * S,
+        'depth': depth * S,
+        'outer_height': outer_height * S,
+        'bottom_thickness': bottom_thickness * S,
+        'wall_thickness': wall_thickness * S,
+        'corner_radius': corner_radius * S,
+        'outer_fillet_radius': outer_fillet_radius * S,
+        'inner_fillet_radius': inner_fillet_radius * S,
+        'step_height': 1.0 * S,
+        'pos_x': obj.location.x * S,
+        'pos_y': obj.location.y * S,
+        'pos_z': obj.location.z * S,
     }
     
     if has_holes:
         params['has_holes'] = True
-        params['hole_radius'] = hole_radius_detected
-        params['hole_offset_x'] = hole_offset_x
-        params['hole_offset_y'] = hole_offset_y
+        params['hole_radius'] = hole_radius_detected * S
+        params['hole_offset_x'] = hole_offset_x * S
+        params['hole_offset_y'] = hole_offset_y * S
         log_to_file(f"[STEP Exporter] Final hole params: radius={hole_radius_detected:.2f}, offset=({hole_offset_x:.1f},{hole_offset_y:.1f}), half_w={half_w:.1f}, half_d={half_d:.1f}")
     
     return params

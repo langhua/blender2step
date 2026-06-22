@@ -1,4 +1,9 @@
-"""Cone gallery — Normal (narrowing up): 8 shelves × 12 columns = 96 combos."""
+"""Cone gallery — Normal (narrowing up): 8 shelves × 12 columns = 96 combos.
+
+=== 单位约定 (Unit Convention) ===
+Blender 原生: 米 (m)
+自定义属性 (Custom Properties): 毫米 (mm) — 存储时 ×1000
+"""
 import bpy, math
 
 H = 1.0; BOT_R = 0.5; TOP_R = 0.25; CH_SZ = 0.05; FR_R = 0.06

@@ -98,3 +98,26 @@ blender --background --python .\step_exporter\test\run_test.py -- --test-number 
 
 2. Screenshot it in FreeCAD only.
 blender --background --python .\step_exporter\test\run_test.py -- --test-number 29 --skip-export
+
+
+### Messure Unit
+
+**Blender 场景设置:**
+    Scene Properties（场景属性）▸ Units
+    Unit System  → Metric
+    Unit Scale   → 0.001
+    Length       → Millimeters
+
+**FreeCAD:** millimeter
+
+**代码单位约定 (Code Unit Convention):**
+
+| 组件 | 单位 | 说明 |
+|------|------|------|
+| Blender 原生 (mesh 数据) | 米 (m) | Blender 内部始终使用米 |
+| 对象自定义属性 (Custom Properties) | 毫米 (mm) | 存储时 ×1000，读取时 ×0.001 |
+| C++ 导出函数 (全部) | 毫米 (mm) | 分析返回 ×S (S=1000) |
+| STEP 文件输出 | 毫米 (mm) | 行业标准 |
+
+> 内外一致使用毫米：Python 分析层将 Blender 原生米单位 ×S 缩放为毫米后传给 C++，
+> C++ 直接使用毫米值创建几何体，STEP 文件标注 MILLIMETER。

@@ -2,6 +2,12 @@
 Edge features: none, chamfer, fillet, both.
 Hole types: plain, blind, tapered blind, through, tapered through.
 Right side: same 8×12 grid with trapezoidal groove on all cylinders.
+
+=== 单位约定 (Unit Convention) ===
+Blender 原生: 米 (m)
+自定义属性 (Custom Properties): 毫米 (mm) — 存储时 ×1000
+  例: obj['hole_radius'] = HOLE_R * 1000  (HOLE_R=0.1m → 存储 100.0mm)
+读取时需还原: hole_r = obj.get('hole_radius', 0) * 0.001  (100.0mm → 0.1m)
 """
 import bpy, math
 

@@ -775,10 +775,10 @@ def create_filleted_top_shell(name, width, depth, outer_height, top_thickness,
     outer.name = name
 
     if outer_ring_height > 0 and outer_ring_width > 0:
-        outer['step_ring_height'] = outer_ring_height
-        outer['step_ring_width'] = outer_ring_width
+        outer['step_ring_height'] = outer_ring_height * 1000.0  # mm
+        outer['step_ring_width'] = outer_ring_width * 1000.0    # mm
 
-    outer['wall_thickness'] = wall_thickness
+    outer['wall_thickness'] = wall_thickness * 1000.0  # mm
 
     if window:
         if isinstance(window[0], (int, float)):
@@ -960,16 +960,17 @@ def create_top_shell_scene():
     bpy.ops.mesh.remove_doubles(threshold=0.05)
     bpy.ops.object.mode_set(mode='OBJECT')
 
-    hole_fillet_radius = 0.3  # 通孔圆倒角半径（仅在 STEP 导出中生效）
-    print(f"  [DEBUG] Hole world: ({hole_cx:.1f}, {hole_y:.1f}, {hole_cz:.1f})")
+    hole_fillet_radius = 0.3  # 通孔圆倒角半径 (m)，仅在 STEP 导出中生效
+    S = 1000.0  # 米→毫米缩放
 
     # 标记对象包含通孔，让 STEP 导出器使用参数化导出 + 圆孔切割（含圆倒角）
     # window_data 格式: cx,cy,cz,radius,1[,fillet_radius] (type=1 表示圆孔)
-    hole_relative_cx = hole_cx - shell_loc.x  # 26.0
-    hole_relative_cy = depth / 2.0  # 后壁
-    hole_relative_cz = hole_cz - shell_loc.z  # -2.0
-    hole_data = f"{hole_relative_cx:.3f},{hole_relative_cy:.3f},{hole_relative_cz:.3f},{hole_radius_outer:.3f},1,{hole_fillet_radius:.3f}"
-    shell_with_holes["hole_fillet_radius"] = hole_fillet_radius  # 单独属性，方便在Blender中修改
+    # 所有数值以毫米 (mm) 存储，匹配 C++ 导出函数期望
+    hole_relative_cx = (hole_cx - shell_loc.x) * S  # 26.0mm
+    hole_relative_cy = (depth / 2.0) * S  # 后壁
+    hole_relative_cz = (hole_cz - shell_loc.z) * S  # -2.0mm
+    hole_data = f"{hole_relative_cx:.3f},{hole_relative_cy:.3f},{hole_relative_cz:.3f},{hole_radius_outer * S:.3f},1,{hole_fillet_radius * S:.3f}"
+    shell_with_holes["hole_fillet_radius"] = hole_fillet_radius * S  # 单独属性，方便在Blender中修改 (mm)
     existing_wd = shell_with_holes.get("window_data", "")
     if existing_wd:
         shell_with_holes["window_data"] = existing_wd + ";" + hole_data
@@ -1027,11 +1028,12 @@ def create_top_shell_scene():
 
     # 标记圆角矩形孔到 window_data（供 STEP 参数化导出）
     # 格式: cx,cy,cz,width,height,2,corner_radius[,fillet_radius] (type=2 表示圆角矩形孔)
-    rect_hole_relative_cx = rect_hole_cx - shell_loc.x  # -24.0
-    rect_hole_relative_cy = depth / 2.0  # 后壁
-    rect_hole_relative_cz = rect_hole_cz - shell_loc.z  # -2.0
-    rect_hole_fillet_radius = 0.3  # 圆角矩形孔圆倒角半径（仅在 STEP 导出中生效，设为 0 则不加倒角）
-    rect_hole_data = f"{rect_hole_relative_cx:.3f},{rect_hole_relative_cy:.3f},{rect_hole_relative_cz:.3f},{rect_hole_w:.3f},{rect_hole_h:.3f},2,{rect_hole_cr:.3f},{rect_hole_fillet_radius:.3f}"
+    # 所有数值以毫米 (mm) 存储，匹配 C++ 导出函数期望
+    rect_hole_relative_cx = (rect_hole_cx - shell_loc.x) * S  # -24.0mm
+    rect_hole_relative_cy = (depth / 2.0) * S  # 后壁
+    rect_hole_relative_cz = (rect_hole_cz - shell_loc.z) * S  # -2.0mm
+    rect_hole_fillet_radius = 0.3  # 圆角矩形孔圆倒角半径 (m)
+    rect_hole_data = f"{rect_hole_relative_cx:.3f},{rect_hole_relative_cy:.3f},{rect_hole_relative_cz:.3f},{rect_hole_w * S:.3f},{rect_hole_h * S:.3f},2,{rect_hole_cr * S:.3f},{rect_hole_fillet_radius * S:.3f}"
     existing_wd = shell_with_holes.get("window_data", "")
     if existing_wd:
         shell_with_holes["window_data"] = existing_wd + ";" + rect_hole_data

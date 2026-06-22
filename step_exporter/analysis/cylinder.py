@@ -467,6 +467,9 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
     
     body_portion = (body_end_z - sorted_z[0]) / height if height > 0 else 0
     cylindrical_body = body_portion > 0.6
+    # Grooved cylinders have non-circular mid-region but are still cylindrical
+    if has_groove_custom:
+        cylindrical_body = True
     
     # 同时也检查顶部向下是否有恒定半径区域
     if not cylindrical_body:
@@ -503,7 +506,7 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
         hole_pattern_detected = True
         hole_position = 'through'
         stored_hr = obj.get('hole_radius') if hasattr(obj, 'get') else None
-        hole_radius = stored_hr if stored_hr else body_radius * 0.35
+        hole_radius = stored_hr * 0.001 if stored_hr else body_radius * 0.35
         hole_depth = height
         log_to_file(f"[STEP Exporter]   Through-hole detected from stored property, r={hole_radius:.4f}")
     elif stored_pos in ('top', 'bottom', 'both'):
@@ -511,8 +514,8 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
         hole_position = stored_pos
         stored_hr = obj.get('hole_radius') if hasattr(obj, 'get') else None
         stored_hd = obj.get('hole_depth') if hasattr(obj, 'get') else None
-        hole_radius = stored_hr if stored_hr else body_radius * 0.35
-        hole_depth = stored_hd if stored_hd else height * 0.5
+        hole_radius = stored_hr * 0.001 if stored_hr else body_radius * 0.35
+        hole_depth = stored_hd * 0.001 if stored_hd else height * 0.5
         if stored_pos == 'both':
             hole_depth_top = hole_depth
         log_to_file(f"[STEP Exporter]   Blind hole from stored property: pos={stored_pos} r={hole_radius:.4f} d={hole_depth:.4f}")
@@ -535,9 +538,9 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
         # 优先使用对象上存储的精确孔半径（避免 z-level 分析的 inner_r 偏差）
         stored_hr = obj.get('hole_radius') if hasattr(obj, 'get') else None
         stored_pos2 = obj.get('hole_position') if hasattr(obj, 'get') else None
-        if stored_hr is not None and stored_pos2 in ('top', 'bottom', 'both') and stored_hr > 0.0005:
-            inner_r = stored_hr
-            log_to_file(f"[STEP Exporter]   Using stored hole_radius={stored_hr:.4f} from object property")
+        if stored_hr is not None and stored_pos2 in ('top', 'bottom', 'both') and stored_hr > 0.5:
+            inner_r = stored_hr * 0.001
+            log_to_file(f"[STEP Exporter]   Using stored hole_radius={inner_r:.4f} from object property")
         
         # 从底部向上扫描找内孔结束位置（用max半径判断外壁是否存在）
         hole_end_bottom = sorted_z[0]
@@ -1693,13 +1696,45 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
     if stepped_hole_params:
         for k in ('small_hole_radius', 'small_hole_height', 'inner_bottom_radius', 'inner_top_radius'):
             if k in stepped_hole_params: stepped_hole_params[k] *= S
-    
+
+    # Grooved external wall: return early with groove result before other classification
+    if has_groove_custom:
+        is_cone = abs(bottom_radius - top_radius) > max(bottom_radius, top_radius) * 0.01
+        if is_cone:
+            result = {
+                'obj_type': 'cone_groove',
+                'bottom_radius': bottom_radius,
+                'top_radius': top_radius,
+                'height': height,
+                'pos_x': pos_x, 'pos_y': pos_y, 'pos_z': pos_z,
+                'top_chamfer': top_feature_size if top_feature == 'chamfer' else 0,
+                'top_fillet': top_feature_size if top_feature == 'fillet' else 0,
+                'bottom_chamfer': bottom_feature_size if bottom_feature == 'chamfer' else 0,
+                'bottom_fillet': bottom_feature_size if bottom_feature == 'fillet' else 0,
+            }
+        else:
+            result = {
+                'obj_type': 'grooved_cylinder',
+                'radius': max(bottom_radius, top_radius),
+                'height': height,
+                'pos_x': pos_x, 'pos_y': pos_y, 'pos_z': pos_z,
+                'top_chamfer': top_feature_size if top_feature == 'chamfer' else 0,
+                'top_fillet': top_feature_size if top_feature == 'fillet' else 0,
+                'bottom_chamfer': bottom_feature_size if bottom_feature == 'chamfer' else 0,
+                'bottom_fillet': bottom_feature_size if bottom_feature == 'fillet' else 0,
+            }
+        result.update(groove_params)
+        bm.free()
+        return result
+
     if is_hollow:
         if bottom_radius * 0.98 <= top_radius <= bottom_radius * 1.02:
             # 检查锥形通孔
             hole_is_tapered_thru = obj.get('hole_is_tapered', False) if hasattr(obj, 'get') else False
-            inner_end_r = obj.get('hole_end_radius', inner_radius) if hasattr(obj, 'get') else inner_radius
-            inner_opening_r = obj.get('hole_opening_radius', inner_radius) if hasattr(obj, 'get') else inner_radius
+            stored_end = obj.get('hole_end_radius') if hasattr(obj, 'get') else None
+            stored_opening = obj.get('hole_opening_radius') if hasattr(obj, 'get') else None
+            inner_end_r = stored_end * 0.001 if stored_end else inner_radius
+            inner_opening_r = stored_opening * 0.001 if stored_opening else inner_radius
             
             if hole_is_tapered_thru and abs(inner_opening_r - inner_end_r) > 0.0001:
                 obj_type = 'hollow_cylinder_tapered'

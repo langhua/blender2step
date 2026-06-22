@@ -1274,6 +1274,34 @@ TopoDS_Shape create_cylinder_with_blind_hole_solid_parametric(
             } else {
                 std::cout << "[STEP Exporter] Fillet edge not found at z=" << targetZ << " r=" << HR << std::endl;
             }
+
+            // Apply fillet at hole BOTTOM (inside the cylinder)
+            double bottomZ = is_bottom ? (-halfH + hole_depth) : (halfH - hole_depth);
+            if (std::abs(bottomZ) < std::abs(halfH) - 0.01) { // bottom is not at the opening
+                TopoDS_Edge bottomEdge;
+                bool bottomFound = false;
+                for (TopExp_Explorer exp(hole_solid, TopAbs_EDGE); exp.More(); exp.Next()) {
+                    TopoDS_Edge e = TopoDS::Edge(exp.Current());
+                    BRepAdaptor_Curve c(e);
+                    if (c.GetType() != GeomAbs_Circle) continue;
+                    gp_Circ cr = c.Circle();
+                    gp_Pnt ct = cr.Location();
+                    if (std::abs(ct.X()) > 0.01 || std::abs(ct.Y()) > 0.01) continue;
+                    if (std::abs(cr.Radius() - HR) / std::max(HR, 0.001) > 0.15) continue;
+                    if (std::abs(ct.Z() - bottomZ) < 0.02) { bottomEdge = e; bottomFound = true; break; }
+                }
+                if (bottomFound) {
+                    BRepFilletAPI_MakeFillet fm2(hole_solid);
+                    fm2.Add(FR, bottomEdge);
+                    fm2.Build();
+                    if (fm2.IsDone()) {
+                        hole_solid = shape_to_solid(fm2.Shape());
+                        std::cout << "[STEP Exporter] Applied blind hole fillet at bottom: r=" << FR << " z=" << bottomZ << std::endl;
+                    }
+                } else {
+                    std::cout << "[STEP Exporter] Hole bottom edge not found at z=" << bottomZ << " r=" << HR << std::endl;
+                }
+            }
         }
 
         std::cout << "[STEP Exporter] Created cylinder with blind hole: r=" << radius
@@ -1351,6 +1379,35 @@ TopoDS_Shape create_cylinder_with_blind_hole_solid_parametric(
             }
         } else {
             std::cout << "[STEP Exporter] Tapered hole fillet edge not found at z=" << targetZ << " r=" << HR << std::endl;
+        }
+
+        // Apply fillet at tapered hole BOTTOM (inside cylinder, smaller radius)
+        double bottomZ = is_bottom ? (-halfH + hole_depth) : (halfH - hole_depth);
+        double bottomR = hole_radius_bottom; // tapered hole bottom has smaller radius
+        if (std::abs(bottomZ) < std::abs(halfH) - 0.01) {
+            TopoDS_Edge bottomEdge;
+            bool bottomFound = false;
+            for (TopExp_Explorer exp(result_solid, TopAbs_EDGE); exp.More(); exp.Next()) {
+                TopoDS_Edge e = TopoDS::Edge(exp.Current());
+                BRepAdaptor_Curve c(e);
+                if (c.GetType() != GeomAbs_Circle) continue;
+                gp_Circ cr = c.Circle();
+                gp_Pnt ct = cr.Location();
+                if (std::abs(ct.X()) > 0.01 || std::abs(ct.Y()) > 0.01) continue;
+                if (std::abs(cr.Radius() - bottomR) / std::max(bottomR, 0.001) > 0.15) continue;
+                if (std::abs(ct.Z() - bottomZ) < 0.02) { bottomEdge = e; bottomFound = true; break; }
+            }
+            if (bottomFound) {
+                BRepFilletAPI_MakeFillet fm2(result_solid);
+                fm2.Add(FR, bottomEdge);
+                fm2.Build();
+                if (fm2.IsDone()) {
+                    result_solid = shape_to_solid(fm2.Shape());
+                    std::cout << "[STEP Exporter] Applied tapered blind hole fillet at bottom: r=" << FR << " z=" << bottomZ << " edge_r=" << bottomR << std::endl;
+                }
+            } else {
+                std::cout << "[STEP Exporter] Tapered hole bottom edge not found at z=" << bottomZ << " r=" << bottomR << std::endl;
+            }
         }
     }
 
@@ -1454,7 +1511,7 @@ TopoDS_Shape create_cylinder_with_dual_blind_holes_solid_parametric(
             BRepAlgoAPI_Cut cut(solid, shape_to_solid(cutter_b));
             if (cut.IsDone()) {
                 solid = shape_to_solid(cut.Shape());
-                // Apply fillet at bottom opening
+                // Apply fillet at bottom opening AND hole bottom
                 if (!solid.IsNull() && hole_fillet_radius > 0.001) {
                     for (TopExp_Explorer exp(solid, TopAbs_EDGE); exp.More(); exp.Next()) {
                         TopoDS_Edge e = TopoDS::Edge(exp.Current());
@@ -1468,6 +1525,24 @@ TopoDS_Shape create_cylinder_with_dual_blind_holes_solid_parametric(
                             break;
                         }
                     }
+                    // Fillet at bottom hole BOTTOM (inside cylinder)
+                    // For tapered holes, the bottom edge has a different radius (hole_radius_bottom)
+                    double btmZ = -halfH + bottom_hole_depth;
+                    double edgeR_b = is_tapered ? hole_radius_bottom : hole_radius;
+                    if (std::abs(btmZ + halfH) > 0.01) {
+                        for (TopExp_Explorer exp(solid, TopAbs_EDGE); exp.More(); exp.Next()) {
+                            TopoDS_Edge e = TopoDS::Edge(exp.Current());
+                            BRepAdaptor_Curve c(e);
+                            if (c.GetType() != GeomAbs_Circle) continue;
+                            gp_Circ cr = c.Circle();
+                            if (std::abs(cr.Radius() - edgeR_b) / std::max(edgeR_b, 0.001) > 0.15) continue;
+                            if (std::abs(cr.Location().Z() - btmZ) < 0.02) {
+                                BRepFilletAPI_MakeFillet fm(solid); fm.Add(hole_fillet_radius, e); fm.Build();
+                                if (fm.IsDone()) solid = shape_to_solid(fm.Shape());
+                                break;
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1478,7 +1553,7 @@ TopoDS_Shape create_cylinder_with_dual_blind_holes_solid_parametric(
             BRepAlgoAPI_Cut cut(solid, shape_to_solid(cutter_t));
             if (cut.IsDone()) {
                 solid = shape_to_solid(cut.Shape());
-                // Apply fillet at top opening
+                // Apply fillet at top opening AND hole bottom
                 if (!solid.IsNull() && hole_fillet_radius > 0.001) {
                     for (TopExp_Explorer exp(solid, TopAbs_EDGE); exp.More(); exp.Next()) {
                         TopoDS_Edge e = TopoDS::Edge(exp.Current());
@@ -1490,6 +1565,24 @@ TopoDS_Shape create_cylinder_with_dual_blind_holes_solid_parametric(
                             BRepFilletAPI_MakeFillet fm(solid); fm.Add(hole_fillet_radius, e); fm.Build();
                             if (fm.IsDone()) solid = shape_to_solid(fm.Shape());
                             break;
+                        }
+                    }
+                    // Fillet at top hole BOTTOM (inside cylinder)
+                    // For tapered holes, the bottom edge has a different radius (hole_radius_bottom)
+                    double topBtmZ = halfH - top_hole_depth;
+                    double edgeR_t = is_tapered ? hole_radius_bottom : hole_radius;
+                    if (std::abs(topBtmZ - halfH) > 0.01) {
+                        for (TopExp_Explorer exp(solid, TopAbs_EDGE); exp.More(); exp.Next()) {
+                            TopoDS_Edge e = TopoDS::Edge(exp.Current());
+                            BRepAdaptor_Curve c(e);
+                            if (c.GetType() != GeomAbs_Circle) continue;
+                            gp_Circ cr = c.Circle();
+                            if (std::abs(cr.Radius() - edgeR_t) / std::max(edgeR_t, 0.001) > 0.15) continue;
+                            if (std::abs(cr.Location().Z() - topBtmZ) < 0.02) {
+                                BRepFilletAPI_MakeFillet fm(solid); fm.Add(hole_fillet_radius, e); fm.Build();
+                                if (fm.IsDone()) solid = shape_to_solid(fm.Shape());
+                                break;
+                            }
                         }
                     }
                 }

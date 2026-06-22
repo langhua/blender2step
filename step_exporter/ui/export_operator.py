@@ -243,195 +243,42 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
         set_operator(self)
         log_to_file(f"[STEP Exporter] === Calling start_progress ===")
         start_progress(context)
+        update_progress(0, "正在分析物体...", context)  # 立即显示进度，避免空白等待
         
-        # 将导出参数存储到全局变量
+        # 注册模态处理器，让 UI 可以立即刷新
+        wm = context.window_manager
+        self._timer = wm.event_timer_add(0.1, window=context.window)
+        wm.modal_handler_add(self)
         
-        # 确定要导出的对象列表
-        if self.use_selected and context.selected_objects:
-            _g._export_objects = [obj for obj in context.selected_objects if obj.type in ('MESH', 'CURVE')]
-        else:
-            _g._export_objects = [obj for obj in context.scene.objects if obj.type in ('MESH', 'CURVE')]
-        
-        # 根据选择的单位确定缩放值
-        if self.unit == 'mm':
-            scale = 1000.0
-        else:
-            scale = 1.0
-        
-        step_unit = 'MILLIMETER' if self.unit == 'mm' else 'METER'
-        
-        # 检测底壳和圆柱对象，使用参数化导出
-        bottom_shells = []
-        top_shells = []
-        cylinder_objects = []
-        regular_export_objects = []
-        
-        for obj in _g._export_objects:
-            if obj.type == 'MESH':
-                log_to_file(f"[STEP Exporter] Checking: {obj.name}")
-                
-                # 如果对象标记了需要使用网格导出（如包含通孔），则跳过参数化分析
-                if obj.get("step_use_mesh", False):
-                    log_to_file(f"[STEP Exporter]   -> marked for mesh export (has holes/cuts)")
-                    regular_export_objects.append(obj)
-                    continue
-                
-                # 先检测圆柱/圆锥（优先于壳检测，避免 chamfer+fillet 圆柱被误判为顶壳）
-                cyl_params = _analyze_cylinder_from_mesh(obj, context, scale)
-                if cyl_params:
-                    cylinder_objects.append(cyl_params)
-                    log_to_file(f"[STEP Exporter]   -> {cyl_params['obj_type']}! r={cyl_params.get('radius', cyl_params.get('bottom_radius', '?'))} h={cyl_params['height']}")
-                    log_to_file(f"[STEP Exporter] Found {cyl_params['obj_type']}: {obj.name}")
-                    continue
-                
-                # 再检测底壳
-                shell_params = _analyze_bottom_shell_from_mesh(obj, context, scale)
-                if shell_params:
-                    bottom_shells.append(shell_params)
-                    hh = shell_params.get('has_holes', False)
-                    log_to_file(f"[STEP Exporter]   -> Bottom shell! has_holes={hh}")
-                    log_to_file(f"[STEP Exporter] Found bottom shell: {obj.name} (has_holes={shell_params.get('has_holes', False)})")
-                    continue
-
-                # 最后检测顶壳（锥形渐缩壳）
-                top_shell_params = _analyze_top_shell_from_mesh(obj, context, scale)
-                if top_shell_params:
-                    top_shells.append(top_shell_params)
-                    log_to_file(f"[STEP Exporter]   -> Top shell! recess={top_shell_params.get('top_recess',0):.1f}")
-                    log_to_file(f"[STEP Exporter] Found top shell: {obj.name}")
-                    continue
-                
-                log_to_file(f"[STEP Exporter]   -> NOT a parametric object")
-                regular_export_objects.append(obj)
-            elif obj.type == 'CURVE':
-                regular_export_objects.append(obj)
-        
-        total_parametric = len(bottom_shells) + len(top_shells) + len(cylinder_objects)
-        log_to_file(f"[STEP Exporter] Total objects: {len(_g._export_objects)}, bottom_shells: {len(bottom_shells)}, top_shells: {len(top_shells)}, cylinders: {len(cylinder_objects)}, regular: {len(regular_export_objects)}")
-        
-        if bottom_shells or top_shells or cylinder_objects:
-            log_to_file(f"[STEP Exporter] Found {total_parametric} parametric object(s) (+ {len(regular_export_objects)} regular), using parametric export")
-            update_progress(10, "检测到参数化对象，正在导出...", context)
-
-            # 日志文件已在 execute() 开头打开，此处确保可用即可
-
-            _g._bottom_shell_export_data = {
-                'filepath': self.filepath,
-                'shells': bottom_shells,
-                'top_shells': top_shells,
-                'cylinders': cylinder_objects,
-                'regular_objects': regular_export_objects,
-                'step_schema': self.step_schema,
-                'step_unit': step_unit,
-                'enable_logging': self.enable_logging,
-                'fix_geometry': self.fix_geometry,
-                'create_solid': self.create_solid,
-                'advanced_brep': self.advanced_brep,
-                'sew_tolerance': self.sew_tolerance,
-                'context': context,
-            }
-
-            _g._export_complete = False
-            _g._export_success = False
-            
-            # 重置分阶段导出状态
-            _g._parametric_export_stage = 0
-            _g._parametric_export_idx = 0
-            _g._parametric_temp_files = []
-            _g._parametric_progress_val = 0.0
-            
-            # 后台模式：直接在循环中运行分阶段导出（无UI，无需modal）
-            if bpy.app.background:
-                log_to_file(f"[STEP Exporter] Background mode: running staged export synchronously")
-                try:
-                    while True:
-                        next_tick = _parametric_export_staged()
-                        if next_tick is None:
-                            break
-                except Exception as e:
-                    log_to_file(f"[STEP Exporter] Background export error: {e}")
-                    import traceback
-                    log_to_file(traceback.format_exc())
-                    _g._export_success = False
-                    _g._export_complete = True
-                
-                # 清理
-                end_progress(context)
-                clear_operator()
-                if _g._export_log_file and not _g._export_log_file.closed:
-                    _g._export_log_file.close()
-                    _g._export_log_file = None
-                try:
-                    _merge_log_files(os.path.dirname(self.filepath), self.filepath)
-                except:
-                    pass
-                
-                log_to_file(f"[STEP Exporter] Background export done, success={_g._export_success}")
-                self.report({'INFO' if _g._export_success else 'ERROR'}, "STEP 导出完成" if _g._export_success else "STEP 导出失败")
-                return {'FINISHED'}
-            
-            # UI模式：注册事件定时器用于modal进度更新
-            wm = context.window_manager
-            self._timer = wm.event_timer_add(0.1, window=context.window)
-            wm.modal_handler_add(self)
-            log_to_file(f"[STEP Exporter] Modal handler and event timer registered")
-
-            return {'RUNNING_MODAL'}
-        
-        _g._export_params = {
-            'filepath': self.filepath,
+        # 存储基本参数供异步回调使用
+        _g._export_setup_params = {
             'use_selected': self.use_selected,
             'unit': self.unit,
+            'step_schema': self.step_schema,
+            'enable_logging': self.enable_logging,
             'fix_geometry': self.fix_geometry,
             'create_solid': self.create_solid,
             'advanced_brep': self.advanced_brep,
-            'step_schema': self.step_schema,
             'sew_tolerance': self.sew_tolerance,
-            'enable_logging': self.enable_logging,
-            'apply_modifiers': self.apply_modifiers,
+            'filepath': self.filepath,
             'context': context,
-            'scale': scale
         }
-
-        # 重置状态
-        _g._export_complete = False
-        _g._export_success = False
-        _g._export_stage = 0
-        _g._export_objects_data = []
-        _g._export_current_index = 0
-
-        # 注册事件定时器用于modal进度更新
-        wm = context.window_manager
-        self._timer = wm.event_timer_add(0.2, window=context.window)
-        wm.modal_handler_add(self)
-        log_to_file(f"[STEP Exporter] Modal handler and event timer registered (regular path)")
-
-        log_to_file(f"[STEP Exporter] === Registering app timer ===")
-        log_to_file(f"[STEP Exporter] Objects to export: {len(_g._export_objects)}")
-
-        # 包装 _export_worker_timer，完成后设置完成标志
-        def _async_regular_worker():
+        
+        # 用 app timer 延迟执行物体分析，让 UI 先刷新显示进度条
+        def _deferred_analyze_and_export():
             try:
-                result = _export_worker_timer()
-                if result is None:
-                    # timer 停止，导出完成（可能成功也可能失败，由内部决定）
-                    _g._export_success = True
-                    _g._export_complete = True
-                    return None
-                return result
+                _execute_analysis_and_export(self, _g._export_setup_params)
             except Exception as e:
-                log_to_file(f"[STEP Exporter] Async regular export error: {e}")
+                log_to_file(f"[STEP Exporter] Deferred analysis error: {e}")
                 import traceback
                 log_to_file(traceback.format_exc())
                 _g._export_success = False
                 _g._export_complete = True
-                return None
-
-        # 将导出工作交给 app timer，让 modal operator 保持生命周期
-        bpy.app.timers.register(_async_regular_worker, first_interval=0.1)
-        log_to_file(f"[STEP Exporter] App timer registered for regular export")
-
-        # 返回 RUNNING_MODAL 保持 operator 生命周期，进度条才能持续显示
+            return None  # 一次性 timer
+        
+        bpy.app.timers.register(_deferred_analyze_and_export, first_interval=0.01)
+        log_to_file(f"[STEP Exporter] Modal handler registered, analysis deferred to timer")
+        
         return {'RUNNING_MODAL'}
     
     def get_mesh_data_enhanced(self, obj, context, scale, apply_modifiers=True):
@@ -881,6 +728,191 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
             # 变换矩阵
             'matrix_world': [list(row) for row in eval_obj.matrix_world],
         }
+
+# ====================== 延迟分析 + 导出 ======================
+
+def _execute_analysis_and_export(operator, params):
+    """在 app timer 中执行物体分析，然后启动参数化或常规导出。
+    延迟执行确保 UI 先刷新显示进度条，避免用户看到空白等待。
+    """
+    context = params['context']
+    use_selected = params['use_selected']
+    unit = params['unit']
+    step_schema = params['step_schema']
+    enable_logging = params['enable_logging']
+    fix_geometry = params['fix_geometry']
+    create_solid = params['create_solid']
+    advanced_brep = params['advanced_brep']
+    sew_tolerance = params['sew_tolerance']
+    filepath = params['filepath']
+    
+    import bpy
+    from ..core import _globals as _g
+    from ..core.utils import log_to_file, _merge_log_files
+    from ..analysis import _analyze_cylinder_from_mesh, _analyze_bottom_shell_from_mesh, _analyze_top_shell_from_mesh
+    from ..export import _export_worker_timer, _parametric_export_staged
+    from ..export.progress_report import start_progress, update_progress, end_progress, set_operator, clear_operator
+    
+    # 确定要导出的对象列表
+    if use_selected and context.selected_objects:
+        _g._export_objects = [obj for obj in context.selected_objects if obj.type in ('MESH', 'CURVE')]
+    else:
+        _g._export_objects = [obj for obj in context.scene.objects if obj.type in ('MESH', 'CURVE')]
+    
+    # 根据选择的单位确定缩放值
+    if unit == 'mm':
+        scale = 1000.0
+    else:
+        scale = 1.0
+    
+    step_unit = 'MILLIMETER' if unit == 'mm' else 'METER'
+    
+    # 检测底壳和圆柱对象，使用参数化导出
+    bottom_shells = []
+    top_shells = []
+    cylinder_objects = []
+    regular_export_objects = []
+    
+    total_objects = len(_g._export_objects)
+    for idx, obj in enumerate(_g._export_objects):
+        if obj.type == 'MESH':
+            log_to_file(f"[STEP Exporter] Checking: {obj.name}")
+            
+            # 如果对象标记了需要使用网格导出
+            if obj.get("step_use_mesh", False):
+                log_to_file(f"[STEP Exporter]   -> marked for mesh export (has holes/cuts)")
+                regular_export_objects.append(obj)
+                continue
+            
+            # 先检测圆柱/圆锥
+            cyl_params = _analyze_cylinder_from_mesh(obj, context, scale)
+            if cyl_params:
+                cylinder_objects.append(cyl_params)
+                log_to_file(f"[STEP Exporter] Found {cyl_params['obj_type']}: {obj.name}")
+                continue
+            
+            # 再检测底壳
+            shell_params = _analyze_bottom_shell_from_mesh(obj, context, scale)
+            if shell_params:
+                bottom_shells.append(shell_params)
+                log_to_file(f"[STEP Exporter] Found bottom shell: {obj.name}")
+                continue
+
+            # 最后检测顶壳
+            top_shell_params = _analyze_top_shell_from_mesh(obj, context, scale)
+            if top_shell_params:
+                top_shells.append(top_shell_params)
+                log_to_file(f"[STEP Exporter] Found top shell: {obj.name}")
+                continue
+            
+            log_to_file(f"[STEP Exporter]   -> NOT a parametric object")
+            regular_export_objects.append(obj)
+        elif obj.type == 'CURVE':
+            regular_export_objects.append(obj)
+        
+        # 每分析约 10% 物体更新一次进度 (1% → 8%)
+        if idx % max(1, total_objects // 10) == 0:
+            pct = int(1 + 7 * idx / max(1, total_objects))
+            update_progress(pct, f"分析物体 {idx+1}/{total_objects}...", context)
+    
+    total_parametric = len(bottom_shells) + len(top_shells) + len(cylinder_objects)
+    log_to_file(f"[STEP Exporter] Total objects: {len(_g._export_objects)}, bottom_shells: {len(bottom_shells)}, top_shells: {len(top_shells)}, cylinders: {len(cylinder_objects)}, regular: {len(regular_export_objects)}")
+    
+    if bottom_shells or top_shells or cylinder_objects:
+        log_to_file(f"[STEP Exporter] Found {total_parametric} parametric object(s), using parametric export")
+        update_progress(10, f"分析完成，开始导出 {total_parametric} 个参数化物体...", context)
+
+        _g._bottom_shell_export_data = {
+            'filepath': filepath,
+            'shells': bottom_shells,
+            'top_shells': top_shells,
+            'cylinders': cylinder_objects,
+            'regular_objects': regular_export_objects,
+            'step_schema': step_schema,
+            'step_unit': step_unit,
+            'enable_logging': enable_logging,
+            'fix_geometry': fix_geometry,
+            'create_solid': create_solid,
+            'advanced_brep': advanced_brep,
+            'sew_tolerance': sew_tolerance,
+            'context': context,
+        }
+
+        _g._export_complete = False
+        _g._export_success = False
+        
+        # 重置分阶段导出状态
+        _g._parametric_export_stage = 0
+        _g._parametric_export_idx = 0
+        _g._parametric_temp_files = []
+        _g._parametric_progress_val = 0.0
+        
+        # 后台模式：同步运行
+        if bpy.app.background:
+            log_to_file(f"[STEP Exporter] Background mode: running staged export synchronously")
+            try:
+                while True:
+                    next_tick = _parametric_export_staged()
+                    if next_tick is None:
+                        break
+            except Exception as e:
+                log_to_file(f"[STEP Exporter] Background export error: {e}")
+                import traceback
+                log_to_file(traceback.format_exc())
+                _g._export_success = False
+                _g._export_complete = True
+            
+            end_progress(context)
+            clear_operator()
+            log_to_file(f"[STEP Exporter] Background export done, success={_g._export_success}")
+            return
+        
+        # UI模式：modal handler 已在 execute() 中注册，直接开始分阶段导出
+        log_to_file(f"[STEP Exporter] Staged export will run in modal handler")
+        # 不需要额外操作——modal handler 中的 TIMER 事件会自动调用 _parametric_export_staged()
+    else:
+        # 常规导出路径
+        log_to_file(f"[STEP Exporter] No parametric objects, using regular export")
+        
+        _g._export_params = {
+            'filepath': filepath,
+            'use_selected': use_selected,
+            'unit': unit,
+            'fix_geometry': fix_geometry,
+            'create_solid': create_solid,
+            'advanced_brep': advanced_brep,
+            'step_schema': step_schema,
+            'sew_tolerance': sew_tolerance,
+            'enable_logging': enable_logging,
+            'context': context,
+            'scale': scale,
+            'apply_modifiers': True,
+        }
+        
+        _g._export_complete = False
+        _g._export_success = False
+        _g._export_stage = 0
+        _g._export_objects_data = []
+        _g._export_current_index = 0
+        
+        def _async_regular_worker():
+            try:
+                result = _export_worker_timer()
+                if result is None:
+                    _g._export_success = True
+                    _g._export_complete = True
+                    return None
+                return result
+            except Exception as e:
+                log_to_file(f"[STEP Exporter] Async regular export error: {e}")
+                import traceback
+                log_to_file(traceback.format_exc())
+                _g._export_success = False
+                _g._export_complete = True
+                return None
+        
+        bpy.app.timers.register(_async_regular_worker, first_interval=0.1)
+        log_to_file(f"[STEP Exporter] App timer registered for regular export")
 
 # ====================== 菜单函数 ======================
 

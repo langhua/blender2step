@@ -108,16 +108,17 @@ blender --background --python .\step_exporter\test\run_test.py -- --test-number 
     Unit Scale   → 0.001
     Length       → Millimeters
 
+    即：
+    Unit Scale  = 0.001  →  1 BU = 1 mm
+    Length      = Millimeters
+
+
 **FreeCAD:** millimeter
 
-**代码单位约定 (Code Unit Convention):**
+**坐标数据流:**
+    Blender mesh 顶点裸值（BU）→ 在当前 Unit Scale 下数值上 = 毫米
+    Python 取 vertex.co（经 matrix_world 变换后）→ 裸 BU 值 → 直接作为 mm 传入 C++
+    不要额外 ×1000（×1000 只在 Unit Scale=1 / 把 BU 当米解释时才需要）
 
-| 组件 | 单位 | 说明 |
-|------|------|------|
-| Blender 原生 (mesh 数据) | 米 (m) | Blender 内部始终使用米 |
-| 对象自定义属性 (Custom Properties) | 毫米 (mm) | 存储时 ×1000，读取时 ×0.001 |
-| C++ 导出函数 (全部) | 毫米 (mm) | 分析返回 ×S (S=1000) |
-| STEP 文件输出 | 毫米 (mm) | 行业标准 |
-
-> 内外一致使用毫米：Python 分析层将 Blender 原生米单位 ×S 缩放为毫米后传给 C++，
-> C++ 直接使用毫米值创建几何体，STEP 文件标注 MILLIMETER。
+    STEP 文件单位声明: MILLIMETER
+    FreeCAD 打开: 毫米（一致 ✓）

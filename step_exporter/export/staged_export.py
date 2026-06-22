@@ -267,7 +267,11 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
                 top_ch, top_fr, btm_ch, btm_fr,
                 px, py, pz,
                 data['step_schema'], data['step_unit'],
-                1 if data['enable_logging'] else 0)
+                1 if data['enable_logging'] else 0,
+                cparams.get('groove_depth', 0),
+                cparams.get('groove_bottom_width', 0),
+                cparams.get('groove_top_width', 0),
+                cparams.get('groove_extrusion_length', 0))
         return cpp_exporter.export_cylinder_blind_hole_step(
             temp_file, cparams['radius'], cparams['height'],
             cparams['hole_radius'], cparams['hole_depth'],
@@ -277,7 +281,11 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
             top_ch, top_fr, btm_ch, btm_fr,
             px, py, pz,
             data['step_schema'], data['step_unit'],
-            1 if data['enable_logging'] else 0)
+            1 if data['enable_logging'] else 0,
+            cparams.get('groove_depth', 0),
+            cparams.get('groove_bottom_width', 0),
+            cparams.get('groove_top_width', 0),
+            cparams.get('groove_extrusion_length', 0))
     elif obj_type == 'cylinder_stepped_hole':
         top_ch = cparams.get('top_chamfer', 0.0)
         top_fr = cparams.get('top_fillet', 0.0)
@@ -291,7 +299,11 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
             top_ch, top_fr, btm_ch, btm_fr,
             px, py, pz,
             data['step_schema'], data['step_unit'],
-            1 if data['enable_logging'] else 0)
+            1 if data['enable_logging'] else 0,
+            cparams.get('groove_depth', 0),
+            cparams.get('groove_bottom_width', 0),
+            cparams.get('groove_top_width', 0),
+            cparams.get('groove_extrusion_length', 0))
     elif obj_type == 'cylinder_tapered_stepped_hole':
         top_ch = cparams.get('top_chamfer', 0.0)
         top_fr = cparams.get('top_fillet', 0.0)
@@ -306,7 +318,11 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
             top_ch, top_fr, btm_ch, btm_fr,
             px, py, pz,
             data['step_schema'], data['step_unit'],
-            1 if data['enable_logging'] else 0)
+            1 if data['enable_logging'] else 0,
+            cparams.get('groove_depth', 0),
+            cparams.get('groove_bottom_width', 0),
+            cparams.get('groove_top_width', 0),
+            cparams.get('groove_extrusion_length', 0))
     elif obj_type == 'cone_groove':
         top_ch = cparams.get('top_chamfer', 0.0)
         top_fr = cparams.get('top_fillet', 0.0)
@@ -440,10 +456,15 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
             cparams.get('groove_bottom_width', 0),
             cparams.get('groove_top_width', 0),
             cparams.get('groove_extrusion_length', 0),
+            0, 0, 0, 0,  # no chamfer/fillet for true cones
             px, py, pz, data['step_schema'], data['step_unit'],
             1 if data['enable_logging'] else 0)
     elif obj_type == 'hollow_cylinder_grooved':
         # Hollow cylinder (through-hole) with trapezoidal groove
+        top_ch = cparams.get('top_feature_size', 0) if cparams.get('top_feature') == 'chamfer' else 0
+        top_fr = cparams.get('top_feature_size', 0) if cparams.get('top_feature') == 'fillet' else 0
+        btm_ch = cparams.get('bottom_feature_size', 0) if cparams.get('bottom_feature') == 'chamfer' else 0
+        btm_fr = cparams.get('bottom_feature_size', 0) if cparams.get('bottom_feature') == 'fillet' else 0
         return cpp_exporter.export_hollow_cone_fillet_with_groove_step(
             temp_file,
             cparams.get('outer_bottom_radius', cparams.get('outer_radius', 0)),
@@ -455,6 +476,7 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
             cparams.get('groove_bottom_width', 0),
             cparams.get('groove_top_width', 0),
             cparams.get('groove_extrusion_length', 0),
+            top_ch, top_fr, btm_ch, btm_fr,
             px, py, pz, data['step_schema'], data['step_unit'],
             1 if data['enable_logging'] else 0)
     elif obj_type == 'cone_stepped_hole':

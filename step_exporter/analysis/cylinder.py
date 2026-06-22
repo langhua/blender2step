@@ -477,6 +477,21 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
     # Grooved cylinders have non-circular mid-region but are still cylindrical
     if has_groove_custom:
         cylindrical_body = True
+        # Also run top-down body detection to find correct body boundaries
+        # (bottom-up may stop early due to fillet/chamfer at the bottom end)
+        body_start_z = sorted_z[-1]
+        for zl in reversed(sorted_z):
+            r = z_radius_data.get(zl)
+            if r is None:
+                continue
+            if abs(r - top_radius) / max(top_radius, 0.01) < 0.01:
+                body_start_z = zl
+            else:
+                break
+        top_body_portion = (sorted_z[-1] - body_start_z) / height if height > 0 else 0
+        if top_body_portion > 0.3:  # looser threshold for grooved cylinders
+            body_radius = top_radius
+            body_end_z = body_start_z
     
     # 同时也检查顶部向下是否有恒定半径区域
     if not cylindrical_body:
@@ -527,6 +542,10 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
         if stored_pos == 'both':
             hole_depth_top = hole_depth
         log_to_file(f"[STEP Exporter]   Blind hole from stored property: pos={stored_pos} r={hole_radius:.4f} d={hole_depth:.4f}")
+    elif stored_pos in ('stepped', 'tapered_stepped'):
+        hole_pattern_detected = True
+        hole_position = stored_pos  # 'stepped' or 'tapered_stepped'
+        log_to_file(f"[STEP Exporter]   Stepped/tapered-stepped hole from stored property: type={stored_pos}")
     
     # 强制圆柱体判断：两端半径接近且顶部干净时，即使中间z层缺少外壁顶点
     # （如盲孔圆柱的外壁仅有顶部/底部顶点），也认定为恒定半径圆柱。
@@ -633,6 +652,10 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                     hole_radius = inner_r  # already in meters
                     hole_depth = stored_hd3 * 0.001 if stored_hd3 else bottom_hole_d
                     log_to_file(f"[STEP Exporter]   Using stored hole_position=bottom, overriding dual-blind detection")
+                elif stored_pos3 in ('stepped', 'tapered_stepped'):
+                    hole_pattern_detected = True
+                    hole_position = stored_pos3  # keep 'stepped' or 'tapered_stepped'
+                    log_to_file(f"[STEP Exporter]   Using stored hole_position={stored_pos3}, overriding dual-blind detection")
                 else:
                     hole_pattern_detected = True
                     hole_position = 'both'
@@ -683,8 +706,9 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                 else:
                     log_to_file(f"[STEP Exporter]   Hole pattern detected: bottom_r={bottom_radius:.3f} above_r={above_r_first:.3f}, treating as cylinder")
                     cylindrical_body = True
-                    body_radius = bottom_radius
-                    top_radius = bottom_radius
+                    body_radius = max(bottom_radius, top_radius)
+                    top_radius = body_radius
+                    bottom_radius = body_radius
                     hole_pattern_detected = True
     
     # 底部盲孔检测：顶部恒定半径为本体，底部参数骤降为孔洞
@@ -801,7 +825,7 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
         
         # 底部过渡：body_end_z 以下的层（如果有底部倒角）
         if len(sorted_z) >= 2 and sorted_z[0] < body_end_z:
-            bottom_transition_zls = [zl for zl in sorted_z if zl < sorted_z[0] and zl in z_radius_data]
+            bottom_transition_zls = [zl for zl in sorted_z if sorted_z[0] <= zl <= body_end_z and zl in z_radius_data]
         else:
             bottom_transition_zls = []
     else:
@@ -818,23 +842,36 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
             ratio_01 = abs(r0 - r1) / max(abs(r0), 0.001)
             ratio_12 = abs(r1 - r2) / max(abs(r1), 0.001)
             if ratio_01 > 0.01 and ratio_12 < 0.01:
-                # r0 != r1 == r2 → 顶部倒角，r0 是完整半径（圆柱体）
-                body_radius = r0
-                bottom_radius = r0
-                top_radius = r0  # 让后续比例检查通过，确保返回 cylinder 而非 cone
-                top_feature = 'chamfer'
-                top_feature_size = r0 - r2
-                top_transition_zls = [valid_zls[0], valid_zls[1]]
-                cylindrical_body = True
-                body_end_z = valid_zls[2]
+                # r0 != r1 == r2 → one end has edge feature, the other is full body
+                # Determine which end is chamfered: r0 > r1 means top chamfer (r0 full), r0 < r1 means bottom chamfer
+                if r0 > r1:
+                    # r0 > r1 == r2 → 顶部倒角，r0 是完整半径（圆柱体）
+                    body_radius = r0
+                    bottom_radius = r0
+                    top_radius = r0  # 让后续比例检查通过，确保返回 cylinder 而非 cone
+                    top_feature = 'chamfer'
+                    top_feature_size = r0 - r2
+                    top_transition_zls = [valid_zls[0], valid_zls[1]]
+                    cylindrical_body = True
+                    body_end_z = valid_zls[2]
+                else:
+                    # r0 < r1 == r2 → 底部倒角（圆柱体），r0 是倒角后的小半径
+                    body_radius = r1
+                    bottom_radius = r1
+                    top_radius = r1
+                    bottom_feature = 'chamfer'
+                    bottom_feature_size = r1 - r0
+                    bottom_transition_zls = [valid_zls[0], valid_zls[1]]
+                    cylindrical_body = True
+                    body_end_z = valid_zls[1]  # chamfer ends here, body starts
             elif ratio_01 < 0.01 and ratio_12 > 0.01:
-                # r0 == r1 != r2 → 底部倒角（圆柱体）
+                # r0 == r1 != r2 → 顶部特征（圆柱体），r0=r1 是完整半径，r2 是特征端
                 body_radius = r0
                 bottom_radius = r0
                 top_radius = r0
-                bottom_feature = 'chamfer'
-                bottom_feature_size = r0 - r2
-                bottom_transition_zls = [valid_zls[1], valid_zls[2]]
+                top_feature = 'chamfer'
+                top_feature_size = r0 - r2
+                top_transition_zls = [valid_zls[1], valid_zls[2]]
                 cylindrical_body = True
                 body_end_z = valid_zls[0]
             elif ratio_01 > 0.01 and ratio_12 > 0.01:
@@ -1321,7 +1358,17 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
             body_radius_for_export = max(bottom_radius, top_radius)
             
             # 锥体通孔：如果上下半径不同，使用空心锥体
-            if abs(bottom_radius - top_radius) / max(bottom_radius, 0.01) > 0.05:
+            # But first: check if radius difference is from an edge feature (chamfer/fillet)
+            stored_ctype_cone = obj.get('chamfer_type') if hasattr(obj, 'get') else None
+            radius_diff_from_edge = False
+            if stored_ctype_cone and abs(bottom_radius - top_radius) / max(bottom_radius, 0.01) > 0.05:
+                # The radius difference may be from chamfer/fillet, not cone body
+                if stored_ctype_cone in ('chamfer', 'fillet', 'chamfer_both', 'fillet_both',
+                                          'bottom_chamfer', 'bottom_fillet', 'chamfer_fillet'):
+                    radius_diff_from_edge = True
+            is_cone_body = (abs(bottom_radius - top_radius) / max(bottom_radius, 0.01) > 0.05
+                            and not radius_diff_from_edge)
+            if is_cone_body:
                 hole_fillet_r = obj.get('hole_fillet_radius', 0.0) if hasattr(obj, 'get') else 0.0
                 # 收集倒角/圆角参数
                 # 优先使用存储的倒角类型，其次用 mesh 检测
@@ -1515,6 +1562,80 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                 result['bottom_feature_size'] = hole_fillet_r
                 result['obj_type'] = 'hollow_cylinder_tapered'
             return result
+        if hole_position in ('stepped', 'tapered_stepped'):
+            # Stepped through hole or tapered stepped through hole
+            is_tpr = (hole_position == 'tapered_stepped')
+            # Use stored edge feature properties (more reliable than mesh for stepped holes)
+            stored_ct = obj.get('chamfer_type') if hasattr(obj, 'get') else None
+            stored_csz = (obj.get('chamfer_size', 0) if hasattr(obj, 'get') else 0) * 0.001  # mm → m
+            stored_fr = (obj.get('fillet_radius_edge', 0) if hasattr(obj, 'get') else 0) * 0.001  # mm → m
+            if stored_ct == 'chamfer':
+                top_ch = stored_csz; top_fr = 0; btm_ch = 0; btm_fr = 0
+            elif stored_ct == 'fillet':
+                top_ch = 0; top_fr = stored_fr; btm_ch = 0; btm_fr = 0
+            elif stored_ct == 'bottom_chamfer':
+                top_ch = 0; top_fr = 0; btm_ch = stored_csz; btm_fr = 0
+            elif stored_ct == 'bottom_fillet':
+                top_ch = 0; top_fr = 0; btm_ch = 0; btm_fr = stored_fr
+            elif stored_ct == 'chamfer_both':
+                top_ch = stored_csz; top_fr = 0; btm_ch = stored_csz; btm_fr = 0
+            elif stored_ct == 'fillet_both':
+                top_ch = 0; top_fr = stored_fr; btm_ch = 0; btm_fr = stored_fr
+            elif stored_ct == 'chamfer_fillet':
+                top_ch = stored_csz; top_fr = 0; btm_ch = 0; btm_fr = stored_fr
+            else:
+                # Fallback to mesh detection
+                top_ch = top_feature_size if top_feature == 'chamfer' else 0
+                top_fr = top_feature_size if top_feature == 'fillet' else 0
+                btm_ch = bottom_feature_size if bottom_feature == 'chamfer' else 0
+                btm_fr = bottom_feature_size if bottom_feature == 'fillet' else 0
+            if is_tpr:
+                result = {
+                    'obj_type': 'cylinder_tapered_stepped_hole',
+                    'radius': (max(z_radius_data.values()) if stored_ct in ('chamfer_both', 'fillet_both', 'chamfer_fillet')
+                               else max(bottom_radius, top_radius)) * S,
+                    'height': height * S,
+                    'stepped_large_h': (obj.get('hole_stepped_large_h', 0) if hasattr(obj, 'get') else 0),
+                    'taper_top_r': (obj.get('hole_taper_top_r', 0) if hasattr(obj, 'get') else 0),
+                    'taper_step_r': (obj.get('hole_taper_step_r', 0) if hasattr(obj, 'get') else 0),
+                    'stepped_small_r': (obj.get('hole_stepped_small_r', 0) if hasattr(obj, 'get') else 0),
+                    'hole_fillet_radius': (obj.get('hole_fillet_radius', 0) if hasattr(obj, 'get') else 0),
+                    'top_chamfer': top_ch * S,
+                    'top_fillet': top_fr * S,
+                    'bottom_chamfer': btm_ch * S,
+                    'bottom_fillet': btm_fr * S,
+                    'pos_x': pos_x * S,
+                    'pos_y': pos_y * S,
+                    'pos_z': pos_z * S,
+                    'groove_depth': groove_params.get('groove_depth', 0) if groove_params else 0,
+                    'groove_bottom_width': groove_params.get('groove_bottom_width', 0) if groove_params else 0,
+                    'groove_top_width': groove_params.get('groove_top_width', 0) if groove_params else 0,
+                    'groove_extrusion_length': groove_params.get('groove_extrusion_length', 0) if groove_params else 0,
+                }
+            else:
+                result = {
+                    'obj_type': 'cylinder_stepped_hole',
+                    'radius': (max(z_radius_data.values()) if stored_ct in ('chamfer_both', 'fillet_both', 'chamfer_fillet')
+                               else max(bottom_radius, top_radius)) * S,
+                    'height': height * S,
+                    'stepped_large_r': (obj.get('hole_stepped_large_r', 0) if hasattr(obj, 'get') else 0),
+                    'stepped_large_h': (obj.get('hole_stepped_large_h', 0) if hasattr(obj, 'get') else 0),
+                    'stepped_small_r': (obj.get('hole_stepped_small_r', 0) if hasattr(obj, 'get') else 0),
+                    'hole_fillet_radius': (obj.get('hole_fillet_radius', 0) if hasattr(obj, 'get') else 0),
+                    'top_chamfer': top_ch * S,
+                    'top_fillet': top_fr * S,
+                    'bottom_chamfer': btm_ch * S,
+                    'bottom_fillet': btm_fr * S,
+                    'pos_x': pos_x * S,
+                    'pos_y': pos_y * S,
+                    'pos_z': pos_z * S,
+                    'groove_depth': groove_params.get('groove_depth', 0) if groove_params else 0,
+                    'groove_bottom_width': groove_params.get('groove_bottom_width', 0) if groove_params else 0,
+                    'groove_top_width': groove_params.get('groove_top_width', 0) if groove_params else 0,
+                    'groove_extrusion_length': groove_params.get('groove_extrusion_length', 0) if groove_params else 0,
+                }
+            log_to_file(f"[STEP Exporter]   -> {result['obj_type']}! r={result['radius']} h={result['height']}")
+            return result
         if hole_position == 'bottom':
             # 底部盲孔：如果 hole_radius/hole_depth 已在检测阶段设置，直接使用
             if hole_radius > 0 and hole_depth > 0:
@@ -1645,7 +1766,11 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
         # Check if cone body + blind hole (use cone_blind_hole C++ path)
         # Bidirectional: cone can narrow upward or widen upward
         radius_ratio = top_radius / bottom_radius if bottom_radius > 0 else 1.0
-        if radius_ratio < 0.85 or radius_ratio > 1.0 / 0.85:
+        is_cone_like = (radius_ratio < 0.85 or radius_ratio > 1.0 / 0.85)
+        # If stored edge feature explains the radius difference, it's a cylinder not cone
+        if is_cone_like and stored_ctype:
+            is_cone_like = False  # Edge feature (fillet/chamfer) explains the difference
+        if is_cone_like:
             result = {
                 'obj_type': 'cone_blind_hole',
                 'bottom_radius': bottom_radius * S,
@@ -1662,6 +1787,10 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                 'pos_x': pos_x * S,
                 'pos_y': pos_y * S,
                 'pos_z': pos_z * S,
+                'groove_depth': groove_params.get('groove_depth', 0) if groove_params else 0,
+                'groove_bottom_width': groove_params.get('groove_bottom_width', 0) if groove_params else 0,
+                'groove_top_width': groove_params.get('groove_top_width', 0) if groove_params else 0,
+                'groove_extrusion_length': groove_params.get('groove_extrusion_length', 0) if groove_params else 0,
             }
             if hole_position == 'both':
                 result['hole_depth_top'] = hole_depth_top * S
@@ -1684,6 +1813,10 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
             'pos_x': pos_x * S,
             'pos_y': pos_y * S,
             'pos_z': pos_z * S,
+            'groove_depth': groove_params.get('groove_depth', 0) if groove_params else 0,
+            'groove_bottom_width': groove_params.get('groove_bottom_width', 0) if groove_params else 0,
+            'groove_top_width': groove_params.get('groove_top_width', 0) if groove_params else 0,
+            'groove_extrusion_length': groove_params.get('groove_extrusion_length', 0) if groove_params else 0,
         }
         if hole_position == 'both':
             result['hole_depth_top'] = hole_depth_top * S
@@ -1708,6 +1841,39 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
     # Grooved external wall: return early with groove result before other classification
     if has_groove_custom:
         is_cone = abs(bottom_radius - top_radius) > max(bottom_radius, top_radius) * 0.01
+        # Edge features (chamfer/fillet) make mesh radii differ even for cylinders.
+        # If there's an edge feature, the body is cylindrical, not conical.
+        # Stored properties always override mesh detection for grooved cylinders
+        # because mesh detection is unreliable when the groove disrupts the surface.
+        stored_ct = obj.get('chamfer_type') if hasattr(obj, 'get') else None
+        stored_csz = obj.get('chamfer_size', 0) if hasattr(obj, 'get') else 0
+        stored_fr = obj.get('fillet_radius_edge', 0) if hasattr(obj, 'get') else 0
+        if stored_ct in ('chamfer', 'fillet', 'chamfer_both', 'fillet_both',
+                         'bottom_chamfer', 'bottom_fillet', 'chamfer_fillet'):
+            has_edge_feature = True
+            # Reset mesh-detected features; use stored properties only
+            top_feature = None; top_feature_size = 0.0
+            bottom_feature = None; bottom_feature_size = 0.0
+            if stored_ct in ('chamfer', 'chamfer_both', 'chamfer_fillet'):
+                top_feature = 'chamfer'; top_feature_size = stored_csz  # already mm
+            if stored_ct in ('fillet', 'fillet_both'):
+                top_feature = 'fillet'; top_feature_size = stored_fr
+            if stored_ct in ('bottom_chamfer',):
+                bottom_feature = 'chamfer'; bottom_feature_size = stored_csz
+            if stored_ct in ('bottom_fillet',):
+                bottom_feature = 'fillet'; bottom_feature_size = stored_fr
+            if stored_ct in ('chamfer_both',):
+                bottom_feature = 'chamfer'; bottom_feature_size = stored_csz
+            if stored_ct in ('fillet_both',):
+                bottom_feature = 'fillet'; bottom_feature_size = stored_fr
+            if stored_ct in ('chamfer_fillet',):
+                bottom_feature = 'fillet'; bottom_feature_size = stored_fr
+        else:
+            # No stored properties: use mesh-detected features
+            has_edge_feature = ((top_feature and top_feature != 'none' and top_feature_size > 0.0001) or
+                                (bottom_feature and bottom_feature != 'none' and bottom_feature_size > 0.0001))
+        if is_cone and has_edge_feature:
+            is_cone = False  # Treat as grooved cylinder with edge feature, not cone
         if is_cone:
             result = {
                 'obj_type': 'cone_groove',
@@ -1723,7 +1889,8 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
         else:
             result = {
                 'obj_type': 'grooved_cylinder',
-                'radius': max(bottom_radius, top_radius),
+                'radius': (max(z_radius_data.values()) * S if stored_ct in ('chamfer_both', 'fillet_both', 'chamfer_fillet')
+                           else max(bottom_radius, top_radius)),
                 'height': height,
                 'pos_x': pos_x, 'pos_y': pos_y, 'pos_z': pos_z,
                 'top_chamfer': top_feature_size if top_feature == 'chamfer' else 0,
@@ -1732,6 +1899,9 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                 'bottom_fillet': bottom_feature_size if bottom_feature == 'fillet' else 0,
             }
         result.update(groove_params)
+        log_to_file(f"[STEP Exporter]   -> {result['obj_type']}! r={result.get('radius', result.get('bottom_radius','?'))} h={result['height']} "
+                    f"top_ch={result.get('top_chamfer',0):.1f} top_fr={result.get('top_fillet',0):.1f} "
+                    f"btm_ch={result.get('bottom_chamfer',0):.1f} btm_fr={result.get('bottom_fillet',0):.1f}")
         bm.free()
         return result
 
@@ -1748,9 +1918,11 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                 obj_type = 'hollow_cylinder_tapered'
                 fillet_r = obj.get('hole_fillet_radius', 0.0) if hasattr(obj, 'get') else 0.0
                 log_to_file(f"[STEP Exporter]   Tapered through-hole: opening_r={inner_opening_r:.3f} end_r={inner_end_r:.3f}")
+                _stored_ct_hol = obj.get('chamfer_type') if hasattr(obj, 'get') else None
                 return {
                     'obj_type': obj_type,
-                    'outer_radius': max(bottom_radius, top_radius),
+                    'outer_radius': (max(z_radius_data.values()) * S if _stored_ct_hol in ('chamfer_both', 'fillet_both', 'chamfer_fillet')
+                                     else max(bottom_radius, top_radius)),
                     'inner_radius_top': inner_opening_r,
                     'inner_radius_bottom': inner_end_r,
                     'height': height,
@@ -1762,10 +1934,12 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
             
             # 实心圆柱阶梯孔检测（优先于空心圆柱——台阶孔内壁会被检测为空心）
             if has_stepped_hole:
+                _stored_ct_hol2 = obj.get('chamfer_type') if hasattr(obj, 'get') else None
                 if hasattr(obj, 'get') and obj.get('hole_is_tapered', False):
                     return {
                         'obj_type': 'cylinder_tapered_stepped_hole',
-                        'radius': max(bottom_radius, top_radius),
+                        'radius': (max(z_radius_data.values()) * S if _stored_ct_hol2 in ('chamfer_both', 'fillet_both', 'chamfer_fillet')
+                                   else max(bottom_radius, top_radius)),
                         'height': height,
                         'stepped_large_h': obj.get('hole_stepped_large_h', 0),
                         'taper_top_r': obj.get('hole_taper_top_r', 0),
@@ -1777,10 +1951,15 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                         'bottom_chamfer': bottom_feature_size if bottom_feature == 'chamfer' else 0,
                         'bottom_fillet': bottom_feature_size if bottom_feature == 'fillet' else 0,
                         'pos_x': pos_x, 'pos_y': pos_y, 'pos_z': pos_z,
+                        'groove_depth': groove_params.get('groove_depth', 0) if groove_params else 0,
+                        'groove_bottom_width': groove_params.get('groove_bottom_width', 0) if groove_params else 0,
+                        'groove_top_width': groove_params.get('groove_top_width', 0) if groove_params else 0,
+                        'groove_extrusion_length': groove_params.get('groove_extrusion_length', 0) if groove_params else 0,
                     }
                 return {
                     'obj_type': 'cylinder_stepped_hole',
-                    'radius': max(bottom_radius, top_radius),
+                    'radius': (max(z_radius_data.values()) * S if _stored_ct_hol2 in ('chamfer_both', 'fillet_both', 'chamfer_fillet')
+                               else max(bottom_radius, top_radius)),
                     'height': height,
                     'stepped_large_r': obj.get('hole_stepped_large_r', 0) if hasattr(obj, 'get') else 0,
                     'stepped_large_h': obj.get('hole_stepped_large_h', 0) if hasattr(obj, 'get') else 0,
@@ -1791,14 +1970,21 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                     'bottom_chamfer': bottom_feature_size if bottom_feature == 'chamfer' else 0,
                     'bottom_fillet': bottom_feature_size if bottom_feature == 'fillet' else 0,
                     'pos_x': pos_x, 'pos_y': pos_y, 'pos_z': pos_z,
+                    'groove_depth': groove_params.get('groove_depth', 0) if groove_params else 0,
+                    'groove_bottom_width': groove_params.get('groove_bottom_width', 0) if groove_params else 0,
+                    'groove_top_width': groove_params.get('groove_top_width', 0) if groove_params else 0,
+                    'groove_extrusion_length': groove_params.get('groove_extrusion_length', 0) if groove_params else 0,
+                    'pos_x': pos_x, 'pos_y': pos_y, 'pos_z': pos_z,
                 }
 
             obj_type = 'hollow_cylinder'
             if top_feature == 'fillet':
                 obj_type = 'hollow_cylinder_fillet'
+            _stored_ct_hol3 = obj.get('chamfer_type') if hasattr(obj, 'get') else None
             return {
                 'obj_type': obj_type,
-                'outer_radius': max(bottom_radius, top_radius),
+                'outer_radius': (max(z_radius_data.values()) * S if _stored_ct_hol3 in ('chamfer_both', 'fillet_both', 'chamfer_fillet')
+                                 else max(bottom_radius, top_radius)),
                 'inner_radius': inner_radius,
                 'height': height,
                 'pos_x': pos_x,
@@ -1842,10 +2028,12 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
     else:
         # 实心圆柱阶梯孔检测（优先）
         if has_stepped_hole:
+            _stored_ct2 = obj.get('chamfer_type') if hasattr(obj, 'get') else None
             if hasattr(obj, 'get') and obj.get('hole_is_tapered', False):
                 return {
                     'obj_type': 'cylinder_tapered_stepped_hole',
-                    'radius': max(bottom_radius, top_radius),
+                    'radius': (max(z_radius_data.values()) * S if _stored_ct2 in ('chamfer_both', 'fillet_both', 'chamfer_fillet')
+                               else max(bottom_radius, top_radius)),
                     'height': height,
                     'stepped_large_h': obj.get('hole_stepped_large_h', 0),
                     'taper_top_r': obj.get('hole_taper_top_r', 0),
@@ -1857,10 +2045,15 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                     'bottom_chamfer': bottom_feature_size if bottom_feature == 'chamfer' else 0,
                     'bottom_fillet': bottom_feature_size if bottom_feature == 'fillet' else 0,
                     'pos_x': pos_x, 'pos_y': pos_y, 'pos_z': pos_z,
+                    'groove_depth': groove_params.get('groove_depth', 0) if groove_params else 0,
+                    'groove_bottom_width': groove_params.get('groove_bottom_width', 0) if groove_params else 0,
+                    'groove_top_width': groove_params.get('groove_top_width', 0) if groove_params else 0,
+                    'groove_extrusion_length': groove_params.get('groove_extrusion_length', 0) if groove_params else 0,
                 }
             return {
                 'obj_type': 'cylinder_stepped_hole',
-                'radius': max(bottom_radius, top_radius),
+                'radius': (max(z_radius_data.values()) * S if _stored_ct2 in ('chamfer_both', 'fillet_both', 'chamfer_fillet')
+                           else max(bottom_radius, top_radius)),
                 'height': height,
                 'stepped_large_r': obj.get('hole_stepped_large_r', 0) if hasattr(obj, 'get') else 0,
                 'stepped_large_h': obj.get('hole_stepped_large_h', 0) if hasattr(obj, 'get') else 0,
@@ -1871,10 +2064,43 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                 'bottom_chamfer': bottom_feature_size if bottom_feature == 'chamfer' else 0,
                 'bottom_fillet': bottom_feature_size if bottom_feature == 'fillet' else 0,
                 'pos_x': pos_x, 'pos_y': pos_y, 'pos_z': pos_z,
+                'groove_depth': groove_params.get('groove_depth', 0) if groove_params else 0,
+                'groove_bottom_width': groove_params.get('groove_bottom_width', 0) if groove_params else 0,
+                'groove_top_width': groove_params.get('groove_top_width', 0) if groove_params else 0,
+                'groove_extrusion_length': groove_params.get('groove_extrusion_length', 0) if groove_params else 0,
             }
         # 实心圆柱外壁槽检测
         if has_groove_custom:
             is_cone = abs(bottom_radius - top_radius) > max(bottom_radius, top_radius) * 0.01
+            # Stored properties always override mesh detection for grooved cylinders
+            stored_ct = obj.get('chamfer_type') if hasattr(obj, 'get') else None
+            stored_csz = obj.get('chamfer_size', 0) if hasattr(obj, 'get') else 0
+            stored_fr = obj.get('fillet_radius_edge', 0) if hasattr(obj, 'get') else 0
+            if stored_ct in ('chamfer', 'fillet', 'chamfer_both', 'fillet_both',
+                             'bottom_chamfer', 'bottom_fillet', 'chamfer_fillet'):
+                has_edge_feature2 = True
+                # Reset mesh-detected features; use stored properties only
+                top_feature = None; top_feature_size = 0.0
+                bottom_feature = None; bottom_feature_size = 0.0
+                if stored_ct in ('chamfer', 'chamfer_both', 'chamfer_fillet'):
+                    top_feature = 'chamfer'; top_feature_size = stored_csz  # already mm
+                if stored_ct in ('fillet', 'fillet_both'):
+                    top_feature = 'fillet'; top_feature_size = stored_fr
+                if stored_ct in ('bottom_chamfer',):
+                    bottom_feature = 'chamfer'; bottom_feature_size = stored_csz
+                if stored_ct in ('bottom_fillet',):
+                    bottom_feature = 'fillet'; bottom_feature_size = stored_fr
+                if stored_ct in ('chamfer_both',):
+                    bottom_feature = 'chamfer'; bottom_feature_size = stored_csz
+                if stored_ct in ('fillet_both',):
+                    bottom_feature = 'fillet'; bottom_feature_size = stored_fr
+                if stored_ct in ('chamfer_fillet',):
+                    bottom_feature = 'fillet'; bottom_feature_size = stored_fr
+            else:
+                has_edge_feature2 = ((top_feature and top_feature != 'none' and top_feature_size > 0.0001) or
+                                     (bottom_feature and bottom_feature != 'none' and bottom_feature_size > 0.0001))
+            if is_cone and has_edge_feature2:
+                is_cone = False  # Treat as grooved cylinder with edge feature, not cone
             if is_cone:
                 result = {
                     'obj_type': 'cone_groove',
@@ -1890,7 +2116,8 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
             else:
                 result = {
                     'obj_type': 'grooved_cylinder',
-                    'radius': max(bottom_radius, top_radius),
+                    'radius': (max(z_radius_data.values()) * S if stored_ct in ('chamfer_both', 'fillet_both', 'chamfer_fillet')
+                               else max(bottom_radius, top_radius)),
                     'height': height,
                     'pos_x': pos_x, 'pos_y': pos_y, 'pos_z': pos_z,
                     'top_chamfer': top_feature_size if top_feature == 'chamfer' else 0,

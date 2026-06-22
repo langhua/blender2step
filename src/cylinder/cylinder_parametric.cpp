@@ -67,6 +67,11 @@ static TopoDS_Solid shape_to_solid(const TopoDS_Shape& shape) {
     return TopoDS::Solid(shape);
 }
 
+// ====================== Trapezoidal Groove Forward Declaration ======================
+static bool apply_trapezoidal_groove(TopoDS_Solid& solid, double radius,
+                                      double groove_depth, double groove_bottom_width,
+                                      double groove_top_width, double groove_extrusion_length);
+
 // ====================== 参数化圆柱体实体创建 ======================
 
 TopoDS_Shape create_cylinder_solid_parametric(double radius, double height)
@@ -896,12 +901,15 @@ TopoDS_Shape create_hollow_cone_fillet_with_groove_parametric(
     double inner_bottom_radius, double inner_top_radius,
     double height, double fillet_radius,
     double groove_depth, double groove_bottom_width,
-    double groove_top_width, double groove_extrusion_length)
+    double groove_top_width, double groove_extrusion_length,
+    double top_chamfer, double top_fillet,
+    double bottom_chamfer, double bottom_fillet)
 {
     // Step 1: Create hollow cone solid (without fillet - apply fillet after groove cut)
     TopoDS_Shape coneShape = create_hollow_cone_solid_parametric(
         outer_bottom_radius, outer_top_radius,
-        inner_bottom_radius, inner_top_radius, height);
+        inner_bottom_radius, inner_top_radius, height,
+        top_chamfer, top_fillet, bottom_chamfer, bottom_fillet, 0.0);
     if (coneShape.IsNull()) {
         std::cerr << "[STEP Exporter] Failed to create hollow cone base shape" << std::endl;
         return TopoDS_Shape();
@@ -1173,7 +1181,9 @@ TopoDS_Shape create_cylinder_with_blind_hole_solid_parametric(
     double radius, double height, double hole_radius, double hole_depth,
     double hole_fillet_radius, bool is_bottom, double hole_radius_bottom,
     double top_chamfer, double top_fillet,
-    double bottom_chamfer, double bottom_fillet)
+    double bottom_chamfer, double bottom_fillet,
+    double groove_depth, double groove_bottom_width,
+    double groove_top_width, double groove_extrusion_length)
 {
     double halfH = height / 2.0;
     double ext = 5.0; // extend for clean cut
@@ -1307,6 +1317,16 @@ TopoDS_Shape create_cylinder_with_blind_hole_solid_parametric(
         std::cout << "[STEP Exporter] Created cylinder with blind hole: r=" << radius
                   << " h=" << height << " hole_r=" << hole_radius
                   << " hole_d=" << hole_depth << " is_bottom=" << is_bottom << std::endl;
+
+        // Apply trapezoidal groove if specified
+        if (groove_depth > 0.001) {
+            TopoDS_Solid groove_solid = shape_to_solid(hole_solid);
+            if (!groove_solid.IsNull()) {
+                apply_trapezoidal_groove(groove_solid, radius, groove_depth,
+                                         groove_bottom_width, groove_top_width, groove_extrusion_length);
+                hole_solid = groove_solid;
+            }
+        }
         return hole_solid;
     }
 
@@ -1414,6 +1434,16 @@ TopoDS_Shape create_cylinder_with_blind_hole_solid_parametric(
     std::cout << "[STEP Exporter] Created cylinder with tapered blind hole: r=" << radius
               << " h=" << height << " hole_r=" << hole_radius << " hole_r_bottom=" << hole_radius_bottom
               << " hole_d=" << hole_depth << " is_bottom=" << is_bottom << std::endl;
+
+    // Apply trapezoidal groove if specified
+    if (groove_depth > 0.001) {
+        TopoDS_Solid groove_solid = shape_to_solid(result_solid);
+        if (!groove_solid.IsNull()) {
+            apply_trapezoidal_groove(groove_solid, radius, groove_depth,
+                                     groove_bottom_width, groove_top_width, groove_extrusion_length);
+            result_solid = groove_solid;
+        }
+    }
     return result_solid;
 }
 // ====================== 参数化双端盲孔圆柱体 ======================
@@ -1424,7 +1454,9 @@ TopoDS_Shape create_cylinder_with_dual_blind_holes_solid_parametric(
     double bottom_hole_depth, double top_hole_depth,
     double hole_fillet_radius, double hole_radius_bottom,
     double top_chamfer, double top_fillet,
-    double bottom_chamfer, double bottom_fillet)
+    double bottom_chamfer, double bottom_fillet,
+    double groove_depth, double groove_bottom_width,
+    double groove_top_width, double groove_extrusion_length)
 {
     TopoDS_Shape outerShape = create_cylinder_solid_parametric(radius, height);
     if (outerShape.IsNull()) return TopoDS_Shape();
@@ -1591,6 +1623,16 @@ TopoDS_Shape create_cylinder_with_dual_blind_holes_solid_parametric(
     }
     std::cout << "[STEP Exporter] Created cylinder with dual blind holes: r=" << radius << " h=" << height
               << " hole_r=" << hole_radius << " btm_d=" << bottom_hole_depth << " top_d=" << top_hole_depth << std::endl;
+
+    // Apply trapezoidal groove if specified
+    if (groove_depth > 0.001) {
+        TopoDS_Solid groove_solid = shape_to_solid(solid);
+        if (!groove_solid.IsNull()) {
+            apply_trapezoidal_groove(groove_solid, radius, groove_depth,
+                                     groove_bottom_width, groove_top_width, groove_extrusion_length);
+            solid = groove_solid;
+        }
+    }
     return solid;
 }
 
@@ -1745,7 +1787,9 @@ TopoDS_Shape create_cylinder_stepped_hole_parametric(
     double large_hole_r, double large_hole_h,
     double small_hole_r, double hole_fillet_r,
     double top_chamfer, double top_fillet,
-    double bottom_chamfer, double bottom_fillet)
+    double bottom_chamfer, double bottom_fillet,
+    double groove_depth, double groove_bottom_width,
+    double groove_top_width, double groove_extrusion_length)
 {
     double halfH = height / 2.0;
 
@@ -1846,6 +1890,11 @@ TopoDS_Shape create_cylinder_stepped_hole_parametric(
         }
     }
 
+    // Apply trapezoidal groove if specified
+    if (groove_depth > 0.001) {
+        apply_trapezoidal_groove(solid, radius, groove_depth,
+                                 groove_bottom_width, groove_top_width, groove_extrusion_length);
+    }
     return solid;
 }
 
@@ -1856,7 +1905,9 @@ TopoDS_Shape create_cylinder_tapered_stepped_hole_parametric(
     double taper_top_r, double taper_step_r,
     double small_hole_r, double hole_fillet_r,
     double top_chamfer, double top_fillet,
-    double bottom_chamfer, double bottom_fillet)
+    double bottom_chamfer, double bottom_fillet,
+    double groove_depth, double groove_bottom_width,
+    double groove_top_width, double groove_extrusion_length)
 {
     double halfH = height / 2.0;
 
@@ -1963,10 +2014,68 @@ TopoDS_Shape create_cylinder_tapered_stepped_hole_parametric(
         }
     }
 
+    // Apply trapezoidal groove if specified
+    if (groove_depth > 0.001) {
+        apply_trapezoidal_groove(solid, radius, groove_depth,
+                                 groove_bottom_width, groove_top_width, groove_extrusion_length);
+    }
     return solid;
 }
 
 // ====================== 圆柱外壁梯形槽 ======================
+// ====================== Trapezoidal Groove Helper ======================
+
+static bool apply_trapezoidal_groove(TopoDS_Solid& solid, double radius,
+                                      double groove_depth, double groove_bottom_width,
+                                      double groove_top_width, double groove_extrusion_length)
+{
+    if (groove_depth <= 0.001) return true; // no groove, nothing to do
+
+    double r_surface = radius + 1.5;  // slight overcut beyond cylinder surface
+    double r_floor = radius - groove_depth;
+    double hb = groove_bottom_width / 2.0;  // Z half-extent at surface (wider)
+    double ht = groove_top_width / 2.0;     // Z half-extent at groove floor (narrower)
+    double half_ext = groove_extrusion_length / 2.0;
+
+    // Build trapezoid face at Y = -half_ext, cross-section in XZ plane
+    BRepBuilderAPI_MakePolygon wireMaker;
+    wireMaker.Add(gp_Pnt(r_surface, -half_ext,  hb));
+    wireMaker.Add(gp_Pnt(r_floor,   -half_ext,  ht));
+    wireMaker.Add(gp_Pnt(r_floor,   -half_ext, -ht));
+    wireMaker.Add(gp_Pnt(r_surface, -half_ext, -hb));
+    wireMaker.Close();
+
+    if (!wireMaker.IsDone()) { std::cerr << "[STEP Exporter] Groove wire failed" << std::endl; return false; }
+    TopoDS_Face face = BRepBuilderAPI_MakeFace(wireMaker.Wire());
+    if (face.IsNull()) { std::cerr << "[STEP Exporter] Groove face failed" << std::endl; return false; }
+
+    // Extrude in +Y
+    BRepPrimAPI_MakePrism prismMaker(face, gp_Vec(0, groove_extrusion_length, 0));
+    if (!prismMaker.IsDone()) { std::cerr << "[STEP Exporter] Groove prism failed" << std::endl; return false; }
+    TopoDS_Shape prism = prismMaker.Shape();
+    if (prism.IsNull()) return false;
+
+    // Boolean cut
+    BRepAlgoAPI_Cut cutMaker(solid, prism);
+    if (cutMaker.IsDone() && !cutMaker.Shape().IsNull()) {
+        TopoDS_Shape result = cutMaker.Shape();
+        if (result.ShapeType() == TopAbs_SOLID) {
+            solid = TopoDS::Solid(result);
+        } else {
+            BRepBuilderAPI_MakeSolid sm;
+            for (TopExp_Explorer exp(result, TopAbs_SHELL); exp.More(); exp.Next())
+                sm.Add(TopoDS::Shell(exp.Current()));
+            if (sm.IsDone()) solid = sm.Solid();
+        }
+        std::cout << "[STEP Exporter] Applied trapezoidal groove: depth=" << groove_depth
+                  << " bot_w=" << groove_bottom_width << " top_w=" << groove_top_width << std::endl;
+        return true;
+    }
+    return false;
+}
+
+// ====================== Cylinder with Groove ======================
+
 TopoDS_Shape create_cylinder_with_groove_parametric(
     double radius, double height,
     double groove_depth, double groove_bottom_width,
@@ -2012,46 +2121,14 @@ TopoDS_Shape create_cylinder_with_groove_parametric(
     apply_edge(true);
     apply_edge(false);
 
-    // Create trapezoidal groove cutter using MakePrism (same pattern as cone groove)
-    double r_surface = radius + 1.5;  // slight overcut beyond cylinder surface
-    double r_floor = radius - groove_depth;
-    double hb = groove_bottom_width / 2.0;  // Z half-extent at surface (wider)
-    double ht = groove_top_width / 2.0;     // Z half-extent at groove floor (narrower)
-    double half_ext = groove_extrusion_length / 2.0;
-
-    // Build trapezoid face at Y = -half_ext, cross-section in XZ plane
-    // Counter-clockwise when viewed from +Y (normal toward +Y)
-    BRepBuilderAPI_MakePolygon wireMaker;
-    wireMaker.Add(gp_Pnt(r_surface, -half_ext,  hb));
-    wireMaker.Add(gp_Pnt(r_floor,   -half_ext,  ht));
-    wireMaker.Add(gp_Pnt(r_floor,   -half_ext, -ht));
-    wireMaker.Add(gp_Pnt(r_surface, -half_ext, -hb));
-    wireMaker.Close();
-
-    if (!wireMaker.IsDone()) return solid;
-    TopoDS_Face face = BRepBuilderAPI_MakeFace(wireMaker.Wire());
-    if (face.IsNull()) return solid;
-
-    // Extrude in +Y to create prism cutter
-    BRepPrimAPI_MakePrism prismMaker(face, gp_Vec(0, groove_extrusion_length, 0));
-    if (!prismMaker.IsDone()) return solid;
-    TopoDS_Shape prism = prismMaker.Shape();
-    if (prism.IsNull()) return solid;
-
-    // Boolean cut
-    BRepAlgoAPI_Cut cutMaker(solid, prism);
-    if (cutMaker.IsDone() && !cutMaker.Shape().IsNull()) {
-        TopoDS_Shape result = cutMaker.Shape();
-        if (result.ShapeType() == TopAbs_SOLID) {
-            solid = TopoDS::Solid(result);
-        } else {
-            BRepBuilderAPI_MakeSolid sm;
-            for (TopExp_Explorer exp(result, TopAbs_SHELL); exp.More(); exp.Next())
-                sm.Add(TopoDS::Shell(exp.Current()));
-            if (sm.IsDone()) solid = sm.Solid();
-        }
+    // Create trapezoidal groove
+    if (!apply_trapezoidal_groove(solid, radius, groove_depth, groove_bottom_width, groove_top_width, groove_extrusion_length)) {
+        return solid; // return un-grooved cylinder on failure
     }
 
+    std::cout << "[STEP Exporter] Created cylinder with groove: r=" << radius << " h=" << height
+              << " groove_d=" << groove_depth << " bot_w=" << groove_bottom_width
+              << " top_w=" << groove_top_width << std::endl;
     return solid;
 }
 

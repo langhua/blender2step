@@ -1219,8 +1219,9 @@ TopoDS_Shape create_cone_stepped_hole_parametric(
                             }
                         }
                         
-                        // --- Step edge ---
+                        // --- Step edges (inner + outer) ---
                         if (hole_fillet_radius > 0.001) {
+                            int step_added = 0;
                             for (TopExp_Explorer exp(result_top, TopAbs_EDGE); exp.More(); exp.Next()) {
                                 TopoDS_Edge edge = TopoDS::Edge(exp.Current());
                                 TopoDS_Vertex v1 = TopExp::FirstVertex(edge, true);
@@ -1229,14 +1230,17 @@ TopoDS_Shape create_cone_stepped_hole_parametric(
                                 gp_Pnt p2 = BRep_Tool::Pnt(v2);
                                 if (fabs(p1.Z() - p2.Z()) < 0.01 && fabs(p1.Z() - step_z) < 0.02) {
                                     double r = sqrt(p1.X()*p1.X() + p1.Y()*p1.Y());
-                                    if (r < small_hole_radius * 1.5) {
+                                    // Inner step edge (small hole top): r ≈ small_hole_radius
+                                    // Outer step edge (large hole bottom): r ≈ inner_bottom_radius
+                                    if (r < small_hole_radius * 1.8 || fabs(r - (inner_bottom_radius + inner_top_radius) / 2.0) < r * 0.3) {
                                         fm.Add(hole_fillet_radius, edge);
                                         added = true;
-                                        log_fillet_debug("taper_at_top: added STEP fillet r=" + std::to_string(hole_fillet_radius) + " at z=" + std::to_string(p1.Z()));
-                                        break;
+                                        step_added++;
+                                        log_fillet_debug("taper_at_top: added STEP fillet r=" + std::to_string(hole_fillet_radius) + " at z=" + std::to_string(p1.Z()) + " edge_r=" + std::to_string(r));
                                     }
                                 }
                             }
+                            log_fillet_debug("taper_at_top: step edges added=" + std::to_string(step_added));
                         }
                         
                         if (added) {

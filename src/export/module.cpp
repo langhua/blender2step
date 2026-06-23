@@ -1922,25 +1922,29 @@ PyObject* export_cone_stepped_hole_step(PyObject* self, PyObject* args) {
     double small_hole_radius, small_hole_height;
     double inner_bottom_radius, inner_top_radius;
     double top_fillet_radius = 0.0;
+    double bottom_fillet_radius = 0.0;
+    double hole_fillet_radius = 0.0;
     double pos_x = 0.0, pos_y = 0.0, pos_z = 0.0;
     const char* step_schema = "AP214IS";
     const char* unit = "MILLIMETER";
     int enable_logging = 1;
 
-    if (!PyArg_ParseTuple(args, "sddddddd|ddddssi",
+    if (!PyArg_ParseTuple(args, "sddddddd|ddddddssi",
                           &filename,
                           &outer_bottom_radius, &outer_top_radius,
                           &height,
                           &small_hole_radius, &small_hole_height,
                           &inner_bottom_radius, &inner_top_radius,
                           &top_fillet_radius,
+                          &bottom_fillet_radius,
+                          &hole_fillet_radius,
                           &pos_x, &pos_y, &pos_z,
                           &step_schema, &unit, &enable_logging)) {
         PyErr_SetString(PyExc_TypeError,
             "export_cone_stepped_hole_step() expected: filename, "
             "outer_bottom_radius, outer_top_radius, height, "
             "small_hole_radius, small_hole_height, inner_bottom_radius, inner_top_radius, "
-            "[top_fillet_radius], [pos_x], [pos_y], [pos_z], [step_schema], [unit], [enable_logging]");
+            "[top_fillet_radius], [bottom_fillet_radius], [hole_fillet_radius], [pos_x], [pos_y], [pos_z], [step_schema], [unit], [enable_logging]");
         return NULL;
     }
 
@@ -1949,7 +1953,7 @@ PyObject* export_cone_stepped_hole_step(PyObject* self, PyObject* args) {
             outer_bottom_radius, outer_top_radius, height,
             small_hole_radius, small_hole_height,
             inner_bottom_radius, inner_top_radius,
-            top_fillet_radius);
+            top_fillet_radius, bottom_fillet_radius, hole_fillet_radius);
         if (shape.IsNull()) { Py_RETURN_FALSE; }
 
         if (pos_x != 0.0 || pos_y != 0.0 || pos_z != 0.0) {

@@ -759,6 +759,13 @@ def _execute_analysis_and_export(operator, params):
     else:
         _g._export_objects = [obj for obj in context.scene.objects if obj.type in ('MESH', 'CURVE')]
     
+    # 按视觉位置排序：从上到下（Y递减），从左到右（X递增）
+    _g._export_objects.sort(key=lambda obj: (
+        -round(obj.location.y, 4),   # 主键：Y 递减 → 从上到下
+        round(obj.location.x, 4),    # 次键：X 递增 → 从左到右
+        obj.name                     # 同名位置按字母序
+    ))
+    
     # 根据选择的单位确定缩放值
     if unit == 'mm':
         scale = 1000.0
@@ -778,17 +785,19 @@ def _execute_analysis_and_export(operator, params):
         if obj.type == 'MESH':
             log_to_file(f"[STEP Exporter] Checking: {obj.name}")
             
-            # 如果对象标记了需要使用网格导出
-            if obj.get("step_use_mesh", False):
-                log_to_file(f"[STEP Exporter]   -> marked for mesh export (has holes/cuts)")
-                regular_export_objects.append(obj)
-                continue
-            
-            # 先检测圆柱/圆锥
+            # 优先尝试参数化分析（圆柱/圆锥检测）
+            # 即使对象有 step_use_mesh 标记，也先尝试参数化——网格可能已被布尔操作破坏
             cyl_params = _analyze_cylinder_from_mesh(obj, context, scale)
             if cyl_params:
+                cyl_params['bl_obj'] = obj  # 保存 Blender 对象引用，用于导出时高亮
                 cylinder_objects.append(cyl_params)
                 log_to_file(f"[STEP Exporter] Found {cyl_params['obj_type']}: {obj.name}")
+                continue
+            
+            # 参数化分析失败：如果有 step_use_mesh 标记，回退到网格导出
+            if obj.get("step_use_mesh", False):
+                log_to_file(f"[STEP Exporter]   -> parametric failed, fallback to mesh export (has holes/cuts)")
+                regular_export_objects.append(obj)
                 continue
             
             # 再检测底壳

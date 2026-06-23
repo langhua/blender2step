@@ -1303,12 +1303,13 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                 
                 # Criteria for stepped hole:
                 # - Top section nearly constant radius (straight hole)
-                # - Bottom inner radius significantly larger than top
+                # - Bottom inner radius significantly larger than top (gap > 30% of top, or > 0.15 absolute for small holes)
                 # - For 4+ levels: bottom section has significant taper
                 # - For 3 levels: accept by gap between bottom and top inner
                 if len(inner_z_data) >= 4:
                     is_stepped = (top_range < max(top_mean * 0.05, 0.10) and
-                                  bot_range > max(top_mean * 0.08, 0.30) and
+                                  (bot_range > max(top_mean * 0.08, 0.15) or
+                                   bot_min > top_mean * 1.3) and
                                   top_mean < inner_radius * 0.85)
                 else:
                     # 3-level mesh: check top flat + bottom significantly larger
@@ -1330,7 +1331,8 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                             step_z = inner_z_sorted[i + 1]
                     
                     small_h = top_z - step_z
-                    if 0.5 <= small_h <= height * 0.6:
+                    # 锥体台阶孔：straight_h 可以是 0.3x~0.9x height（适应圆锥变体）
+                    if 0.3 * height <= small_h <= height * 0.9:
                         # inner_top_radius (large hole radius at step) computed from
                         # bottom inner_radius and 2° taper (same as outer cone).
                         # This avoids mesh artifacts at the coincident step face.
@@ -1345,6 +1347,179 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                                     f"straight_r={top_mean:.3f} straight_h={small_h:.2f} "
                                     f"inner_bot_r={inner_radius:.3f} inner_top_r={inner_top_r:.3f} "
                                     f"step_gap={best_gap:.3f}")
+    
+    # 锥体台阶孔补充检测：当 mesh 检测未触发时，从 inner_z_data 直接推导
+    if not stepped_hole_params and is_hollow and abs(bottom_radius - top_radius) > max(bottom_radius, top_radius) * 0.05:
+        # 使用 primary detection 已提取的内孔数据（inner_z_data）
+        # 若 inner_z_data 不足，尝试放宽条件重新提取
+        if len(inner_z_data) < 3:
+            log_to_file(f"[STEP Exporter]   cone stepped fallback: inner_z_data={len(inner_z_data)} entries, re-extracting...")
+            # 重新提取：对锥体，使用更宽松的两聚类检测
+            inner_z_data2 = {}
+            for zl in sorted(z_layers.keys()):
+                pts = z_layers[zl]
+                if len(pts) < 8:
+                    continue
+                radii = sorted(compute_radii(pts))
+                is_cluster, outer = has_two_clusters(radii)
+                if is_cluster:
+                    n = len(radii)
+                    inner_vals = radii[:n - len(outer)]
+                    if len(inner_vals) >= 3:
+                        inner_z_data2[zl] = sorted(inner_vals)[len(inner_vals) // 2]
+                else:
+                    # 宽松检测：取半径分布的下半部分作为内孔候选
+                    mid = len(radii) // 2
+                    # 若中位数远小于最大半径，可能存在内孔
+                    if len(radii) >= 6 and radii[mid] < radii[-1] * 0.7:
+                        inner_z_data2[zl] = radii[mid]
+            if len(inner_z_data2) >= 3:
+                inner_z_data = inner_z_data2
+        
+        if len(inner_z_data) >= 3:
+            inner_z_sorted = sorted(inner_z_data.keys())
+            inner_vals = [(zl, inner_z_data[zl]) for zl in inner_z_sorted]
+            # 找最大间距（台阶位置）
+            best_gap = 0.0
+            step_idx = 0
+            for i in range(len(inner_vals) - 1):
+                gap = abs(inner_vals[i+1][1] - inner_vals[i][1])
+                if gap > best_gap:
+                    best_gap = gap
+                    step_idx = i
+            if best_gap > 0.02:
+                step_z_pos = inner_vals[step_idx + 1][0]  # 台阶上方 z
+                step_lo_r = inner_vals[step_idx][1]       # 台阶下方半径
+                step_hi_r = inner_vals[step_idx + 1][1]   # 台阶上方半径
+                bottom_z = inner_vals[0][0]
+                top_z = inner_vals[-1][0]
+                
+                # 判断直孔位置：半径较小且变化平缓的一侧为直孔
+                # 比较台阶两侧的 Z 范围
+                lo_count = step_idx + 1                     # 下侧 z-level 数
+                hi_count = len(inner_vals) - step_idx - 1   # 上侧 z-level 数
+                
+                # 计算两侧半径变化范围
+                lo_radii = [inner_vals[i][1] for i in range(step_idx + 1)]
+                hi_radii = [inner_vals[i][1] for i in range(step_idx + 1, len(inner_vals))]
+                lo_range = max(lo_radii) - min(lo_radii) if len(lo_radii) >= 2 else 0
+                hi_range = max(hi_radii) - min(hi_radii) if len(hi_radii) >= 2 else 0
+                
+                # 直孔侧：半径变化小（< 5% of mean 或 < 0.03 absolute）
+                lo_is_straight = (lo_range < max(sum(lo_radii) / len(lo_radii) * 0.05, 0.03)) if lo_radii else False
+                hi_is_straight = (hi_range < max(sum(hi_radii) / len(hi_radii) * 0.05, 0.03)) if hi_radii else False
+                
+                # 若只有一侧平缓，它就是直孔
+                # 若两侧都平缓，半径较小的为直孔
+                # 若两侧都变化大，半径变化较小 + 范围较小的为直孔
+                if lo_is_straight and not hi_is_straight:
+                    small_at_bottom = True
+                elif hi_is_straight and not lo_is_straight:
+                    small_at_bottom = False
+                elif lo_is_straight and hi_is_straight:
+                    small_at_bottom = (sum(lo_radii) / len(lo_radii) < sum(hi_radii) / len(hi_radii))
+                else:
+                    # 都不平缓：比较半径变化率和值
+                    lo_ratio = lo_range / (sum(lo_radii) / len(lo_radii)) if lo_radii else 1
+                    hi_ratio = hi_range / (sum(hi_radii) / len(hi_radii)) if hi_radii else 1
+                    if lo_ratio < hi_ratio * 0.5:
+                        small_at_bottom = True
+                    elif hi_ratio < lo_ratio * 0.5:
+                        small_at_bottom = False
+                    else:
+                        small_at_bottom = (sum(lo_radii) / len(lo_radii) < sum(hi_radii) / len(hi_radii))
+                
+                if small_at_bottom:
+                    # 直孔在底部，锥孔在顶部
+                    small_h = step_z_pos - bottom_z
+                    small_r = sum(lo_radii) / len(lo_radii)  # 直孔平均半径
+                    inner_btm = step_hi_r  # 锥孔起点（台阶上方，较大半径）
+                    inner_top = inner_vals[-1][1]  # 锥孔顶部半径
+                else:
+                    # 直孔在顶部，锥孔在底部
+                    small_h = top_z - step_z_pos
+                    small_r = sum(hi_radii) / len(hi_radii)  # 直孔平均半径
+                    inner_btm = inner_vals[0][1]  # 锥孔底部半径
+                    inner_top = step_lo_r  # 锥孔顶部（台阶下方，较大半径）
+                
+                if 0.1 * height <= small_h <= height * 0.95:
+                    stepped_hole_params = {
+                        'small_hole_radius': small_r,
+                        'small_hole_height': small_h,
+                        'inner_bottom_radius': inner_btm,
+                        'inner_top_radius': inner_top,
+                    }
+                    log_to_file(f"[STEP Exporter]   cone stepped hole from inner_z_data (fallback): "
+                                f"small_r={small_r:.3f} small_h={small_h:.2f} "
+                                f"inner_btm={inner_btm:.3f} inner_top={inner_top:.3f} gap={best_gap:.3f}"
+                                f" ({'bottom-straight' if small_at_bottom else 'top-straight'})")
+    
+    # 锥体台阶孔最终兜底：从存储属性直接推导（inner_z_data 不足时）
+    if not stepped_hole_params and is_hollow and abs(bottom_radius - top_radius) > max(bottom_radius, top_radius) * 0.05:
+        # 从 stored properties 读取 taper/stepped 参数（mm → m）
+        taper_top_r = (obj.get('hole_taper_top_r', 0) if hasattr(obj, 'get') else 0) * 0.001
+        taper_step_r = (obj.get('hole_taper_step_r', 0) if hasattr(obj, 'get') else 0) * 0.001
+        stepped_small_r = (obj.get('hole_stepped_small_r', 0) if hasattr(obj, 'get') else 0) * 0.001
+        stepped_large_h = (obj.get('hole_stepped_large_h', 0) if hasattr(obj, 'get') else 0) * 0.001
+        if taper_top_r > 0.001 and taper_step_r > 0.001 and stepped_small_r > 0.001:
+            # 锥孔在底部（大端），直孔在顶部（小端）
+            # inner_bottom = 锥孔大端半径, inner_top = 锥孔台阶处半径
+            stepped_hole_params = {
+                'small_hole_radius': stepped_small_r,
+                'small_hole_height': height - stepped_large_h,
+                'inner_bottom_radius': taper_top_r,
+                'inner_top_radius': taper_step_r,
+            }
+            log_to_file(f"[STEP Exporter]   cone stepped hole from stored props (final fallback): "
+                        f"small_r={stepped_small_r:.3f} small_h={height - stepped_large_h:.2f} "
+                        f"inner_btm={taper_top_r:.3f} inner_top={taper_step_r:.3f}")
+        else:
+            # stored props 不可用 → 从 z_radius_data + hollow 检测推算
+            outer_min = min(bottom_radius, top_radius)
+            inner_z_filtered = {}
+            for zl in sorted(z_radius_data.keys()):
+                r = z_radius_data[zl]
+                # 过滤外壁点：内孔半径 < 外壁较小端 × 90%
+                if r < outer_min * 0.9:
+                    inner_z_filtered[zl] = r
+            if len(inner_z_filtered) >= 6:
+                inner_z_sorted = sorted(inner_z_filtered.keys())
+                inner_vals = [(zl, inner_z_filtered[zl]) for zl in inner_z_sorted]
+                # 找最大间距（台阶位置）— 限制在相邻紧密 z-level 之间（Δz < 2% height）
+                best_gap = 0.0
+                step_idx = 0
+                max_dz = height * 0.02  # 只考虑连续采样点
+                for i in range(len(inner_vals) - 1):
+                    dz = abs(inner_vals[i+1][0] - inner_vals[i][0])
+                    if dz > max_dz:
+                        continue  # 跳过稀疏采样间隙
+                    gap = abs(inner_vals[i+1][1] - inner_vals[i][1])
+                    if gap > best_gap:
+                        best_gap = gap
+                        step_idx = i
+                if best_gap > 0.01:
+                    step_z = inner_vals[step_idx + 1][0]
+                    bot_z = inner_vals[0][0]
+                    top_z = inner_vals[-1][0]
+                    # 台阶两侧半径
+                    lo_r = inner_vals[step_idx][1]
+                    hi_r = inner_vals[step_idx + 1][1]
+                    # 直孔在底部（较小半径侧），锥孔在顶部（较大半径侧）
+                    small_h = step_z - bot_z  # 直孔段高度（底部）
+                    # C++ 参数:
+                    #   inner_bottom = 锥孔段底部半径（= 台阶处，锥孔侧，较大半径）
+                    #   inner_top = 锥孔段顶部半径（= 锥体顶部，锥孔出口）
+                    #   inner_bottom < inner_top → tapered at top, straight at bottom
+                    stepped_hole_params = {
+                        'small_hole_radius': min(lo_r, hi_r),     # 直孔半径（较小侧）
+                        'small_hole_height': small_h,              # 直孔高度
+                        'inner_bottom_radius': max(lo_r, hi_r),   # 锥孔台阶处半径（gap 较大侧）
+                        'inner_top_radius': inner_vals[-1][1],     # 锥体顶部内孔半径（锥孔出口）
+                    }
+                    log_to_file(f"[STEP Exporter]   cone stepped hole from z_radius_data (final fallback): "
+                                f"small_r={min(lo_r, hi_r):.3f} small_h={small_h:.3f} "
+                                f"inner_btm={max(lo_r, hi_r):.3f} inner_top={inner_vals[-1][1]:.3f} "
+                                f"gap={best_gap:.3f} step_z={step_z:.3f} n={len(inner_vals)}")
     
     # 构建返回参数
     # 应用单位缩放：所有尺寸参数 × scale（mm=1000, m=1）
@@ -1565,6 +1740,41 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
         if hole_position in ('stepped', 'tapered_stepped'):
             # Stepped through hole or tapered stepped through hole
             is_tpr = (hole_position == 'tapered_stepped')
+            # 检测是否为锥体（非圆柱）：底面/顶面半径差 > 5%，且非圆柱体
+            is_cone_body = (not cylindrical_body) and abs(bottom_radius - top_radius) > max(bottom_radius, top_radius) * 0.05
+            # 从 stepped_hole_params 或 mesh 数据获取台阶孔参数
+            shp = stepped_hole_params if stepped_hole_params else {}
+            inner_btm = shp.get('inner_bottom_radius', inner_radius if is_hollow else 0)
+            inner_top = shp.get('inner_top_radius', inner_top_radius if is_hollow else 0)
+            small_r = shp.get('small_hole_radius', 0)
+            small_h = shp.get('small_hole_height', 0)
+            # 锥体台阶孔 → 使用 cone_stepped_hole 类型
+            if is_cone_body and inner_btm > 0 and inner_top > 0 and small_r > 0 and small_h > 0:
+                hole_fr = (obj.get('hole_fillet_radius', 0) if hasattr(obj, 'get') else 0)  # 已经是 mm
+                result = {
+                    'obj_type': 'cone_stepped_hole',
+                    'outer_bottom_radius': max(bottom_radius, top_radius) * S,
+                    'outer_top_radius': min(bottom_radius, top_radius) * S,
+                    'height': height * S,
+                    'small_hole_radius': small_r * S,
+                    'small_hole_height': small_h * S,
+                    'inner_bottom_radius': inner_btm * S,
+                    'inner_top_radius': inner_top * S,
+                    'hole_fillet_radius': hole_fr,  # 孔口孔底圆角 (mm, already stored in mm)
+                    'top_feature': top_feature,
+                    'top_feature_size': (top_feature_size if top_feature else 0) * S,
+                    'bottom_feature': bottom_feature,
+                    'bottom_feature_size': (bottom_feature_size if bottom_feature else 0) * S,
+                    'pos_x': pos_x * S,
+                    'pos_y': pos_y * S,
+                    'pos_z': pos_z * S,
+                    'groove_depth': groove_params.get('groove_depth', 0) if groove_params else 0,
+                    'groove_bottom_width': groove_params.get('groove_bottom_width', 0) if groove_params else 0,
+                    'groove_top_width': groove_params.get('groove_top_width', 0) if groove_params else 0,
+                    'groove_extrusion_length': groove_params.get('groove_extrusion_length', 0) if groove_params else 0,
+                }
+                log_to_file(f"[STEP Exporter]   -> cone_stepped_hole! bR={result['outer_bottom_radius']:.1f} tR={result['outer_top_radius']:.1f} h={result['height']:.1f}")
+                return result
             # Use stored edge feature properties (more reliable than mesh for stepped holes)
             stored_ct = obj.get('chamfer_type') if hasattr(obj, 'get') else None
             stored_csz = (obj.get('chamfer_size', 0) if hasattr(obj, 'get') else 0) * 0.001  # mm → m

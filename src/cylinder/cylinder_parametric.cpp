@@ -24,6 +24,21 @@
 #include <gp_Ax2.hxx>
 #include <gp_Ax3.hxx>
 #include <gp_Pln.hxx>
+#include <fstream>
+#include <chrono>
+#include <ctime>
+
+// Debug file logger — writes to build/fillet_debug.log
+static void log_fillet_debug(const std::string& msg) {
+    try {
+        std::ofstream f("F:/git/blender2step/build/fillet_debug.log", std::ios::app);
+        auto now = std::chrono::system_clock::now();
+        auto t = std::chrono::system_clock::to_time_t(now);
+        char buf[32];
+        std::strftime(buf, sizeof(buf), "%H:%M:%S", std::localtime(&t));
+        f << "[" << buf << "] " << msg << std::endl;
+    } catch (...) {}
+}
 #include <Geom_CylindricalSurface.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeWire.hxx>
@@ -1039,20 +1054,35 @@ TopoDS_Shape create_cone_stepped_hole_parametric(
     double height,
     double small_hole_radius, double small_hole_height,
     double inner_bottom_radius, double inner_top_radius,
-    double top_fillet_radius)
+    double top_fillet_radius,
+    double bottom_fillet_radius,
+    double hole_fillet_radius)
 {
     try {
         double half_h = height / 2.0;
-        double step_z = half_h - small_hole_height;
-        double lower_h = step_z + half_h;  // height of lower (tapered) portion
-        double upper_h = half_h - step_z;  // height of upper (straight) portion
+        // 自动判断锥孔位置：内顶半径 > 内底半径 → 锥孔在顶部（圆锥）；否则在底部（圆柱）
+        bool taper_at_top = (inner_top_radius > inner_bottom_radius + 0.01);
+        double step_z, lower_h, upper_h;
+        if (taper_at_top) {
+            // 直孔在底部，锥孔在顶部
+            lower_h = small_hole_height;       // 底部直孔段高度
+            step_z = -half_h + lower_h;         // 直孔 → 锥孔 的分界 z
+            upper_h = height - lower_h;         // 顶部锥孔段高度
+        } else {
+            // 锥孔在底部，直孔在顶部（原始逻辑）
+            step_z = half_h - small_hole_height;
+            lower_h = step_z + half_h;          // 底部锥孔段高度
+            upper_h = half_h - step_z;          // 顶部直孔段高度
+        }
 
         std::cout << "[STEP Exporter] cone_stepped_hole: start, h=" << height
                   << " oBR=" << outer_bottom_radius << " oTR=" << outer_top_radius
                   << " shR=" << small_hole_radius << " shH=" << small_hole_height
                   << " iBR=" << inner_bottom_radius << " iTR=" << inner_top_radius
-                  << " fillet=" << top_fillet_radius
-                  << " step_z=" << step_z << " lower_h=" << lower_h << std::endl;
+                  << " topFillet=" << top_fillet_radius << " btmFillet=" << bottom_fillet_radius
+                  << " holeFillet=" << hole_fillet_radius
+                  << " taper_at_top=" << (taper_at_top ? "YES" : "NO")
+                  << " step_z=" << step_z << " lower_h=" << lower_h << " upper_h=" << upper_h << std::endl;
 
         // ===== 1. Create SINGLE continuous outer cone (from z=-half_h to z=half_h) =====
         TopoDS_Shape outerShape = create_cone_solid_parametric(outer_bottom_radius, outer_top_radius, height);
@@ -1073,12 +1103,148 @@ TopoDS_Shape create_cone_stepped_hole_parametric(
         std::cout << "[STEP Exporter] cone_stepped_hole: outer cone OK" << std::endl;
 
         // ===== 2. Build fused inner cutter (cone + cylinder) =====
-        // Extend both cutters slightly to ensure solid overlap for fusion
         double extend_bot = 1.0;
         double extend_top = 1.0;
 
-        // Inner tapered cone: from z=-half_h-extend_bot to z=step_z (only extend bottom)
-        {
+        if (taper_at_top) {
+            // 锥孔在顶部，直孔在底部
+            {
+                // Bottom straight cylinder (small hole): r=small_hole_radius
+                double cyl_h = lower_h + extend_bot;
+                gp_Ax2 cyl_axis(gp_Pnt(0, 0, -half_h - extend_bot), gp_Dir(0, 0, 1));
+                BRepPrimAPI_MakeCylinder cyl_maker(cyl_axis, small_hole_radius, cyl_h);
+                TopoDS_Solid cyl_cutter = cyl_maker.Solid();
+
+                // Upper tapered cone: from step_z to top, inner_bottom_radius → inner_top_radius
+                double cone_h = upper_h + extend_top;
+                double delta_r = (inner_top_radius - inner_bottom_radius) / upper_h;
+                double cutter_top_r = inner_top_radius + delta_r * extend_top;
+
+                gp_Ax2 cone_axis(gp_Pnt(0, 0, step_z), gp::DZ());
+                BRepPrimAPI_MakeCone cone_cut_maker(cone_axis, inner_bottom_radius, cutter_top_r, cone_h);
+                TopoDS_Solid cone_cutter = cone_cut_maker.Solid();
+
+                BRepAlgoAPI_Fuse fuse_maker(cyl_cutter, cone_cutter);
+                if (!fuse_maker.IsDone()) {
+                    std::cout << "[STEP Exporter] cone_stepped_hole: Fuse cylinder+cone FAILED" << std::endl;
+                    return TopoDS_Shape();
+                }
+                std::cout << "[STEP Exporter] cone_stepped_hole: inner cutter OK (taper-at-top)" << std::endl;
+
+                BRepAlgoAPI_Cut cut_maker(outer_cone, fuse_maker.Shape());
+                if (!cut_maker.IsDone()) {
+                    std::cout << "[STEP Exporter] cone_stepped_hole: Cut FAILED" << std::endl;
+                    return TopoDS_Shape();
+                }
+                TopoDS_Solid result_top = shape_to_solid(cut_maker.Shape());
+                if (!result_top.IsNull()) {
+                    log_fillet_debug("taper_at_top: cut OK, topR=" + std::to_string(top_fillet_radius) + " btmR=" + std::to_string(bottom_fillet_radius) + " holeR=" + std::to_string(hole_fillet_radius));
+                    bool want_fillet = (top_fillet_radius > 0.001 || bottom_fillet_radius > 0.001 || hole_fillet_radius > 0.001);
+                    if (want_fillet) {
+                        std::vector<TopoDS_Edge> topEdges, bottomEdges;
+                        find_circular_edges(result_top, topEdges, bottomEdges);
+                        log_fillet_debug("taper_at_top: topEdges=" + std::to_string(topEdges.size()) + " btmEdges=" + std::to_string(bottomEdges.size()));
+                        BRepFilletAPI_MakeFillet filletMaker(result_top);
+                        bool added = false;
+
+                        // --- Top edges ---
+                        if (!topEdges.empty()) {
+                            TopoDS_Edge outer_e = topEdges[0], inner_e = topEdges[0];
+                            double max_r = 0.0, min_r = 1e10;
+                            for (const auto& edge : topEdges) {
+                                TopoDS_Vertex v = TopExp::FirstVertex(edge, true);
+                                gp_Pnt p = BRep_Tool::Pnt(v);
+                                double r = sqrt(p.X() * p.X() + p.Y() * p.Y());
+                                if (r > max_r) { max_r = r; outer_e = edge; }
+                                if (r < min_r) { min_r = r; inner_e = edge; }
+                            }
+                            log_fillet_debug("taper_at_top: TOP maxR=" + std::to_string(max_r) + " minR=" + std::to_string(min_r));
+                            // Outer top edge: use top_fillet_radius (expands outward)
+                            if (top_fillet_radius > 0.001) {
+                                filletMaker.Add(top_fillet_radius, outer_e);
+                                added = true;
+                                log_fillet_debug("taper_at_top: added OUTER top fillet r=" + std::to_string(top_fillet_radius));
+                            }
+                            // Inner top edge: use hole_fillet_radius (expands inward into hole)
+                            bool has_inner = (min_r < max_r * 0.9);
+                            if (has_inner && hole_fillet_radius > 0.001) {
+                                filletMaker.Add(hole_fillet_radius, inner_e);
+                                added = true;
+                                log_fillet_debug("taper_at_top: added INNER top hole fillet r=" + std::to_string(hole_fillet_radius));
+                            }
+                        }
+
+                        // --- Bottom edges ---
+                        if (!bottomEdges.empty()) {
+                            TopoDS_Edge outer_e = bottomEdges[0], inner_e = bottomEdges[0];
+                            double max_r = 0.0, min_r = 1e10;
+                            for (const auto& edge : bottomEdges) {
+                                TopoDS_Vertex v = TopExp::FirstVertex(edge, true);
+                                gp_Pnt p = BRep_Tool::Pnt(v);
+                                double r = sqrt(p.X() * p.X() + p.Y() * p.Y());
+                                if (r > max_r) { max_r = r; outer_e = edge; }
+                                if (r < min_r) { min_r = r; inner_e = edge; }
+                            }
+                            log_fillet_debug("taper_at_top: BTM maxR=" + std::to_string(max_r) + " minR=" + std::to_string(min_r));
+                            // Outer bottom edge: only if bottom_feature explicitly set
+                            if (bottom_fillet_radius > 0.001) {
+                                filletMaker.Add(bottom_fillet_radius, outer_e);
+                                added = true;
+                                log_fillet_debug("taper_at_top: added OUTER bottom fillet r=" + std::to_string(bottom_fillet_radius));
+                            }
+                            // Inner bottom edge: use hole_fillet_radius
+                            bool has_inner = (min_r < max_r * 0.9);
+                            if (has_inner && hole_fillet_radius > 0.001) {
+                                filletMaker.Add(hole_fillet_radius, inner_e);
+                                added = true;
+                                log_fillet_debug("taper_at_top: added INNER bottom hole fillet r=" + std::to_string(hole_fillet_radius));
+                            }
+                        }
+
+                        // --- Step edge (transition between straight & tapered hole sections) ---
+                        if (hole_fillet_radius > 0.001) {
+                            for (TopExp_Explorer exp(result_top, TopAbs_EDGE); exp.More(); exp.Next()) {
+                                TopoDS_Edge edge = TopoDS::Edge(exp.Current());
+                                TopoDS_Vertex v1 = TopExp::FirstVertex(edge, true);
+                                TopoDS_Vertex v2 = TopExp::LastVertex(edge, true);
+                                gp_Pnt p1 = BRep_Tool::Pnt(v1);
+                                gp_Pnt p2 = BRep_Tool::Pnt(v2);
+                                if (fabs(p1.Z() - p2.Z()) < 0.01 && fabs(p1.Z() - step_z) < 0.02) {
+                                    double r = sqrt(p1.X() * p1.X() + p1.Y() * p1.Y());
+                                    if (r < small_hole_radius * 1.5) {
+                                        filletMaker.Add(hole_fillet_radius, edge);
+                                        added = true;
+                                        log_fillet_debug("taper_at_top: added STEP fillet r=" + std::to_string(hole_fillet_radius) + " at z=" + std::to_string(p1.Z()));
+                                        break; // only one step edge needed
+                                    }
+                                }
+                            }
+                        }
+
+                        if (added) {
+                            log_fillet_debug("taper_at_top: building fillet...");
+                            filletMaker.Build();
+                            if (filletMaker.IsDone()) {
+                                result_top = shape_to_solid(filletMaker.Shape());
+                                log_fillet_debug("taper_at_top: fillet BUILD OK, shape null=" + std::to_string(result_top.IsNull()));
+                            } else {
+                                log_fillet_debug("taper_at_top: fillet BUILD FAILED!");
+                            }
+                        } else {
+                            log_fillet_debug("taper_at_top: NO edges added to fillet");
+                        }
+                    } else {
+                        log_fillet_debug("taper_at_top: fillet radii too small, skipping");
+                    }
+                } else {
+                    log_fillet_debug("taper_at_top: shape_to_solid returned NULL!");
+                }
+                return result_top;
+            }
+        } else {
+            // 锥孔在底部，直孔在顶部（原始逻辑）
+            {
+            // Inner tapered cone: from z=-half_h-extend_bot to z=step_z
             double cone_h = lower_h + extend_bot;  // extend bottom only, top at step
             double delta_r = (inner_top_radius - inner_bottom_radius) / lower_h;
             double cutter_bot_r = inner_bottom_radius - delta_r * extend_bot;
@@ -1135,39 +1301,104 @@ TopoDS_Shape create_cone_stepped_hole_parametric(
             std::cout << "[STEP Exporter] cone_stepped_hole: done, faces=" << nfaces
                       << " planar=" << nplanar << std::endl;
 
-            // Apply top fillet to outer edge if requested
-            if (top_fillet_radius > 0.001) {
+            // Apply fillets: outer edges use top/bottom_fillet_radius, inner edges use hole_fillet_radius
+            bool want_fillet = (top_fillet_radius > 0.001 || bottom_fillet_radius > 0.001 || hole_fillet_radius > 0.001);
+            if (want_fillet) {
+                log_fillet_debug("!taper_at_top: topR=" + std::to_string(top_fillet_radius) + " btmR=" + std::to_string(bottom_fillet_radius) + " holeR=" + std::to_string(hole_fillet_radius));
                 std::vector<TopoDS_Edge> topEdges, bottomEdges;
                 find_circular_edges(result, topEdges, bottomEdges);
+                log_fillet_debug("!taper_at_top: topEdges=" + std::to_string(topEdges.size()) + " btmEdges=" + std::to_string(bottomEdges.size()));
+                BRepFilletAPI_MakeFillet filletMaker(result);
+                bool added = false;
+
+                // --- Top edges ---
                 if (!topEdges.empty()) {
-                    // Only fillet the outer top edge (largest radius)
-                    TopoDS_Edge outer_edge = topEdges[0];
-                    double max_r = 0.0;
+                    TopoDS_Edge outer_e = topEdges[0], inner_e = topEdges[0];
+                    double max_r = 0.0, min_r = 1e10;
                     for (const auto& edge : topEdges) {
                         TopoDS_Vertex v = TopExp::FirstVertex(edge, true);
                         gp_Pnt p = BRep_Tool::Pnt(v);
                         double r = sqrt(p.X() * p.X() + p.Y() * p.Y());
-                        if (r > max_r) { max_r = r; outer_edge = edge; }
+                        if (r > max_r) { max_r = r; outer_e = edge; }
+                        if (r < min_r) { min_r = r; inner_e = edge; }
                     }
-                    BRepFilletAPI_MakeFillet filletMaker(result);
-                    filletMaker.Add(top_fillet_radius, outer_edge);
+                    log_fillet_debug("!taper_at_top: TOP maxR=" + std::to_string(max_r) + " minR=" + std::to_string(min_r));
+                    if (top_fillet_radius > 0.001) {
+                        filletMaker.Add(top_fillet_radius, outer_e);
+                        added = true;
+                        log_fillet_debug("!taper_at_top: added OUTER top fillet r=" + std::to_string(top_fillet_radius));
+                    }
+                    if (min_r < max_r * 0.9 && hole_fillet_radius > 0.001) {
+                        filletMaker.Add(hole_fillet_radius, inner_e);
+                        added = true;
+                        log_fillet_debug("!taper_at_top: added INNER top hole fillet r=" + std::to_string(hole_fillet_radius));
+                    }
+                }
+
+                // --- Bottom edges ---
+                if (!bottomEdges.empty()) {
+                    TopoDS_Edge outer_e = bottomEdges[0], inner_e = bottomEdges[0];
+                    double max_r = 0.0, min_r = 1e10;
+                    for (const auto& edge : bottomEdges) {
+                        TopoDS_Vertex v = TopExp::FirstVertex(edge, true);
+                        gp_Pnt p = BRep_Tool::Pnt(v);
+                        double r = sqrt(p.X() * p.X() + p.Y() * p.Y());
+                        if (r > max_r) { max_r = r; outer_e = edge; }
+                        if (r < min_r) { min_r = r; inner_e = edge; }
+                    }
+                    log_fillet_debug("!taper_at_top: BTM maxR=" + std::to_string(max_r) + " minR=" + std::to_string(min_r));
+                    if (bottom_fillet_radius > 0.001) {
+                        filletMaker.Add(bottom_fillet_radius, outer_e);
+                        added = true;
+                        log_fillet_debug("!taper_at_top: added OUTER bottom fillet r=" + std::to_string(bottom_fillet_radius));
+                    }
+                    if (min_r < max_r * 0.9 && hole_fillet_radius > 0.001) {
+                        filletMaker.Add(hole_fillet_radius, inner_e);
+                        added = true;
+                        log_fillet_debug("!taper_at_top: added INNER bottom hole fillet r=" + std::to_string(hole_fillet_radius));
+                    }
+                }
+
+                // --- Step edge ---
+                if (hole_fillet_radius > 0.001) {
+                    for (TopExp_Explorer exp(result, TopAbs_EDGE); exp.More(); exp.Next()) {
+                        TopoDS_Edge edge = TopoDS::Edge(exp.Current());
+                        TopoDS_Vertex v1 = TopExp::FirstVertex(edge, true);
+                        TopoDS_Vertex v2 = TopExp::LastVertex(edge, true);
+                        gp_Pnt p1 = BRep_Tool::Pnt(v1);
+                        gp_Pnt p2 = BRep_Tool::Pnt(v2);
+                        if (fabs(p1.Z() - p2.Z()) < 0.01 && fabs(p1.Z() - step_z) < 0.02) {
+                            double r = sqrt(p1.X() * p1.X() + p1.Y() * p1.Y());
+                            if (r < small_hole_radius * 1.5) {
+                                filletMaker.Add(hole_fillet_radius, edge);
+                                added = true;
+                                log_fillet_debug("!taper_at_top: added STEP fillet r=" + std::to_string(hole_fillet_radius) + " at z=" + std::to_string(p1.Z()));
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                if (added) {
+                    log_fillet_debug("!taper_at_top: building fillet...");
                     filletMaker.Build();
                     if (filletMaker.IsDone()) {
                         result = shape_to_solid(filletMaker.Shape());
-                        std::cout << "[STEP Exporter] cone_stepped_hole: applied top outer fillet r="
-                                  << top_fillet_radius << std::endl;
+                        log_fillet_debug("!taper_at_top: fillet BUILD OK, shape null=" + std::to_string(result.IsNull()));
                     } else {
-                        std::cout << "[STEP Exporter] cone_stepped_hole: fillet build FAILED" << std::endl;
+                        log_fillet_debug("!taper_at_top: fillet BUILD FAILED!");
                     }
                 } else {
-                    std::cout << "[STEP Exporter] cone_stepped_hole: no top edges found for fillet" << std::endl;
+                    log_fillet_debug("!taper_at_top: NO edges added to fillet");
                 }
             }
 
             return result;
         }
+        }  // end else (taper_at_top)
 
-    } catch (Standard_Failure& e) {
+    }  // end try
+    catch (Standard_Failure& e) {
         std::cout << "[STEP Exporter] OCC error: " << e.GetMessageString() << std::endl;
         return TopoDS_Shape();
     } catch (...) {

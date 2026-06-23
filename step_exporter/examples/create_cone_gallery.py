@@ -97,9 +97,9 @@ def add_cone(y, z, name, br, tr, chamfer_type=None, fillet_r=0,
     bmesh.update_edit_mesh(obj.data)
     bpy.ops.object.mode_set(mode='OBJECT')
 
-    # Store radii for post-processing (_bevel_mixed_edges)
-    obj['cone_bottom_r'] = br
-    obj['cone_top_r'] = tr
+    # Store radii for post-processing (_bevel_mixed_edges) — mm convention, ×1000
+    obj['cone_bottom_r'] = br * 1000
+    obj['cone_top_r'] = tr * 1000
 
     # --- Edge features (Bevel modifier, applied AFTER Boolean) ---
     if chamfer_type is not None:
@@ -275,9 +275,9 @@ def _bevel_mixed_edges():
         if obj.get('chamfer_type') != 'chamfer_fillet':
             continue
 
-        # Get stored radii (set in add_cone)
-        br = obj.get('cone_bottom_r', 0.5)
-        tr = obj.get('cone_top_r', 0.25)
+        # Get stored radii (set in add_cone) — stored in mm, convert to m
+        br = obj.get('cone_bottom_r', 500) / 1000
+        tr = obj.get('cone_top_r', 250) / 1000
         bpy.context.view_layer.objects.active = obj
         hh = H / 2.0
 
@@ -464,8 +464,8 @@ def _apply_modifiers_to(obj):
     # Apply chamfer_fillet BEFORE hole bevel (on clean post-Boolean mesh)
     if obj.get('chamfer_type') == 'chamfer_fillet':
         import bmesh as _bm
-        _br = obj.get('cone_bottom_r', 0.5)
-        _tr = obj.get('cone_top_r', 0.25)
+        _br = obj.get('cone_bottom_r', 500) / 1000
+        _tr = obj.get('cone_top_r', 250) / 1000
         bpy.context.view_layer.objects.active = obj
         _hh = H / 2.0
         bpy.ops.object.mode_set(mode='EDIT')
@@ -498,8 +498,8 @@ def _apply_modifiers_to(obj):
 
     # Immediately bevel hole openings
     import bmesh
-    br = obj.get('cone_bottom_r', 0.5)
-    tr = obj.get('cone_top_r', 0.25)
+    br = obj.get('cone_bottom_r', 500) / 1000
+    tr = obj.get('cone_top_r', 250) / 1000
     hole_type = obj.get('hole_type')
     if hole_type:
         is_tapered = obj.get('hole_is_tapered', False)
@@ -592,7 +592,7 @@ def _add_groove_to_cone(obj):
     """Add trapezoidal groove cutter to a single cone via Boolean modifier.
     Follows parametric_cylinder.py: extend r_surface outward for tapered to enlarge depth."""
     import bmesh
-    mid_r = (obj.get('cone_bottom_r', 0.5) + obj.get('cone_top_r', 0.25)) / 2
+    mid_r = (obj.get('cone_bottom_r', 500) / 1000 + obj.get('cone_top_r', 250) / 1000) / 2
     # Extend cutter outward for tapered surface (like groove_cone_depth_mult)
     cutter_depth = GRV_DEPTH * 1.5  # extend outward by 50%
     r_surface = mid_r + (cutter_depth - GRV_DEPTH) + 0.0001

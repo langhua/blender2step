@@ -6,6 +6,67 @@ from .progress_report import update_progress, start_progress, end_progress
 from ..core.mesh_data import _get_mesh_data_enhanced, _get_curve_data_enhanced
 from ..core import _globals as _g
 
+
+def _highlight_export_object(obj_params):
+    """在 Blender 视图中高亮选中当前正在导出的物体。
+    支持 cylinder params (含 'bl_obj' key) 和 regular Blender object。"""
+    try:
+        bl_obj = None
+        if isinstance(obj_params, dict) and 'bl_obj' in obj_params:
+            bl_obj = obj_params['bl_obj']
+        elif hasattr(obj_params, 'select_set'):
+            bl_obj = obj_params
+        
+        if bl_obj and hasattr(bl_obj, 'select_set'):
+            # 清除所有选中，只选中当前物体
+            for o in bpy.context.scene.objects:
+                if hasattr(o, 'select_set'):
+                    o.select_set(False)
+            bl_obj.select_set(True)
+            bpy.context.view_layer.objects.active = bl_obj
+            # 强制刷新视图
+            for area in bpy.context.screen.areas:
+                if area.type == 'VIEW_3D':
+                    area.tag_redraw()
+    except Exception:
+        pass  # 高亮失败不影响导出流程
+
+
+def _export_as_mesh_fallback(cpp_exporter, temp_file, cparams, data):
+    """参数化导出失败时的网格回退方案。获取 Blender 对象并作为网格 BREP 导出。"""
+    bl_obj = cparams.get('bl_obj') if isinstance(cparams, dict) else None
+    if bl_obj is None:
+        log_to_file(f"[STEP Exporter]   ⚠ mesh fallback: no bl_obj reference, aborting")
+        return False
+    log_to_file(f"[STEP Exporter]   → mesh fallback for {bl_obj.name}")
+    import bpy
+    obj_data = _get_mesh_data_enhanced(bl_obj, bpy.context, scale=1000.0)
+    if obj_data is None:
+        log_to_file(f"[STEP Exporter]   ⚠ mesh fallback: _get_mesh_data_enhanced returned None")
+        return False
+    vert_count = len(obj_data.get('vertices', []))
+    face_count = len(obj_data.get('faces', []))
+    if vert_count > 50000:
+        log_to_file(f"[STEP Exporter]   ⚠ mesh fallback SKIPPED: too large ({vert_count} verts)")
+        return False
+    log_to_file(f"[STEP Exporter]   mesh fallback: {vert_count} verts, {face_count} faces")
+    _g._cpp_log_callback = lambda msg: log_to_file(msg)
+    init_ok = cpp_exporter.init_incremental_export(
+        temp_file, 1, 1000.0,
+        1 if data['fix_geometry'] else 0,
+        1 if data['create_solid'] else 0,
+        1 if data['advanced_brep'] else 0,
+        data['step_schema'], data['step_unit'],
+        1 if data['enable_logging'] else 0,
+        data.get('sew_tolerance', 0.001),
+        _g._cpp_log_callback)
+    if not init_ok:
+        log_to_file(f"[STEP Exporter]   ⚠ mesh fallback: init_incremental_export failed")
+        return False
+    add_ok = cpp_exporter.add_object_to_export(obj_data, None)
+    cpp_exporter.finalize_incremental_export()
+    return add_ok
+
 def _export_bottom_shells_sync(filepath, shells, step_schema, step_unit, enable_logging, context):
     """同步导出底壳（非计时器版本，直接在 execute 中调用）"""
     import _step_exporter as cpp_exporter
@@ -291,6 +352,13 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
         top_fr = cparams.get('top_fillet', 0.0)
         btm_ch = cparams.get('bottom_chamfer', 0.0)
         btm_fr = cparams.get('bottom_fillet', 0.0)
+        # 安全校验：缺少关键台阶孔参数时回退到网格导出
+        large_r = cparams.get('stepped_large_r', 0)
+        large_h = cparams.get('stepped_large_h', 0)
+        small_r = cparams.get('stepped_small_r', 0)
+        if large_r <= 0 or large_h <= 0 or small_r <= 0:
+            log_to_file(f"[STEP Exporter]   ⚠ cylinder_stepped_hole missing params (lr={large_r}, lh={large_h}, sr={small_r}), fallback to mesh")
+            return _export_as_mesh_fallback(cpp_exporter, temp_file, cparams, data)
         return cpp_exporter.export_cylinder_stepped_hole_step(
             temp_file, cparams['radius'], cparams['height'],
             cparams['stepped_large_r'], cparams['stepped_large_h'],
@@ -309,6 +377,13 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
         top_fr = cparams.get('top_fillet', 0.0)
         btm_ch = cparams.get('bottom_chamfer', 0.0)
         btm_fr = cparams.get('bottom_fillet', 0.0)
+        # 安全校验：缺少关键锥形台阶孔参数时回退到网格导出
+        taper_top = cparams.get('taper_top_r', 0)
+        taper_step = cparams.get('taper_step_r', 0)
+        stepped_small = cparams.get('stepped_small_r', 0)
+        if taper_top <= 0 or taper_step <= 0 or stepped_small <= 0:
+            log_to_file(f"[STEP Exporter]   ⚠ cylinder_tapered_stepped_hole missing taper params (top={taper_top}, step={taper_step}, small={stepped_small}), fallback to mesh")
+            return _export_as_mesh_fallback(cpp_exporter, temp_file, cparams, data)
         return cpp_exporter.export_cylinder_tapered_stepped_hole_step(
             temp_file, cparams['radius'], cparams['height'],
             cparams['stepped_large_h'],
@@ -481,6 +556,13 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
             1 if data['enable_logging'] else 0)
     elif obj_type == 'cone_stepped_hole':
         top_fr = cparams.get('top_feature_size', 0.0) if cparams.get('top_feature') == 'fillet' else 0.0
+        btm_fr = cparams.get('bottom_feature_size', 0.0) if cparams.get('bottom_feature') == 'fillet' else 0.0
+        hole_fr = cparams.get('hole_fillet_radius', 0)
+        log_to_file(f"[STEP Exporter]   cone_stepped_hole fillets: outer_top={top_fr:.1f} outer_btm={btm_fr:.1f} hole={hole_fr:.1f}")
+        # 带外壁凹槽的锥体台阶孔：C++ 暂不支持，回退到网格导出
+        if cparams.get('groove_depth', 0) > 0.01:
+            log_to_file(f"[STEP Exporter]   cone_stepped_hole with groove not supported parametrically, fallback to mesh")
+            return _export_as_mesh_fallback(cpp_exporter, temp_file, cparams, data)
         return cpp_exporter.export_cone_stepped_hole_step(
             temp_file,
             cparams.get('outer_bottom_radius', cparams.get('outer_radius', 0)),
@@ -490,7 +572,7 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
             cparams.get('small_hole_height', 0),
             cparams.get('inner_bottom_radius', cparams.get('inner_radius', 0)),
             cparams.get('inner_top_radius', cparams.get('inner_radius', 0)),
-            top_fr, px, py, pz, data['step_schema'], data['step_unit'],
+            top_fr, btm_fr, hole_fr, px, py, pz, data['step_schema'], data['step_unit'],
             1 if data['enable_logging'] else 0)
     elif obj_type == 'cone_fillet':
         has_bottom = cparams.get('bottom_feature') == 'fillet'
@@ -605,6 +687,9 @@ def _parametric_export_staged():
             _g._parametric_temp_files.append(temp_file)
             success = False
             
+            # === 高亮当前正在导出的 Blender 物体 ===
+            _highlight_export_object(obj_params)
+            
             obj_start = time.time()
             try:
                 if obj_type == 'bottom_shell':
@@ -662,26 +747,37 @@ def _parametric_export_staged():
                     obj_data = _get_mesh_data_enhanced(obj, context, scale=1000.0)
                     if obj_data is None:
                         raise RuntimeError("_get_mesh_data_enhanced returned None")
-                    _g._cpp_log_callback = lambda msg: log_to_file(msg)
-                    init_ok = cpp_exporter.init_incremental_export(
-                        temp_file, 1, 1000.0,
-                        1 if data['fix_geometry'] else 0,
-                        1 if data['create_solid'] else 0,
-                        1 if data['advanced_brep'] else 0,
-                        data['step_schema'], data['step_unit'],
-                        1 if data['enable_logging'] else 0,
-                        data.get('sew_tolerance', 0.001),
-                        _g._cpp_log_callback)
-                    if init_ok:
-                        add_ok = cpp_exporter.add_object_to_export(obj_data, None)
-                        cpp_exporter.finalize_incremental_export()
-                        if add_ok:
-                            log_to_file(f"[STEP Exporter]   Mesh {obj.name} exported ({len(obj_data['vertices'])} verts, {len(obj_data['faces'])} tris)")
-                            success = True
-                        else:
-                            log_to_file(f"[STEP Exporter]   FAILED to add mesh {obj.name}")
+                    
+                    # 网格大小安全检查：超大网格会导致 C++ OCCT 内核崩溃
+                    vert_count = len(obj_data.get('vertices', []))
+                    face_count = len(obj_data.get('faces', []))
+                    MAX_SAFE_VERTS = 50000
+                    if vert_count > MAX_SAFE_VERTS:
+                        log_to_file(f"[STEP Exporter]   ⚠ SKIPPING {obj.name}: mesh too large ({vert_count} verts, {face_count} faces > limit {MAX_SAFE_VERTS})")
+                        log_to_file(f"[STEP Exporter]   Object {obj_num}/{total_objects} SKIPPED (large mesh)")
+                        success = False
+                        # 更新进度后继续下一个
                     else:
-                        log_to_file(f"[STEP Exporter]   FAILED init incremental for {obj.name}")
+                        _g._cpp_log_callback = lambda msg: log_to_file(msg)
+                        init_ok = cpp_exporter.init_incremental_export(
+                            temp_file, 1, 1000.0,
+                            1 if data['fix_geometry'] else 0,
+                            1 if data['create_solid'] else 0,
+                            1 if data['advanced_brep'] else 0,
+                            data['step_schema'], data['step_unit'],
+                            1 if data['enable_logging'] else 0,
+                            data.get('sew_tolerance', 0.001),
+                            _g._cpp_log_callback)
+                        if init_ok:
+                            add_ok = cpp_exporter.add_object_to_export(obj_data, None)
+                            cpp_exporter.finalize_incremental_export()
+                            if add_ok:
+                                log_to_file(f"[STEP Exporter]   Mesh {obj.name} exported ({len(obj_data['vertices'])} verts, {len(obj_data['faces'])} tris)")
+                                success = True
+                            else:
+                                log_to_file(f"[STEP Exporter]   FAILED to add mesh {obj.name}")
+                        else:
+                            log_to_file(f"[STEP Exporter]   FAILED init incremental for {obj.name}")
                 
                 if success:
                     log_to_file(f"[STEP Exporter]   Object {obj_num}/{total_objects} OK ({time.time()-obj_start:.3f}s)")

@@ -19,5 +19,18 @@
     //     "OpenCASCADE_DIR": "F:/OpenCASCADE-7.7.0-vc14-64/opencascade-7.7.0/lib/cmake/opencascade",
     //     "CMAKE_PREFIX_PATH": "F:/OpenCASCADE-7.7.0-vc14-64"
     // },
-    "codingcopilot.enableCompletionLanguage": {}
+    "codingcopilot.enableCompletionLanguage": {},
+        
+    // Fix for memory overflow issues (e.g., GitHub Copilot, tsup, Node.js)
+    "typescript.tsserver.maxMemory": 4096,
+    "terminal.integrated.env.windows": {
+        "NODE_OPTIONS": "--max-old-space-size=4096"
+    },
+    "terminal.integrated.env.linux": {
+        "NODE_OPTIONS": "--max-old-space-size=4096"
+    },
+    "terminal.integrated.env.osx": {
+        "NODE_OPTIONS": "--max-old-space-size=4096"
+    }
+
 }

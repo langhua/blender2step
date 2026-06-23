@@ -1751,6 +1751,25 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
             # 锥体台阶孔 → 使用 cone_stepped_hole 类型
             if is_cone_body and inner_btm > 0 and inner_top > 0 and small_r > 0 and small_h > 0:
                 hole_fr = (obj.get('hole_fillet_radius', 0) if hasattr(obj, 'get') else 0)  # 已经是 mm
+                # 读取存储的边特征（比 mesh 检测更可靠）
+                stored_ct = obj.get('chamfer_type') if hasattr(obj, 'get') else None
+                stored_fr = obj.get('fillet_radius_edge', 0) if hasattr(obj, 'get') else 0  # mm
+                stored_csz = obj.get('chamfer_size', 0) if hasattr(obj, 'get') else 0  # mm
+                # 优先使用存储属性，避免 mesh 误检
+                if stored_ct in ('chamfer', 'chamfer_both', 'chamfer_fillet'):
+                    top_feature = 'chamfer'; top_feature_size = stored_csz * 0.001
+                elif stored_ct in ('fillet', 'fillet_both'):
+                    top_feature = 'fillet'; top_feature_size = stored_fr * 0.001
+                elif stored_ct in ('bottom_chamfer',):
+                    top_feature = None; top_feature_size = 0
+                    bottom_feature = 'chamfer'; bottom_feature_size = stored_csz * 0.001
+                elif stored_ct in ('bottom_fillet',):
+                    top_feature = None; top_feature_size = 0
+                    bottom_feature = 'fillet'; bottom_feature_size = stored_fr * 0.001
+                elif stored_ct is None:
+                    # 无存储属性 = 无边缘特征，忽略 mesh 检测
+                    top_feature = None; top_feature_size = 0
+                    bottom_feature = None; bottom_feature_size = 0
                 result = {
                     'obj_type': 'cone_stepped_hole',
                     'outer_bottom_radius': max(bottom_radius, top_radius) * S,

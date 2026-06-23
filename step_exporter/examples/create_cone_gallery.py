@@ -6,7 +6,7 @@ Blender 原生: 米 (m)
 """
 import bpy, math
 
-H = 1.0; BOT_R = 0.5; TOP_R = 0.25; CH_SZ = 0.05; FR_R = 0.06
+H = 1.0; BOT_R = 0.5; TOP_R = 0.25; CH_SZ = 0.05; FR_R = 0.025
 HOLE_R = 0.1; TAPER_OPEN_R = 0.15; HOLE_D = H * 0.25; GAP_Y = 0.2
 HOLE_FILLET_R = 0.015  # fillet radius at hole openings
 STEP_LARGE_R = 0.14; STEP_LARGE_H = H * 0.8; STEP_SMALL_R = 0.05  # stepped hole params
@@ -417,6 +417,12 @@ def _bevel_hole_openings():
         bm.edges.ensure_lookup_table()
 
         edge_count = 0
+        # Compute outer cone radius at each z to exclude outer-wall edges
+        cone_br = obj.get('cone_bottom_r', 500) / 1000  # m
+        cone_tr = obj.get('cone_top_r', 250) / 1000  # m
+        def _outer_r_at_z(z_val):
+            t = (z_val + H / 2) / H  # 0 at bottom, 1 at top
+            return cone_br + (cone_tr - cone_br) * t
         for e in bm.edges:
             v1, v2 = e.verts
             mid_z = (v1.co.z + v2.co.z) / 2.0
@@ -425,8 +431,10 @@ def _bevel_hole_openings():
             dz = abs(v1.co.z - v2.co.z)
 
             for hz, hr in openings:
+                outer_r = _outer_r_at_z(hz)
                 if (abs(mid_z - hz) < 0.06 and
-                    abs(mid_xy - hr) < hr * 0.35 and
+                    abs(mid_xy - hr) < hr * 0.20 and
+                    mid_xy < outer_r - 0.005 and  # exclude outer cone edge
                     dz < 0.03):
                     e.select = True
                     edge_count += 1
@@ -555,6 +563,11 @@ def _apply_modifiers_to(obj):
             bm = bmesh.from_edit_mesh(obj.data)
             bm.edges.ensure_lookup_table()
             edge_count = 0
+            cone_br2 = obj.get('cone_bottom_r', 500) / 1000
+            cone_tr2 = obj.get('cone_top_r', 250) / 1000
+            def _outer_r2(z_val):
+                t = (z_val + H / 2) / H
+                return cone_br2 + (cone_tr2 - cone_br2) * t
             for e in bm.edges:
                 v1, v2 = e.verts
                 mid_z = (v1.co.z + v2.co.z) / 2.0
@@ -562,8 +575,10 @@ def _apply_modifiers_to(obj):
                                    ((v1.co.y + v2.co.y) / 2) ** 2)
                 dz = abs(v1.co.z - v2.co.z)
                 for hz, hr in openings:
+                    outer_r = _outer_r2(hz)
                     if (abs(mid_z - hz) < 0.06 and
-                        abs(mid_xy - hr) < hr * 0.35 and
+                        abs(mid_xy - hr) < hr * 0.20 and
+                        mid_xy < outer_r - 0.005 and
                         dz < 0.03):
                         e.select = True
                         edge_count += 1

@@ -3,6 +3,8 @@ Blender step exporter based on OpenCASCADE.
 
 本模块仅支持Blender 4.2.1，主要由DeepSeek V4 Pro等AI模型生成。
 
+本模块是为了在Blender中设计模型，用于模具制造。
+
 
 ## Development
 
@@ -122,3 +124,8 @@ blender --background --python .\step_exporter\test\run_test.py -- --test-number 
 
     STEP 文件单位声明: MILLIMETER
     FreeCAD 打开: 毫米（一致 ✓）
+
+
+### 模型尺寸
+
+Blender很多mesh模型，OpenCASCADE还不能很好支持，遇到模型尺寸不一致的情况，以OpenCASCADE模型尺寸为准，以便能生成准确的STEP文件，用于模具制造。

@@ -759,10 +759,10 @@ def _execute_analysis_and_export(operator, params):
     else:
         _g._export_objects = [obj for obj in context.scene.objects if obj.type in ('MESH', 'CURVE')]
     
-    # 按视觉位置排序：从上到下（Y递减），从左到右（X递增）
+    # 按视觉位置排序：Z从大到小（最高层先导出），Y从小到大（最左边先导出）
     _g._export_objects.sort(key=lambda obj: (
-        -round(obj.location.y, 4),   # 主键：Y 递减 → 从上到下
-        round(obj.location.x, 4),    # 次键：X 递增 → 从左到右
+        -round(obj.location.z, 4),   # 主键：Z 递减 → 最高层优先
+        round(obj.location.y, 4),    # 次键：Y 递增 → 从左到右
         obj.name                     # 同名位置按字母序
     ))
     

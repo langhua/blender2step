@@ -236,7 +236,7 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
     z_mid_high = max_z - height * 0.20
     
     # 如果有凹槽定制属性，提前提取凹槽参数（不依赖中间层检测结果）
-    has_groove_custom = obj.get('step_groove_depth') is not None
+    has_groove_custom = (obj.get('step_groove_depth', 0) or 0) > 0
     groove_params = {}
     if has_groove_custom:
         groove_params = {
@@ -1740,12 +1740,22 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
         if hole_position in ('stepped', 'tapered_stepped'):
             # Stepped through hole or tapered stepped through hole
             is_tpr = (hole_position == 'tapered_stepped')
-            # 检测是否为锥体（非圆柱）：底面/顶面半径差 > 5%，且非圆柱体
-            is_cone_body = (not cylindrical_body) and abs(bottom_radius - top_radius) > max(bottom_radius, top_radius) * 0.05
+            # 检测是否为锥体：底面/顶面半径差 > 5%（无视 cylindrical_body 误判）
+            is_cone_body = abs(bottom_radius - top_radius) > max(bottom_radius, top_radius) * 0.05
             # 从 stepped_hole_params 或 mesh 数据获取台阶孔参数
             shp = stepped_hole_params if stepped_hole_params else {}
-            inner_btm = shp.get('inner_bottom_radius', inner_radius if is_hollow else 0)
-            inner_top = shp.get('inner_top_radius', inner_top_radius if is_hollow else 0)
+            # 非锥台阶孔：内外径应一致，优先用存储属性避免 mesh 误检导致 taper_at_top 误判
+            if hole_position == 'stepped':
+                stored_large_r = (obj.get('hole_stepped_large_r', 0) if hasattr(obj, 'get') else 0) * 0.001  # mm→m
+                if stored_large_r > 0:
+                    inner_btm = stored_large_r
+                    inner_top = stored_large_r  # 台阶孔大孔段为等径直孔
+                else:
+                    inner_btm = shp.get('inner_bottom_radius', inner_radius if is_hollow else 0)
+                    inner_top = shp.get('inner_top_radius', inner_top_radius if is_hollow else 0)
+            else:
+                inner_btm = shp.get('inner_bottom_radius', inner_radius if is_hollow else 0)
+                inner_top = shp.get('inner_top_radius', inner_top_radius if is_hollow else 0)
             small_r = shp.get('small_hole_radius', 0)
             small_h = shp.get('small_hole_height', 0)
             # 锥体台阶孔 → 使用 cone_stepped_hole 类型
@@ -1787,10 +1797,10 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                     'pos_x': pos_x * S,
                     'pos_y': pos_y * S,
                     'pos_z': pos_z * S,
-                    'groove_depth': groove_params.get('groove_depth', 0) if groove_params else 0,
-                    'groove_bottom_width': groove_params.get('groove_bottom_width', 0) if groove_params else 0,
-                    'groove_top_width': groove_params.get('groove_top_width', 0) if groove_params else 0,
-                    'groove_extrusion_length': groove_params.get('groove_extrusion_length', 0) if groove_params else 0,
+                    'groove_depth': 0,  # 锥体台阶孔不支持外壁凹槽
+                    'groove_bottom_width': 0,
+                    'groove_top_width': 0,
+                    'groove_extrusion_length': 0,
                 }
                 log_to_file(f"[STEP Exporter]   -> cone_stepped_hole! bR={result['outer_bottom_radius']:.1f} tR={result['outer_top_radius']:.1f} h={result['height']:.1f}")
                 return result

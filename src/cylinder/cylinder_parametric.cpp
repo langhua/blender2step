@@ -1061,7 +1061,14 @@ TopoDS_Shape create_cone_stepped_hole_parametric(
     try {
         double half_h = height / 2.0;
         // 自动判断锥孔位置：内顶半径 > 内底半径 → 锥孔在顶部（圆锥）；否则在底部（圆柱）
-        bool taper_at_top = (inner_top_radius > inner_bottom_radius + 0.01);
+        // 当内外径相等时（等径直孔），通过外锥方向判断：小孔在粗端，大孔在细端
+        bool taper_at_top;
+        if (std::abs(inner_top_radius - inner_bottom_radius) < 0.01) {
+            // 等径大孔，小孔在锥体粗端
+            taper_at_top = (outer_bottom_radius > outer_top_radius);
+        } else {
+            taper_at_top = (inner_top_radius > inner_bottom_radius + 0.01);
+        }
         double step_z, lower_h, upper_h;
         if (taper_at_top) {
             // 直孔在底部，锥孔在顶部
@@ -1116,13 +1123,20 @@ TopoDS_Shape create_cone_stepped_hole_parametric(
                 TopoDS_Solid cyl_cutter = cyl_maker.Solid();
 
                 // Upper tapered cone: from step_z to top, inner_bottom_radius → inner_top_radius
+                // If inner radii are equal (diff < 1mm), use cylinder instead of cone
                 double cone_h = upper_h + extend_top;
-                double delta_r = (inner_top_radius - inner_bottom_radius) / upper_h;
-                double cutter_top_r = inner_top_radius + delta_r * extend_top;
-
-                gp_Ax2 cone_axis(gp_Pnt(0, 0, step_z), gp::DZ());
-                BRepPrimAPI_MakeCone cone_cut_maker(cone_axis, inner_bottom_radius, cutter_top_r, cone_h);
-                TopoDS_Solid cone_cutter = cone_cut_maker.Solid();
+                TopoDS_Solid cone_cutter;
+                if (std::abs(inner_bottom_radius - inner_top_radius) < 0.001) {
+                    gp_Ax2 cone_axis(gp_Pnt(0, 0, step_z), gp::DZ());
+                    BRepPrimAPI_MakeCylinder cyl_maker(cone_axis, inner_bottom_radius, cone_h);
+                    cone_cutter = cyl_maker.Solid();
+                } else {
+                    double delta_r = (inner_top_radius - inner_bottom_radius) / upper_h;
+                    double cutter_top_r = inner_top_radius + delta_r * extend_top;
+                    gp_Ax2 cone_axis(gp_Pnt(0, 0, step_z), gp::DZ());
+                    BRepPrimAPI_MakeCone cone_cut_maker(cone_axis, inner_bottom_radius, cutter_top_r, cone_h);
+                    cone_cutter = cone_cut_maker.Solid();
+                }
 
                 BRepAlgoAPI_Fuse fuse_maker(cyl_cutter, cone_cutter);
                 if (!fuse_maker.IsDone()) {
@@ -1260,13 +1274,21 @@ TopoDS_Shape create_cone_stepped_hole_parametric(
                 return result_top;
             }
         } else {
-            double cone_h = lower_h + extend_bot;  // extend bottom only, top at step
-            double delta_r = (inner_top_radius - inner_bottom_radius) / lower_h;
-            double cutter_bot_r = inner_bottom_radius - delta_r * extend_bot;
-
-            gp_Ax2 cone_axis(gp_Pnt(0, 0, -half_h - extend_bot), gp::DZ());
-            BRepPrimAPI_MakeCone cone_cut_maker(cone_axis, cutter_bot_r, inner_top_radius, cone_h);
-            TopoDS_Solid cone_cutter = cone_cut_maker.Solid();
+            // If inner radii are equal (diff < 1mm), use cylinder instead of cone
+            TopoDS_Solid cone_cutter;
+            if (std::abs(inner_bottom_radius - inner_top_radius) < 0.001) {
+                double cyl_h = height + extend_bot + extend_top;
+                gp_Ax2 cyl_axis(gp_Pnt(0, 0, -half_h - extend_bot), gp::DZ());
+                BRepPrimAPI_MakeCylinder cyl_maker(cyl_axis, inner_bottom_radius, cyl_h);
+                cone_cutter = cyl_maker.Solid();
+            } else {
+                double cone_h = lower_h + extend_bot;  // extend bottom only, top at step
+                double delta_r = (inner_top_radius - inner_bottom_radius) / lower_h;
+                double cutter_bot_r = inner_bottom_radius - delta_r * extend_bot;
+                gp_Ax2 cone_axis(gp_Pnt(0, 0, -half_h - extend_bot), gp::DZ());
+                BRepPrimAPI_MakeCone cone_cut_maker(cone_axis, cutter_bot_r, inner_top_radius, cone_h);
+                cone_cutter = cone_cut_maker.Solid();
+            }
 
             // Inner straight cylinder (small hole): r=small_hole_radius, extends below step for fusion overlap
             double cyl_h = upper_h + extend_top + extend_top;

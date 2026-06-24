@@ -557,8 +557,10 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
     elif obj_type == 'cone_stepped_hole':
         top_fr = cparams.get('top_feature_size', 0.0) if cparams.get('top_feature') == 'fillet' else 0.0
         btm_fr = cparams.get('bottom_feature_size', 0.0) if cparams.get('bottom_feature') == 'fillet' else 0.0
+        top_ch = cparams.get('top_feature_size', 0.0) if cparams.get('top_feature') == 'chamfer' else 0.0
+        btm_ch = cparams.get('bottom_feature_size', 0.0) if cparams.get('bottom_feature') == 'chamfer' else 0.0
         hole_fr = cparams.get('hole_fillet_radius', 0)
-        log_to_file(f"[STEP Exporter]   cone_stepped_hole fillets: outer_top={top_fr:.1f} outer_btm={btm_fr:.1f} hole={hole_fr:.1f}")
+        log_to_file(f"[STEP Exporter]   cone_stepped_hole: top_ch={top_ch:.1f} top_fr={top_fr:.1f} btm_ch={btm_ch:.1f} btm_fr={btm_fr:.1f} hole_fr={hole_fr:.1f}")
         # 带外壁凹槽的锥体台阶孔：C++ 暂不支持，回退到网格导出
         if cparams.get('groove_depth', 0) > 0.01:
             log_to_file(f"[STEP Exporter]   cone_stepped_hole with groove not supported parametrically, fallback to mesh")
@@ -572,7 +574,7 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
             cparams.get('small_hole_height', 0),
             cparams.get('inner_bottom_radius', cparams.get('inner_radius', 0)),
             cparams.get('inner_top_radius', cparams.get('inner_radius', 0)),
-            top_fr, btm_fr, hole_fr, px, py, pz, data['step_schema'], data['step_unit'],
+            top_fr, btm_fr, hole_fr, top_ch, btm_ch, px, py, pz, data['step_schema'], data['step_unit'],
             1 if data['enable_logging'] else 0)
     elif obj_type == 'cone_fillet':
         has_bottom = cparams.get('bottom_feature') == 'fillet'

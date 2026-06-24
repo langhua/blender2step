@@ -170,7 +170,9 @@ TopoDS_Shape create_cone_stepped_hole_parametric(double outer_bottom_radius, dou
                                                   double inner_bottom_radius, double inner_top_radius,
                                                   double top_fillet_radius,
                                                   double bottom_fillet_radius = 0.0,
-                                                  double hole_fillet_radius = 0.0);
+                                                  double hole_fillet_radius = 0.0,
+                                                  double top_chamfer = 0.0,
+                                                  double bottom_chamfer = 0.0);
 
 // Python interface functions
 PyObject* get_version(PyObject* self, PyObject* args);

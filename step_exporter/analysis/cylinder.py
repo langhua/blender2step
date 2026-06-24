@@ -40,6 +40,8 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
     
     log_to_file(f"[STEP Exporter] Analyzing mesh for cylinder: {obj.name}")
 
+    inner_z_data = {}  # 内孔 Z→半径 映射，后续台阶孔检测使用
+
     depsgraph = context.evaluated_depsgraph_get()
     eval_obj = obj.evaluated_get(depsgraph)
     mesh_data = eval_obj.data
@@ -1758,6 +1760,21 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                 inner_top = shp.get('inner_top_radius', inner_top_radius if is_hollow else 0)
             small_r = shp.get('small_hole_radius', 0)
             small_h = shp.get('small_hole_height', 0)
+            # 锥体锥形台阶孔 mesh 检测失败时，从存储属性回退
+            if is_cone_body and is_tpr and (small_r <= 0 or small_h <= 0):
+                stored_opening = (obj.get('hole_opening_radius', 0) if hasattr(obj, 'get') else 0) * 0.001  # mm→m
+                stored_end = (obj.get('hole_end_radius', 0) if hasattr(obj, 'get') else 0) * 0.001
+                stored_small = (obj.get('hole_stepped_small_r', 0) if hasattr(obj, 'get') else 0) * 0.001
+                stored_large_h = (obj.get('hole_stepped_large_h', 0) if hasattr(obj, 'get') else 0) * 0.001  # mm→m
+                log_to_file(f"[STEP Exporter]   tapered_stepped fallback: opening={stored_opening:.3f} end={stored_end:.3f} small={stored_small:.3f} large_h={stored_large_h:.3f}")
+                if stored_opening > 0 and stored_end > 0:
+                    inner_btm = stored_end
+                    inner_top = stored_opening
+                    if stored_small > 0:
+                        small_r = stored_small
+                    if stored_large_h > 0:
+                        small_h = height - stored_large_h  # 直孔高度 = 总高 - 大孔高
+                    log_to_file(f"[STEP Exporter]   tapered_stepped fallback result: small_r={small_r:.3f} small_h={small_h:.3f} inner_btm={inner_btm:.3f} inner_top={inner_top:.3f}")
             # 锥体台阶孔 → 使用 cone_stepped_hole 类型
             if is_cone_body and inner_btm > 0 and inner_top > 0 and small_r > 0 and small_h > 0:
                 hole_fr = (obj.get('hole_fillet_radius', 0) if hasattr(obj, 'get') else 0)  # 已经是 mm
@@ -1780,6 +1797,7 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                     # 无存储属性 = 无边缘特征，忽略 mesh 检测
                     top_feature = None; top_feature_size = 0
                     bottom_feature = None; bottom_feature_size = 0
+                # 锥体台阶孔 C++ 已支持 chamfer + fillet 分层处理
                 result = {
                     'obj_type': 'cone_stepped_hole',
                     'outer_bottom_radius': max(bottom_radius, top_radius) * S,
@@ -1789,7 +1807,7 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                     'small_hole_height': small_h * S,
                     'inner_bottom_radius': inner_btm * S,
                     'inner_top_radius': inner_top * S,
-                    'hole_fillet_radius': hole_fr,  # 孔口孔底圆角 (mm, already stored in mm)
+                    'hole_fillet_radius': hole_fr,
                     'top_feature': top_feature,
                     'top_feature_size': (top_feature_size if top_feature else 0) * S,
                     'bottom_feature': bottom_feature,
@@ -1797,11 +1815,31 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                     'pos_x': pos_x * S,
                     'pos_y': pos_y * S,
                     'pos_z': pos_z * S,
-                    'groove_depth': 0,  # 锥体台阶孔不支持外壁凹槽
+                    'groove_depth': 0,
                     'groove_bottom_width': 0,
                     'groove_top_width': 0,
                     'groove_extrusion_length': 0,
                 }
+                # 当外边缘有 chamfer/fillet 时，缩小锥孔口径以留出孔圆角空间
+                # 外边缘特征会削减顶部面半径，OCC Build 失败当 wall < hole_fillet*1.1
+                outer_t = result['outer_top_radius']
+                outer_b = result['outer_bottom_radius']
+                outer_top_sz = (top_feature_size * S) if top_feature in ('chamfer', 'fillet') and top_feature_size > 0 else 0
+                outer_btm_sz = (bottom_feature_size * S) if bottom_feature in ('chamfer', 'fillet') and bottom_feature_size > 0 else 0
+                if outer_top_sz > 0:
+                    need_wall = outer_top_sz + hole_fr * 1.2
+                    if outer_t - result['inner_top_radius'] < need_wall:
+                        new_it = max(outer_t - need_wall, small_r * S + 1.0)
+                        log_to_file(f"[STEP Exporter]   Top edge {outer_top_sz:.0f}: shrinking inner_top {result['inner_top_radius']:.0f}→{new_it:.0f} (need wall {need_wall:.0f})")
+                        result['inner_top_radius'] = new_it
+                        if result['inner_bottom_radius'] > result['inner_top_radius']:
+                            result['inner_bottom_radius'] = result['inner_top_radius']
+                if outer_btm_sz > 0:
+                    need_wall = outer_btm_sz + hole_fr * 1.2
+                    if outer_b - result['inner_bottom_radius'] < need_wall:
+                        new_ib = max(outer_b - need_wall, small_r * S + 1.0)
+                        log_to_file(f"[STEP Exporter]   Bottom edge {outer_btm_sz:.0f}: shrinking inner_bottom {result['inner_bottom_radius']:.0f}→{new_ib:.0f} (need wall {need_wall:.0f})")
+                        result['inner_bottom_radius'] = new_ib
                 log_to_file(f"[STEP Exporter]   -> cone_stepped_hole! bR={result['outer_bottom_radius']:.1f} tR={result['outer_top_radius']:.1f} h={result['height']:.1f}")
                 return result
             # Use stored edge feature properties (more reliable than mesh for stepped holes)
@@ -2008,7 +2046,14 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
         is_cone_like = (radius_ratio < 0.85 or radius_ratio > 1.0 / 0.85)
         # If stored edge feature explains the radius difference, it's a cylinder not cone
         if is_cone_like and stored_ctype:
-            is_cone_like = False  # Edge feature (fillet/chamfer) explains the difference
+            # 边缘特征（倒角/圆角）可部分解释半径差，但不能解释大幅差异
+            # 只有当倒角大小能覆盖整个半径差时，才认为是圆柱+倒角
+            stored_csz_m = stored_csz * 0.001  # mm → m
+            stored_fr_m = stored_fr * 0.001
+            max_feature = max(stored_csz_m, stored_fr_m)
+            if abs(bottom_radius - top_radius) < max_feature * 1.2:
+                is_cone_like = False  # 边缘特征能完全解释半径差 → 圆柱
+            # 否则保留锥体判断（边缘特征叠加在锥体上）
         if is_cone_like:
             result = {
                 'obj_type': 'cone_blind_hole',

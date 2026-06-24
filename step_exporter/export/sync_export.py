@@ -282,12 +282,16 @@ def _export_parametric_sync(filepath, bottom_shells, top_shells, cylinders, step
                 px, py, pz, step_schema, step_unit, 1 if enable_logging else 0)
         elif obj_type == 'cone_stepped_hole':
             top_fr = cparams.get('top_feature_size', 0) if cparams.get('top_feature') == 'fillet' else 0
+            btm_fr = cparams.get('bottom_feature_size', 0) if cparams.get('bottom_feature') == 'fillet' else 0
+            top_ch = cparams.get('top_feature_size', 0) if cparams.get('top_feature') == 'chamfer' else 0
+            btm_ch = cparams.get('bottom_feature_size', 0) if cparams.get('bottom_feature') == 'chamfer' else 0
+            hole_fr = cparams.get('hole_fillet_radius', 0)
             success = cpp_exporter.export_cone_stepped_hole_step(
                 temp_file, cparams['outer_bottom_radius'], cparams['outer_top_radius'],
                 cparams['height'],
                 cparams['small_hole_radius'], cparams['small_hole_height'],
                 cparams['inner_bottom_radius'], cparams['inner_top_radius'],
-                top_fr,
+                top_fr, btm_fr, hole_fr, top_ch, btm_ch,
                 px, py, pz, step_schema, step_unit, 1 if enable_logging else 0)
         else:
             success = False

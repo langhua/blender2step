@@ -1056,7 +1056,9 @@ TopoDS_Shape create_cone_stepped_hole_parametric(
     double inner_bottom_radius, double inner_top_radius,
     double top_fillet_radius,
     double bottom_fillet_radius,
-    double hole_fillet_radius)
+    double hole_fillet_radius,
+    double top_chamfer,
+    double bottom_chamfer)
 {
     try {
         double half_h = height / 2.0;
@@ -1088,6 +1090,7 @@ TopoDS_Shape create_cone_stepped_hole_parametric(
                   << " iBR=" << inner_bottom_radius << " iTR=" << inner_top_radius
                   << " topFillet=" << top_fillet_radius << " btmFillet=" << bottom_fillet_radius
                   << " holeFillet=" << hole_fillet_radius
+                  << " topChamfer=" << top_chamfer << " btmChamfer=" << bottom_chamfer
                   << " taper_at_top=" << (taper_at_top ? "YES" : "NO")
                   << " step_z=" << step_z << " lower_h=" << lower_h << " upper_h=" << upper_h << std::endl;
 
@@ -1108,6 +1111,37 @@ TopoDS_Shape create_cone_stepped_hole_parametric(
             else return TopoDS_Shape();
         }
         std::cout << "[STEP Exporter] cone_stepped_hole: outer cone OK" << std::endl;
+
+        // ===== Apply chamfers to outer cone (clean geometry, before Boolean cut) =====
+        if (top_chamfer > 0.001 || bottom_chamfer > 0.001) {
+            BRepFilletAPI_MakeChamfer chMaker(outer_cone);
+            bool chAdded = false;
+            std::vector<TopoDS_Edge> chTopEdges, chBtmEdges;
+            find_circular_edges(outer_cone, chTopEdges, chBtmEdges);
+            for (const auto& e : chTopEdges) {
+                gp_Pnt p = BRep_Tool::Pnt(TopExp::FirstVertex(e, true));
+                double er = sqrt(p.X()*p.X() + p.Y()*p.Y());
+                if (std::abs(er - outer_top_radius) / std::max(outer_top_radius, 0.001) < 0.2) {
+                    if (top_chamfer > 0.001) { chMaker.Add(top_chamfer, e); chAdded = true; }
+                }
+            }
+            for (const auto& e : chBtmEdges) {
+                gp_Pnt p = BRep_Tool::Pnt(TopExp::FirstVertex(e, true));
+                double er = sqrt(p.X()*p.X() + p.Y()*p.Y());
+                if (std::abs(er - outer_bottom_radius) / std::max(outer_bottom_radius, 0.001) < 0.2) {
+                    if (bottom_chamfer > 0.001) { chMaker.Add(bottom_chamfer, e); chAdded = true; }
+                }
+            }
+            if (chAdded) {
+                chMaker.Build();
+                if (chMaker.IsDone()) {
+                    outer_cone = shape_to_solid(chMaker.Shape());
+                    std::cout << "[STEP Exporter] cone_stepped_hole: chamfer on outer cone OK" << std::endl;
+                } else {
+                    std::cout << "[STEP Exporter] cone_stepped_hole: chamfer on outer cone FAILED" << std::endl;
+                }
+            }
+        }
 
         // ===== 2. Build fused inner cutter (cone + cylinder) =====
         double extend_bot = 1.0;
@@ -1152,7 +1186,7 @@ TopoDS_Shape create_cone_stepped_hole_parametric(
                 }
                 TopoDS_Solid result_top = shape_to_solid(cut_maker.Shape());
                 if (!result_top.IsNull()) {
-                    // === Apply fillets ===
+                    // === Apply fillets FIRST (use original wall thickness before chamfer shrinks it) ===
                     bool want_fillet = (top_fillet_radius > 0.001 || bottom_fillet_radius > 0.001 || hole_fillet_radius > 0.001);
                     if (want_fillet) {
                         std::vector<TopoDS_Edge> topEdges, bottomEdges;
@@ -1192,13 +1226,11 @@ TopoDS_Shape create_cone_stepped_hole_parametric(
                             // Apply inner top hole fillet if there's space
                             if (hole_fillet_radius > 0.001) {
                                 double used = (top_fillet_radius > 0.001) ? std::min(top_fillet_radius, wall * 0.95) : 0.0;
-                                if (used + hole_fillet_radius < wall * 0.95) {
-                                    fm.Add(hole_fillet_radius, inner_e);
-                                    added = true;
-                                    log_fillet_debug("taper_at_top: added INNER top hole fillet r=" + std::to_string(hole_fillet_radius));
-                                } else {
-                                    log_fillet_debug("taper_at_top: SKIP inner top hole fillet (outer=" + std::to_string(used) + " + hole=" + std::to_string(hole_fillet_radius) + " > wall=" + std::to_string(wall) + ")");
+                                if (used + hole_fillet_radius >= wall * 0.95) {
+                                    std::cout << "[STEP Exporter] Warning: hole fillet tight (wall=" << wall << " fr=" << hole_fillet_radius << ")" << std::endl;
                                 }
+                                fm.Add(hole_fillet_radius, inner_e);
+                                added = true;
                             }
                         }
                         
@@ -1246,7 +1278,7 @@ TopoDS_Shape create_cone_stepped_hole_parametric(
                                     double r = sqrt(p1.X()*p1.X() + p1.Y()*p1.Y());
                                     // Inner step edge (small hole top): r ≈ small_hole_radius
                                     // Outer step edge (large hole bottom): r ≈ inner_bottom_radius
-                                    if (r < small_hole_radius * 1.8 || fabs(r - (inner_bottom_radius + inner_top_radius) / 2.0) < r * 0.3) {
+                                    if (r < small_hole_radius * 1.8 || fabs(r - inner_bottom_radius) / std::max(inner_bottom_radius, 0.001) < 0.3) {
                                         fm.Add(hole_fillet_radius, edge);
                                         added = true;
                                         step_added++;
@@ -1338,7 +1370,7 @@ TopoDS_Shape create_cone_stepped_hole_parametric(
             std::cout << "[STEP Exporter] cone_stepped_hole: done, faces=" << nfaces
                       << " planar=" << nplanar << std::endl;
 
-            // Apply fillets: outer edges use top/bottom_fillet_radius, inner edges use hole_fillet_radius
+            // Apply fillets FIRST: inner edges use hole_fillet_radius, outer use top/bottom_fillet_radius
             bool want_fillet = (top_fillet_radius > 0.001 || bottom_fillet_radius > 0.001 || hole_fillet_radius > 0.001);
             if (want_fillet) {
                 log_fillet_debug("!taper_at_top: topR=" + std::to_string(top_fillet_radius) + " btmR=" + std::to_string(bottom_fillet_radius) + " holeR=" + std::to_string(hole_fillet_radius));
@@ -1368,13 +1400,11 @@ TopoDS_Shape create_cone_stepped_hole_parametric(
                     }
                     if (min_r < max_r * 0.9 && hole_fillet_radius > 0.001) {
                         double total_fr = (top_fillet_radius > 0.001 ? top_fillet_radius : 0) + hole_fillet_radius;
-                        if (total_fr < wall * 0.95) {
-                            filletMaker.Add(hole_fillet_radius, inner_e);
-                            added = true;
-                            log_fillet_debug("!taper_at_top: added INNER top hole fillet r=" + std::to_string(hole_fillet_radius));
-                        } else {
-                            log_fillet_debug("!taper_at_top: SKIP inner top fillet (outer+inner=" + std::to_string(total_fr) + " > wall=" + std::to_string(wall) + ")");
+                        if (total_fr >= wall * 0.95) {
+                            std::cout << "[STEP Exporter] Warning: hole fillet tight (wall=" << wall << " fr=" << hole_fillet_radius << ")" << std::endl;
                         }
+                        filletMaker.Add(hole_fillet_radius, inner_e);
+                        added = true;
                     }
                 }
 
@@ -1412,7 +1442,7 @@ TopoDS_Shape create_cone_stepped_hole_parametric(
                         gp_Pnt p2 = BRep_Tool::Pnt(v2);
                         if (fabs(p1.Z() - p2.Z()) < 0.01 && fabs(p1.Z() - step_z) < 0.02) {
                             double r = sqrt(p1.X() * p1.X() + p1.Y() * p1.Y());
-                            if (r < small_hole_radius * 1.5) {
+                            if (r < small_hole_radius * 1.5 || fabs(r - inner_bottom_radius) / std::max(inner_bottom_radius, 0.001) < 0.3) {
                                 filletMaker.Add(hole_fillet_radius, edge);
                                 added = true;
                                 log_fillet_debug("!taper_at_top: added STEP fillet r=" + std::to_string(hole_fillet_radius) + " at z=" + std::to_string(p1.Z()));
@@ -1435,7 +1465,6 @@ TopoDS_Shape create_cone_stepped_hole_parametric(
                     log_fillet_debug("!taper_at_top: NO edges added to fillet");
                 }
             }
-
             return result;
         }  // end else (taper_at_top)
 

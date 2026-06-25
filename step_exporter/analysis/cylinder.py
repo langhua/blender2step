@@ -1539,10 +1539,15 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
             stored_ctype_cone = obj.get('chamfer_type') if hasattr(obj, 'get') else None
             radius_diff_from_edge = False
             if stored_ctype_cone and abs(bottom_radius - top_radius) / max(bottom_radius, 0.01) > 0.05:
-                # The radius difference may be from chamfer/fillet, not cone body
-                if stored_ctype_cone in ('chamfer', 'fillet', 'chamfer_both', 'fillet_both',
-                                          'bottom_chamfer', 'bottom_fillet', 'chamfer_fillet'):
-                    radius_diff_from_edge = True
+                # 检查半径差是否完全可由边缘特征解释
+                # 如果半径差 > 边缘特征大小的1.2倍，则边缘特征叠加在锥体上
+                stored_csz_m = (obj.get('chamfer_size', 0) if hasattr(obj, 'get') else 0) * 0.001
+                stored_fr_m = (obj.get('fillet_radius_edge', 0) if hasattr(obj, 'get') else 0) * 0.001
+                max_edge_sz = max(stored_csz_m, stored_fr_m)
+                if (stored_ctype_cone in ('chamfer', 'fillet', 'chamfer_both', 'fillet_both',
+                                          'bottom_chamfer', 'bottom_fillet', 'chamfer_fillet')
+                        and abs(bottom_radius - top_radius) < max_edge_sz * 1.2):
+                    radius_diff_from_edge = True  # 边缘特征能完全解释半径差 → 圆柱
             is_cone_body = (abs(bottom_radius - top_radius) / max(bottom_radius, 0.01) > 0.05
                             and not radius_diff_from_edge)
             if is_cone_body:
@@ -1799,7 +1804,7 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                     bottom_feature = None; bottom_feature_size = 0
                 # 锥体台阶孔 C++ 已支持 chamfer + fillet 分层处理
                 result = {
-                    'obj_type': 'cone_stepped_hole',
+                    'obj_type': 'cone_stepped_hole_groove' if (has_groove_custom and groove_params and groove_params.get('groove_depth', 0) > 0) else 'cone_stepped_hole',
                     'outer_bottom_radius': max(bottom_radius, top_radius) * S,
                     'outer_top_radius': min(bottom_radius, top_radius) * S,
                     'height': height * S,
@@ -1815,10 +1820,10 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                     'pos_x': pos_x * S,
                     'pos_y': pos_y * S,
                     'pos_z': pos_z * S,
-                    'groove_depth': 0,
-                    'groove_bottom_width': 0,
-                    'groove_top_width': 0,
-                    'groove_extrusion_length': 0,
+                    'groove_depth': groove_params.get('groove_depth', 0) if groove_params else 0,
+                    'groove_bottom_width': groove_params.get('groove_bottom_width', 0) if groove_params else 0,
+                    'groove_top_width': groove_params.get('groove_top_width', 0) if groove_params else 0,
+                    'groove_extrusion_length': groove_params.get('groove_extrusion_length', 0) if groove_params else 0,
                 }
                 # 当外边缘有 chamfer/fillet 时，缩小锥孔口径以留出孔圆角空间
                 # 外边缘特征会削减顶部面半径，OCC Build 失败当 wall < hole_fillet*1.1

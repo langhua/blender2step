@@ -948,7 +948,7 @@ TopoDS_Shape create_hollow_cone_fillet_with_groove_parametric(
     // Groove is at mid-height (z=0) of the cone, centered in Y
     // The cross-section is in the XZ plane, extruded along Y axis
     double mid_outer_radius = (outer_bottom_radius + outer_top_radius) / 2.0;
-    double R_surface = mid_outer_radius;           // groove starts from cylinder/cone surface
+    double R_surface = std::max(outer_bottom_radius, outer_top_radius) + 1.0;  // extend past widest part
     double r_inner = mid_outer_radius - groove_depth;  // groove floor = surface - depth
     double hb = groove_bottom_width / 2.0;        // Z half-extent at surface (wider)
     double ht = groove_top_width / 2.0;           // Z half-extent at groove bottom (narrower)
@@ -2516,6 +2516,68 @@ TopoDS_Shape create_cone_with_blind_hole_and_groove_parametric(
     // Cut trapezoidal groove (same logic as create_cone_with_groove_parametric)
     double mid_r = (bottom_radius + top_radius) / 2.0;
     double r_surface = std::max(bottom_radius, top_radius) + 1.0;
+    double r_floor = mid_r - groove_depth;
+    double hb = groove_bottom_width / 2.0;
+    double ht = groove_top_width / 2.0;
+    double half_ext = groove_extrusion_length / 2.0;
+
+    BRepBuilderAPI_MakePolygon wireMaker;
+    wireMaker.Add(gp_Pnt(r_surface, -half_ext,  hb));
+    wireMaker.Add(gp_Pnt(r_floor,   -half_ext,  ht));
+    wireMaker.Add(gp_Pnt(r_floor,   -half_ext, -ht));
+    wireMaker.Add(gp_Pnt(r_surface, -half_ext, -hb));
+    wireMaker.Close();
+
+    if (!wireMaker.IsDone()) return solid;
+    TopoDS_Face face = BRepBuilderAPI_MakeFace(wireMaker.Wire());
+    if (face.IsNull()) return solid;
+
+    BRepPrimAPI_MakePrism prismMaker(face, gp_Vec(0, groove_extrusion_length, 0));
+    if (!prismMaker.IsDone()) return solid;
+    TopoDS_Shape prism = prismMaker.Shape();
+    if (prism.IsNull()) return solid;
+
+    BRepAlgoAPI_Cut cutMaker(solid, prism);
+    if (cutMaker.IsDone() && !cutMaker.Shape().IsNull()) {
+        TopoDS_Shape result = cutMaker.Shape();
+        if (result.ShapeType() == TopAbs_SOLID) {
+            solid = TopoDS::Solid(result);
+        } else {
+            BRepBuilderAPI_MakeSolid sm;
+            for (TopExp_Explorer exp(result, TopAbs_SHELL); exp.More(); exp.Next())
+                sm.Add(TopoDS::Shell(exp.Current()));
+            if (sm.IsDone()) solid = sm.Solid();
+        }
+    }
+
+    return solid;
+}
+
+// Combined: cone stepped hole + external trapezoidal groove
+TopoDS_Shape create_cone_stepped_hole_with_groove_parametric(
+    double outer_bottom_radius, double outer_top_radius,
+    double height,
+    double small_hole_radius, double small_hole_height,
+    double inner_bottom_radius, double inner_top_radius,
+    double top_fillet_radius, double bottom_fillet_radius,
+    double hole_fillet_radius,
+    double top_chamfer, double bottom_chamfer,
+    double groove_depth, double groove_bottom_width,
+    double groove_top_width, double groove_extrusion_length)
+{
+    TopoDS_Shape shape = create_cone_stepped_hole_parametric(
+        outer_bottom_radius, outer_top_radius, height,
+        small_hole_radius, small_hole_height,
+        inner_bottom_radius, inner_top_radius,
+        top_fillet_radius, bottom_fillet_radius, hole_fillet_radius,
+        top_chamfer, bottom_chamfer);
+    if (shape.IsNull()) return TopoDS_Shape();
+
+    TopoDS_Solid solid = shape_to_solid(shape);
+    if (solid.IsNull()) return TopoDS_Shape();
+
+    double mid_r = (outer_bottom_radius + outer_top_radius) / 2.0;
+    double r_surface = std::max(outer_bottom_radius, outer_top_radius) + 1.0;
     double r_floor = mid_r - groove_depth;
     double hb = groove_bottom_width / 2.0;
     double ht = groove_top_width / 2.0;

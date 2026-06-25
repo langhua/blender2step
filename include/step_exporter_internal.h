@@ -136,6 +136,16 @@ TopoDS_Shape create_cylinder_with_groove_parametric(double radius, double height
 TopoDS_Shape create_cone_with_groove_parametric(double bottom_radius, double top_radius, double height,
                                                  double groove_depth, double groove_bottom_width,
                                                  double groove_top_width, double groove_extrusion_length);
+// Cone stepped hole + external groove
+TopoDS_Shape create_cone_stepped_hole_with_groove_parametric(double outer_bottom_radius, double outer_top_radius,
+                                                              double height,
+                                                              double small_hole_radius, double small_hole_height,
+                                                              double inner_bottom_radius, double inner_top_radius,
+                                                              double top_fillet_radius, double bottom_fillet_radius,
+                                                              double hole_fillet_radius,
+                                                              double top_chamfer, double bottom_chamfer,
+                                                              double groove_depth, double groove_bottom_width,
+                                                              double groove_top_width, double groove_extrusion_length);
 // Cone with blind hole (single end)
 TopoDS_Shape create_cone_with_blind_hole_solid_parametric(double bottom_radius, double top_radius, double height,
                                                            double hole_radius, double hole_depth,

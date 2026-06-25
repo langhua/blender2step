@@ -601,6 +601,26 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
             cparams.get('inner_top_radius', cparams.get('inner_radius', 0)),
             top_fr, btm_fr, hole_fr, top_ch, btm_ch, px, py, pz, data['step_schema'], data['step_unit'],
             1 if data['enable_logging'] else 0)
+    elif obj_type == 'cone_stepped_hole_groove':
+        top_fr = cparams.get('top_feature_size', 0.0) if cparams.get('top_feature') == 'fillet' else 0.0
+        btm_fr = cparams.get('bottom_feature_size', 0.0) if cparams.get('bottom_feature') == 'fillet' else 0.0
+        top_ch = cparams.get('top_feature_size', 0.0) if cparams.get('top_feature') == 'chamfer' else 0.0
+        btm_ch = cparams.get('bottom_feature_size', 0.0) if cparams.get('bottom_feature') == 'chamfer' else 0.0
+        hole_fr = cparams.get('hole_fillet_radius', 0)
+        return cpp_exporter.export_cone_stepped_hole_groove_step(
+            temp_file,
+            cparams.get('outer_bottom_radius', cparams.get('outer_radius', 0)),
+            cparams.get('outer_top_radius', cparams.get('outer_radius', 0)),
+            cparams['height'],
+            cparams.get('small_hole_radius', 0),
+            cparams.get('small_hole_height', 0),
+            cparams.get('inner_bottom_radius', cparams.get('inner_radius', 0)),
+            cparams.get('inner_top_radius', cparams.get('inner_radius', 0)),
+            top_fr, btm_fr, hole_fr, top_ch, btm_ch,
+            cparams['groove_depth'], cparams['groove_bottom_width'],
+            cparams['groove_top_width'], cparams['groove_extrusion_length'],
+            px, py, pz, data['step_schema'], data['step_unit'],
+            1 if data['enable_logging'] else 0)
     elif obj_type == 'cone_fillet':
         has_bottom = cparams.get('bottom_feature') == 'fillet'
         has_top = cparams.get('top_feature') == 'fillet'

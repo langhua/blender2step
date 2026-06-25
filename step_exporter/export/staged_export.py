@@ -546,6 +546,10 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
             1 if data['enable_logging'] else 0)
     elif obj_type == 'hollow_cone_grooved':
         # Hollow cone (through-hole) with trapezoidal groove
+        top_ch = cparams.get('top_chamfer', 0.0)
+        top_fr = cparams.get('top_fillet', 0.0)
+        btm_ch = cparams.get('bottom_chamfer', 0.0)
+        btm_fr = cparams.get('bottom_fillet', 0.0)
         return cpp_exporter.export_hollow_cone_fillet_with_groove_step(
             temp_file,
             cparams.get('outer_bottom_radius', cparams.get('outer_radius', 0)),
@@ -557,7 +561,7 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
             cparams.get('groove_bottom_width', 0),
             cparams.get('groove_top_width', 0),
             cparams.get('groove_extrusion_length', 0),
-            0, 0, 0, 0,  # no chamfer/fillet for true cones
+            top_ch, top_fr, btm_ch, btm_fr,
             px, py, pz, data['step_schema'], data['step_unit'],
             1 if data['enable_logging'] else 0)
     elif obj_type == 'hollow_cylinder_grooved':

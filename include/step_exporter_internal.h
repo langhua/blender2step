@@ -135,7 +135,9 @@ TopoDS_Shape create_cylinder_with_groove_parametric(double radius, double height
 // Cone with external trapezoidal groove at mid-height
 TopoDS_Shape create_cone_with_groove_parametric(double bottom_radius, double top_radius, double height,
                                                  double groove_depth, double groove_bottom_width,
-                                                 double groove_top_width, double groove_extrusion_length);
+                                                 double groove_top_width, double groove_extrusion_length,
+                                                 double top_chamfer, double top_fillet,
+                                                 double bottom_chamfer, double bottom_fillet);
 // Cone stepped hole + external groove
 TopoDS_Shape create_cone_stepped_hole_with_groove_parametric(double outer_bottom_radius, double outer_top_radius,
                                                               double height,

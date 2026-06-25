@@ -1542,19 +1542,23 @@ PyObject* export_cone_groove_step(PyObject* self, PyObject* args) {
     const char* filename;
     double bottom_radius, top_radius, height;
     double groove_depth, groove_bottom_width, groove_top_width, groove_extrusion_length;
+    double top_chamfer = 0.0, top_fillet = 0.0;
+    double bottom_chamfer = 0.0, bottom_fillet = 0.0;
     double pos_x = 0.0, pos_y = 0.0, pos_z = 0.0;
     const char* step_schema = "AP214IS";
     const char* unit = "MILLIMETER";
     int enable_logging = 1;
 
-    if (!PyArg_ParseTuple(args, "sddddddd|dddssi",
+    if (!PyArg_ParseTuple(args, "sddddddd|dddddddssi",
                           &filename, &bottom_radius, &top_radius, &height,
                           &groove_depth, &groove_bottom_width, &groove_top_width, &groove_extrusion_length,
+                          &top_chamfer, &top_fillet, &bottom_chamfer, &bottom_fillet,
                           &pos_x, &pos_y, &pos_z,
                           &step_schema, &unit, &enable_logging)) {
         PyErr_SetString(PyExc_TypeError,
             "export_cone_groove_step() expected: filename, bottom_radius, top_radius, height, "
             "groove_depth, groove_bottom_width, groove_top_width, groove_extrusion_length, "
+            "[top_chamfer], [top_fillet], [bottom_chamfer], [bottom_fillet], "
             "[pos_x], [pos_y], [pos_z], [step_schema], [unit], [enable_logging]");
         return NULL;
     }
@@ -1562,7 +1566,8 @@ PyObject* export_cone_groove_step(PyObject* self, PyObject* args) {
     try {
         TopoDS_Shape shape = create_cone_with_groove_parametric(
             bottom_radius, top_radius, height,
-            groove_depth, groove_bottom_width, groove_top_width, groove_extrusion_length);
+            groove_depth, groove_bottom_width, groove_top_width, groove_extrusion_length,
+            top_chamfer, top_fillet, bottom_chamfer, bottom_fillet);
         if (shape.IsNull()) Py_RETURN_FALSE;
 
         if (pos_x != 0.0 || pos_y != 0.0 || pos_z != 0.0) {

@@ -2437,15 +2437,46 @@ TopoDS_Shape create_cylinder_with_groove_parametric(
 TopoDS_Shape create_cone_with_groove_parametric(
     double bottom_radius, double top_radius, double height,
     double groove_depth, double groove_bottom_width,
-    double groove_top_width, double groove_extrusion_length)
+    double groove_top_width, double groove_extrusion_length,
+    double top_chamfer, double top_fillet,
+    double bottom_chamfer, double bottom_fillet)
 {
     double mid_r = (bottom_radius + top_radius) / 2.0;
 
-    // Create cone body
+    // Create cone body with edge features
     TopoDS_Shape outer = create_cone_solid_parametric(bottom_radius, top_radius, height);
     if (outer.IsNull()) return TopoDS_Shape();
     TopoDS_Solid solid = shape_to_solid(outer);
     if (solid.IsNull()) return TopoDS_Shape();
+
+    // Apply edge features (chamfer/fillet) before groove cut
+    auto apply_edge = [&](bool at_top) {
+        double ch = at_top ? top_chamfer : bottom_chamfer;
+        double fr = at_top ? top_fillet : bottom_fillet;
+        double sz = std::max(ch, fr);
+        if (sz <= 0.001) return;
+        bool is_chamfer = (ch > 0.001);
+        std::vector<TopoDS_Edge> topEdges, bottomEdges;
+        find_circular_edges(solid, topEdges, bottomEdges);
+        const auto& target = at_top ? topEdges : bottomEdges;
+        double edgeR = at_top ? top_radius : bottom_radius;
+        for (const auto& e : target) {
+            double er = BRepAdaptor_Curve(e).Circle().Radius();
+            if (std::abs(er - edgeR) / std::max(edgeR, 0.001) < 0.2) {
+                if (is_chamfer) {
+                    BRepFilletAPI_MakeChamfer cm(solid);
+                    cm.Add(ch, e); cm.Build();
+                    if (cm.IsDone()) { solid = shape_to_solid(cm.Shape()); break; }
+                } else {
+                    BRepFilletAPI_MakeFillet fm(solid);
+                    fm.Add(fr, e); fm.Build();
+                    if (fm.IsDone()) { solid = shape_to_solid(fm.Shape()); break; }
+                }
+            }
+        }
+    };
+    apply_edge(true);
+    apply_edge(false);
 
     // Create trapezoidal groove cutter at mid-height
     // Use max radius + margin to ensure cutter extends outside cone at all Z levels

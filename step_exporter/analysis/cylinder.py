@@ -2144,6 +2144,12 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
         if stored_ct in ('chamfer', 'fillet', 'chamfer_both', 'fillet_both',
                          'bottom_chamfer', 'bottom_fillet', 'chamfer_fillet'):
             has_edge_feature = True
+            # If body is a cone and the edge feature can't fully explain the radius
+            # difference, keep is_cone=True (edge feature sits on the cone surface).
+            if is_cone:
+                max_edge = max(stored_csz, stored_fr)
+                if abs(bottom_radius - top_radius) > max_edge * 1.2:
+                    has_edge_feature = False  # cone body with edge feature, not cylinder
             # Reset mesh-detected features; use stored properties only
             top_feature = None; top_feature_size = 0.0
             bottom_feature = None; bottom_feature_size = 0.0
@@ -2398,6 +2404,12 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
             if stored_ct in ('chamfer', 'fillet', 'chamfer_both', 'fillet_both',
                              'bottom_chamfer', 'bottom_fillet', 'chamfer_fillet'):
                 has_edge_feature2 = True
+                # If body is a cone and the edge feature can't fully explain the radius
+                # difference, keep is_cone=True (edge feature sits on the cone surface).
+                if is_cone:
+                    max_edge2 = max(stored_csz, stored_fr)
+                    if abs(bottom_radius - top_radius) > max_edge2 * 1.2:
+                        has_edge_feature2 = False
                 # Reset mesh-detected features; use stored properties only
                 top_feature = None; top_feature_size = 0.0
                 bottom_feature = None; bottom_feature_size = 0.0

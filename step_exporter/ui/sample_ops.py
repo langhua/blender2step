@@ -406,7 +406,7 @@ class STEP_EXPORTER_OT_create_cylinder_gallery(Operator):
 
             if self._mod_idx < len(self._grooved_list):
 
-                m._apply_groove(self._grooved_list[self._mod_idx])
+                m.apply_groove(self._grooved_list[self._mod_idx])
 
                 self._mod_idx += 1
 
@@ -792,7 +792,7 @@ class STEP_EXPORTER_OT_create_cone_gallery(Operator):
 
             if self._mod_idx < len(self._grooved_list):
 
-                m._apply_groove(self._grooved_list[self._mod_idx])
+                m.apply_groove(self._grooved_list[self._mod_idx])
 
                 self._mod_idx += 1
 
@@ -1174,7 +1174,7 @@ class STEP_EXPORTER_OT_create_cone_gallery_inverted(Operator):
 
             if self._mod_idx < len(self._grooved_list):
 
-                m._apply_groove(self._grooved_list[self._mod_idx])
+                m.apply_groove(self._grooved_list[self._mod_idx])
 
                 self._mod_idx += 1
 

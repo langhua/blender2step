@@ -272,7 +272,7 @@ def _bevel_mixed_edges():
     Adapted from cylinder gallery for varying cone radii."""
     import bmesh
     for obj in list(bpy.data.objects):
-        if not obj.name.startswith('S') or obj.name.startswith('CUT_') or obj.name.startswith('L'):
+        if not (obj.name.startswith('S') or obj.name.startswith('GS')) or obj.name.startswith('CUT_') or obj.name.startswith('L'):
             continue
         if obj.get('chamfer_type') != 'chamfer_fillet':
             continue
@@ -315,10 +315,13 @@ def _bevel_mixed_edges():
         bpy.ops.object.mode_set(mode='OBJECT')
 
 def apply_all_modifiers():
-    """Apply Bevel modifiers FIRST (vertex groups intact), then Boolean (holes)."""
+    """Apply Bevel modifiers FIRST (vertex groups intact), then Boolean (holes + grooves)."""
     cones = [o for o in bpy.data.objects
-             if o.name.startswith('S') and not o.name.startswith('CUT_')
-             and not o.name.startswith('L')]
+             if (o.name.startswith('S') or o.name.startswith('GS')) and not o.name.startswith('CUT_')
+             and not o.name.startswith('GCUT_') and not o.name.startswith('L')]
+    s_count = sum(1 for o in cones if o.name.startswith('S'))
+    gs_count = sum(1 for o in cones if o.name.startswith('GS'))
+    print(f"apply_all_modifiers: {len(cones)} objects ({s_count} S, {gs_count} GS)")
     for obj in cones:
         if not obj.modifiers:
             continue
@@ -338,16 +341,29 @@ def apply_all_modifiers():
                 except RuntimeError as e:
                     print(f"    Skip {obj.name}/{mod.name}: {e}")
 
-    # Remove cutter objects
+    # Mesh cleanup after Boolean operations (remove residual geometry)
+    import bmesh
     for obj in list(bpy.data.objects):
-        if obj.name.startswith('CUT_'):
+        if not (obj.name.startswith('S') or obj.name.startswith('GS')) or obj.name.startswith('CUT_') or obj.name.startswith('GCUT_') or obj.name.startswith('L'):
+            continue
+        bpy.context.view_layer.objects.active = obj
+        bpy.ops.object.mode_set(mode='EDIT')
+        bpy.ops.mesh.select_all(action='SELECT')
+        bpy.ops.mesh.remove_doubles(threshold=0.0001)
+        bpy.ops.mesh.delete_loose()
+        bpy.ops.mesh.normals_make_consistent(inside=False)
+        bpy.ops.object.mode_set(mode='OBJECT')
+
+    # Remove cutter objects (hole cutters CUT_ and groove cutters GCUT_)
+    for obj in list(bpy.data.objects):
+        if obj.name.startswith('CUT_') or obj.name.startswith('GCUT_'):
             bpy.data.objects.remove(obj, do_unlink=True)
 
 def _bevel_hole_openings():
     """After modifiers applied, bevel hole edge loops for visual fillet."""
     import bmesh
     for obj in list(bpy.data.objects):
-        if not obj.name.startswith('S') or obj.name.startswith('CUT_') or obj.name.startswith('L'):
+        if not (obj.name.startswith('S') or obj.name.startswith('GS')) or obj.name.startswith('CUT_') or obj.name.startswith('L'):
             continue
         hole_type = obj.get('hole_type')
         if not hole_type:
@@ -601,79 +617,17 @@ def _post_process_one(obj):
     return
 
 
-# Groove parameters — trapezoidal through-slot
-GRV_DEPTH = 0.06; GRV_TOP_W = 0.08; GRV_ANGLE = math.radians(45)
+# Groove utilities shared with cylinder gallery and inverted cone gallery
+from groove_utils import add_trapezoidal_groove, apply_groove, GRV_DEPTH, GRV_TOP_W
+
 Y_OFFSET = 6.6 + 4.8 + 6.6  # right grid center: half_span + 4col_gap + half_span = 18.0
 
 def _add_groove_to_cone(obj):
-    """Add trapezoidal groove cutter to a single cone via Boolean modifier.
-    Follows parametric_cylinder.py: extend r_surface outward for tapered to enlarge depth."""
-    import bmesh
-    mid_r = (obj.get('cone_bottom_r', 500) / 1000 + obj.get('cone_top_r', 250) / 1000) / 2
-    # Extend cutter outward for tapered surface (like groove_cone_depth_mult)
-    cutter_depth = GRV_DEPTH * 1.5  # extend outward by 50%
-    r_surface = mid_r + (cutter_depth - GRV_DEPTH) + 0.0001
-    r_floor = mid_r - GRV_DEPTH
-    # Compute bot_w from actual cutter radial span (like parametric)
-    cutter_span = r_surface - r_floor
-    bot_w = GRV_TOP_W + 2.0 * cutter_span * math.tan(GRV_ANGLE)
-    hb = bot_w / 2.0
-    ht = GRV_TOP_W / 2.0
-    ext_len = 2.0 * mid_r + 0.04  # through entire diameter + margin
-    half_ext = ext_len / 2.0
-    cy = obj.location.y
-    cz = obj.location.z
-
-    bpy.ops.mesh.primitive_cube_add(size=1.0, location=(0, cy, cz))
-    cutter = bpy.context.active_object
-    cutter.name = f"GCUT_{obj.name}"
-    cutter.hide_render = True
-
-    bpy.ops.object.mode_set(mode='EDIT')
-    bm = bmesh.from_edit_mesh(cutter.data)
-    for v in bm.verts:
-        x_sign = 1 if v.co.x > 0 else -1
-        y_sign = 1 if v.co.y > 0 else -1
-        z_sign = 1 if v.co.z > 0 else -1
-        v.co = (
-            r_surface if x_sign > 0 else r_floor,
-            half_ext if y_sign > 0 else -half_ext,
-            hb if x_sign > 0 and z_sign > 0 else
-            -hb if x_sign > 0 and z_sign < 0 else
-            ht if z_sign > 0 else -ht
-        )
-    bmesh.update_edit_mesh(cutter.data)
-    bpy.ops.object.mode_set(mode='OBJECT')
-
-    mod = obj.modifiers.new(name="Groove", type='BOOLEAN')
-    mod.object = cutter
-    mod.operation = 'DIFFERENCE'
-    mod.solver = 'EXACT'
-
-    bot_w_mm = bot_w * 1000
-    top_w_mm = GRV_TOP_W * 1000
-    obj['step_groove_depth'] = GRV_DEPTH * 1000
-    obj['step_groove_bottom_width'] = bot_w_mm
-    obj['step_groove_top_width'] = top_w_mm
-    obj['step_groove_extrusion_length'] = ext_len * 1000
-
-
-def _apply_groove(obj):
-    """Apply the Groove modifier and clean up mesh + cutter."""
-    bpy.context.view_layer.objects.active = obj
-    for mod in obj.modifiers:
-        if mod.name == "Groove" and mod.type == 'BOOLEAN':
-            cutter = mod.object
-            bpy.ops.object.modifier_apply(modifier="Groove")
-            if cutter:
-                bpy.data.objects.remove(cutter, do_unlink=True)
-            break
-    bpy.ops.object.mode_set(mode='EDIT')
-    bpy.ops.mesh.select_all(action='SELECT')
-    bpy.ops.mesh.remove_doubles(threshold=0.0001)
-    bpy.ops.mesh.delete_loose()
-    bpy.ops.mesh.normals_make_consistent(inside=False)
-    bpy.ops.object.mode_set(mode='OBJECT')
+    """Thin wrapper with cone-specific debug output."""
+    bot_r = obj.get('cone_bottom_r', 500) / 1000
+    top_r = obj.get('cone_top_r', 250) / 1000
+    print(f"  [groove] {obj.name}: bot_r={bot_r:.3f} top_r={top_r:.3f}")
+    add_trapezoidal_groove(obj, bot_r, top_r)
 
 
 # ===== BUILD =====
@@ -836,6 +790,26 @@ if __name__ == '__main__':
             add_cone(y, z, f"S{shelf_idx+1}_{name_sfx}", br, tr,
                      base_ctype, base_fr, hole, hd, he)
             add_label(y, z, label)
+            y += STEP_Y
+
+    # Grooved shelves (GS1-GS8): same Z rows as S, offset in X to avoid overlap
+    X_GS = max(BOT_R, TOP_R) * 6 + 2.0  # right column, clear of S objects
+    print("=== Creating grooved shelves (GS1-GS8) ===")
+    for shelf_idx, (shelf_label, base_ctype, base_fr, items) in enumerate(SHELVES):
+        z = Z_TOP - shelf_idx * Z_GAP  # same Z rows as S shelves
+        print(f"  GS shelf {shelf_idx+1}: {shelf_label} at z={z:.2f}")
+        n = len(items)
+        start_y = -((n - 1) * STEP_Y) / 2
+        y = start_y
+        label_y = start_y + STEP_Y * (n - 1) / 2
+        add_shelf_label(label_y, z, f"G {shelf_label}")
+
+        for name_sfx, hole, hd, he, label in items:
+            br, tr = BOT_R, TOP_R
+            obj = add_cone(y, z, f"GS{shelf_idx+1}_{name_sfx}", br, tr,
+                          base_ctype, base_fr, hole, hd, he)
+            obj.location.x = X_GS  # offset to right column
+            _add_groove_to_cone(obj)
             y += STEP_Y
 
     apply_all_modifiers()

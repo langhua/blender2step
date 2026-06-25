@@ -16,8 +16,6 @@ HOLE_R = 0.1; TAPER_OPEN_R = 0.12; HOLE_D = H * 0.25
 HOLE_FILLET_R = 0.015
 # Stepped hole parameters
 STEP_LARGE_R = 0.14; STEP_LARGE_H = H * 0.8; STEP_SMALL_R = 0.05
-# Groove parameters — trapezoidal through-slot
-GRV_DEPTH = 0.06; GRV_TOP_W = 0.08; GRV_ANGLE = math.radians(45)
 GAP_Y = 0.2
 Z_GAP = H * 2 + 0.8
 X_LABEL = R + 0.35
@@ -504,74 +502,12 @@ SHELVES = [
 # 4 column gap = 4*STEP_Y=4.0, then right grid center at 5.5+4.0+5.5=15.0
 Y_OFFSET = 15.0
 
+# Groove utilities shared with cone galleries
+from groove_utils import add_trapezoidal_groove, apply_groove, GRV_DEPTH, GRV_TOP_W
+
 def _add_groove_to_cylinder(obj):
-    """Add a trapezoidal groove cutter to a single cylinder via Boolean modifier.
-    Follows parametric_cylinder.py pattern."""
-    import bmesh
-    r_surface = R + 0.0001
-    r_floor = R - GRV_DEPTH
-    cutter_span = r_surface - r_floor  # actual radial span
-    bot_w = GRV_TOP_W + 2.0 * cutter_span * math.tan(GRV_ANGLE)
-    hb = bot_w / 2.0
-    ht = GRV_TOP_W / 2.0
-    ext_len = 2.0 * R + 0.04  # through entire diameter + margin
-    half_ext = ext_len / 2.0
-    cy = obj.location.y
-    cz = obj.location.z
-
-    bpy.ops.mesh.primitive_cube_add(size=1.0, location=(0, cy, cz))
-    cutter = bpy.context.active_object
-    cutter.name = f"GCUT_{obj.name}"
-    cutter.hide_render = True
-
-    bpy.ops.object.mode_set(mode='EDIT')
-    bm = bmesh.from_edit_mesh(cutter.data)
-    for v in bm.verts:
-        x_sign = 1 if v.co.x > 0 else -1
-        y_sign = 1 if v.co.y > 0 else -1
-        z_sign = 1 if v.co.z > 0 else -1
-        v.co = (
-            r_surface if x_sign > 0 else r_floor,
-            half_ext if y_sign > 0 else -half_ext,
-            hb if x_sign > 0 and z_sign > 0 else
-            -hb if x_sign > 0 and z_sign < 0 else
-            ht if z_sign > 0 else -ht
-        )
-    bmesh.update_edit_mesh(cutter.data)
-    bpy.ops.object.mode_set(mode='OBJECT')
-
-    mod = obj.modifiers.new(name="Groove", type='BOOLEAN')
-    mod.object = cutter
-    mod.operation = 'DIFFERENCE'
-    mod.solver = 'EXACT'
-
-    # Store groove params (mm)
-    bot_w_mm = bot_w * 1000
-    top_w_mm = GRV_TOP_W * 1000
-    obj['step_groove_depth'] = GRV_DEPTH * 1000
-    obj['step_groove_bottom_width'] = bot_w_mm
-    obj['step_groove_top_width'] = top_w_mm
-    obj['step_groove_extrusion_length'] = ext_len * 1000
-
-
-def _apply_groove(obj):
-    """Apply the Groove modifier and clean up mesh + cutter."""
-    bpy.context.view_layer.objects.active = obj
-    # Find cutter object
-    for mod in obj.modifiers:
-        if mod.name == "Groove" and mod.type == 'BOOLEAN':
-            cutter = mod.object
-            bpy.ops.object.modifier_apply(modifier="Groove")
-            if cutter:
-                bpy.data.objects.remove(cutter, do_unlink=True)
-            break
-    # Clean up mesh
-    bpy.ops.object.mode_set(mode='EDIT')
-    bpy.ops.mesh.select_all(action='SELECT')
-    bpy.ops.mesh.remove_doubles(threshold=0.0001)
-    bpy.ops.mesh.delete_loose()
-    bpy.ops.mesh.normals_make_consistent(inside=False)
-    bpy.ops.object.mode_set(mode='OBJECT')
+    """Thin wrapper for cylinder-specific groove (bot_r = top_r = R)."""
+    add_trapezoidal_groove(obj, R)
 
 
 def _apply_modifiers_to(obj):

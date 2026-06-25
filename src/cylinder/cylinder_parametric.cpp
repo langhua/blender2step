@@ -2448,7 +2448,74 @@ TopoDS_Shape create_cone_with_groove_parametric(
     if (solid.IsNull()) return TopoDS_Shape();
 
     // Create trapezoidal groove cutter at mid-height
-    double r_surface = mid_r + 1.5;
+    // Use max radius + margin to ensure cutter extends outside cone at all Z levels
+    double r_surface = std::max(bottom_radius, top_radius) + 1.0;
+    double r_floor = mid_r - groove_depth;
+    double hb = groove_bottom_width / 2.0;
+    double ht = groove_top_width / 2.0;
+    double half_ext = groove_extrusion_length / 2.0;
+
+    BRepBuilderAPI_MakePolygon wireMaker;
+    wireMaker.Add(gp_Pnt(r_surface, -half_ext,  hb));
+    wireMaker.Add(gp_Pnt(r_floor,   -half_ext,  ht));
+    wireMaker.Add(gp_Pnt(r_floor,   -half_ext, -ht));
+    wireMaker.Add(gp_Pnt(r_surface, -half_ext, -hb));
+    wireMaker.Close();
+
+    if (!wireMaker.IsDone()) return solid;
+    TopoDS_Face face = BRepBuilderAPI_MakeFace(wireMaker.Wire());
+    if (face.IsNull()) return solid;
+
+    BRepPrimAPI_MakePrism prismMaker(face, gp_Vec(0, groove_extrusion_length, 0));
+    if (!prismMaker.IsDone()) return solid;
+    TopoDS_Shape prism = prismMaker.Shape();
+    if (prism.IsNull()) return solid;
+
+    BRepAlgoAPI_Cut cutMaker(solid, prism);
+    if (cutMaker.IsDone() && !cutMaker.Shape().IsNull()) {
+        TopoDS_Shape result = cutMaker.Shape();
+        if (result.ShapeType() == TopAbs_SOLID) {
+            solid = TopoDS::Solid(result);
+        } else {
+            BRepBuilderAPI_MakeSolid sm;
+            for (TopExp_Explorer exp(result, TopAbs_SHELL); exp.More(); exp.Next())
+                sm.Add(TopoDS::Shell(exp.Current()));
+            if (sm.IsDone()) solid = sm.Solid();
+        }
+    }
+
+    return solid;
+}
+
+// Combined: cone with blind hole + external trapezoidal groove
+TopoDS_Shape create_cone_with_blind_hole_and_groove_parametric(
+    double bottom_radius, double top_radius, double height,
+    double hole_radius, double hole_depth, double hole_depth_top,
+    double hole_fillet_radius, const char* hole_position,
+    double hole_radius_bottom,
+    double top_chamfer, double top_fillet,
+    double bottom_chamfer, double bottom_fillet,
+    double groove_depth, double groove_bottom_width,
+    double groove_top_width, double groove_extrusion_length)
+{
+    bool is_bottom = (strcmp(hole_position, "bottom") == 0);
+    bool is_both = (strcmp(hole_position, "both") == 0);
+    double hd_top = is_both ? hole_depth_top : 0.0;
+
+    // Create cone + blind hole first
+    TopoDS_Shape shape = create_cone_with_blind_hole_solid_parametric(
+        bottom_radius, top_radius, height,
+        hole_radius, hole_depth, hd_top,
+        hole_fillet_radius, is_bottom, hole_radius_bottom,
+        top_chamfer, top_fillet, bottom_chamfer, bottom_fillet);
+    if (shape.IsNull()) return TopoDS_Shape();
+
+    TopoDS_Solid solid = shape_to_solid(shape);
+    if (solid.IsNull()) return TopoDS_Shape();
+
+    // Cut trapezoidal groove (same logic as create_cone_with_groove_parametric)
+    double mid_r = (bottom_radius + top_radius) / 2.0;
+    double r_surface = std::max(bottom_radius, top_radius) + 1.0;
     double r_floor = mid_r - groove_depth;
     double hb = groove_bottom_width / 2.0;
     double ht = groove_top_width / 2.0;

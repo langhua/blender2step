@@ -1207,7 +1207,7 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                         bottom_radius = peak_r
     
     # 对于圆柱本体有过渡 → 修正 radius 为 body_radius
-    if cylindrical_body and (top_feature or bottom_feature):
+    if cylindrical_body and (top_feature or bottom_feature) and not has_groove_custom:
         # 单侧过渡：用无过渡侧的极端Z层半径作为本体半径
         # 避免 body_radius 因过渡区边界顶点混入导致轻微偏差
         if top_feature and not bottom_feature:
@@ -2056,7 +2056,8 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
             # 否则保留锥体判断（边缘特征叠加在锥体上）
         if is_cone_like:
             result = {
-                'obj_type': 'cone_blind_hole',
+                'obj_type': 'cone_blind_hole_groove' if (has_groove_custom and groove_params and groove_params.get('groove_depth', 0) > 0) else 'cone_blind_hole',
+                'bottom_radius': bottom_radius * S,
                 'bottom_radius': bottom_radius * S,
                 'top_radius': top_radius * S,
                 'height': height * S,
@@ -2132,6 +2133,9 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
         stored_ct = obj.get('chamfer_type') if hasattr(obj, 'get') else None
         stored_csz = obj.get('chamfer_size', 0) if hasattr(obj, 'get') else 0
         stored_fr = obj.get('fillet_radius_edge', 0) if hasattr(obj, 'get') else 0
+        log_to_file(f"[STEP Exporter]   [GROOVE:v4] stored_ct={stored_ct} stored_csz={stored_csz} "
+                    f"is_cone={is_cone} bR={bottom_radius:.1f} tR={top_radius:.1f} "
+                    f"mesh_tf={top_feature} mesh_tfs={top_feature_size if top_feature else 'N/A'}")
         if stored_ct in ('chamfer', 'fillet', 'chamfer_both', 'fillet_both',
                          'bottom_chamfer', 'bottom_fillet', 'chamfer_fillet'):
             has_edge_feature = True
@@ -2154,8 +2158,31 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                 bottom_feature = 'fillet'; bottom_feature_size = stored_fr
         else:
             # No stored properties: use mesh-detected features
+            # Filter out false chamfer/fillet detections caused by groove artifacts:
+            # a chamfer size equal to the cone taper or >= radius is invalid
+            log_to_file(f"[STEP Exporter]   [FILTER:v4] before: tf={top_feature} tfs={top_feature_size:.4f} "
+                        f"bf={bottom_feature} bfs={bottom_feature_size:.4f} "
+                        f"bR={bottom_radius:.1f} tR={top_radius:.1f} diff={abs(bottom_radius-top_radius):.1f}")
+            if top_feature == 'chamfer' and top_feature_size > 0:
+                if abs(bottom_radius - top_radius) > 0.001:  # cone shape
+                    if top_feature_size >= abs(bottom_radius - top_radius) * 0.95:
+                        log_to_file(f"[STEP Exporter]   [FILTER:v4] Clearing top chamfer: "
+                                    f"{top_feature_size:.1f} >= {abs(bottom_radius-top_radius)*0.95:.1f} (95% of taper)")
+                        top_feature = None; top_feature_size = 0.0
+                if top_feature and top_feature_size >= top_radius * 0.9:
+                    log_to_file(f"[STEP Exporter]   [FILTER:v4] Clearing top chamfer: "
+                                f"{top_feature_size:.1f} >= {top_radius*0.9:.1f} (90% of top_r)")
+                    top_feature = None; top_feature_size = 0.0
+            if bottom_feature == 'chamfer' and bottom_feature_size > 0:
+                if abs(bottom_radius - top_radius) > 0.001:
+                    if bottom_feature_size >= abs(bottom_radius - top_radius) * 0.95:
+                        bottom_feature = None; bottom_feature_size = 0.0
+                if bottom_feature_size >= bottom_radius * 0.9:
+                    bottom_feature = None; bottom_feature_size = 0.0
             has_edge_feature = ((top_feature and top_feature != 'none' and top_feature_size > 0.0001) or
                                 (bottom_feature and bottom_feature != 'none' and bottom_feature_size > 0.0001))
+            log_to_file(f"[STEP Exporter]   [FILTER:v4] after: tf={top_feature} tfs={top_feature_size:.4f} "
+                        f"is_cone={is_cone} has_edge={has_edge_feature}")
         if is_cone and has_edge_feature:
             is_cone = False  # Treat as grooved cylinder with edge feature, not cone
         if is_cone:
@@ -2360,6 +2387,9 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
             stored_ct = obj.get('chamfer_type') if hasattr(obj, 'get') else None
             stored_csz = obj.get('chamfer_size', 0) if hasattr(obj, 'get') else 0
             stored_fr = obj.get('fillet_radius_edge', 0) if hasattr(obj, 'get') else 0
+            log_to_file(f"[STEP Exporter]   [GROOVE2:v4] stored_ct={stored_ct} stored_csz={stored_csz} "
+                        f"is_cone={is_cone} bR={bottom_radius:.1f} tR={top_radius:.1f} "
+                        f"mesh_tf={top_feature} mesh_tfs={top_feature_size if top_feature else 'N/A'}")
             if stored_ct in ('chamfer', 'fillet', 'chamfer_both', 'fillet_both',
                              'bottom_chamfer', 'bottom_fillet', 'chamfer_fillet'):
                 has_edge_feature2 = True
@@ -2381,8 +2411,30 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                 if stored_ct in ('chamfer_fillet',):
                     bottom_feature = 'fillet'; bottom_feature_size = stored_fr
             else:
+                # Filter out false chamfer/fillet detections from groove artifacts
+                log_to_file(f"[STEP Exporter]   [FILTER2:v4] before: tf={top_feature} tfs={top_feature_size:.4f} "
+                            f"bf={bottom_feature} bfs={bottom_feature_size:.4f} "
+                            f"bR={bottom_radius:.1f} tR={top_radius:.1f} diff={abs(bottom_radius-top_radius):.1f}")
+                if top_feature == 'chamfer' and top_feature_size > 0:
+                    if abs(bottom_radius - top_radius) > 0.001:
+                        if top_feature_size >= abs(bottom_radius - top_radius) * 0.95:
+                            log_to_file(f"[STEP Exporter]   [FILTER2:v4] Clearing top chamfer: "
+                                        f"{top_feature_size:.1f} >= {abs(bottom_radius-top_radius)*0.95:.1f}")
+                            top_feature = None; top_feature_size = 0.0
+                    if top_feature and top_feature_size >= top_radius * 0.9:
+                        log_to_file(f"[STEP Exporter]   [FILTER2:v4] Clearing top chamfer (radius): "
+                                    f"{top_feature_size:.1f} >= {top_radius*0.9:.1f}")
+                        top_feature = None; top_feature_size = 0.0
+                if bottom_feature == 'chamfer' and bottom_feature_size > 0:
+                    if abs(bottom_radius - top_radius) > 0.001:
+                        if bottom_feature_size >= abs(bottom_radius - top_radius) * 0.95:
+                            bottom_feature = None; bottom_feature_size = 0.0
+                    if bottom_feature_size >= bottom_radius * 0.9:
+                        bottom_feature = None; bottom_feature_size = 0.0
                 has_edge_feature2 = ((top_feature and top_feature != 'none' and top_feature_size > 0.0001) or
                                      (bottom_feature and bottom_feature != 'none' and bottom_feature_size > 0.0001))
+                log_to_file(f"[STEP Exporter]   [FILTER2:v4] after: tf={top_feature} tfs={top_feature_size:.4f} "
+                            f"is_cone={is_cone} has_edge2={has_edge_feature2}")
             if is_cone and has_edge_feature2:
                 is_cone = False  # Treat as grooved cylinder with edge feature, not cone
             if is_cone:

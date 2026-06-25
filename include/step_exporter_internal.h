@@ -144,6 +144,16 @@ TopoDS_Shape create_cone_with_blind_hole_solid_parametric(double bottom_radius, 
                                                            double hole_radius_bottom = 0.0,
                                                            double top_chamfer = 0.0, double top_fillet = 0.0,
                                                            double bottom_chamfer = 0.0, double bottom_fillet = 0.0);
+// Cone with blind hole + external trapezoidal groove
+TopoDS_Shape create_cone_with_blind_hole_and_groove_parametric(double bottom_radius, double top_radius, double height,
+                                                                double hole_radius, double hole_depth,
+                                                                double hole_depth_top,
+                                                                double hole_fillet_radius, const char* hole_position,
+                                                                double hole_radius_bottom,
+                                                                double top_chamfer, double top_fillet,
+                                                                double bottom_chamfer, double bottom_fillet,
+                                                                double groove_depth, double groove_bottom_width,
+                                                                double groove_top_width, double groove_extrusion_length);
 TopoDS_Shape create_cone_chamfer_solid_parametric(double bottom_radius, double top_radius, double height,
                                                    double chamfer_size, int is_top_chamfer);
 TopoDS_Shape create_cone_chamfer_solid_parametric_both(double bottom_radius, double top_radius, double height,

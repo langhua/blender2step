@@ -2080,7 +2080,7 @@ PyObject* export_cone_stepped_hole_groove_step(PyObject* self, PyObject* args) {
     const char* unit = "MILLIMETER";
     int enable_logging = 1;
 
-    if (!PyArg_ParseTuple(args, "sddddddddddddddddd|dddssi",
+    if (!PyArg_ParseTuple(args, "sdddddddddddddddd|dddssi",
                           &filename,
                           &outer_bottom_radius, &outer_top_radius, &height,
                           &small_hole_radius, &small_hole_height,

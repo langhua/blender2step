@@ -168,6 +168,8 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
     # 修复：当底部有清晰两簇但顶部因地貌/倒角失去了簇结构时，
     # 从顶部向下扫描，找到最靠近bevel的两簇层来修正top_radius
     # （向下扫描找到的第一个两簇层最接近bevel底部，半径最准）
+    # 保存锥体判断用的原始顶部最大半径（cluster scan 可能覆盖 top_radius）
+    cone_top_max_r = top_radii_sorted[-1] if top_radii_sorted else top_radius
     if bottom_is_hollow and not top_is_hollow:
         for scan_idx in range(len(sorted_z) - 2, len(sorted_z) // 3, -1):
             scan_zl = sorted_z[scan_idx]
@@ -196,14 +198,19 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
     # 不能简单向上扫描找"干净层"——靠近底部的干净层可能是内孔壁（半径偏小），
     # 会被误判为锥体底部。
     if std_b > bottom_radius * 0.15 and std_t <= top_radius * 0.15:
-        # 顶部干净，底部混乱 → 恒定半径圆柱，用顶部数据替代底部
-        bottom_radius = top_radius
-        bottom_outer_radii = top_outer_radii if might_be_hollow else top_radii
-        std_b = std_t
-        # 标记为可能空心：后续中间层检测需要提取外圈簇，避免内孔壁污染半径范围检查
-        if not might_be_hollow:
-            might_be_hollow = True
-        log_to_file(f"[STEP Exporter] Bottom variance high (std_b={std_b:.4f}), top is clean (r={top_radius:.4f}), using top radius for cylinder body")
+        # 检查是否为锥体（底部和顶部半径明显不同）
+        is_cone_body = abs(bottom_radius - cone_top_max_r) / max(bottom_radius, 0.001) > 0.08
+        if not is_cone_body:
+            # 顶部干净，底部混乱 → 恒定半径圆柱，用顶部数据替代底部
+            bottom_radius = top_radius
+            bottom_outer_radii = top_outer_radii if might_be_hollow else top_radii
+            std_b = std_t
+            # 标记为可能空心：后续中间层检测需要提取外圈簇，避免内孔壁污染半径范围检查
+            if not might_be_hollow:
+                might_be_hollow = True
+            log_to_file(f"[STEP Exporter] Bottom variance high (std_b={std_b:.4f}), top is clean (r={top_radius:.4f}), using top radius for cylinder body")
+        else:
+            log_to_file(f"[STEP Exporter] Cone detected (bR={bottom_radius:.3f} tR={cone_top_max_r:.3f}), skipping cylinder radius fix")
     
     # 标准差不大于平均半径的 15% 才认为是规则圆柱
     # 有存储属性（孔/倒角）时放宽：这些特征会导致Z层混合，方差偏高
@@ -477,8 +484,15 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
     body_portion = (body_end_z - sorted_z[0]) / height if height > 0 else 0
     cylindrical_body = body_portion > 0.6
     # Grooved cylinders have non-circular mid-region but are still cylindrical
+    # UNLESS top and bottom radii differ significantly → cone
     if has_groove_custom:
-        cylindrical_body = True
+        btm_r_for_cone = bottom_radius  # bottom outer radius
+        top_r_for_cone = top_radii_sorted[-1] if top_radii_sorted else top_radius  # actual top max
+        if abs(btm_r_for_cone - top_r_for_cone) / max(btm_r_for_cone, 0.001) > 0.08:
+            log_to_file(f"[STEP Exporter] Grooved cone detected (bR={btm_r_for_cone:.3f} tR={top_r_for_cone:.3f}), not cylindrical")
+            cylindrical_body = False
+        else:
+            cylindrical_body = True
         # Also run top-down body detection to find correct body boundaries
         # (bottom-up may stop early due to fillet/chamfer at the bottom end)
         body_start_z = sorted_z[-1]
@@ -1478,6 +1492,9 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
         else:
             # stored props 不可用 → 从 z_radius_data + hollow 检测推算
             outer_min = min(bottom_radius, top_radius)
+            # 用顶部 z 层真实最大半径修正（避免 cluster scan 覆盖导致的错误）
+            real_top_max_r = top_radii_sorted[-1] if top_radii_sorted else top_radius
+            outer_min = min(bottom_radius, real_top_max_r)
             inner_z_filtered = {}
             for zl in sorted(z_radius_data.keys()):
                 r = z_radius_data[zl]
@@ -1790,16 +1807,23 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                 # 优先使用存储属性，避免 mesh 误检
                 if stored_ct in ('chamfer', 'chamfer_both', 'chamfer_fillet'):
                     top_feature = 'chamfer'; top_feature_size = stored_csz * 0.001
+                    bottom_feature = 'chamfer' if stored_ct in ('chamfer_both', 'chamfer_fillet') else None
+                    bottom_feature_size = stored_csz * 0.001 if bottom_feature else 0
                 elif stored_ct in ('fillet', 'fillet_both'):
                     top_feature = 'fillet'; top_feature_size = stored_fr * 0.001
+                    bottom_feature = 'fillet' if stored_ct == 'fillet_both' else None
+                    bottom_feature_size = stored_fr * 0.001 if bottom_feature else 0
                 elif stored_ct in ('bottom_chamfer',):
                     top_feature = None; top_feature_size = 0
                     bottom_feature = 'chamfer'; bottom_feature_size = stored_csz * 0.001
                 elif stored_ct in ('bottom_fillet',):
                     top_feature = None; top_feature_size = 0
                     bottom_feature = 'fillet'; bottom_feature_size = stored_fr * 0.001
-                elif stored_ct is None:
-                    # 无存储属性 = 无边缘特征，忽略 mesh 检测
+                elif not stored_ct:
+                    # 无存储属性（None 或空字符串）= 无边缘特征
+                    top_feature = None; top_feature_size = 0
+                    bottom_feature = None; bottom_feature_size = 0
+                else:
                     top_feature = None; top_feature_size = 0
                     bottom_feature = None; bottom_feature_size = 0
                 # 锥体台阶孔 C++ 已支持 chamfer + fillet 分层处理

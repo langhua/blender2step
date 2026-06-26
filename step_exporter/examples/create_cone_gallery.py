@@ -8,7 +8,7 @@ import bpy, math
 
 H = 1.0; BOT_R = 0.5; TOP_R = 0.25; CH_SZ = 0.05; FR_R = 0.025
 HOLE_R = 0.1; TAPER_OPEN_R = 0.15; HOLE_D = H * 0.25; GAP_Y = 0.2
-HOLE_FILLET_R = 0.015  # fillet radius at hole openings
+HOLE_FILLET_R = 0.030  # fillet radius at hole openings (increased for visual verification)
 STEP_LARGE_R = 0.14; STEP_LARGE_H = H * 0.8; STEP_SMALL_R = 0.05  # stepped hole params
 Z_GAP = H * 2 + 0.8  # doubled row spacing
 X_LABEL = max(BOT_R, TOP_R) + 0.3  # label column to the side

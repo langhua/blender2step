@@ -1067,7 +1067,8 @@ TopoDS_Shape create_cone_stepped_hole_parametric(
         bool taper_at_top;
         if (std::abs(inner_top_radius - inner_bottom_radius) < 0.01) {
             // 等径大孔，小孔在锥体粗端
-            taper_at_top = (outer_bottom_radius > outer_top_radius);
+            // 等径大孔：small_hole_height < height/2 → 小孔在底部 → taper_at_top
+            taper_at_top = (small_hole_height < height * 0.5);
         } else {
             taper_at_top = (inner_top_radius > inner_bottom_radius + 0.01);
         }

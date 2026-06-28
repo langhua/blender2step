@@ -214,16 +214,29 @@ TopoDS_Shape create_hollow_cone_solid_parametric(
     double bottom_chamfer, double bottom_fillet,
     double hole_fillet_radius)
 {
-    // ===== Radius compensation for chamfer/fillet (matching cone_stepped_hole) =====
+    // ===== Radius compensation for chamfer/fillet =====
     double actual_bot_r = outer_bottom_radius;
     double actual_top_r = outer_top_radius;
-    if (top_chamfer > 0.001 || top_fillet > 0.001) {
-        double top_sz = std::max(top_chamfer, top_fillet);
-        actual_top_r = outer_top_radius + top_sz;
-    }
-    if (bottom_chamfer > 0.001 || bottom_fillet > 0.001) {
-        double bot_sz = std::max(bottom_chamfer, bottom_fillet);
-        actual_bot_r = outer_bottom_radius + bot_sz;
+    double top_sz = std::max(top_chamfer, top_fillet);
+    double bot_sz = std::max(bottom_chamfer, bottom_fillet);
+    bool is_cylinder = (std::abs(outer_bottom_radius - outer_top_radius) < 0.01);
+    if (is_cylinder) {
+        double max_r = std::max(outer_bottom_radius, outer_top_radius);
+        bool top_has = (top_sz > 0.001);
+        bool bot_has = (bot_sz > 0.001);
+        if (top_has && bot_has) {
+            // Both ends treated - need compensation
+            double max_sz = std::max(top_sz, bot_sz);
+            actual_bot_r = max_r + max_sz;
+            actual_top_r = max_r + max_sz;
+        } else {
+            // At least one end untreated - use max measured radius directly
+            actual_bot_r = max_r;
+            actual_top_r = max_r;
+        }
+    } else {
+        if (top_sz > 0.001) actual_top_r += top_sz;
+        if (bot_sz > 0.001) actual_bot_r += bot_sz;
     }
 
     // 创建外锥体（使用补偿后半径）
@@ -715,17 +728,37 @@ TopoDS_Shape create_cone_chamfer_fillet_solid_parametric(
     double bottom_radius, double top_radius, double height,
     double chamfer_size, double fillet_radius, bool reversed)
 {
-    // ===== Radius compensation for chamfer/fillet (matching cone_stepped_hole) =====
+    // ===== Radius compensation for chamfer/fillet =====
     double actual_bot_r = bottom_radius;
     double actual_top_r = top_radius;
+    bool is_cyl = (std::abs(bottom_radius - top_radius) < 0.01);
+    double max_r = is_cyl ? std::max(bottom_radius, top_radius) : 0.0;
     if (reversed) {
-        // reversed: top=chamfer, bottom=fillet
-        if (chamfer_size > 0.001) actual_top_r = top_radius + chamfer_size;
-        if (fillet_radius > 0.001) actual_bot_r = bottom_radius + fillet_radius;
+        double top_sz = chamfer_size;
+        double bot_sz = fillet_radius;
+        if (is_cyl) {
+            bool top_has = (top_sz > 0.001), bot_has = (bot_sz > 0.001);
+            if (top_has && bot_has) {
+                double ms = std::max(top_sz, bot_sz);
+                actual_bot_r = max_r + ms; actual_top_r = max_r + ms;
+            } else { actual_bot_r = max_r; actual_top_r = max_r; }
+        } else {
+            if (top_sz > 0.001) actual_top_r += top_sz;
+            if (bot_sz > 0.001) actual_bot_r += bot_sz;
+        }
     } else {
-        // default: top=fillet, bottom=chamfer
-        if (fillet_radius > 0.001) actual_top_r = top_radius + fillet_radius;
-        if (chamfer_size > 0.001) actual_bot_r = bottom_radius + chamfer_size;
+        double top_sz = fillet_radius;
+        double bot_sz = chamfer_size;
+        if (is_cyl) {
+            bool top_has = (top_sz > 0.001), bot_has = (bot_sz > 0.001);
+            if (top_has && bot_has) {
+                double ms = std::max(top_sz, bot_sz);
+                actual_bot_r = max_r + ms; actual_top_r = max_r + ms;
+            } else { actual_bot_r = max_r; actual_top_r = max_r; }
+        } else {
+            if (top_sz > 0.001) actual_top_r += top_sz;
+            if (bot_sz > 0.001) actual_bot_r += bot_sz;
+        }
     }
 
     TopoDS_Shape shape = create_cone_solid_parametric(actual_bot_r, actual_top_r, height);
@@ -787,11 +820,22 @@ TopoDS_Shape create_cone_chamfer_solid_parametric_both(
     double bottom_radius, double top_radius, double height,
     double bottom_chamfer, double top_chamfer)
 {
-    // ===== Radius compensation for chamfer (matching cone_stepped_hole) =====
+    // ===== Radius compensation for chamfer =====
     double actual_bot_r = bottom_radius;
     double actual_top_r = top_radius;
-    if (top_chamfer > 0.001) actual_top_r = top_radius + top_chamfer;
-    if (bottom_chamfer > 0.001) actual_bot_r = bottom_radius + bottom_chamfer;
+    double top_sz = top_chamfer, bot_sz = bottom_chamfer;
+    bool is_cyl = (std::abs(bottom_radius - top_radius) < 0.01);
+    if (is_cyl) {
+        double max_r = std::max(bottom_radius, top_radius);
+        bool top_has = (top_sz > 0.001), bot_has = (bot_sz > 0.001);
+        if (top_has && bot_has) {
+            double ms = std::max(top_sz, bot_sz);
+            actual_bot_r = max_r + ms; actual_top_r = max_r + ms;
+        } else { actual_bot_r = max_r; actual_top_r = max_r; }
+    } else {
+        if (top_sz > 0.001) actual_top_r += top_sz;
+        if (bot_sz > 0.001) actual_bot_r += bot_sz;
+    }
 
     TopoDS_Shape shape = create_cone_solid_parametric(actual_bot_r, actual_top_r, height);
     if (shape.IsNull()) return TopoDS_Shape();
@@ -826,11 +870,22 @@ TopoDS_Shape create_cone_fillet_solid_parametric_both(
     double bottom_radius, double top_radius, double height,
     double bottom_fillet, double top_fillet)
 {
-    // ===== Radius compensation for fillet (matching cone_stepped_hole) =====
+    // ===== Radius compensation for fillet =====
     double actual_bot_r = bottom_radius;
     double actual_top_r = top_radius;
-    if (top_fillet > 0.001) actual_top_r = top_radius + top_fillet;
-    if (bottom_fillet > 0.001) actual_bot_r = bottom_radius + bottom_fillet;
+    double top_fr = top_fillet, bot_fr = bottom_fillet;
+    bool is_cyl = (std::abs(bottom_radius - top_radius) < 0.01);
+    if (is_cyl) {
+        double max_r = std::max(bottom_radius, top_radius);
+        bool top_has = (top_fr > 0.001), bot_has = (bot_fr > 0.001);
+        if (top_has && bot_has) {
+            double ms = std::max(top_fr, bot_fr);
+            actual_bot_r = max_r + ms; actual_top_r = max_r + ms;
+        } else { actual_bot_r = max_r; actual_top_r = max_r; }
+    } else {
+        if (top_fr > 0.001) actual_top_r += top_fr;
+        if (bot_fr > 0.001) actual_bot_r += bot_fr;
+    }
 
     TopoDS_Shape shape = create_cone_solid_parametric(actual_bot_r, actual_top_r, height);
     if (shape.IsNull()) return TopoDS_Shape();
@@ -983,10 +1038,26 @@ TopoDS_Shape create_hollow_cone_fillet_with_groove_parametric(
 
     // Step 2: Create trapezoid prism cutter for the groove
     // Groove is at mid-height (z=0) of the cone, centered in Y
-    // The cross-section is in the XZ plane, extruded along Y axis
-    double mid_outer_radius = (outer_bottom_radius + outer_top_radius) / 2.0;
-    double R_surface = std::max(outer_bottom_radius, outer_top_radius) + 1.0;  // extend past widest part
-    double r_inner = mid_outer_radius - groove_depth;  // groove floor = surface - depth
+    // Use compensated radii matching create_hollow_cone_solid_parametric
+    double comp_bot_r = outer_bottom_radius;
+    double comp_top_r = outer_top_radius;
+    double top_sz = std::max(top_chamfer, top_fillet);
+    double bot_sz = std::max(bottom_chamfer, bottom_fillet);
+    bool is_cyl = (std::abs(outer_bottom_radius - outer_top_radius) < 0.01);
+    if (is_cyl) {
+        double max_r = std::max(outer_bottom_radius, outer_top_radius);
+        bool top_has = (top_sz > 0.001), bot_has = (bot_sz > 0.001);
+        if (top_has && bot_has) {
+            double ms = std::max(top_sz, bot_sz);
+            comp_bot_r = max_r + ms; comp_top_r = max_r + ms;
+        } else { comp_bot_r = max_r; comp_top_r = max_r; }
+    } else {
+        if (top_sz > 0.001) comp_top_r += top_sz;
+        if (bot_sz > 0.001) comp_bot_r += bot_sz;
+    }
+    double mid_outer_radius = (comp_bot_r + comp_top_r) / 2.0;
+    double R_surface = std::max(comp_bot_r, comp_top_r) + 1.0;
+    double r_inner = mid_outer_radius - groove_depth;
     double hb = groove_bottom_width / 2.0;        // Z half-extent at surface (wider)
     double ht = groove_top_width / 2.0;           // Z half-extent at groove bottom (narrower)
     double half_ext = groove_extrusion_length / 2.0; // Y half-extent
@@ -1137,15 +1208,28 @@ TopoDS_Shape create_cone_stepped_hole_parametric(
         // C++ adds chamfer/fillet size back to get true cone body radius
         double actual_top_r = outer_top_radius;
         double actual_bot_r = outer_bottom_radius;
-        if (top_chamfer > 0.001 || top_fillet_radius > 0.001) {
-            double top_sz = std::max(top_chamfer, top_fillet_radius);
-            actual_top_r = outer_top_radius + top_sz;
-            std::cout << "[STEP Exporter] cone_stepped_hole: top radius compensated " << outer_top_radius << " -> " << actual_top_r << std::endl;
-        }
-        if (bottom_chamfer > 0.001 || bottom_fillet_radius > 0.001) {
-            double bot_sz = std::max(bottom_chamfer, bottom_fillet_radius);
-            actual_bot_r = outer_bottom_radius + bot_sz;
-            std::cout << "[STEP Exporter] cone_stepped_hole: bottom radius compensated " << outer_bottom_radius << " -> " << actual_bot_r << std::endl;
+        double top_sz = std::max(top_chamfer, top_fillet_radius);
+        double bot_sz = std::max(bottom_chamfer, bottom_fillet_radius);
+        bool is_cyl = (std::abs(outer_bottom_radius - outer_top_radius) < 0.01);
+        if (is_cyl) {
+            double max_r = std::max(outer_bottom_radius, outer_top_radius);
+            bool top_has = (top_sz > 0.001), bot_has = (bot_sz > 0.001);
+            if (top_has && bot_has) {
+                double ms = std::max(top_sz, bot_sz);
+                actual_bot_r = max_r + ms; actual_top_r = max_r + ms;
+                std::cout << "[STEP Exporter] cone_stepped_hole: both ends treated, compensated +" << ms << std::endl;
+            } else {
+                actual_bot_r = max_r; actual_top_r = max_r;
+            }
+        } else {
+            if (top_sz > 0.001) {
+                actual_top_r += top_sz;
+                std::cout << "[STEP Exporter] cone_stepped_hole: top radius compensated " << outer_top_radius << " -> " << actual_top_r << std::endl;
+            }
+            if (bot_sz > 0.001) {
+                actual_bot_r += bot_sz;
+                std::cout << "[STEP Exporter] cone_stepped_hole: bottom radius compensated " << outer_bottom_radius << " -> " << actual_bot_r << std::endl;
+            }
         }
         TopoDS_Shape outerShape = create_cone_solid_parametric(actual_bot_r, actual_top_r, height);
         if (outerShape.IsNull()) {
@@ -1799,20 +1883,34 @@ TopoDS_Shape create_cone_with_blind_hole_solid_parametric(
 {
     double halfH = height / 2.0;
 
-    // ===== Radius compensation for chamfer/fillet (matching cone_stepped_hole) =====
+    // ===== Radius compensation for chamfer/fillet =====
     // Python passes measured edge radii (with chamfer/fillet cut away).
     // Add chamfer/fillet size back to get true cone body radius before edge treatment.
     double actual_top_r = top_radius;
     double actual_bot_r = bottom_radius;
-    if (top_chamfer > 0.001 || top_fillet > 0.001) {
-        double top_sz = std::max(top_chamfer, top_fillet);
-        actual_top_r = top_radius + top_sz;
-        std::cout << "[STEP Exporter] cone_blind_hole: top radius compensated " << top_radius << " -> " << actual_top_r << std::endl;
-    }
-    if (bottom_chamfer > 0.001 || bottom_fillet > 0.001) {
-        double bot_sz = std::max(bottom_chamfer, bottom_fillet);
-        actual_bot_r = bottom_radius + bot_sz;
-        std::cout << "[STEP Exporter] cone_blind_hole: bottom radius compensated " << bottom_radius << " -> " << actual_bot_r << std::endl;
+    double top_sz = std::max(top_chamfer, top_fillet);
+    double bot_sz = std::max(bottom_chamfer, bottom_fillet);
+    bool is_cyl = (std::abs(bottom_radius - top_radius) < 0.01);
+    if (is_cyl) {
+        double max_r = std::max(bottom_radius, top_radius);
+        bool top_has = (top_sz > 0.001), bot_has = (bot_sz > 0.001);
+        if (top_has && bot_has) {
+            double ms = std::max(top_sz, bot_sz);
+            actual_bot_r = max_r + ms; actual_top_r = max_r + ms;
+            std::cout << "[STEP Exporter] cone_blind_hole: both ends treated, compensated +" << ms << std::endl;
+        } else {
+            actual_bot_r = max_r; actual_top_r = max_r;
+            std::cout << "[STEP Exporter] cone_blind_hole: cylinder, using max_r=" << max_r << std::endl;
+        }
+    } else {
+        if (top_sz > 0.001) {
+            actual_top_r += top_sz;
+            std::cout << "[STEP Exporter] cone_blind_hole: top radius compensated " << top_radius << " -> " << actual_top_r << std::endl;
+        }
+        if (bot_sz > 0.001) {
+            actual_bot_r += bot_sz;
+            std::cout << "[STEP Exporter] cone_blind_hole: bottom radius compensated " << bottom_radius << " -> " << actual_bot_r << std::endl;
+        }
     }
 
     // Create cone body with compensated radii
@@ -2323,13 +2421,19 @@ TopoDS_Shape create_cone_with_groove_parametric(
     // ===== Radius compensation for chamfer/fillet =====
     double actual_bot_r = bottom_radius;
     double actual_top_r = top_radius;
-    if (top_chamfer > 0.001 || top_fillet > 0.001) {
-        double top_sz = std::max(top_chamfer, top_fillet);
-        actual_top_r = top_radius + top_sz;
-    }
-    if (bottom_chamfer > 0.001 || bottom_fillet > 0.001) {
-        double bot_sz = std::max(bottom_chamfer, bottom_fillet);
-        actual_bot_r = bottom_radius + bot_sz;
+    double top_sz = std::max(top_chamfer, top_fillet);
+    double bot_sz = std::max(bottom_chamfer, bottom_fillet);
+    bool is_cyl = (std::abs(bottom_radius - top_radius) < 0.01);
+    if (is_cyl) {
+        double max_r = std::max(bottom_radius, top_radius);
+        bool top_has = (top_sz > 0.001), bot_has = (bot_sz > 0.001);
+        if (top_has && bot_has) {
+            double ms = std::max(top_sz, bot_sz);
+            actual_bot_r = max_r + ms; actual_top_r = max_r + ms;
+        } else { actual_bot_r = max_r; actual_top_r = max_r; }
+    } else {
+        if (top_sz > 0.001) actual_top_r += top_sz;
+        if (bot_sz > 0.001) actual_bot_r += bot_sz;
     }
 
     // Create cone body with edge features
@@ -2368,8 +2472,8 @@ TopoDS_Shape create_cone_with_groove_parametric(
     apply_edge(false);
 
     // Create trapezoidal groove cutter at mid-height
-    // Use max radius + margin to ensure cutter extends outside cone at all Z levels
-    double r_surface = std::max(bottom_radius, top_radius) + 1.0;
+    // Use compensated max radius + margin to ensure cutter extends outside cone at all Z levels
+    double r_surface = std::max(actual_bot_r, actual_top_r) + 1.0;
     double r_floor = mid_r - groove_depth;
     double hb = groove_bottom_width / 2.0;
     double ht = groove_top_width / 2.0;
@@ -2433,9 +2537,25 @@ TopoDS_Shape create_cone_with_blind_hole_and_groove_parametric(
     TopoDS_Solid solid = shape_to_solid(shape);
     if (solid.IsNull()) return TopoDS_Shape();
 
-    // Cut trapezoidal groove (same logic as create_cone_with_groove_parametric)
-    double mid_r = (bottom_radius + top_radius) / 2.0;
-    double r_surface = std::max(bottom_radius, top_radius) + 1.0;
+    // Cut trapezoidal groove with compensated radii (matching cone_blind_hole)
+    double comp_bot_r = bottom_radius;
+    double comp_top_r = top_radius;
+    double top_sz = std::max(top_chamfer, top_fillet);
+    double bot_sz = std::max(bottom_chamfer, bottom_fillet);
+    bool is_cyl = (std::abs(bottom_radius - top_radius) < 0.01);
+    if (is_cyl) {
+        double max_r = std::max(bottom_radius, top_radius);
+        bool top_has = (top_sz > 0.001), bot_has = (bot_sz > 0.001);
+        if (top_has && bot_has) {
+            double ms = std::max(top_sz, bot_sz);
+            comp_bot_r = max_r + ms; comp_top_r = max_r + ms;
+        } else { comp_bot_r = max_r; comp_top_r = max_r; }
+    } else {
+        if (top_sz > 0.001) comp_top_r += top_sz;
+        if (bot_sz > 0.001) comp_bot_r += bot_sz;
+    }
+    double mid_r = (comp_bot_r + comp_top_r) / 2.0;
+    double r_surface = std::max(comp_bot_r, comp_top_r) + 1.0;
     double r_floor = mid_r - groove_depth;
     double hb = groove_bottom_width / 2.0;
     double ht = groove_top_width / 2.0;
@@ -2496,8 +2616,26 @@ TopoDS_Shape create_cone_stepped_hole_with_groove_parametric(
     TopoDS_Solid solid = shape_to_solid(shape);
     if (solid.IsNull()) return TopoDS_Shape();
 
-    double mid_r = (outer_bottom_radius + outer_top_radius) / 2.0;
-    double r_surface = std::max(outer_bottom_radius, outer_top_radius) + 1.0;
+    // Groove cutter with compensated radii (matching cone_stepped_hole)
+    // Groove cutter with compensated radii (matching cone_stepped_hole)
+    double comp_bot_r = outer_bottom_radius;
+    double comp_top_r = outer_top_radius;
+    double top_sz = std::max(top_chamfer, top_fillet_radius);
+    double bot_sz = std::max(bottom_chamfer, bottom_fillet_radius);
+    bool is_cyl = (std::abs(outer_bottom_radius - outer_top_radius) < 0.01);
+    if (is_cyl) {
+        double max_r = std::max(outer_bottom_radius, outer_top_radius);
+        bool top_has = (top_sz > 0.001), bot_has = (bot_sz > 0.001);
+        if (top_has && bot_has) {
+            double ms = std::max(top_sz, bot_sz);
+            comp_bot_r = max_r + ms; comp_top_r = max_r + ms;
+        } else { comp_bot_r = max_r; comp_top_r = max_r; }
+    } else {
+        if (top_sz > 0.001) comp_top_r += top_sz;
+        if (bot_sz > 0.001) comp_bot_r += bot_sz;
+    }
+    double mid_r = (comp_bot_r + comp_top_r) / 2.0;
+    double r_surface = std::max(comp_bot_r, comp_top_r) + 1.0;
     double r_floor = mid_r - groove_depth;
     double hb = groove_bottom_width / 2.0;
     double ht = groove_top_width / 2.0;

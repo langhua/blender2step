@@ -1744,10 +1744,9 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                 log_to_file(f"[STEP Exporter]   -> hollow_cylinder_grooved! groove_depth={groove_params.get('groove_depth', 0):.4f}")
                 return result
             if hole_fillet_r > 0 and not has_outer_feature:
-                result['top_feature'] = 'fillet'
-                result['top_feature_size'] = hole_fillet_r
-                result['bottom_feature'] = 'fillet'
-                result['bottom_feature_size'] = hole_fillet_r
+                # 孔圆角仅应用于内孔边缘，不应用于外缘
+                # （C++ 层通过 hole_fillet_radius 参数单独处理内孔圆角）
+                pass
                 result['obj_type'] = 'hollow_cylinder_tapered'
             return result
         if hole_position in ('stepped', 'tapered_stepped'):
@@ -1771,21 +1770,20 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                 inner_top = shp.get('inner_top_radius', inner_top_radius if is_hollow else 0)
             small_r = shp.get('small_hole_radius', 0)
             small_h = shp.get('small_hole_height', 0)
-            # 锥体锥形台阶孔 mesh 检测失败时，从存储属性回退
-            if is_cone_body and is_tpr and (small_r <= 0 or small_h <= 0):
+            # 锥体锥形台阶孔：存储属性优先（mesh 检测在倒锥体等复杂几何上不可靠）
+            if is_cone_body and is_tpr:
                 stored_opening = (obj.get('hole_opening_radius', 0) if hasattr(obj, 'get') else 0) * 0.001  # mm→m
                 stored_end = (obj.get('hole_end_radius', 0) if hasattr(obj, 'get') else 0) * 0.001
                 stored_small = (obj.get('hole_stepped_small_r', 0) if hasattr(obj, 'get') else 0) * 0.001
                 stored_large_h = (obj.get('hole_stepped_large_h', 0) if hasattr(obj, 'get') else 0) * 0.001  # mm→m
-                log_to_file(f"[STEP Exporter]   tapered_stepped fallback: opening={stored_opening:.3f} end={stored_end:.3f} small={stored_small:.3f} large_h={stored_large_h:.3f}")
-                if stored_opening > 0 and stored_end > 0:
+                log_to_file(f"[STEP Exporter]   tapered_stepped stored: opening={stored_opening:.3f} end={stored_end:.3f} small={stored_small:.3f} large_h={stored_large_h:.3f}")
+                if stored_opening > 0 and stored_end > 0 and stored_small > 0:
                     inner_btm = stored_end
                     inner_top = stored_opening
-                    if stored_small > 0:
-                        small_r = stored_small
+                    small_r = stored_small
                     if stored_large_h > 0:
                         small_h = height - stored_large_h  # 直孔高度 = 总高 - 大孔高
-                    log_to_file(f"[STEP Exporter]   tapered_stepped fallback result: small_r={small_r:.3f} small_h={small_h:.3f} inner_btm={inner_btm:.3f} inner_top={inner_top:.3f}")
+                    log_to_file(f"[STEP Exporter]   tapered_stepped using stored props: small_r={small_r:.3f} small_h={small_h:.3f} inner_btm={inner_btm:.3f} inner_top={inner_top:.3f}")
             # 锥体台阶孔 → 使用 cone_stepped_hole 类型
             if is_cone_body and inner_btm > 0 and inner_top > 0 and small_r > 0 and small_h > 0:
                 hole_fr = (obj.get('hole_fillet_radius', 0) if hasattr(obj, 'get') else 0)  # 已经是 mm

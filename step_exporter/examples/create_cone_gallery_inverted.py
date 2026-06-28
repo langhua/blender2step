@@ -234,6 +234,8 @@ def add_cone(y, z, name, br, tr, chamfer_type=None, fillet_r=0,
             obj['hole_is_tapered_stepped'] = True
             obj['hole_opening_radius'] = taper_top_r * 1000
             obj['hole_end_radius'] = taper_step_r * 1000
+            obj['hole_stepped_small_r'] = STEP_SMALL_R * 1000
+            obj['hole_stepped_large_h'] = STEP_LARGE_H * 1000
             obj['step_use_mesh'] = True
 
         obj['hole_type'] = str(hole)

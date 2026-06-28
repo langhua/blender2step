@@ -177,10 +177,16 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
             scan_is_cluster, scan_outer = has_two_clusters(scan_radii)
             if scan_is_cluster:
                 so_sorted = sorted(scan_outer)
-                top_radius = so_sorted[len(so_sorted) // 2]
-                top_outer_radii = scan_outer  # 同时更新用于后续STD检查
-                top_is_hollow = True  # 标记为已找到簇，避免STD检查用错数据
-                log_to_file(f"[STEP Exporter] Corrected top_radius via cluster scan at z={scan_zl:.2f}: {top_radius:.3f}")
+                corrected_r = so_sorted[len(so_sorted) // 2]
+                # 验证：修正后的半径必须接近顶部最大半径（≥70%），
+                # 防止把内孔壁（如台阶孔的大孔段）误判为外壁
+                if corrected_r >= cone_top_max_r * 0.7:
+                    top_radius = corrected_r
+                    top_outer_radii = scan_outer  # 同时更新用于后续STD检查
+                    top_is_hollow = True  # 标记为已找到簇，避免STD检查用错数据
+                    log_to_file(f"[STEP Exporter] Corrected top_radius via cluster scan at z={scan_zl:.2f}: {top_radius:.3f}")
+                else:
+                    log_to_file(f"[STEP Exporter] Rejected cluster scan at z={scan_zl:.2f}: corrected_r={corrected_r:.3f} < 0.7*cone_top_max_r={cone_top_max_r*0.7:.3f} (inner wall, not outer)")
                 break
     
     # 半径标准差判断是否为规则圆形
@@ -1164,65 +1170,9 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
     if bottom_transition_zls and not bottom_feature:
         bottom_feature, bottom_feature_size = _classify_transition(bottom_transition_zls)
     
-    # 保存修正前的原始 mesh 半径（用于内孔过滤，不被 chamfer 修正影响）
-    mesh_bottom_r = bottom_radius
-    mesh_top_r = top_radius
+    # 不修正半径：C++ 用传入值 + chamfer/fillet size 反推锥体真实半径
     
-    # 锥体倒角/圆角修正：过渡区边缘半径 = 锥体本体半径（非倒角面半径）
-    # 顶部过渡层升序排列，第一个是本体边界（最高完整锥体半径）
-    if not cylindrical_body and top_feature and top_transition_zls:
-        body_top_r = z_radius_data.get(top_transition_zls[0], None)
-        if body_top_r is not None and body_top_r > top_radius * 1.02:
-            log_to_file(f"[STEP Exporter]   Cone top radius corrected via chamfer: {top_radius:.4f} -> {body_top_r:.4f}")
-            top_radius = body_top_r
-    # 底部过渡层升序排列，最后一个是本体边界
-    if not cylindrical_body and bottom_feature and bottom_transition_zls:
-        body_bot_r = z_radius_data.get(bottom_transition_zls[-1], None)
-        if body_bot_r is not None and body_bot_r > bottom_radius * 1.02:
-            log_to_file(f"[STEP Exporter]   Cone bottom radius corrected via chamfer: {bottom_radius:.4f} -> {body_bot_r:.4f}")
-            bottom_radius = body_bot_r
-    
-    # 兜底修正：当 stored_ctype 指示顶部特征（倒角/圆角）但 mesh 因孔洞干扰未能检测时，
-    # 在顶部区域扫描外壁峰值半径来修正 top_radius
-    if not cylindrical_body and top_radius < bottom_radius * 0.85:
-        stored_ctype_fb = obj.get('chamfer_type') if hasattr(obj, 'get') else None
-        # 排除仅底部特征的类型，其余皆有顶部特征（chamfer/fillet/both/chamfer_fillet）
-        has_top_feature = (stored_ctype_fb and 
-                          stored_ctype_fb not in ('bottom_chamfer', 'bottom_fillet'))
-        if has_top_feature:
-            valid_zls = [zl for zl in sorted_z if zl in z_radius_data]
-            if len(valid_zls) >= 3:
-                height_z = sorted_z[-1] - sorted_z[0]
-                top_cut = sorted_z[-1] - height_z * 0.15
-                # 收集顶部15%区域内的z-level（排除顶面本身）
-                top_region = [(zl, z_radius_data[zl]) for zl in valid_zls
-                              if zl > top_cut and zl < sorted_z[-1] * 0.99]
-                if top_region:
-                    peak_z, peak_r = max(top_region, key=lambda x: x[1])
-                    if peak_r > top_radius * 1.02:
-                        log_to_file(f"[STEP Exporter]   Cone top radius corrected via stored edge feature (hole interference): {top_radius:.4f} -> {peak_r:.4f} (z={peak_z:.4f})")
-                        top_radius = peak_r
-    
-    # 兜底修正：当 stored_ctype 指示底部特征（倒角/圆角）但 mesh 因孔洞干扰未能检测时，
-    # 在底部区域扫描外壁峰值半径来修正 bottom_radius
-    if not cylindrical_body and bottom_radius < top_radius * 0.85:
-        stored_ctype_fb3 = obj.get('chamfer_type') if hasattr(obj, 'get') else None
-        # 仅当存在底部特征时触发（bottom_chamfer, bottom_fillet, chamfer_both, fillet_both, chamfer_fillet）
-        has_bottom_feature = (stored_ctype_fb3 and 
-                             stored_ctype_fb3 in ('bottom_chamfer', 'bottom_fillet', 'chamfer_both', 'fillet_both', 'chamfer_fillet'))
-        if has_bottom_feature:
-            valid_zls = [zl for zl in sorted_z if zl in z_radius_data]
-            if len(valid_zls) >= 3:
-                height_z = sorted_z[-1] - sorted_z[0]
-                bot_cut = sorted_z[0] + height_z * 0.15
-                # 收集底部15%区域内的z-level（排除底面本身）
-                bot_region = [(zl, z_radius_data[zl]) for zl in valid_zls
-                              if zl < bot_cut and zl > sorted_z[0] * 1.01]
-                if bot_region:
-                    peak_z, peak_r = max(bot_region, key=lambda x: x[1])
-                    if peak_r > bottom_radius * 1.02:
-                        log_to_file(f"[STEP Exporter]   Cone bottom radius corrected via stored edge feature (hole interference): {bottom_radius:.4f} -> {peak_r:.4f} (z={peak_z:.4f})")
-                        bottom_radius = peak_r
+    # 不修正半径：C++ 用传入值 + chamfer/fillet size 反推锥体真实半径
     
     # 对于圆柱本体有过渡 → 修正 radius 为 body_radius
     if cylindrical_body and (top_feature or bottom_feature) and not has_groove_custom:
@@ -1490,16 +1440,29 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                 'inner_bottom_radius': taper_top_r,
                 'inner_top_radius': taper_step_r,
             }
-            log_to_file(f"[STEP Exporter]   cone stepped hole from stored props (final fallback): "
+            log_to_file(f"[STEP Exporter]   cone stepped hole from stored props (taper fallback): "
                         f"small_r={stepped_small_r:.3f} small_h={height - stepped_large_h:.2f} "
                         f"inner_btm={taper_top_r:.3f} inner_top={taper_step_r:.3f}")
+        elif stepped_small_r > 0.001 and stepped_large_h > 0.001:
+            # 直台阶孔回退：大孔段为等径直孔，使用 hole_stepped_large_r
+            stored_large_r_s = (obj.get('hole_stepped_large_r', 0) if hasattr(obj, 'get') else 0) * 0.001
+            if stored_large_r_s > 0.001:
+                stepped_hole_params = {
+                    'small_hole_radius': stepped_small_r,
+                    'small_hole_height': height - stepped_large_h,
+                    'inner_bottom_radius': stored_large_r_s,
+                    'inner_top_radius': stored_large_r_s,
+                }
+                log_to_file(f"[STEP Exporter]   cone stepped hole from stored props (straight fallback): "
+                            f"small_r={stepped_small_r:.3f} small_h={height - stepped_large_h:.2f} "
+                            f"large_r={stored_large_r_s:.3f}")
         else:
             # stored props 不可用 → 从 z_radius_data + hollow 检测推算
-            # 用原始 mesh 半径做过滤（不受 chamfer 修正影响）
-            outer_min = min(mesh_bottom_r, mesh_top_r)
-            real_top_max_r = top_radii_sorted[-1] if top_radii_sorted else mesh_top_r
-            outer_min = min(mesh_bottom_r, real_top_max_r)
-            log_to_file(f"[STEP Exporter]   cone stepped: outer_min={outer_min:.4f} (mesh_bR={mesh_bottom_r:.4f} mesh_tR={mesh_top_r:.4f} realTop={real_top_max_r:.4f})")
+            # 用 mesh 半径做过滤
+            outer_min = min(bottom_radius, top_radius)
+            real_top_max_r = top_radii_sorted[-1] if top_radii_sorted else top_radius
+            outer_min = min(bottom_radius, real_top_max_r)
+            log_to_file(f"[STEP Exporter]   cone stepped: outer_min={outer_min:.4f} (bR={bottom_radius:.4f} tR={top_radius:.4f} realTop={real_top_max_r:.4f})")
             inner_z_filtered = {}
             for zl in sorted(z_radius_data.keys()):
                 r = z_radius_data[zl]
@@ -1876,13 +1839,16 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                     'groove_extrusion_length': groove_params.get('groove_extrusion_length', 0) if groove_params else 0,
                 }
                 # 当外边缘有 chamfer/fillet 时，缩小锥孔口径以留出孔圆角空间
-                # 外边缘特征会削减顶部面半径，OCC Build 失败当 wall < hole_fillet*1.1
+                # C++ 已做半径补偿（outer_r += chamfer_sz 后再倒角），
+                # 所以倒角不消耗壁厚，只需为内孔圆角留空间
                 outer_t = result['outer_top_radius']
                 outer_b = result['outer_bottom_radius']
                 outer_top_sz = (top_feature_size * S) if top_feature in ('chamfer', 'fillet') and top_feature_size > 0 else 0
                 outer_btm_sz = (bottom_feature_size * S) if bottom_feature in ('chamfer', 'fillet') and bottom_feature_size > 0 else 0
                 if outer_top_sz > 0:
-                    need_wall = outer_top_sz + hole_fr * 1.2
+                    # C++ compensates: actual_top_r = outer_t + outer_top_sz, then chamfers
+                    # Chamfer doesn't reduce wall; only hole_fillet matters
+                    need_wall = hole_fr * 1.2
                     if outer_t - result['inner_top_radius'] < need_wall:
                         new_it = max(outer_t - need_wall, small_r * S + 1.0)
                         log_to_file(f"[STEP Exporter]   Top edge {outer_top_sz:.0f}: shrinking inner_top {result['inner_top_radius']:.0f}→{new_it:.0f} (need wall {need_wall:.0f})")
@@ -1890,7 +1856,8 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                         if result['inner_bottom_radius'] > result['inner_top_radius']:
                             result['inner_bottom_radius'] = result['inner_top_radius']
                 if outer_btm_sz > 0:
-                    need_wall = outer_btm_sz + hole_fr * 1.2
+                    # C++ compensates bottom too: actual_bot_r = outer_b + outer_btm_sz
+                    need_wall = hole_fr * 1.2
                     if outer_b - result['inner_bottom_radius'] < need_wall:
                         new_ib = max(outer_b - need_wall, small_r * S + 1.0)
                         log_to_file(f"[STEP Exporter]   Bottom edge {outer_btm_sz:.0f}: shrinking inner_bottom {result['inner_bottom_radius']:.0f}→{new_ib:.0f} (need wall {need_wall:.0f})")

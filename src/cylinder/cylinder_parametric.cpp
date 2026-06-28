@@ -1095,8 +1095,22 @@ TopoDS_Shape create_cone_stepped_hole_parametric(
                   << " taper_at_top=" << (taper_at_top ? "YES" : "NO")
                   << " step_z=" << step_z << " lower_h=" << lower_h << " upper_h=" << upper_h << std::endl;
 
-        // ===== 1. Create SINGLE continuous outer cone (from z=-half_h to z=half_h) =====
-        TopoDS_Shape outerShape = create_cone_solid_parametric(outer_bottom_radius, outer_top_radius, height);
+        // ===== 1. Create outer cone with chamfer/fillet compensated radii =====
+        // Python passes measured edge radii (with chamfer/fillet cut away)
+        // C++ adds chamfer/fillet size back to get true cone body radius
+        double actual_top_r = outer_top_radius;
+        double actual_bot_r = outer_bottom_radius;
+        if (top_chamfer > 0.001 || top_fillet_radius > 0.001) {
+            double top_sz = std::max(top_chamfer, top_fillet_radius);
+            actual_top_r = outer_top_radius + top_sz;
+            std::cout << "[STEP Exporter] cone_stepped_hole: top radius compensated " << outer_top_radius << " -> " << actual_top_r << std::endl;
+        }
+        if (bottom_chamfer > 0.001 || bottom_fillet_radius > 0.001) {
+            double bot_sz = std::max(bottom_chamfer, bottom_fillet_radius);
+            actual_bot_r = outer_bottom_radius + bot_sz;
+            std::cout << "[STEP Exporter] cone_stepped_hole: bottom radius compensated " << outer_bottom_radius << " -> " << actual_bot_r << std::endl;
+        }
+        TopoDS_Shape outerShape = create_cone_solid_parametric(actual_bot_r, actual_top_r, height);
         if (outerShape.IsNull()) {
             std::cout << "[STEP Exporter] cone_stepped_hole: Failed to create outer cone" << std::endl;
             return TopoDS_Shape();
@@ -1115,8 +1129,8 @@ TopoDS_Shape create_cone_stepped_hole_parametric(
 
         // ===== Apply chamfers to outer cone (clean geometry, before Boolean cut) =====
         // Cap chamfer size to avoid cutting through wall into hole
-        double top_wall = std::abs(outer_top_radius - inner_top_radius);
-        double btm_wall = std::abs(outer_bottom_radius - inner_bottom_radius);
+        double top_wall = std::abs(actual_top_r - inner_top_radius);
+        double btm_wall = std::abs(actual_bot_r - inner_bottom_radius);
         double safe_top_ch = std::min(top_chamfer, top_wall * 0.8);
         double safe_btm_ch = std::min(bottom_chamfer, btm_wall * 0.8);
         if (safe_top_ch > 0.001 || safe_btm_ch > 0.001) {
@@ -1127,14 +1141,14 @@ TopoDS_Shape create_cone_stepped_hole_parametric(
             for (const auto& e : chTopEdges) {
                 gp_Pnt p = BRep_Tool::Pnt(TopExp::FirstVertex(e, true));
                 double er = sqrt(p.X()*p.X() + p.Y()*p.Y());
-                if (std::abs(er - outer_top_radius) / std::max(outer_top_radius, 0.001) < 0.2) {
+                if (std::abs(er - actual_top_r) / std::max(actual_top_r, 0.001) < 0.2) {
                     if (safe_top_ch > 0.001) { chMaker.Add(safe_top_ch, e); chAdded = true; }
                 }
             }
             for (const auto& e : chBtmEdges) {
                 gp_Pnt p = BRep_Tool::Pnt(TopExp::FirstVertex(e, true));
                 double er = sqrt(p.X()*p.X() + p.Y()*p.Y());
-                if (std::abs(er - outer_bottom_radius) / std::max(outer_bottom_radius, 0.001) < 0.2) {
+                if (std::abs(er - actual_bot_r) / std::max(actual_bot_r, 0.001) < 0.2) {
                     if (safe_btm_ch > 0.001) { chMaker.Add(safe_btm_ch, e); chAdded = true; }
                 }
             }
@@ -1230,10 +1244,10 @@ TopoDS_Shape create_cone_stepped_hole_parametric(
                 double er = cr.Radius();
 
                 // Outer top/bottom edges (chamfer/fillet on cone exterior)
-                if (top_fillet_radius > 0.001 && std::abs(er - outer_top_radius) / std::max(outer_top_radius, 0.001) < 0.2 && std::abs(ez - half_h) < 0.01) {
+                if (top_fillet_radius > 0.001 && std::abs(er - actual_top_r) / std::max(actual_top_r, 0.001) < 0.2 && std::abs(ez - half_h) < 0.01) {
                     edges_to_fillet.push_back(e); radii.push_back(top_fillet_radius);
                 }
-                if (bottom_fillet_radius > 0.001 && std::abs(er - outer_bottom_radius) / std::max(outer_bottom_radius, 0.001) < 0.2 && std::abs(ez + half_h) < 0.01) {
+                if (bottom_fillet_radius > 0.001 && std::abs(er - actual_bot_r) / std::max(actual_bot_r, 0.001) < 0.2 && std::abs(ez + half_h) < 0.01) {
                     edges_to_fillet.push_back(e); radii.push_back(bottom_fillet_radius);
                 }
                 // Top hole opening
@@ -1748,13 +1762,29 @@ TopoDS_Shape create_cone_with_blind_hole_solid_parametric(
 {
     double halfH = height / 2.0;
 
-    // Create cone body
-    TopoDS_Shape outer = create_cone_solid_parametric(bottom_radius, top_radius, height);
+    // ===== Radius compensation for chamfer/fillet (matching cone_stepped_hole) =====
+    // Python passes measured edge radii (with chamfer/fillet cut away).
+    // Add chamfer/fillet size back to get true cone body radius before edge treatment.
+    double actual_top_r = top_radius;
+    double actual_bot_r = bottom_radius;
+    if (top_chamfer > 0.001 || top_fillet > 0.001) {
+        double top_sz = std::max(top_chamfer, top_fillet);
+        actual_top_r = top_radius + top_sz;
+        std::cout << "[STEP Exporter] cone_blind_hole: top radius compensated " << top_radius << " -> " << actual_top_r << std::endl;
+    }
+    if (bottom_chamfer > 0.001 || bottom_fillet > 0.001) {
+        double bot_sz = std::max(bottom_chamfer, bottom_fillet);
+        actual_bot_r = bottom_radius + bot_sz;
+        std::cout << "[STEP Exporter] cone_blind_hole: bottom radius compensated " << bottom_radius << " -> " << actual_bot_r << std::endl;
+    }
+
+    // Create cone body with compensated radii
+    TopoDS_Shape outer = create_cone_solid_parametric(actual_bot_r, actual_top_r, height);
     if (outer.IsNull()) return TopoDS_Shape();
     TopoDS_Solid solid = shape_to_solid(outer);
     if (solid.IsNull()) return TopoDS_Shape();
 
-    // Apply edge features
+    // Apply edge features (use compensated radii for edge matching)
     auto apply_edge = [&](bool at_top) {
         double ch = at_top ? top_chamfer : bottom_chamfer;
         double fr = at_top ? top_fillet : bottom_fillet;
@@ -1764,7 +1794,7 @@ TopoDS_Shape create_cone_with_blind_hole_solid_parametric(
         std::vector<TopoDS_Edge> topEdges, bottomEdges;
         find_circular_edges(solid, topEdges, bottomEdges);
         const auto& target = at_top ? topEdges : bottomEdges;
-        double edgeR = at_top ? top_radius : bottom_radius;
+        double edgeR = at_top ? actual_top_r : actual_bot_r;
         for (const auto& e : target) {
             double er = BRepAdaptor_Curve(e).Circle().Radius();
             if (std::abs(er - edgeR) / std::max(edgeR, 0.001) < 0.2) {

@@ -214,11 +214,23 @@ TopoDS_Shape create_hollow_cone_solid_parametric(
     double bottom_chamfer, double bottom_fillet,
     double hole_fillet_radius)
 {
-    // 创建外锥体
-    TopoDS_Shape outerShape = create_cone_solid_parametric(outer_bottom_radius, outer_top_radius, height);
+    // ===== Radius compensation for chamfer/fillet (matching cone_stepped_hole) =====
+    double actual_bot_r = outer_bottom_radius;
+    double actual_top_r = outer_top_radius;
+    if (top_chamfer > 0.001 || top_fillet > 0.001) {
+        double top_sz = std::max(top_chamfer, top_fillet);
+        actual_top_r = outer_top_radius + top_sz;
+    }
+    if (bottom_chamfer > 0.001 || bottom_fillet > 0.001) {
+        double bot_sz = std::max(bottom_chamfer, bottom_fillet);
+        actual_bot_r = outer_bottom_radius + bot_sz;
+    }
+
+    // 创建外锥体（使用补偿后半径）
+    TopoDS_Shape outerShape = create_cone_solid_parametric(actual_bot_r, actual_top_r, height);
     if (outerShape.IsNull()) return TopoDS_Shape();
 
-    // Apply edge features to outer body
+    // Apply edge features to outer body (use compensated radii for edge matching)
     TopoDS_Solid outerSolid;
     if (outerShape.ShapeType() == TopAbs_SOLID) {
         outerSolid = TopoDS::Solid(outerShape);
@@ -236,7 +248,7 @@ TopoDS_Shape create_hollow_cone_solid_parametric(
         std::vector<TopoDS_Edge> topEdges, bottomEdges;
         find_circular_edges(outerSolid, topEdges, bottomEdges);
         const auto& target = at_top ? topEdges : bottomEdges;
-        double edgeR = at_top ? outer_top_radius : outer_bottom_radius;
+        double edgeR = at_top ? actual_top_r : actual_bot_r;
         for (const auto& e : target) {
             double er = BRepAdaptor_Curve(e).Circle().Radius();
             if (std::abs(er - edgeR) / std::max(edgeR, 0.001) < 0.2) {
@@ -703,7 +715,20 @@ TopoDS_Shape create_cone_chamfer_fillet_solid_parametric(
     double bottom_radius, double top_radius, double height,
     double chamfer_size, double fillet_radius, bool reversed)
 {
-    TopoDS_Shape shape = create_cone_solid_parametric(bottom_radius, top_radius, height);
+    // ===== Radius compensation for chamfer/fillet (matching cone_stepped_hole) =====
+    double actual_bot_r = bottom_radius;
+    double actual_top_r = top_radius;
+    if (reversed) {
+        // reversed: top=chamfer, bottom=fillet
+        if (chamfer_size > 0.001) actual_top_r = top_radius + chamfer_size;
+        if (fillet_radius > 0.001) actual_bot_r = bottom_radius + fillet_radius;
+    } else {
+        // default: top=fillet, bottom=chamfer
+        if (fillet_radius > 0.001) actual_top_r = top_radius + fillet_radius;
+        if (chamfer_size > 0.001) actual_bot_r = bottom_radius + chamfer_size;
+    }
+
+    TopoDS_Shape shape = create_cone_solid_parametric(actual_bot_r, actual_top_r, height);
     if (shape.IsNull()) return TopoDS_Shape();
     
     TopoDS_Solid solid;
@@ -762,7 +787,13 @@ TopoDS_Shape create_cone_chamfer_solid_parametric_both(
     double bottom_radius, double top_radius, double height,
     double bottom_chamfer, double top_chamfer)
 {
-    TopoDS_Shape shape = create_cone_solid_parametric(bottom_radius, top_radius, height);
+    // ===== Radius compensation for chamfer (matching cone_stepped_hole) =====
+    double actual_bot_r = bottom_radius;
+    double actual_top_r = top_radius;
+    if (top_chamfer > 0.001) actual_top_r = top_radius + top_chamfer;
+    if (bottom_chamfer > 0.001) actual_bot_r = bottom_radius + bottom_chamfer;
+
+    TopoDS_Shape shape = create_cone_solid_parametric(actual_bot_r, actual_top_r, height);
     if (shape.IsNull()) return TopoDS_Shape();
     TopoDS_Solid solid = shape_to_solid(shape);
     if (solid.IsNull()) return TopoDS_Shape();
@@ -795,7 +826,13 @@ TopoDS_Shape create_cone_fillet_solid_parametric_both(
     double bottom_radius, double top_radius, double height,
     double bottom_fillet, double top_fillet)
 {
-    TopoDS_Shape shape = create_cone_solid_parametric(bottom_radius, top_radius, height);
+    // ===== Radius compensation for fillet (matching cone_stepped_hole) =====
+    double actual_bot_r = bottom_radius;
+    double actual_top_r = top_radius;
+    if (top_fillet > 0.001) actual_top_r = top_radius + top_fillet;
+    if (bottom_fillet > 0.001) actual_bot_r = bottom_radius + bottom_fillet;
+
+    TopoDS_Shape shape = create_cone_solid_parametric(actual_bot_r, actual_top_r, height);
     if (shape.IsNull()) return TopoDS_Shape();
     TopoDS_Solid solid = shape_to_solid(shape);
     if (solid.IsNull()) return TopoDS_Shape();
@@ -2283,8 +2320,20 @@ TopoDS_Shape create_cone_with_groove_parametric(
 {
     double mid_r = (bottom_radius + top_radius) / 2.0;
 
+    // ===== Radius compensation for chamfer/fillet =====
+    double actual_bot_r = bottom_radius;
+    double actual_top_r = top_radius;
+    if (top_chamfer > 0.001 || top_fillet > 0.001) {
+        double top_sz = std::max(top_chamfer, top_fillet);
+        actual_top_r = top_radius + top_sz;
+    }
+    if (bottom_chamfer > 0.001 || bottom_fillet > 0.001) {
+        double bot_sz = std::max(bottom_chamfer, bottom_fillet);
+        actual_bot_r = bottom_radius + bot_sz;
+    }
+
     // Create cone body with edge features
-    TopoDS_Shape outer = create_cone_solid_parametric(bottom_radius, top_radius, height);
+    TopoDS_Shape outer = create_cone_solid_parametric(actual_bot_r, actual_top_r, height);
     if (outer.IsNull()) return TopoDS_Shape();
     TopoDS_Solid solid = shape_to_solid(outer);
     if (solid.IsNull()) return TopoDS_Shape();
@@ -2299,7 +2348,7 @@ TopoDS_Shape create_cone_with_groove_parametric(
         std::vector<TopoDS_Edge> topEdges, bottomEdges;
         find_circular_edges(solid, topEdges, bottomEdges);
         const auto& target = at_top ? topEdges : bottomEdges;
-        double edgeR = at_top ? top_radius : bottom_radius;
+        double edgeR = at_top ? actual_top_r : actual_bot_r;
         for (const auto& e : target) {
             double er = BRepAdaptor_Curve(e).Circle().Radius();
             if (std::abs(er - edgeR) / std::max(edgeR, 0.001) < 0.2) {

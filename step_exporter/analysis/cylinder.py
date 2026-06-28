@@ -1698,6 +1698,13 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
             top_feat = 'none'; top_sz = 0.0; bot_feat = 'none'; bot_sz = 0.0
             if stored_orig_r > 0:
                 body_radius_for_export = stored_orig_r * 0.001  # mm -> m
+            elif stored_chamfer_type in ('chamfer_both', 'fillet_both', 'chamfer_fillet'):
+                top_add = (stored_chamfer_sz if stored_chamfer_type in ('chamfer_both', 'chamfer_fillet') else 0)
+                top_add = max(top_add, stored_fillet_r if stored_chamfer_type in ('fillet_both',) else 0)
+                bot_add = (stored_chamfer_sz if stored_chamfer_type == 'chamfer_both' else 0)
+                bot_add = max(bot_add, stored_fillet_r if stored_chamfer_type in ('fillet_both', 'chamfer_fillet') else 0)
+                body_radius_for_export = max(bottom_radius + bot_add * 0.001, top_radius + top_add * 0.001)
+                log_to_file(f"[STEP Exporter]   Estimated orig radius from edge features: {body_radius_for_export:.3f}")
             if stored_chamfer_type == 'chamfer':
                 top_feat = 'chamfer'; top_sz = stored_chamfer_sz * 0.001
             elif stored_chamfer_type == 'fillet':
@@ -2064,6 +2071,14 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
         # No fallback to mesh-detected values.
         if stored_orig_r > 0:
             body_radius_for_export = stored_orig_r * 0.001  # use original radius
+        elif stored_ctype in ('chamfer_both', 'fillet_both', 'chamfer_fillet'):
+            # Both ends treated, no stored orig radius: estimate from edge features
+            top_add = (stored_csz if stored_ctype in ('chamfer_both', 'chamfer_fillet') else 0)
+            top_add = max(top_add, stored_fr if stored_ctype in ('fillet_both',) else 0)
+            bot_add = (stored_csz if stored_ctype == 'chamfer_both' else 0)
+            bot_add = max(bot_add, stored_fr if stored_ctype in ('fillet_both', 'chamfer_fillet') else 0)
+            body_radius_for_export = max(bottom_radius + bot_add * 0.001, top_radius + top_add * 0.001)
+            log_to_file(f"[STEP Exporter]   Estimated orig radius from edge features: {body_radius_for_export:.3f} (bR={bottom_radius:.3f}+{bot_add*0.001:.3f} tR={top_radius:.3f}+{top_add*0.001:.3f})")
 
         # Check if cone body + blind hole (use cone_blind_hole C++ path)
         # Bidirectional: cone can narrow upward or widen upward

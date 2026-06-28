@@ -214,30 +214,18 @@ TopoDS_Shape create_hollow_cone_solid_parametric(
     double bottom_chamfer, double bottom_fillet,
     double hole_fillet_radius)
 {
-    // ===== Radius compensation for chamfer/fillet =====
+    // ===== Radius compensation for chamfer/fillet (cones only; cylinders pre-compensated by Python) =====
     double actual_bot_r = outer_bottom_radius;
     double actual_top_r = outer_top_radius;
     double top_sz = std::max(top_chamfer, top_fillet);
     double bot_sz = std::max(bottom_chamfer, bottom_fillet);
     bool is_cylinder = (std::abs(outer_bottom_radius - outer_top_radius) < 0.01);
-    if (is_cylinder) {
-        double max_r = std::max(outer_bottom_radius, outer_top_radius);
-        bool top_has = (top_sz > 0.001);
-        bool bot_has = (bot_sz > 0.001);
-        if (top_has && bot_has) {
-            // Both ends treated - need compensation
-            double max_sz = std::max(top_sz, bot_sz);
-            actual_bot_r = max_r + max_sz;
-            actual_top_r = max_r + max_sz;
-        } else {
-            // At least one end untreated - use max measured radius directly
-            actual_bot_r = max_r;
-            actual_top_r = max_r;
-        }
-    } else {
+    if (!is_cylinder) {
+        // Cone: compensate each end independently for chamfer/fillet
         if (top_sz > 0.001) actual_top_r += top_sz;
         if (bot_sz > 0.001) actual_bot_r += bot_sz;
     }
+    // Cylinder: use radii as-is (Python pre-compensates via cylinder_original_radius)
 
     // 创建外锥体（使用补偿后半径）
     TopoDS_Shape outerShape = create_cone_solid_parametric(actual_bot_r, actual_top_r, height);
@@ -736,26 +724,14 @@ TopoDS_Shape create_cone_chamfer_fillet_solid_parametric(
     if (reversed) {
         double top_sz = chamfer_size;
         double bot_sz = fillet_radius;
-        if (is_cyl) {
-            bool top_has = (top_sz > 0.001), bot_has = (bot_sz > 0.001);
-            if (top_has && bot_has) {
-                double ms = std::max(top_sz, bot_sz);
-                actual_bot_r = max_r + ms; actual_top_r = max_r + ms;
-            } else { actual_bot_r = max_r; actual_top_r = max_r; }
-        } else {
+        if (!is_cyl) {
             if (top_sz > 0.001) actual_top_r += top_sz;
             if (bot_sz > 0.001) actual_bot_r += bot_sz;
         }
     } else {
         double top_sz = fillet_radius;
         double bot_sz = chamfer_size;
-        if (is_cyl) {
-            bool top_has = (top_sz > 0.001), bot_has = (bot_sz > 0.001);
-            if (top_has && bot_has) {
-                double ms = std::max(top_sz, bot_sz);
-                actual_bot_r = max_r + ms; actual_top_r = max_r + ms;
-            } else { actual_bot_r = max_r; actual_top_r = max_r; }
-        } else {
+        if (!is_cyl) {
             if (top_sz > 0.001) actual_top_r += top_sz;
             if (bot_sz > 0.001) actual_bot_r += bot_sz;
         }
@@ -825,14 +801,7 @@ TopoDS_Shape create_cone_chamfer_solid_parametric_both(
     double actual_top_r = top_radius;
     double top_sz = top_chamfer, bot_sz = bottom_chamfer;
     bool is_cyl = (std::abs(bottom_radius - top_radius) < 0.01);
-    if (is_cyl) {
-        double max_r = std::max(bottom_radius, top_radius);
-        bool top_has = (top_sz > 0.001), bot_has = (bot_sz > 0.001);
-        if (top_has && bot_has) {
-            double ms = std::max(top_sz, bot_sz);
-            actual_bot_r = max_r + ms; actual_top_r = max_r + ms;
-        } else { actual_bot_r = max_r; actual_top_r = max_r; }
-    } else {
+    if (!is_cyl) {
         if (top_sz > 0.001) actual_top_r += top_sz;
         if (bot_sz > 0.001) actual_bot_r += bot_sz;
     }
@@ -875,14 +844,7 @@ TopoDS_Shape create_cone_fillet_solid_parametric_both(
     double actual_top_r = top_radius;
     double top_fr = top_fillet, bot_fr = bottom_fillet;
     bool is_cyl = (std::abs(bottom_radius - top_radius) < 0.01);
-    if (is_cyl) {
-        double max_r = std::max(bottom_radius, top_radius);
-        bool top_has = (top_fr > 0.001), bot_has = (bot_fr > 0.001);
-        if (top_has && bot_has) {
-            double ms = std::max(top_fr, bot_fr);
-            actual_bot_r = max_r + ms; actual_top_r = max_r + ms;
-        } else { actual_bot_r = max_r; actual_top_r = max_r; }
-    } else {
+    if (!is_cyl) {
         if (top_fr > 0.001) actual_top_r += top_fr;
         if (bot_fr > 0.001) actual_bot_r += bot_fr;
     }
@@ -1044,14 +1006,7 @@ TopoDS_Shape create_hollow_cone_fillet_with_groove_parametric(
     double top_sz = std::max(top_chamfer, top_fillet);
     double bot_sz = std::max(bottom_chamfer, bottom_fillet);
     bool is_cyl = (std::abs(outer_bottom_radius - outer_top_radius) < 0.01);
-    if (is_cyl) {
-        double max_r = std::max(outer_bottom_radius, outer_top_radius);
-        bool top_has = (top_sz > 0.001), bot_has = (bot_sz > 0.001);
-        if (top_has && bot_has) {
-            double ms = std::max(top_sz, bot_sz);
-            comp_bot_r = max_r + ms; comp_top_r = max_r + ms;
-        } else { comp_bot_r = max_r; comp_top_r = max_r; }
-    } else {
+    if (!is_cyl) {
         if (top_sz > 0.001) comp_top_r += top_sz;
         if (bot_sz > 0.001) comp_bot_r += bot_sz;
     }
@@ -1211,17 +1166,7 @@ TopoDS_Shape create_cone_stepped_hole_parametric(
         double top_sz = std::max(top_chamfer, top_fillet_radius);
         double bot_sz = std::max(bottom_chamfer, bottom_fillet_radius);
         bool is_cyl = (std::abs(outer_bottom_radius - outer_top_radius) < 0.01);
-        if (is_cyl) {
-            double max_r = std::max(outer_bottom_radius, outer_top_radius);
-            bool top_has = (top_sz > 0.001), bot_has = (bot_sz > 0.001);
-            if (top_has && bot_has) {
-                double ms = std::max(top_sz, bot_sz);
-                actual_bot_r = max_r + ms; actual_top_r = max_r + ms;
-                std::cout << "[STEP Exporter] cone_stepped_hole: both ends treated, compensated +" << ms << std::endl;
-            } else {
-                actual_bot_r = max_r; actual_top_r = max_r;
-            }
-        } else {
+        if (!is_cyl) {
             if (top_sz > 0.001) {
                 actual_top_r += top_sz;
                 std::cout << "[STEP Exporter] cone_stepped_hole: top radius compensated " << outer_top_radius << " -> " << actual_top_r << std::endl;
@@ -1891,18 +1836,7 @@ TopoDS_Shape create_cone_with_blind_hole_solid_parametric(
     double top_sz = std::max(top_chamfer, top_fillet);
     double bot_sz = std::max(bottom_chamfer, bottom_fillet);
     bool is_cyl = (std::abs(bottom_radius - top_radius) < 0.01);
-    if (is_cyl) {
-        double max_r = std::max(bottom_radius, top_radius);
-        bool top_has = (top_sz > 0.001), bot_has = (bot_sz > 0.001);
-        if (top_has && bot_has) {
-            double ms = std::max(top_sz, bot_sz);
-            actual_bot_r = max_r + ms; actual_top_r = max_r + ms;
-            std::cout << "[STEP Exporter] cone_blind_hole: both ends treated, compensated +" << ms << std::endl;
-        } else {
-            actual_bot_r = max_r; actual_top_r = max_r;
-            std::cout << "[STEP Exporter] cone_blind_hole: cylinder, using max_r=" << max_r << std::endl;
-        }
-    } else {
+    if (!is_cyl) {
         if (top_sz > 0.001) {
             actual_top_r += top_sz;
             std::cout << "[STEP Exporter] cone_blind_hole: top radius compensated " << top_radius << " -> " << actual_top_r << std::endl;
@@ -2424,14 +2358,7 @@ TopoDS_Shape create_cone_with_groove_parametric(
     double top_sz = std::max(top_chamfer, top_fillet);
     double bot_sz = std::max(bottom_chamfer, bottom_fillet);
     bool is_cyl = (std::abs(bottom_radius - top_radius) < 0.01);
-    if (is_cyl) {
-        double max_r = std::max(bottom_radius, top_radius);
-        bool top_has = (top_sz > 0.001), bot_has = (bot_sz > 0.001);
-        if (top_has && bot_has) {
-            double ms = std::max(top_sz, bot_sz);
-            actual_bot_r = max_r + ms; actual_top_r = max_r + ms;
-        } else { actual_bot_r = max_r; actual_top_r = max_r; }
-    } else {
+    if (!is_cyl) {
         if (top_sz > 0.001) actual_top_r += top_sz;
         if (bot_sz > 0.001) actual_bot_r += bot_sz;
     }
@@ -2543,14 +2470,7 @@ TopoDS_Shape create_cone_with_blind_hole_and_groove_parametric(
     double top_sz = std::max(top_chamfer, top_fillet);
     double bot_sz = std::max(bottom_chamfer, bottom_fillet);
     bool is_cyl = (std::abs(bottom_radius - top_radius) < 0.01);
-    if (is_cyl) {
-        double max_r = std::max(bottom_radius, top_radius);
-        bool top_has = (top_sz > 0.001), bot_has = (bot_sz > 0.001);
-        if (top_has && bot_has) {
-            double ms = std::max(top_sz, bot_sz);
-            comp_bot_r = max_r + ms; comp_top_r = max_r + ms;
-        } else { comp_bot_r = max_r; comp_top_r = max_r; }
-    } else {
+    if (!is_cyl) {
         if (top_sz > 0.001) comp_top_r += top_sz;
         if (bot_sz > 0.001) comp_bot_r += bot_sz;
     }
@@ -2623,14 +2543,7 @@ TopoDS_Shape create_cone_stepped_hole_with_groove_parametric(
     double top_sz = std::max(top_chamfer, top_fillet_radius);
     double bot_sz = std::max(bottom_chamfer, bottom_fillet_radius);
     bool is_cyl = (std::abs(outer_bottom_radius - outer_top_radius) < 0.01);
-    if (is_cyl) {
-        double max_r = std::max(outer_bottom_radius, outer_top_radius);
-        bool top_has = (top_sz > 0.001), bot_has = (bot_sz > 0.001);
-        if (top_has && bot_has) {
-            double ms = std::max(top_sz, bot_sz);
-            comp_bot_r = max_r + ms; comp_top_r = max_r + ms;
-        } else { comp_bot_r = max_r; comp_top_r = max_r; }
-    } else {
+    if (!is_cyl) {
         if (top_sz > 0.001) comp_top_r += top_sz;
         if (bot_sz > 0.001) comp_bot_r += bot_sz;
     }

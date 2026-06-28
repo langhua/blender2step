@@ -2113,7 +2113,6 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
             result = {
                 'obj_type': 'cone_blind_hole_groove' if (has_groove_custom and groove_params and groove_params.get('groove_depth', 0) > 0) else 'cone_blind_hole',
                 'bottom_radius': bottom_radius * S,
-                'bottom_radius': bottom_radius * S,
                 'top_radius': top_radius * S,
                 'height': height * S,
                 'hole_radius': hole_radius * S,
@@ -2569,6 +2568,24 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                         obj_type = 'cone_chamfer' if top_feature == 'chamfer' else 'cone_fillet'
                     elif bottom_feature:
                         obj_type = 'cone_chamfer' if bottom_feature == 'chamfer' else 'cone_fillet'
+                    # 优先使用存储属性覆盖 mesh 检测值（单位均为 mm，与 mesh 数据一致）
+                    stored_ct_cone = obj.get('chamfer_type') if hasattr(obj, 'get') else None
+                    stored_ch_sz = obj.get('chamfer_size', 0) if hasattr(obj, 'get') else 0
+                    stored_fr_r = obj.get('fillet_radius_edge', 0) if hasattr(obj, 'get') else 0
+                    if stored_ct_cone in ('chamfer', 'chamfer_both', 'chamfer_fillet'):
+                        top_feature = 'chamfer'; top_feature_size = stored_ch_sz
+                        bottom_feature = 'chamfer' if stored_ct_cone in ('chamfer_both', 'chamfer_fillet') else None
+                        bottom_feature_size = stored_ch_sz if bottom_feature else 0
+                    elif stored_ct_cone in ('fillet', 'fillet_both'):
+                        top_feature = 'fillet'; top_feature_size = stored_fr_r
+                        bottom_feature = 'fillet' if stored_ct_cone == 'fillet_both' else None
+                        bottom_feature_size = stored_fr_r if bottom_feature else 0
+                    elif stored_ct_cone in ('bottom_chamfer',):
+                        bottom_feature = 'chamfer'; bottom_feature_size = stored_ch_sz
+                        top_feature = None; top_feature_size = 0
+                    elif stored_ct_cone in ('bottom_fillet',):
+                        bottom_feature = 'fillet'; bottom_feature_size = stored_fr_r
+                        top_feature = None; top_feature_size = 0
                     log_to_file(f"[STEP Exporter]   CLASSIFIED: {obj_type} bR={bottom_radius:.6f} tR={top_radius:.6f} h={height:.6f}")
                     return {
                         'obj_type': obj_type,

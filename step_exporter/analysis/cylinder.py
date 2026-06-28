@@ -1794,10 +1794,15 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                 stored_fr = obj.get('fillet_radius_edge', 0) if hasattr(obj, 'get') else 0  # mm
                 stored_csz = obj.get('chamfer_size', 0) if hasattr(obj, 'get') else 0  # mm
                 # 优先使用存储属性，避免 mesh 误检
-                if stored_ct in ('chamfer', 'chamfer_both', 'chamfer_fillet'):
+                if stored_ct == 'chamfer':
                     top_feature = 'chamfer'; top_feature_size = stored_csz * 0.001
-                    bottom_feature = 'chamfer' if stored_ct in ('chamfer_both', 'chamfer_fillet') else None
-                    bottom_feature_size = stored_csz * 0.001 if bottom_feature else 0
+                    bottom_feature = None; bottom_feature_size = 0
+                elif stored_ct == 'chamfer_both':
+                    top_feature = 'chamfer'; top_feature_size = stored_csz * 0.001
+                    bottom_feature = 'chamfer'; bottom_feature_size = stored_csz * 0.001
+                elif stored_ct == 'chamfer_fillet':
+                    top_feature = 'chamfer'; top_feature_size = stored_csz * 0.001
+                    bottom_feature = 'fillet'; bottom_feature_size = stored_fr * 0.001
                 elif stored_ct in ('fillet', 'fillet_both'):
                     top_feature = 'fillet'; top_feature_size = stored_fr * 0.001
                     bottom_feature = 'fillet' if stored_ct == 'fillet_both' else None
@@ -2539,10 +2544,15 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                     stored_ct_cone = obj.get('chamfer_type') if hasattr(obj, 'get') else None
                     stored_ch_sz = obj.get('chamfer_size', 0) if hasattr(obj, 'get') else 0
                     stored_fr_r = obj.get('fillet_radius_edge', 0) if hasattr(obj, 'get') else 0
-                    if stored_ct_cone in ('chamfer', 'chamfer_both', 'chamfer_fillet'):
+                    if stored_ct_cone == 'chamfer':
                         top_feature = 'chamfer'; top_feature_size = stored_ch_sz
-                        bottom_feature = 'chamfer' if stored_ct_cone in ('chamfer_both', 'chamfer_fillet') else None
-                        bottom_feature_size = stored_ch_sz if bottom_feature else 0
+                        bottom_feature = None; bottom_feature_size = 0
+                    elif stored_ct_cone == 'chamfer_both':
+                        top_feature = 'chamfer'; top_feature_size = stored_ch_sz
+                        bottom_feature = 'chamfer'; bottom_feature_size = stored_ch_sz
+                    elif stored_ct_cone == 'chamfer_fillet':
+                        top_feature = 'chamfer'; top_feature_size = stored_ch_sz
+                        bottom_feature = 'fillet'; bottom_feature_size = stored_fr_r
                     elif stored_ct_cone in ('fillet', 'fillet_both'):
                         top_feature = 'fillet'; top_feature_size = stored_fr_r
                         bottom_feature = 'fillet' if stored_ct_cone == 'fillet_both' else None

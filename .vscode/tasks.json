@@ -35,6 +35,13 @@
 			"type": "shell",
 			"command": "cmake --build build --config Release",
 			"group": "build"
+		},
+		{
+			"label": "Fix Cone Labels",
+			"type": "shell",
+			"command": "python _fix_cone_labels.py",
+			"isBackground": false,
+			"problemMatcher": []
 		}
 	]
 }

@@ -727,8 +727,9 @@ def add_grooved_copies(progress_cb=None):
             bpy.context.collection.objects.link(copy)
             grooved_cyls.append(copy)
             
-            # Copy associated label by position
-            pos_key = (round(src.location.y, 3), round(src.location.z, 3))
+            # Copy associated label by position (label Z = cylinder Z + H/2 + 0.6)
+            label_z = src.location.z + H / 2 + 0.6
+            pos_key = (round(src.location.y, 3), round(label_z, 3))
             lbl = labels_by_pos.get(pos_key)
             if lbl:
                 lbl_copy = lbl.copy()

@@ -341,7 +341,7 @@ class STEP_EXPORTER_OT_create_cylinder_gallery(Operator):
 
                 for lbl in self._labels_left:
 
-                    if abs(lbl.location.y - obj.location.y) < 0.01 and abs(lbl.location.z - obj.location.z) < 0.01:
+                    if abs(lbl.location.y - obj.location.y) < 0.01 and abs(lbl.location.z - (obj.location.z + m.H / 2 + 0.6)) < 0.01:
 
                         lbl_copy = lbl.copy()
 
@@ -730,7 +730,7 @@ class STEP_EXPORTER_OT_create_cone_gallery(Operator):
 
                 for lbl in self._labels_left:
 
-                    if abs(lbl.location.y - obj.location.y) < 0.01 and abs(lbl.location.z - obj.location.z) < 0.01:
+                    if abs(lbl.location.y - obj.location.y) < 0.01 and abs(lbl.location.z - (obj.location.z + m.H * 0.1)) < 0.01:
 
                         lbl_copy = lbl.copy()
 
@@ -1115,7 +1115,7 @@ class STEP_EXPORTER_OT_create_cone_gallery_inverted(Operator):
 
                 for lbl in self._labels_left:
 
-                    if abs(lbl.location.y - obj.location.y) < 0.01 and abs(lbl.location.z - obj.location.z) < 0.01:
+                    if abs(lbl.location.y - obj.location.y) < 0.01 and abs(lbl.location.z - (obj.location.z + m.H * 0.1)) < 0.01:
 
                         lbl_copy = lbl.copy()
 

@@ -39,7 +39,7 @@ class STEP_EXPORTER_PT_main_panel(Panel):
         layout.separator()
         if _g.CPP_MODULE_LOADED:
             col = layout.column(align=True)
-            col.operator("export_scene.step_enhanced", text="Quick Export (Enhanced)", icon='EXPORT')
+            col.operator("export_scene.step_enhanced", text="Step Export", icon='EXPORT')
         else:
             box = layout.box()
             box.label(text="C++ module required", icon='ERROR')
@@ -63,7 +63,6 @@ class STEP_EXPORTER_PT_sample_generators(Panel):
         col = layout.column(align=True)
         col.operator("step_exporter.create_top_shell", text="Top Shell", icon='MESH_PLANE')
         col.operator("step_exporter.create_bottom_shell", text="Bottom Shell", icon='MESH_PLANE')
-        col.operator("step_exporter.create_cylinder", text="Cylinder", icon='MESH_CYLINDER')
         col.operator("step_exporter.create_cylinder_gallery", text="Cylinder Gallery", icon='MESH_CYLINDER')
         col.operator("step_exporter.create_cone_gallery", text="Cone Gallery △", icon='MESH_CONE')
         col.operator("step_exporter.create_cone_gallery_inverted", text="Cone Gallery ▽", icon='MESH_CONE')

@@ -1,6 +1,7 @@
 """Cylinder panel."""
 import bpy
 from bpy.types import Panel
+from ..core.i18n import _t
 
 class STEP_EXPORTER_PT_cylinder_panel(Panel):
     """参数化圆柱生成面板"""
@@ -14,7 +15,7 @@ class STEP_EXPORTER_PT_cylinder_panel(Panel):
     
     def draw(self, context):
         layout = self.layout
-        layout.operator("step_exporter.create_parametric_cylinder", text="Generate Cylinder", icon='MESH_CYLINDER')
+        layout.operator("step_exporter.create_parametric_cylinder", text=_t("Generate Cylinder"), icon='MESH_CYLINDER')
 
 
 # ====================== 注册与注销 ======================

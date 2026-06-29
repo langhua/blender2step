@@ -5,12 +5,13 @@ import sys, os
 import bpy
 
 from bpy.types import Operator
+from ..core.i18n import _t
 
 
 
 class STEP_EXPORTER_OT_create_top_shell(Operator):
 
-    """创建带开窗的塑料顶壳样品"""
+    """Create a top shell sample with windows"""
 
     bl_idname = "step_exporter.create_top_shell"
 
@@ -26,7 +27,7 @@ class STEP_EXPORTER_OT_create_top_shell(Operator):
 
         exec(compile(open(script_path).read(), script_path, 'exec'), {'__name__': '__main__', '__file__': script_path})
 
-        self.report({'INFO'}, "Top shell created")
+        self.report({'INFO'}, _t("Top shell created"))
 
         return {'FINISHED'}
 
@@ -36,7 +37,7 @@ class STEP_EXPORTER_OT_create_top_shell(Operator):
 
 class STEP_EXPORTER_OT_create_bottom_shell(Operator):
 
-    """创建带螺栓孔的塑料底壳样品"""
+    """Create a bottom shell sample with bolt holes"""
 
     bl_idname = "step_exporter.create_bottom_shell"
 
@@ -62,7 +63,7 @@ class STEP_EXPORTER_OT_create_bottom_shell(Operator):
 
             sys.argv = old_argv
 
-        self.report({'INFO'}, "Bottom shell created")
+        self.report({'INFO'}, _t("Bottom shell created"))
 
         return {'FINISHED'}
 
@@ -72,7 +73,7 @@ class STEP_EXPORTER_OT_create_bottom_shell(Operator):
 
 class STEP_EXPORTER_OT_create_cylinder(Operator):
 
-    """创建机械圆柱体样品"""
+    """Create a mechanical cylinder sample"""
 
     bl_idname = "step_exporter.create_cylinder"
 
@@ -88,7 +89,7 @@ class STEP_EXPORTER_OT_create_cylinder(Operator):
 
         exec(compile(open(script_path).read(), script_path, 'exec'), {'__name__': '__main__', '__file__': script_path})
 
-        self.report({'INFO'}, "Cylinder created")
+        self.report({'INFO'}, _t("Cylinder created"))
 
         return {'FINISHED'}
 
@@ -98,7 +99,7 @@ class STEP_EXPORTER_OT_create_cylinder(Operator):
 
 class STEP_EXPORTER_OT_create_cylinder_gallery(Operator):
 
-    """创建圆柱体组合样品（8种边缘特征× 10种孔洞）"""
+    """Create a cylinder combo gallery (8 edge features × 12 hole types)"""
 
     bl_idname = "step_exporter.create_cylinder_gallery"
 
@@ -159,7 +160,7 @@ class STEP_EXPORTER_OT_create_cylinder_gallery(Operator):
 
                 self._phase = 1
 
-                update_progress(45, "应用修改器...", context)
+                update_progress(45, _t("Applying modifiers..."), context)
 
                 return {'RUNNING_MODAL'}
 
@@ -203,7 +204,7 @@ class STEP_EXPORTER_OT_create_cylinder_gallery(Operator):
 
                 pct = self._done / self._total * 45
 
-                update_progress(pct, f"创建: {self._done}/{self._total}", context)
+                update_progress(pct, _t("Creating: {done}/{total}", done=self._done, total=self._total), context)
 
                 self._item_idx += 1
 
@@ -229,7 +230,7 @@ class STEP_EXPORTER_OT_create_cylinder_gallery(Operator):
 
                 pct = 45 + (self._mod_idx / len(self._left_cyls)) * 2
 
-                update_progress(pct, f"应用修改器: {self._mod_idx}/{len(self._left_cyls)}", context)
+                update_progress(pct, _t("Applying: {idx}/{total}", idx=self._mod_idx, total=len(self._left_cyls)), context)
 
                 return {'RUNNING_MODAL'}
 
@@ -245,7 +246,7 @@ class STEP_EXPORTER_OT_create_cylinder_gallery(Operator):
 
             self._phase = 2
 
-            update_progress(47, "孔口圆角...", context)
+            update_progress(47, _t("Hole fillets..."), context)
 
             return {'RUNNING_MODAL'}
 
@@ -263,13 +264,13 @@ class STEP_EXPORTER_OT_create_cylinder_gallery(Operator):
 
                 pct = 47 + (self._mod_idx / len(self._left_cyls)) * 3
 
-                update_progress(pct, f"后处理: {self._mod_idx}/{len(self._left_cyls)}", context)
+                update_progress(pct, _t("Post-processing: {idx}/{total}", idx=self._mod_idx, total=len(self._left_cyls)), context)
 
                 return {'RUNNING_MODAL'}
 
             self._phase = 3
 
-            update_progress(50, "左侧完成", context)
+            update_progress(50, _t("Left side done"), context)
 
             return {'RUNNING_MODAL'}
 
@@ -314,7 +315,7 @@ class STEP_EXPORTER_OT_create_cylinder_gallery(Operator):
 
             self._phase = 4
 
-            update_progress(50, "复制圆柱...", context)
+            update_progress(50, _t("Copying cylinders..."), context)
 
             return {'RUNNING_MODAL'}
 
@@ -360,7 +361,7 @@ class STEP_EXPORTER_OT_create_cylinder_gallery(Operator):
 
                 pct = 50 + (self._copy_idx / total_c) * 30
 
-                update_progress(pct, f"复制: {self._copy_idx}/{total_c}", context)
+                update_progress(pct, _t("Copying: {idx}/{total}", idx=self._copy_idx, total=total_c), context)
 
                 return {'RUNNING_MODAL'}
 
@@ -391,7 +392,7 @@ class STEP_EXPORTER_OT_create_cylinder_gallery(Operator):
 
                 pct = 80 + (self._mod_idx / total_g) * 10
 
-                update_progress(pct, f"添加槽: {self._mod_idx}/{total_g}", context)
+                update_progress(pct, _t("Adding grooves: {idx}/{total}", idx=self._mod_idx, total=total_g), context)
 
                 return {'RUNNING_MODAL'}
 
@@ -417,7 +418,7 @@ class STEP_EXPORTER_OT_create_cylinder_gallery(Operator):
 
                 pct = 90 + (self._mod_idx / total_g) * 5
 
-                update_progress(pct, f"应用槽: {self._mod_idx}/{total_g}", context)
+                update_progress(pct, _t("Applying grooves: {idx}/{total}", idx=self._mod_idx, total=total_g), context)
 
                 return {'RUNNING_MODAL'}
 
@@ -429,7 +430,7 @@ class STEP_EXPORTER_OT_create_cylinder_gallery(Operator):
 
         # ===== Phase 7: finish (95→100%) =====
 
-        update_progress(100, "完成!", context)
+        update_progress(100, _t("Done!"), context)
 
         context.window_manager.event_timer_remove(self._timer)
 
@@ -437,7 +438,7 @@ class STEP_EXPORTER_OT_create_cylinder_gallery(Operator):
 
         context.window.cursor_set('DEFAULT')
 
-        self.report({'INFO'}, "Cylinder gallery created — 192 items")
+        self.report({'INFO'}, _t("Cylinder gallery created — {count} items", count=192))
 
         return {'FINISHED'}
 
@@ -469,7 +470,7 @@ class STEP_EXPORTER_OT_create_cylinder_gallery(Operator):
 
         from ..export.progress_report import start_progress
 
-        start_progress(context, "Creating cylinder gallery (with grooves)...")
+        start_progress(context, _t("Creating cylinder gallery (with grooves)..."))
 
         wm = context.window_manager
 
@@ -489,7 +490,7 @@ class STEP_EXPORTER_OT_create_cylinder_gallery(Operator):
 
 class STEP_EXPORTER_OT_create_cone_gallery(Operator):
 
-    """创建锥体组合样品（倒角/圆角/孔）- 正锥形（上细下粗）"""
+    """Create a cone combo gallery (chamfer/fillet/hole) — narrowing upward"""
 
     bl_idname = "step_exporter.create_cone_gallery"
 
@@ -550,7 +551,7 @@ class STEP_EXPORTER_OT_create_cone_gallery(Operator):
 
                 self._phase = 1
 
-                update_progress(45, "应用修改器...", context)
+                update_progress(45, _t("Applying modifiers..."), context)
 
                 return {'RUNNING_MODAL'}
 
@@ -594,7 +595,7 @@ class STEP_EXPORTER_OT_create_cone_gallery(Operator):
 
                 pct = self._done / self._total * 45
 
-                update_progress(pct, f"创建: {self._done}/{self._total}", context)
+                update_progress(pct, _t("Creating: {done}/{total}", done=self._done, total=self._total), context)
 
                 self._item_idx += 1
 
@@ -620,7 +621,7 @@ class STEP_EXPORTER_OT_create_cone_gallery(Operator):
 
                 pct = 45 + (self._mod_idx / len(self._cones)) * 2
 
-                update_progress(pct, f"应用修改器: {self._mod_idx}/{len(self._cones)}", context)
+                update_progress(pct, _t("Applying: {idx}/{total}", idx=self._mod_idx, total=len(self._cones)), context)
 
                 return {'RUNNING_MODAL'}
 
@@ -634,7 +635,7 @@ class STEP_EXPORTER_OT_create_cone_gallery(Operator):
 
             self._phase = 2
 
-            update_progress(47, "后处理...", context)
+            update_progress(47, _t("Post-processing..."), context)
 
             return {'RUNNING_MODAL'}
 
@@ -652,13 +653,13 @@ class STEP_EXPORTER_OT_create_cone_gallery(Operator):
 
                 pct = 47 + (self._mod_idx / len(self._cones)) * 3
 
-                update_progress(pct, f"后处理: {self._mod_idx}/{len(self._cones)}", context)
+                update_progress(pct, _t("Post-processing: {idx}/{total}", idx=self._mod_idx, total=len(self._cones)), context)
 
                 return {'RUNNING_MODAL'}
 
             self._phase = 3
 
-            update_progress(50, "左侧完成", context)
+            update_progress(50, _t("Left side done"), context)
 
             return {'RUNNING_MODAL'}
 
@@ -703,7 +704,7 @@ class STEP_EXPORTER_OT_create_cone_gallery(Operator):
 
             self._phase = 4
 
-            update_progress(50, "复制锥体...", context)
+            update_progress(50, _t("Copying cones..."), context)
 
             return {'RUNNING_MODAL'}
 
@@ -749,7 +750,7 @@ class STEP_EXPORTER_OT_create_cone_gallery(Operator):
 
                 pct = 50 + (self._copy_idx / total_c) * 30
 
-                update_progress(pct, f"复制: {self._copy_idx}/{total_c}", context)
+                update_progress(pct, _t("Copying: {idx}/{total}", idx=self._copy_idx, total=total_c), context)
 
                 return {'RUNNING_MODAL'}
 
@@ -780,7 +781,7 @@ class STEP_EXPORTER_OT_create_cone_gallery(Operator):
 
                 pct = 80 + (self._mod_idx / total_g) * 10
 
-                update_progress(pct, f"添加槽: {self._mod_idx}/{total_g}", context)
+                update_progress(pct, _t("Adding grooves: {idx}/{total}", idx=self._mod_idx, total=total_g), context)
 
                 return {'RUNNING_MODAL'}
 
@@ -806,7 +807,7 @@ class STEP_EXPORTER_OT_create_cone_gallery(Operator):
 
                 pct = 90 + (self._mod_idx / total_g) * 5
 
-                update_progress(pct, f"应用槽: {self._mod_idx}/{total_g}", context)
+                update_progress(pct, _t("Applying grooves: {idx}/{total}", idx=self._mod_idx, total=total_g), context)
 
                 return {'RUNNING_MODAL'}
 
@@ -818,7 +819,7 @@ class STEP_EXPORTER_OT_create_cone_gallery(Operator):
 
         # ===== Phase 7: finish (95→100%) =====
 
-        update_progress(100, "完成!", context)
+        update_progress(100, _t("Done!"), context)
 
         context.window_manager.event_timer_remove(self._timer)
 
@@ -826,7 +827,7 @@ class STEP_EXPORTER_OT_create_cone_gallery(Operator):
 
         context.window.cursor_set('DEFAULT')
 
-        self.report({'INFO'}, f"Cone gallery created {self._total * 2} items")
+        self.report({'INFO'}, _t("Cone gallery created — {count} items", count=self._total * 2))
 
         return {'FINISHED'}
 
@@ -858,7 +859,7 @@ class STEP_EXPORTER_OT_create_cone_gallery(Operator):
 
         from ..export.progress_report import start_progress
 
-        start_progress(context, "Creating cone gallery (with grooves)...")
+        start_progress(context, _t("Creating cone gallery (with grooves)..."))
 
         wm = context.window_manager
 
@@ -874,7 +875,7 @@ class STEP_EXPORTER_OT_create_cone_gallery(Operator):
 
 class STEP_EXPORTER_OT_create_cone_gallery_inverted(Operator):
 
-    """创建锥体组合样品（倒角/圆角/孔）- 倒锥形（上粗下细）"""
+    """Create a cone combo gallery (chamfer/fillet/hole) — widening upward"""
 
     bl_idname = "step_exporter.create_cone_gallery_inverted"
 
@@ -935,7 +936,7 @@ class STEP_EXPORTER_OT_create_cone_gallery_inverted(Operator):
 
                 self._phase = 1
 
-                update_progress(45, "应用修改器...", context)
+                update_progress(45, _t("Applying modifiers..."), context)
 
                 return {'RUNNING_MODAL'}
 
@@ -979,7 +980,7 @@ class STEP_EXPORTER_OT_create_cone_gallery_inverted(Operator):
 
                 pct = self._done / self._total * 45
 
-                update_progress(pct, f"创建: {self._done}/{self._total}", context)
+                update_progress(pct, _t("Creating: {done}/{total}", done=self._done, total=self._total), context)
 
                 self._item_idx += 1
 
@@ -1005,7 +1006,7 @@ class STEP_EXPORTER_OT_create_cone_gallery_inverted(Operator):
 
                 pct = 45 + (self._mod_idx / len(self._cones)) * 2
 
-                update_progress(pct, f"应用修改器: {self._mod_idx}/{len(self._cones)}", context)
+                update_progress(pct, _t("Applying: {idx}/{total}", idx=self._mod_idx, total=len(self._cones)), context)
 
                 return {'RUNNING_MODAL'}
 
@@ -1019,7 +1020,7 @@ class STEP_EXPORTER_OT_create_cone_gallery_inverted(Operator):
 
             self._phase = 2
 
-            update_progress(47, "后处理...", context)
+            update_progress(47, _t("Post-processing..."), context)
 
             return {'RUNNING_MODAL'}
 
@@ -1037,13 +1038,13 @@ class STEP_EXPORTER_OT_create_cone_gallery_inverted(Operator):
 
                 pct = 47 + (self._mod_idx / len(self._cones)) * 3
 
-                update_progress(pct, f"后处理: {self._mod_idx}/{len(self._cones)}", context)
+                update_progress(pct, _t("Post-processing: {idx}/{total}", idx=self._mod_idx, total=len(self._cones)), context)
 
                 return {'RUNNING_MODAL'}
 
             self._phase = 3
 
-            update_progress(50, "左侧完成", context)
+            update_progress(50, _t("Left side done"), context)
 
             return {'RUNNING_MODAL'}
 
@@ -1088,7 +1089,7 @@ class STEP_EXPORTER_OT_create_cone_gallery_inverted(Operator):
 
             self._phase = 4
 
-            update_progress(50, "复制锥体...", context)
+            update_progress(50, _t("Copying cones..."), context)
 
             return {'RUNNING_MODAL'}
 
@@ -1134,7 +1135,7 @@ class STEP_EXPORTER_OT_create_cone_gallery_inverted(Operator):
 
                 pct = 50 + (self._copy_idx / total_c) * 30
 
-                update_progress(pct, f"复制: {self._copy_idx}/{total_c}", context)
+                update_progress(pct, _t("Copying: {idx}/{total}", idx=self._copy_idx, total=total_c), context)
 
                 return {'RUNNING_MODAL'}
 
@@ -1165,7 +1166,7 @@ class STEP_EXPORTER_OT_create_cone_gallery_inverted(Operator):
 
                 pct = 80 + (self._mod_idx / total_g) * 10
 
-                update_progress(pct, f"添加槽: {self._mod_idx}/{total_g}", context)
+                update_progress(pct, _t("Adding grooves: {idx}/{total}", idx=self._mod_idx, total=total_g), context)
 
                 return {'RUNNING_MODAL'}
 
@@ -1191,7 +1192,7 @@ class STEP_EXPORTER_OT_create_cone_gallery_inverted(Operator):
 
                 pct = 90 + (self._mod_idx / total_g) * 5
 
-                update_progress(pct, f"应用槽: {self._mod_idx}/{total_g}", context)
+                update_progress(pct, _t("Applying grooves: {idx}/{total}", idx=self._mod_idx, total=total_g), context)
 
                 return {'RUNNING_MODAL'}
 
@@ -1203,7 +1204,7 @@ class STEP_EXPORTER_OT_create_cone_gallery_inverted(Operator):
 
         # ===== Phase 7: finish (95→100%) =====
 
-        update_progress(100, "完成!", context)
+        update_progress(100, _t("Done!"), context)
 
         context.window_manager.event_timer_remove(self._timer)
 
@@ -1211,7 +1212,7 @@ class STEP_EXPORTER_OT_create_cone_gallery_inverted(Operator):
 
         context.window.cursor_set('DEFAULT')
 
-        self.report({'INFO'}, f"Inverted cone gallery created {self._total * 2} items")
+        self.report({'INFO'}, _t("Inverted cone gallery created — {count} items", count=self._total * 2))
 
         return {'FINISHED'}
 
@@ -1243,7 +1244,7 @@ class STEP_EXPORTER_OT_create_cone_gallery_inverted(Operator):
 
         from ..export.progress_report import start_progress
 
-        start_progress(context, "Creating inverted cone gallery...")
+        start_progress(context, _t("Creating inverted cone gallery (with grooves)..."))
 
         wm = context.window_manager
 

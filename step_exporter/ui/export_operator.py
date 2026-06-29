@@ -9,6 +9,7 @@ from ..export.progress_report import start_progress, update_progress, end_progre
 from ..analysis import _analyze_cylinder_from_mesh, _analyze_bottom_shell_from_mesh, _analyze_top_shell_from_mesh
 from ..export import _export_worker_timer, _parametric_export_staged
 from ..core import _globals as _g
+from ..core.i18n import _t
 
 """Operators and panels for STEP Exporter."""
 import sys, os, math, time
@@ -43,34 +44,34 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
         name="Export Unit",
         description="Unit for exported STEP file",
         items=[
-            ('mm', "毫米 (mm)", "Export in millimeters (1 Blender unit = 1 mm)"),
-            ('m', "米 (m)", "Export in meters (1 Blender unit = 1 m)"),
+            ('mm', "毫米 (mm)", "Export in millimeters (default)"),
+            ('m', "米 (m)", "Export in meters"),
         ],
         default='mm',
     ) # type: ignore
     
     fix_geometry: BoolProperty(
         name="Fix Geometry",
-        description="Enable geometry fixing (repair gaps, small edges, etc.)",
+        description="Enable geometry fixing to resolve common mesh issues before export",
         default=True,
     ) # type: ignore
     
     # 高级 BREP 参数
     create_solid: BoolProperty(
         name="Create Solid",
-        description="Attempt to create solid bodies instead of surfaces. Yields better compatibility with CAD software",
+        description="Attempt to create solid bodies from mesh data",
         default=True,
     ) # type: ignore
     
     advanced_brep: BoolProperty(
         name="Advanced BREP",
-        description="Use advanced BREP representation (includes PCURVE, parametric surfaces). Recommended for best compatibility",
+        description="Use advanced BREP representation for better compatibility",
         default=True,
     ) # type: ignore
     
     create_exploded_view: BoolProperty(
         name="Create Exploded View",
-        description="Create an exploded view with separated cone face, bottom face, and top face",
+        description="Create an exploded view of assemblies in the STEP file",
         default=False,
     ) # type: ignore
     
@@ -89,7 +90,7 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
     
     sew_tolerance: FloatProperty(
         name="Sewing Tolerance",
-        description="Tolerance for sewing faces together (in meters, will be converted to mm internally). Smaller values = more precise but slower",
+        description="Tolerance for sewing faces together (smaller = more precise, larger = more tolerant)",
         default=0.001,
         min=0.000001,  # 1 micron minimum
         max=1.0,
@@ -120,22 +121,22 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
         
         # 状态信息
         box = layout.box()
-        box.label(text="Module Status", icon='INFO')
+        box.label(text=_t("Module Status"), icon='INFO')
         if _g.CPP_MODULE_LOADED and _g.step_exporter:
             try:
                 version = _g.step_exporter.get_version()
-                box.label(text=f"C++ module v{version} loaded", icon='CHECKMARK')
+                box.label(text=_t("C++ module v{version} loaded", version=version), icon='CHECKMARK')
             except:
-                box.label(text="C++ module loaded", icon='CHECKMARK')
+                box.label(text=_t("C++ module loaded"), icon='CHECKMARK')
         else:
-            box.label(text="C++ extension not loaded", icon='ERROR')
+            box.label(text=_t("✗ C++ extension not loaded"), icon='ERROR')
             if _g.MODULE_LOAD_ERROR:
-                box.label(text=f"Error: {_g.MODULE_LOAD_ERROR[:50]}...", icon='ERROR')
-            box.label(text="Check system console for details", icon='ERROR')
+                box.label(text=_t("Error: {err}...", err=_g.MODULE_LOAD_ERROR[:50]), icon='ERROR')
+            box.label(text=_t("Check system console for details"), icon='ERROR')
         
         # 基本设置
         box = layout.box()
-        box.label(text="Basic Settings", icon='SETTINGS')
+        box.label(text=_t("Basic Settings"), icon='SETTINGS')
         box.prop(self, "unit")
         box.prop(self, "fix_geometry")
         box.prop(self, "use_selected")
@@ -144,7 +145,7 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
         
         # 高级 BREP 设置
         box = layout.box()
-        box.label(text="Advanced BREP & Solid Creation", icon='MOD_SOLIDIFY')
+        box.label(text=_t("Advanced BREP & Solid Creation"), icon='MOD_SOLIDIFY')
         box.prop(self, "create_solid")
         box.prop(self, "advanced_brep")
         box.prop(self, "create_exploded_view")
@@ -183,9 +184,9 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
                     pass
                 
                 if _g._export_success:
-                    self.report({'INFO'}, "STEP 导出完成")
+                    self.report({'INFO'}, _t("STEP export completed"))
                 else:
-                    self.report({'ERROR'}, "STEP 导出失败，请查看日志")
+                    self.report({'ERROR'}, _t("STEP export failed, check log"))
                 
                 return {'FINISHED'}
             
@@ -222,7 +223,7 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
 
     def execute(self, context):
         if not _g.CPP_MODULE_LOADED or not _g.step_exporter:
-            self.report({'ERROR'}, "C++ extension module '_step_exporter' not loaded. Check console for details.")
+            self.report({'ERROR'}, _t("C++ extension module not loaded. Please compile and install first."))
             return {'CANCELLED'}
         
         # 尽早打开日志文件，确保所有 [STEP Exporter] 日志都写入 .step.log

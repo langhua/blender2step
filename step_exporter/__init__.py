@@ -106,6 +106,8 @@ _classes = (
 def register():
     from .export.progress_report import register as _rp
     _rp()
+    from .core.i18n import register_translations
+    register_translations()
     import bpy
     for cls in _classes:
         try:
@@ -125,6 +127,8 @@ def unregister():
         bpy.utils.unregister_class(cls)
     from .export.progress_report import unregister as _urp
     _urp()
+    from .core.i18n import unregister_translations
+    unregister_translations()
 
 
 if __name__ == "__main__":

@@ -19,12 +19,12 @@ def _on_hole_param_change(self, context=None):
 class STEP_EXPORTER_OT_create_parametric_cylinder(Operator):
     """创建参数化圆柱体（标准/锥形，带倒角/开孔）"""
     bl_idname = "step_exporter.create_parametric_cylinder"
-    bl_label = "Parametric Cylinder"
+    bl_label = _t("Parametric Cylinder")
     bl_options = {'REGISTER', 'UNDO'}
     
     # === 圆柱类型 ===
     cylinder_type: EnumProperty(
-        name="Type",
+        name=_t("Type"),
         description="Cylinder type",
         items=[
             ('standard', "Standard", "Standard cylinder"),
@@ -34,26 +34,26 @@ class STEP_EXPORTER_OT_create_parametric_cylinder(Operator):
     )
     # 标准圆柱
     radius: FloatProperty(
-        name="Radius", default=15.0, min=0.5, max=500.0,
+        name=_t("Radius"), default=15.0, min=0.5, max=500.0,
     )
     # 锥形圆柱
     top_radius: FloatProperty(
-        name="Top R", default=10.0, min=0.1, max=500.0,
+        name=_t("Top R"), default=10.0, min=0.1, max=500.0,
     )
     bottom_radius: FloatProperty(
-        name="Bottom R", default=20.0, min=0.1, max=500.0,
+        name=_t("Bottom R"), default=20.0, min=0.1, max=500.0,
     )
     # 通用
     height: FloatProperty(
-        name="Height", default=40.0, min=0.5, max=500.0,
+        name=_t("Height"), default=40.0, min=0.5, max=500.0,
     )
     segments: IntProperty(
-        name="Segments", default=64, min=8, max=256,
+        name=_t("Segments"), default=64, min=8, max=256,
     )
     
     # === 单位 ===
     unit: EnumProperty(
-        name="Unit",
+        name=_t("Unit"),
         items=[
             ('mm', "mm", "Millimeters (input ×0.001 → meters)"),
             ('m', "m", "Meters (input ×1.0, no conversion)"),
@@ -63,7 +63,7 @@ class STEP_EXPORTER_OT_create_parametric_cylinder(Operator):
     
     # === 倒角 ===
     chamfer_type: EnumProperty(
-        name="Chamfer",
+        name=_t("Chamfer"),
         items=[
             ('none', "None", "No edge treatment"),
             ('chamfer', "Chamfer", "Top chamfer only"),
@@ -75,15 +75,15 @@ class STEP_EXPORTER_OT_create_parametric_cylinder(Operator):
         default='none',
     )
     chamfer_size: FloatProperty(
-        name="Chamfer Size", default=2.0, min=0.1, max=50.0,
+        name=_t("Chamfer Size"), default=2.0, min=0.1, max=50.0,
     )
     fillet_radius: FloatProperty(
-        name="Fillet R", default=2.0, min=0.1, max=50.0,
+        name=_t("Fillet R"), default=2.0, min=0.1, max=50.0,
     )
     
     # === 孔 ===
     hole_type: EnumProperty(
-        name="Hole",
+        name=_t("Hole"),
         items=[
             ('none', "None", "Solid cylinder, no hole"),
             ('top', "Top Blind", "Blind hole from top"),
@@ -97,71 +97,71 @@ class STEP_EXPORTER_OT_create_parametric_cylinder(Operator):
         update=lambda self, ctx: _on_hole_param_change(self),
     )
     hole_radius: FloatProperty(
-        name="Hole R", default=5.0, min=0.1, max=100.0,
+        name=_t("Hole R"), default=5.0, min=0.1, max=100.0,
     )
     hole_depth: FloatProperty(
-        name="Hole Depth %", default=50.0, min=1.0, max=100.0, subtype='PERCENTAGE',
+        name=_t("Hole Depth %"), default=50.0, min=1.0, max=100.0, subtype='PERCENTAGE',
         description="Hole depth as percentage of cylinder height (for blind holes)",
     )
     hole_is_tapered: BoolProperty(
-        name="Tapered Hole", default=False,
+        name=_t("Tapered Hole"), default=False,
         update=lambda self, ctx: _on_hole_param_change(self),
     )
     hole_opening_radius: FloatProperty(
-        name="Hole Opening R", default=6.0, min=0.1, max=100.0,
+        name=_t("Hole Opening R"), default=6.0, min=0.1, max=100.0,
         description="Radius at hole opening (cylinder face)",
     )
     hole_end_radius: FloatProperty(
-        name="Hole End R", default=4.0, min=0.1, max=100.0,
+        name=_t("Hole End R"), default=4.0, min=0.1, max=100.0,
         description="Radius at hole bottom/end (inside cylinder)",
     )
     hole_fillet_radius: FloatProperty(
-        name="Hole Fillet R", default=0.5, min=0.0, max=50.0,
+        name=_t("Hole Fillet R"), default=0.5, min=0.0, max=50.0,
         description="Fillet radius for hole opening edge (0 = no fillet)",
     )
     # Stepped hole parameters
     stepped_large_radius: FloatProperty(
-        name="Large Hole R", default=7.0, min=0.1, max=100.0,
+        name=_t("Large Hole R"), default=7.0, min=0.1, max=100.0,
         description="Radius of the large (top) section of the stepped hole",
     )
     stepped_large_height: FloatProperty(
-        name="Large Hole H %", default=80, min=1, max=99, subtype='PERCENTAGE',
+        name=_t("Large Hole H %"), default=80, min=1, max=99, subtype='PERCENTAGE',
         description="Height of the large hole section as percentage of cylinder height",
     )
     stepped_small_radius: FloatProperty(
-        name="Small Hole R", default=4.0, min=0.1, max=100.0,
+        name=_t("Small Hole R"), default=4.0, min=0.1, max=100.0,
         description="Radius of the small (bottom) section of the stepped hole",
     )
     # Tapered stepped hole parameters
     tapered_step_top_radius: FloatProperty(
-        name="Tapered Top R", default=9.0, min=0.1, max=100.0,
+        name=_t("Tapered Top R"), default=9.0, min=0.1, max=100.0,
         description="Radius of the tapered hole at the top surface (wider)",
     )
     tapered_step_bottom_radius: FloatProperty(
-        name="Tapered Step R", default=7.0, min=0.1, max=100.0,
+        name=_t("Tapered Step R"), default=7.0, min=0.1, max=100.0,
         description="Radius of the tapered hole at the step (narrower)",
     )
     # Groove parameters
     groove_enabled: BoolProperty(
-        name="External Groove", default=False,
+        name=_t("External Groove"), default=False,
         description="Add a trapezoidal groove around the cylinder at mid-height",
     )
     groove_angle: FloatProperty(
-        name="Groove Angle", default=math.radians(45.0),
+        name=_t("Groove Angle"), default=math.radians(45.0),
         min=math.radians(30.0), max=math.radians(90.0),
         subtype='ANGLE',
         description="Angle of each side-wall measured from the groove floor (vertical)",
     )
     groove_top_width: FloatProperty(
-        name="Top Width", default=2.0, min=0.1, max=100.0,
+        name=_t("Top Width"), default=2.0, min=0.1, max=100.0,
         description="Width of the groove at the groove floor (inner edge)",
     )
     groove_depth_pct: FloatProperty(
-        name="Depth % of R", default=20.0, min=5.0, max=80.0, step=5.0,
+        name=_t("Depth % of R"), default=20.0, min=5.0, max=80.0, step=5.0,
         description="Groove depth as percentage of mid-radius",
     )
     groove_cone_depth_mult: FloatProperty(
-        name="Cone Depth ×", default=1.5, min=1.0, max=3.0, step=0.1,
+        name=_t("Cone Depth ×"), default=1.5, min=1.0, max=3.0, step=0.1,
         description="Multiplier for groove depth on tapered cylinders (compensates slanted surface)",
     )
     

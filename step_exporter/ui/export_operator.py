@@ -41,7 +41,7 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
     
     # 基本参数
     unit: EnumProperty(
-        name="Export Unit",
+        name=_t("Export Unit"),
         description="Unit for exported STEP file",
         items=[
             ('mm', "毫米 (mm)", "Export in millimeters (default)"),
@@ -51,32 +51,32 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
     ) # type: ignore
     
     fix_geometry: BoolProperty(
-        name="Fix Geometry",
+        name=_t("Fix Geometry"),
         description="Enable geometry fixing to resolve common mesh issues before export",
         default=True,
     ) # type: ignore
     
     # 高级 BREP 参数
     create_solid: BoolProperty(
-        name="Create Solid",
+        name=_t("Create Solid"),
         description="Attempt to create solid bodies from mesh data",
         default=True,
     ) # type: ignore
     
     advanced_brep: BoolProperty(
-        name="Advanced BREP",
+        name=_t("Advanced BREP"),
         description="Use advanced BREP representation for better compatibility",
         default=True,
     ) # type: ignore
     
     create_exploded_view: BoolProperty(
-        name="Create Exploded View",
+        name=_t("Create Exploded View"),
         description="Create an exploded view of assemblies in the STEP file",
         default=False,
     ) # type: ignore
     
     step_schema: EnumProperty(
-        name="STEP Schema",
+        name=_t("STEP Schema"),
         description="STEP application protocol",
         items=[
             ('AP214DIS', "AP214DIS", "AP214 DIS — draft standard"),
@@ -89,7 +89,7 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
     ) # type: ignore
     
     sew_tolerance: FloatProperty(
-        name="Sewing Tolerance",
+        name=_t("Sewing Tolerance"),
         description="Tolerance for sewing faces together (smaller = more precise, larger = more tolerant)",
         default=0.001,
         min=0.000001,  # 1 micron minimum
@@ -99,19 +99,19 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
     ) # type: ignore
     
     use_selected: BoolProperty(
-        name="Selected Only",
+        name=_t("Selected Only"),
         description="Export only selected objects",
         default=False,
     ) # type: ignore
     
     apply_modifiers: BoolProperty(
-        name="Apply Modifiers",
+        name=_t("Apply Modifiers"),
         description="Apply all modifiers before export",
         default=True,
     ) # type: ignore
     
     enable_logging: BoolProperty(
-        name="Enable Logging",
+        name=_t("Enable Logging"),
         description="Enable detailed logging to console",
         default=True,
     ) # type: ignore

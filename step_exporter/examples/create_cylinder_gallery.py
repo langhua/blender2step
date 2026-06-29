@@ -680,61 +680,82 @@ def build(progress_cb=None):
 
 
 def add_grooved_copies(progress_cb=None):
-    """Copy left-side cylinders to Y+ offset, rename GCx, add grooves."""
-    import bmesh
-    left_cyls = [o for o in bpy.data.objects
-                 if o.name.startswith('C') and not o.name.startswith('CUT_')
-                 and not o.name.startswith('GC') and not o.name.startswith('L')
-                 and o.name[1:2].isdigit()]  # C1_, C2_, etc.
-    labels_left = [o for o in bpy.data.objects if o.name.startswith('L') and not o.name.startswith('LS') and not o.name.startswith('GC')]
-    shelf_labels_left = [o for o in bpy.data.objects if o.name.startswith('LS')]
-
-    # Copy shelf labels first (no progress)
-    for obj in shelf_labels_left:
-        copy = obj.copy()
-        copy.data = obj.data.copy()
-        copy.location.y += Y_OFFSET
-        copy.name = obj.name.replace('LS_', 'GLS_')
-        bpy.context.collection.objects.link(copy)
-
-    # Phase 1a: copy cylinders + labels (50→80%)
-    total = len(left_cyls)
+    """Copy left-side cylinders to Y+ offset, rename GCx, add grooves.
+    Labels are copied explicitly, not matched by location."""
+    
+    # Collect left cylinders by name for ordered iteration
+    cyl_by_name = {}
+    for o in bpy.data.objects:
+        if o.name.startswith('C') and not o.name.startswith('CUT_') and o.name[1:2].isdigit():
+            cyl_by_name[o.name] = o
+    
+    # Collect left labels by their position
+    labels_by_pos = {}  # (y, z) -> label object
+    for o in bpy.data.objects:
+        if o.name.startswith('L_') and not o.name.startswith('LS_'):
+            key = (round(o.location.y, 3), round(o.location.z, 3))
+            labels_by_pos[key] = o
+    
+    # Copy shelf labels first (append groove suffix)
+    for o in bpy.data.objects:
+        if o.name.startswith('LS_'):
+            copy = o.copy()
+            copy.data = o.data.copy()
+            copy.location.y += Y_OFFSET
+            copy.name = o.name.replace('LS_', 'GLS_')
+            # Append groove marker to the text body
+            copy.data.body = o.data.body + _t(' +Groove')
+            bpy.context.collection.objects.link(copy)
+    
+    # Phase 1a: copy cylinders + labels in Z- Y+ order
+    total = sum(len(s[3]) for s in SHELVES)
     done = 0
-    for obj in left_cyls:
-        # Copy cylinder
-        copy = obj.copy()
-        copy.data = obj.data.copy()
-        copy.location.y += Y_OFFSET
-        copy.name = 'G' + obj.name  # C1_Plain → GC1_Plain
-        bpy.context.collection.objects.link(copy)
-
-        # Find and copy associated label
-        for lbl in labels_left:
-            if abs(lbl.location.y - obj.location.y) < 0.01 and abs(lbl.location.z - obj.location.z) < 0.01:
+    grooved_cyls = []
+    for shelf_idx, (shelf_label, base_ctype, base_fr, items) in enumerate(SHELVES):
+        for name_sfx, hole, hd, he, label_text in items:
+            src_name = f"C{shelf_idx+1}_{name_sfx}"
+            src = cyl_by_name.get(src_name)
+            if src is None:
+                done += 1
+                continue
+            
+            # Copy cylinder
+            copy = src.copy()
+            copy.data = src.data.copy()
+            copy.location.y += Y_OFFSET
+            copy.name = 'G' + src_name
+            bpy.context.collection.objects.link(copy)
+            grooved_cyls.append(copy)
+            
+            # Copy associated label by position
+            pos_key = (round(src.location.y, 3), round(src.location.z, 3))
+            lbl = labels_by_pos.get(pos_key)
+            if lbl:
                 lbl_copy = lbl.copy()
                 lbl_copy.data = lbl.data.copy()
                 lbl_copy.location.y += Y_OFFSET
-                lbl_copy.name = 'GL' + lbl.name[1:]
+                lbl_copy.name = 'GL' + lbl.name[1:]  # L_xxx → GL_xxx
                 bpy.context.collection.objects.link(lbl_copy)
-                break
+            
+            done += 1
+            if progress_cb:
+                progress_cb(50 + min(done / total * 30, 30), f"复制: {done}/{total}")
+    
+    # Phase 1b: add groove modifiers
+    done = 0
+    for obj in grooved_cyls:
+        _add_groove_to_cylinder(obj)
         done += 1
         if progress_cb:
-            progress_cb(50 + min(done / total * 30, 30), f"复制: {done}/{total}")
-
-    # Phase 1b: add groove modifiers (80→90%)
-    grooved = [o for o in bpy.data.objects
-               if o.name.startswith('GC') and not o.name.startswith('CUT_')]
-    total_g = len(grooved)
-    for i, obj in enumerate(grooved):
-        _add_groove_to_cylinder(obj)
+            progress_cb(80 + min(done / total * 10, 10), f"添加槽: {done}/{total}")
+    
+    # Phase 1c: apply groove modifiers
+    done = 0
+    for obj in grooved_cyls:
+        apply_groove(obj)
+        done += 1
         if progress_cb:
-            progress_cb(80 + min((i + 1) / total_g * 10, 10), f"添加槽: {i+1}/{total_g}")
-
-    # Phase 1c: apply groove modifiers (90→95%)
-    for i, obj in enumerate(grooved):
-        _apply_groove(obj)
-        if progress_cb:
-            progress_cb(90 + min((i + 1) / total_g * 5, 5), f"应用槽: {i+1}/{total_g}")
+            progress_cb(90 + min(done / total * 5, 5), f"应用槽: {done}/{total}")
 
     if progress_cb:
         progress_cb(95, "右侧完成")

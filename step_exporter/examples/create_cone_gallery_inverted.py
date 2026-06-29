@@ -764,7 +764,7 @@ SHELVES = [
         _make_row("TprStep", "tapered_stepped", STEP_LARGE_H, None, _t("+BothFil+TprStep")),
     ]),
     # S8: Top Chamfer + Bottom Fillet — 12 hole variants
-    (_t("S8 T.Ch+B.Fil"), "chamfer_fillet", FR_R, [
+    (_t("S8 Inv T.Ch+B.Fil"), "chamfer_fillet", FR_R, [
         _make_row("Plain", None, 0, None, _t("+T.Ch+B.Fil")),
         _make_row("TBl", "top", HOLE_D, None, _t("+ChFil+TBl")),
         _make_row("BBl", "bottom", HOLE_D, None, _t("+ChFil+BBl")),

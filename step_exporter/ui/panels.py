@@ -11,11 +11,11 @@ def menu_func_export_enhanced(self, context):
 # ====================== 面板类 ======================
 
 class STEP_EXPORTER_PT_main_panel(Panel):
-    bl_label = "STEP Exporter"
+    bl_label = _t("STEP Exporter")
     bl_idname = "STEP_EXPORTER_PT_main_panel"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
-    bl_category = "STEP Export"
+    bl_category = _t("STEP Export")
     
     def draw(self, context):
         layout = self.layout
@@ -49,12 +49,12 @@ class STEP_EXPORTER_PT_main_panel(Panel):
 # ====================== Sample Generators 子面板 ======================
 
 class STEP_EXPORTER_PT_sample_generators(Panel):
-    bl_label = "Sample Generators"
+    bl_label = _t("Sample Generators")
     bl_idname = "STEP_EXPORTER_PT_sample_generators"
     bl_parent_id = "STEP_EXPORTER_PT_main_panel"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
-    bl_category = "STEP Export"
+    bl_category = _t("STEP Export")
     bl_order = 1  # 放在 Cylinder Panel 下面
     
     def draw(self, context):

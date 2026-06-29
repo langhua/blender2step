@@ -27,8 +27,8 @@ from ..core import _globals as _g
 class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
     """Export to STEP format with advanced BREP and solid creation"""
     bl_idname = "export_scene.step_enhanced"
-    bl_label = "Export STEP (Enhanced)"
-    bl_description = "Export to STEP format with advanced BREP representation"
+    bl_label = _t("Export STEP (Enhanced)")
+    bl_description = _t("Export to STEP format with advanced BREP representation")
     bl_options = {'PRESET', 'UNDO'}
     
     _timer = None  # 事件定时器句柄，用于 modal 进度显示
@@ -79,13 +79,13 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
         name="STEP Schema",
         description="STEP application protocol",
         items=[
-            ('AP214DIS', "AP214DIS", "ISO 10303-214 DIS version: Draft International Standard (default)"),
-            ('AP214CD', "AP214CD", "ISO 10303-214 Conformance Class D: Core data for automotive mechanical design processes"),
-            ('AP214IS', "AP214IS", "ISO 10303-214 IS version: International Standard"),
-            ('AP203', "AP203", "ISO 10303-203: Configuration controlled 3D designs of mechanical parts and assemblies (widely supported)"),
-            ('AP242DIS', "AP242DIS", "ISO 10303-242 DIS version: Managed model-based 3D engineering"),
+            ('AP214DIS', "AP214DIS", "AP214 DIS — draft standard"),
+            ('AP214CD', "AP214CD", "AP214 CD — automotive design"),
+            ('AP214IS', "AP214IS", "AP214 IS — international standard"),
+            ('AP203', "AP203", "AP203 — widely supported"),
+            ('AP242DIS', "AP242DIS", "AP242 DIS — model-based 3D"),
         ],
-        default='AP214DIS',
+        default='AP214IS',
     ) # type: ignore
     
     sew_tolerance: FloatProperty(
@@ -149,7 +149,11 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
         box.prop(self, "create_solid")
         box.prop(self, "advanced_brep")
         box.prop(self, "create_exploded_view")
-        box.prop(self, "step_schema")
+        # Step schema with 50% width so label displays fully without ellipsis
+        row = box.row()
+        split = row.split(factor=0.5)
+        split.label(text=_t("STEP Schema"))
+        split.prop(self, "step_schema", text="")
         box.prop(self, "sew_tolerance")
         
 

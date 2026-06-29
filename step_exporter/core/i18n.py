@@ -147,11 +147,16 @@ _STRINGS = {
         "zh_CN": "在 STEP 文件中创建装配体的分解视图",
     },
     "STEP Schema": {
-        "zh_CN": "STEP 模式",
+        "zh_CN": "STEP 规范",
     },
     "STEP application protocol": {
         "zh_CN": "STEP 应用协议",
     },
+    "AP214 DIS (default)": {"zh_CN": "AP214 DIS（默认）"},
+    "AP214 CD — automotive design": {"zh_CN": "AP214 CD — 汽车设计"},
+    "AP214 IS — international standard": {"zh_CN": "AP214 IS — 国际标准"},
+    "AP203 — widely supported": {"zh_CN": "AP203 — 广泛兼容"},
+    "AP242 DIS — model-based 3D": {"zh_CN": "AP242 DIS — 基于模型的三维工程"},
     "Sewing Tolerance": {
         "zh_CN": "缝合容差",
     },
@@ -443,8 +448,16 @@ _STRINGS = {
 def _get_language():
     """Detect Blender's current UI language. Returns 'zh_CN' or 'en'."""
     try:
+        # Method 1: preferences
         lang = bpy.context.preferences.view.language
-        if lang in ('zh_CN', 'zh_TW', 'zh'):
+        if lang and ('zh' in lang.lower() or 'chinese' in lang.lower()):
+            return 'zh_CN'
+    except Exception:
+        pass
+    try:
+        # Method 2: app translations locale
+        locale = bpy.app.translations.locale
+        if locale and 'zh' in locale.lower():
             return 'zh_CN'
     except Exception:
         pass

@@ -6,6 +6,7 @@ from bpy.types import Operator
 from bpy.props import StringProperty, FloatProperty, IntProperty, BoolProperty, EnumProperty
 from ..core.utils import log_to_file
 from ..core import _globals as _g
+from ..core.i18n import _t
 
 def _on_hole_param_change(self, context=None):
     """当孔位置或锥形选项改变时，确保开口半径 >= 孔底半径"""
@@ -183,7 +184,7 @@ class STEP_EXPORTER_OT_create_parametric_cylinder(Operator):
         
         # Cylinder type
         box = layout.box()
-        box.label(text="Cylinder", icon='MESH_CYLINDER')
+        box.label(text=_t("Cylinder"), icon='MESH_CYLINDER')
         box.prop(self, 'unit')
         box.prop(self, 'cylinder_type')
         if self.cylinder_type == 'standard':
@@ -196,7 +197,7 @@ class STEP_EXPORTER_OT_create_parametric_cylinder(Operator):
         
         # Chamfer/Fillet
         box = layout.box()
-        box.label(text="Edge Treatment", icon='MOD_BEVEL')
+        box.label(text=_t("Edge Treatment"), icon='MOD_BEVEL')
         box.prop(self, 'chamfer_type')
         if self.chamfer_type in ('chamfer', 'both'):
             box.prop(self, 'chamfer_size')
@@ -205,7 +206,7 @@ class STEP_EXPORTER_OT_create_parametric_cylinder(Operator):
         
         # Hole
         box = layout.box()
-        box.label(text="Hole", icon='MESH_CYLINDER')
+        box.label(text=_t("Hole"), icon='MESH_CYLINDER')
         box.prop(self, 'hole_type')
         if self.hole_type != 'none':
             if self.hole_type in ('stepped', 'tapered_stepped'):
@@ -229,7 +230,7 @@ class STEP_EXPORTER_OT_create_parametric_cylinder(Operator):
 
         # Groove
         box = layout.box()
-        box.label(text="Groove", icon='MOD_BOOLEAN')
+        box.label(text=_t("Groove"), icon='MOD_BOOLEAN')
         box.prop(self, 'groove_enabled')
         if self.groove_enabled:
             box.prop(self, 'groove_angle')
@@ -242,8 +243,8 @@ class STEP_EXPORTER_OT_create_parametric_cylinder(Operator):
             angle_rad = self.groove_angle
             derived_bot_w = self.groove_top_width + 2.0 * auto_depth * math.tan(angle_rad)
             info = layout.box()
-            info.label(text=f"Depth: {auto_depth:.1f} mm  |  Bottom W: {derived_bot_w:.1f} mm")
-            info.label(text=f"  (bot_w = top_w + 2×depth×tan(angle))")
+            info.label(text=_t("Depth: {depth:.1f} mm  |  Bottom W: {bot_w:.1f} mm", depth=auto_depth, bot_w=derived_bot_w))
+            info.label(text=_t("  (bot_w = top_w + 2×depth×tan(angle))"))
     
     def execute(self, context):
         try:
@@ -251,7 +252,7 @@ class STEP_EXPORTER_OT_create_parametric_cylinder(Operator):
             if obj:
                 obj.select_set(True)
                 context.view_layer.objects.active = obj
-                self.report({'INFO'}, "Cylinder created: " + obj.name)
+                self.report({'INFO'}, _t("Cylinder created: {name}", name=obj.name))
         except Exception as e:
             self.report({'ERROR'}, str(e))
             import traceback; traceback.print_exc()

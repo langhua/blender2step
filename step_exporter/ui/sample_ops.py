@@ -15,7 +15,7 @@ class STEP_EXPORTER_OT_create_top_shell(Operator):
 
     bl_idname = "step_exporter.create_top_shell"
 
-    bl_label = "Create Top Shell"
+    bl_label = _t("Create Top Shell")
 
     bl_options = {'REGISTER', 'UNDO'}
 
@@ -41,7 +41,7 @@ class STEP_EXPORTER_OT_create_bottom_shell(Operator):
 
     bl_idname = "step_exporter.create_bottom_shell"
 
-    bl_label = "Create Bottom Shell"
+    bl_label = _t("Create Bottom Shell")
 
     bl_options = {'REGISTER', 'UNDO'}
 
@@ -77,7 +77,7 @@ class STEP_EXPORTER_OT_create_cylinder(Operator):
 
     bl_idname = "step_exporter.create_cylinder"
 
-    bl_label = "Create Cylinder"
+    bl_label = _t("Create Cylinder")
 
     bl_options = {'REGISTER', 'UNDO'}
 
@@ -103,7 +103,7 @@ class STEP_EXPORTER_OT_create_cylinder_gallery(Operator):
 
     bl_idname = "step_exporter.create_cylinder_gallery"
 
-    bl_label = "Create Cylinder Gallery"
+    bl_label = _t("Create Cylinder Gallery")
 
     bl_options = {'REGISTER', 'UNDO'}
 
@@ -494,7 +494,7 @@ class STEP_EXPORTER_OT_create_cone_gallery(Operator):
 
     bl_idname = "step_exporter.create_cone_gallery"
 
-    bl_label = "Create Cone Gallery"
+    bl_label = _t("Create Cone Gallery")
 
     bl_options = {'REGISTER', 'UNDO'}
 
@@ -879,7 +879,7 @@ class STEP_EXPORTER_OT_create_cone_gallery_inverted(Operator):
 
     bl_idname = "step_exporter.create_cone_gallery_inverted"
 
-    bl_label = "Create Cone Gallery (Inverted)"
+    bl_label = _t("Create Cone Gallery (Inverted)")
 
     bl_options = {'REGISTER', 'UNDO'}
 

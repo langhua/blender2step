@@ -153,6 +153,7 @@ class STEP_EXPORTER_OT_create_cylinder_gallery(Operator):
                                   if o.name.startswith('C') and not o.name.startswith('CUT_')
 
                                   and not o.name.startswith('L')]
+                self._left_cyls.sort(key=lambda o: (-o.location.z, o.location.y))
 
                 self._mod_idx = 0
 
@@ -285,6 +286,7 @@ class STEP_EXPORTER_OT_create_cylinder_gallery(Operator):
                               and not o.name.startswith('GC') and not o.name.startswith('L')
 
                               and o.name[1:2].isdigit()]
+            self._left_cyls.sort(key=lambda o: (-o.location.z, o.location.y))
 
             self._labels_left = [o for o in bpy.data.objects
 
@@ -365,6 +367,7 @@ class STEP_EXPORTER_OT_create_cylinder_gallery(Operator):
             self._grooved_list = [o for o in bpy.data.objects
 
                                  if o.name.startswith('GC') and not o.name.startswith('CUT_')]
+            self._grooved_list.sort(key=lambda o: (-o.location.z, o.location.y))
 
             self._mod_idx = 0
 
@@ -541,6 +544,7 @@ class STEP_EXPORTER_OT_create_cone_gallery(Operator):
                               if o.name.startswith('S') and not o.name.startswith('CUT_')
 
                               and not o.name.startswith('L') and not o.name.startswith('GS')]
+                self._cones.sort(key=lambda o: (-o.location.z, o.location.y))
 
                 self._mod_idx = 0
 
@@ -671,6 +675,7 @@ class STEP_EXPORTER_OT_create_cone_gallery(Operator):
                                and not o.name.startswith('GS') and not o.name.startswith('L')
 
                                and o.name[1:2].isdigit()]
+            self._left_cones.sort(key=lambda o: (-o.location.z, o.location.y))
 
             self._labels_left = [o for o in bpy.data.objects
 
@@ -751,6 +756,7 @@ class STEP_EXPORTER_OT_create_cone_gallery(Operator):
             self._grooved_list = [o for o in bpy.data.objects
 
                                  if o.name.startswith('GS') and not o.name.startswith('CUT_')]
+            self._grooved_list.sort(key=lambda o: (-o.location.z, o.location.y))
 
             self._mod_idx = 0
 
@@ -923,6 +929,7 @@ class STEP_EXPORTER_OT_create_cone_gallery_inverted(Operator):
                               if o.name.startswith('S') and not o.name.startswith('CUT_')
 
                               and not o.name.startswith('L') and not o.name.startswith('GS')]
+                self._cones.sort(key=lambda o: (-o.location.z, o.location.y))
 
                 self._mod_idx = 0
 
@@ -1053,6 +1060,7 @@ class STEP_EXPORTER_OT_create_cone_gallery_inverted(Operator):
                                and not o.name.startswith('GS') and not o.name.startswith('L')
 
                                and o.name[1:2].isdigit()]
+            self._left_cones.sort(key=lambda o: (-o.location.z, o.location.y))
 
             self._labels_left = [o for o in bpy.data.objects
 
@@ -1133,6 +1141,7 @@ class STEP_EXPORTER_OT_create_cone_gallery_inverted(Operator):
             self._grooved_list = [o for o in bpy.data.objects
 
                                  if o.name.startswith('GS') and not o.name.startswith('CUT_')]
+            self._grooved_list.sort(key=lambda o: (-o.location.z, o.location.y))
 
             self._mod_idx = 0
 

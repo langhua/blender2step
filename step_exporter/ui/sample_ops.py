@@ -17,6 +17,8 @@ class STEP_EXPORTER_OT_create_top_shell(Operator):
 
     bl_label = _t("Create Top Shell")
 
+    bl_description = _t("Create a top shell sample with windows")
+
     bl_options = {'REGISTER', 'UNDO'}
 
     
@@ -42,6 +44,8 @@ class STEP_EXPORTER_OT_create_bottom_shell(Operator):
     bl_idname = "step_exporter.create_bottom_shell"
 
     bl_label = _t("Create Bottom Shell")
+
+    bl_description = _t("Create a bottom shell sample with bolt holes")
 
     bl_options = {'REGISTER', 'UNDO'}
 
@@ -79,6 +83,8 @@ class STEP_EXPORTER_OT_create_cylinder(Operator):
 
     bl_label = _t("Create Cylinder")
 
+    bl_description = _t("Create a mechanical cylinder sample")
+
     bl_options = {'REGISTER', 'UNDO'}
 
     
@@ -104,6 +110,8 @@ class STEP_EXPORTER_OT_create_cylinder_gallery(Operator):
     bl_idname = "step_exporter.create_cylinder_gallery"
 
     bl_label = _t("Create Cylinder Gallery")
+
+    bl_description = _t("Create a cylinder combo gallery (8 edge features × 12 hole types)")
 
     bl_options = {'REGISTER', 'UNDO'}
 
@@ -519,6 +527,8 @@ class STEP_EXPORTER_OT_create_cone_gallery(Operator):
 
     bl_label = _t("Create Cone Gallery")
 
+    bl_description = _t("Create a cone combo gallery (chamfer/fillet/hole) — narrowing upward")
+
     bl_options = {'REGISTER', 'UNDO'}
 
 
@@ -903,6 +913,8 @@ class STEP_EXPORTER_OT_create_cone_gallery_inverted(Operator):
     bl_idname = "step_exporter.create_cone_gallery_inverted"
 
     bl_label = _t("Create Cone Gallery (Inverted)")
+
+    bl_description = _t("Create a cone combo gallery (chamfer/fillet/hole) — widening upward")
 
     bl_options = {'REGISTER', 'UNDO'}
 

@@ -295,6 +295,17 @@ class STEP_EXPORTER_OT_create_cylinder_gallery(Operator):
 
                                 and not o.name.startswith('GC')]
 
+            # DEBUG: log label collection
+            print(f"[DEBUG Phase3] Found {len(self._left_cyls)} left cylinders, {len(self._labels_left)} left labels")
+            if self._labels_left:
+                sample = self._labels_left[0]
+                print(f"[DEBUG Phase3] Sample label: name={sample.name}, Y={sample.location.y:.3f}, Z={sample.location.z:.3f}")
+            if self._left_cyls:
+                sample = self._left_cyls[0]
+                print(f"[DEBUG Phase3] Sample cyl: name={sample.name}, Y={sample.location.y:.3f}, Z={sample.location.z:.3f}")
+                expected_label_z = sample.location.z + m.H * 0.1
+                print(f"[DEBUG Phase3] Expected label Z for this cyl: {expected_label_z:.3f}")
+
             self._shelf_labels_left = [o for o in bpy.data.objects
 
                                       if o.name.startswith('LS')]
@@ -341,7 +352,9 @@ class STEP_EXPORTER_OT_create_cylinder_gallery(Operator):
 
                 for lbl in self._labels_left:
 
-                    if abs(lbl.location.y - obj.location.y) < 0.01 and abs(lbl.location.z - (obj.location.z + m.H / 2 + 0.6)) < 0.01:
+                    dy = abs(lbl.location.y - obj.location.y)
+                    dz = abs(lbl.location.z - (obj.location.z + m.H * 0.1))
+                    if dy < 0.01 and dz < 0.01:
 
                         lbl_copy = lbl.copy()
 
@@ -353,7 +366,17 @@ class STEP_EXPORTER_OT_create_cylinder_gallery(Operator):
 
                         bpy.context.collection.objects.link(lbl_copy)
 
+                        if self._copy_idx < 3:
+                            print(f"[DEBUG Phase4] MATCHED: cyl={obj.name} (z={obj.location.z:.3f}) -> label={lbl.name} (z={lbl.location.z:.3f}) dz={dz:.4f}")
                         break
+                else:
+                    # no label matched
+                    if self._copy_idx < 5:
+                        print(f"[DEBUG Phase4] NO MATCH: cyl={obj.name} Y={obj.location.y:.3f} Z={obj.location.z:.3f}")
+                        print(f"  Expected label Z = {obj.location.z + m.H * 0.1:.3f}")
+                        # print first 3 labels for comparison
+                        for lbl in list(self._labels_left)[:3]:
+                            print(f"  Available label: {lbl.name} Y={lbl.location.y:.3f} Z={lbl.location.z:.3f}")
 
                 self._copy_idx += 1
 

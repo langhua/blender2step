@@ -16,337 +16,32 @@ import bpy
 
 _STRINGS = {
     # ── bl_info ──
-    "STEP Exporter (Enhanced)": {
         "zh_CN": "STEP 导出器（增强版）",
-    },
-    "Export to STEP format with advanced BREP, solid creation and geometry fixing": {
-        "zh_CN": "导出为 STEP 格式，支持高级 BREP、实体创建和几何修复",
-    },
-    "File > Export > STEP (Enhanced)": {
-        "zh_CN": "文件 > 导出 > STEP（增强版）",
-    },
 
     # ── Menu ──
-    "STEP Enhanced (.step)": {
-        "zh_CN": "STEP 增强版 (.step)",
-    },
 
     # ── Panel: Main ──
-    "STEP Exporter": {
-        "zh_CN": "STEP 导出器",
-    },
-    "STEP Export": {
-        "zh_CN": "STEP 导出",
-    },
-    "Module Status": {
-        "zh_CN": "模块状态",
-    },
-    "✓ Module v{version} loaded": {
-        "zh_CN": "✓ 模块 v{version} 已加载",
-    },
-    "✓ OpenCASCADE {oc_ver} ready": {
-        "zh_CN": "✓ OpenCASCADE {oc_ver} 就绪",
-    },
-    "✓ C++ module loaded": {
-        "zh_CN": "✓ C++ 模块已加载",
-    },
-    "✗ C++ extension not loaded": {
-        "zh_CN": "✗ C++ 扩展未加载",
-    },
-    "Check system console": {
-        "zh_CN": "请查看系统控制台",
-    },
-    "Step Export": {
-        "zh_CN": "STEP 导出",
-    },
-    "C++ module required": {
-        "zh_CN": "需要 C++ 模块",
-    },
-    "Compile and install first": {
-        "zh_CN": "请先编译并安装",
-    },
 
     # ── Panel: Sample Generators ──
-    "Sample Generators": {
-        "zh_CN": "样品生成器",
-    },
-    "Top Shell": {
-        "zh_CN": "顶壳",
-    },
-    "Bottom Shell": {
-        "zh_CN": "底壳",
-    },
-    "Cylinder": {
-        "zh_CN": "圆柱体",
-    },
-    "Cylinder Gallery": {
-        "zh_CN": "圆柱库",
-    },
-    "Cone Gallery △": {
-        "zh_CN": "圆锥库 △",
-    },
-    "Cone Gallery ▽": {
-        "zh_CN": "倒锥库 ▽",
-    },
 
     # ── Panel: Parametric Cylinder ──
-    "Parametric Cylinder": {
-        "zh_CN": "参数化圆柱",
-    },
-    "Generate Cylinder": {
-        "zh_CN": "生成圆柱",
-    },
 
     # ── Export Operator ──
-    "Export STEP (Enhanced)": {
-        "zh_CN": "导出 STEP（增强版）",
-    },
-    "Export to STEP format with advanced BREP representation": {
-        "zh_CN": "使用高级 BREP 表示导出为 STEP 格式",
-    },
-    "Export Unit": {
-        "zh_CN": "导出单位",
-    },
-    "Unit for exported STEP file": {
-        "zh_CN": "导出 STEP 文件的单位",
-    },
-    "毫米 (mm)": {
-        "zh_CN": "毫米 (mm)",
-    },
-    "Export in millimeters (default)": {
-        "zh_CN": "以毫米为单位导出（默认）",
-    },
-    "米 (m)": {
-        "zh_CN": "米 (m)",
-    },
-    "Export in meters": {
-        "zh_CN": "以米为单位导出",
-    },
-    "Fix Geometry": {
-        "zh_CN": "修复几何体",
-    },
-    "Enable geometry fixing to resolve common mesh issues before export": {
-        "zh_CN": "导出前启用几何体修复以解决常见网格问题",
-    },
-    "Create Solid": {
-        "zh_CN": "创建实体",
-    },
-    "Attempt to create solid bodies from mesh data": {
-        "zh_CN": "尝试从网格数据创建实体",
-    },
-    "Advanced BREP": {
-        "zh_CN": "高级 BREP",
-    },
-    "Use advanced BREP representation for better compatibility": {
-        "zh_CN": "使用高级 BREP 表示以获得更好的兼容性",
-    },
-    "Create Exploded View": {
-        "zh_CN": "创建分解视图",
-    },
-    "Create an exploded view of assemblies in the STEP file": {
-        "zh_CN": "在 STEP 文件中创建装配体的分解视图",
-    },
-    "STEP Schema": {
-        "zh_CN": "STEP 规范",
-    },
-    "STEP application protocol": {
-        "zh_CN": "STEP 应用协议",
-    },
     "AP214 DIS (default)": {"zh_CN": "AP214 DIS（默认）"},
     "AP214 CD — automotive design": {"zh_CN": "AP214 CD — 汽车设计"},
     "AP214 IS — international standard": {"zh_CN": "AP214 IS — 国际标准"},
     "AP203 — widely supported": {"zh_CN": "AP203 — 广泛兼容"},
     "AP242 DIS — model-based 3D": {"zh_CN": "AP242 DIS — 基于模型的三维工程"},
-    "Sewing Tolerance": {
-        "zh_CN": "缝合容差",
-    },
-    "Tolerance for sewing faces together (smaller = more precise, larger = more tolerant)": {
-        "zh_CN": "缝合面的容差（越小越精确，越大越宽松）",
-    },
-    "Selected Only": {
-        "zh_CN": "仅导出选中",
-    },
-    "Export only selected objects": {
-        "zh_CN": "仅导出选中的对象",
-    },
-    "Apply Modifiers": {
-        "zh_CN": "应用修改器",
-    },
-    "Apply all modifiers before export": {
-        "zh_CN": "导出前应用所有修改器",
-    },
-    "Enable Logging": {
-        "zh_CN": "启用日志",
-    },
-    "Enable detailed logging to console": {
-        "zh_CN": "启用详细日志输出到控制台",
-    },
-    "Basic Settings": {
-        "zh_CN": "基本设置",
-    },
-    "Advanced BREP & Solid Creation": {
-        "zh_CN": "高级 BREP 与实体创建",
-    },
-    "C++ module v{version} loaded": {
-        "zh_CN": "C++ 模块 v{version} 已加载",
-    },
-    "C++ module loaded": {
-        "zh_CN": "C++ 模块已加载",
-    },
-    "Error: {err}...": {
-        "zh_CN": "错误：{err}...",
-    },
-    "Check system console for details": {
-        "zh_CN": "请查看系统控制台了解详情",
-    },
 
     # ── Export Report Messages ──
-    "STEP export completed": {
-        "zh_CN": "STEP 导出完成",
-    },
-    "STEP export failed, check log": {
-        "zh_CN": "STEP 导出失败，请查看日志",
-    },
-    "C++ extension module not loaded. Please compile and install first.": {
-        "zh_CN": "C++ 扩展模块未加载，请先编译并安装。",
-    },
 
     # ── Sample Operators ──
-    "Create Top Shell": {
-        "zh_CN": "创建顶壳",
-    },
-    "Create Bottom Shell": {
-        "zh_CN": "创建底壳",
-    },
-    "Create Cylinder": {
-        "zh_CN": "创建圆柱体",
-    },
-    "Create Cylinder Gallery": {
-        "zh_CN": "创建圆柱库",
-    },
-    "Create Cone Gallery": {
-        "zh_CN": "创建圆锥库",
-    },
-    "Create Cone Gallery (Inverted)": {
-        "zh_CN": "创建倒锥库",
-    },
-    "Top shell created": {
-        "zh_CN": "顶壳已创建",
-    },
-    "Bottom shell created": {
-        "zh_CN": "底壳已创建",
-    },
-    "Cylinder created": {
-        "zh_CN": "圆柱体已创建",
-    },
-    "Cylinder gallery created — {count} items": {
-        "zh_CN": "圆柱库已创建 — {count} 个对象",
-    },
-    "Cone gallery created — {count} items": {
-        "zh_CN": "圆锥库已创建 — {count} 个对象",
-    },
-    "Inverted cone gallery created — {count} items": {
-        "zh_CN": "倒锥库已创建 — {count} 个对象",
-    },
 
     # ── Progress Messages ──
-    "Applying modifiers...": {
-        "zh_CN": "应用修改器...",
-    },
-    "Creating: {done}/{total}": {
-        "zh_CN": "创建：{done}/{total}",
-    },
-    "Applying: {idx}/{total}": {
-        "zh_CN": "应用修改器：{idx}/{total}",
-    },
-    "Hole fillets...": {
-        "zh_CN": "孔口圆角...",
-    },
-    "Post-processing: {idx}/{total}": {
-        "zh_CN": "后处理：{idx}/{total}",
-    },
-    "Post-processing...": {
-        "zh_CN": "后处理...",
-    },
-    "Left side done": {
-        "zh_CN": "左侧完成",
-    },
-    "Copying cylinders...": {
-        "zh_CN": "复制圆柱...",
-    },
-    "Copying cones...": {
-        "zh_CN": "复制锥体...",
-    },
-    "Copying: {idx}/{total}": {
-        "zh_CN": "复制：{idx}/{total}",
-    },
-    "Adding grooves: {idx}/{total}": {
-        "zh_CN": "添加槽：{idx}/{total}",
-    },
-    "Applying grooves: {idx}/{total}": {
-        "zh_CN": "应用槽：{idx}/{total}",
-    },
-    "Done!": {
-        "zh_CN": "完成！",
-    },
-    "Creating cylinder gallery (with grooves)...": {
-        "zh_CN": "创建圆柱库（带梯形槽）...",
-    },
-    "Creating cone gallery (with grooves)...": {
-        "zh_CN": "创建圆锥库（带梯形槽）...",
-    },
-    "Creating inverted cone gallery (with grooves)...": {
-        "zh_CN": "创建倒锥库（带梯形槽）...",
-    },
-    "Creating cylinder gallery...": {
-        "zh_CN": "创建圆柱库...",
-    },
-    "Creating cone gallery...": {
-        "zh_CN": "创建圆锥库...",
-    },
-    "Creating inverted cone gallery...": {
-        "zh_CN": "创建倒锥库...",
-    },
 
     # ── Operator Descriptions ──
-    "Create a top shell sample with windows": {
-        "zh_CN": "创建带开窗的塑料顶壳样品",
-    },
-    "Create a bottom shell sample with bolt holes": {
-        "zh_CN": "创建带螺栓孔的塑料底壳样品",
-    },
-    "Create a mechanical cylinder sample": {
-        "zh_CN": "创建机械圆柱体样品",
-    },
-    "Create a cylinder combo gallery (8 edge features × 12 hole types)": {
-        "zh_CN": "创建圆柱体组合样品（8种边缘特征 × 12种孔洞）",
-    },
-    "Create a cone combo gallery (chamfer/fillet/hole) — narrowing upward": {
-        "zh_CN": "创建锥体组合样品（倒角/圆角/孔）— 正锥形（上细下粗）",
-    },
-    "Create a cone combo gallery (chamfer/fillet/hole) — widening upward": {
-        "zh_CN": "创建锥体组合样品（倒角/圆角/孔）— 倒锥形（上粗下细）",
-    },
-    "Generate a parametric cylinder with features": {
-        "zh_CN": "生成带特征的参数化圆柱体",
-    },
 
     # ── STEP Export Log ──
-    "STEP Export Started": {
-        "zh_CN": "STEP 导出开始",
-    },
-    "Exporting {obj_type} {idx}/{total}...": {
-        "zh_CN": "导出 {obj_type} {idx}/{total}...",
-    },
-    "Merging STEP files...": {
-        "zh_CN": "合并 STEP 文件...",
-    },
-    "Export complete. {count} objects exported.": {
-        "zh_CN": "导出完成，共 {count} 个对象。",
-    },
-    "Object {idx}/{total} OK ({time}s)": {
-        "zh_CN": "对象 {idx}/{total} 完成（{time}秒）",
-    },
 
     # ── Parametric Cylinder Properties ──
     "Type": {"zh_CN": "类型"},
@@ -410,7 +105,6 @@ _STRINGS = {
     "Multiplier for groove depth on tapered cylinders (compensates slanted surface)": {"zh_CN": "锥形圆柱凹槽深度系数（补偿倾斜表面）"},
 
     # ── Parametric Cylinder UI Labels ──
-    "Cylinder": {"zh_CN": "圆柱体"},
     "Edge Treatment": {"zh_CN": "边缘处理"},
     "Groove": {"zh_CN": "凹槽"},
     "Depth: {depth:.1f} mm  |  Bottom W: {bot_w:.1f} mm": {"zh_CN": "深度：{depth:.1f} mm  |  底宽：{bot_w:.1f} mm"},
@@ -435,55 +129,215 @@ _STRINGS = {
     "Tapered Stepped": {"zh_CN": "锥形台阶孔"},
 
     # ── bl_info ──
-    "STEP Exporter (Enhanced)": {"zh_CN": "STEP 导出器（增强版）"},
-    "Export to STEP format with advanced BREP, solid creation and geometry fixing": {"zh_CN": "导出为 STEP 格式，支持高级 BREP、实体创建和几何修复"},
 
     # ── Progress in sample_ops (runtime, wrapped by _t) ──
     "正在分析物体...": {"zh_CN": "正在分析物体..."},
     "分析物体 {idx}/{total}...": {"zh_CN": "分析物体 {idx}/{total}..."},
     "分析完成，开始导出 {count} 个参数化物体...": {"zh_CN": "分析完成，开始导出 {count} 个参数化物体..."},
+
+    # ── Shelf Labels (Gallery Row Names) ──
+    "C1 No Edge": {"zh_CN": "C1 无边缘"},
+    "C2 T.Chamfer": {"zh_CN": "C2 顶部倒角"},
+    "C3 B.Chamfer": {"zh_CN": "C3 底部倒角"},
+    "C4 T.Fillet": {"zh_CN": "C4 顶部圆角"},
+    "C5 B.Fillet": {"zh_CN": "C5 底部圆角"},
+    "C6 T.Ch+B.Fil": {"zh_CN": "C6 顶倒角+底圆角"},
+    "C7 BothChamfer": {"zh_CN": "C7 双倒角"},
+    "C8 BothFillet": {"zh_CN": "C8 双圆角"},
+    "S1 No Edge": {"zh_CN": "S1 无边缘"},
+    "S2 T.Chamfer": {"zh_CN": "S2 顶部倒角"},
+    "S3 B.Chamfer": {"zh_CN": "S3 底部倒角"},
+    "S4 Both Chamfer": {"zh_CN": "S4 双倒角"},
+    "S5 T.Fillet": {"zh_CN": "S5 顶部圆角"},
+    "S6 B.Fillet": {"zh_CN": "S6 底部圆角"},
+    "S7 Both Fillet": {"zh_CN": "S7 双圆角"},
+    "S8 T.Ch+B.Fil": {"zh_CN": "S8 顶倒角+底圆角"},
+
+    # ── Inverted Cone Gallery Shelf Labels ──
+    "S1 Inv No Edge": {"zh_CN": "S1 无边缘（倒锥）"},
+    "S2 Inv T.Chamfer": {"zh_CN": "S2 顶部倒角（倒锥）"},
+    "S3 Inv B.Chamfer": {"zh_CN": "S3 底部倒角（倒锥）"},
+    "S4 Inv Both Chamfer": {"zh_CN": "S4 双倒角（倒锥）"},
+    "S5 Inv T.Fillet": {"zh_CN": "S5 顶部圆角（倒锥）"},
+    "S6 Inv B.Fillet": {"zh_CN": "S6 底部圆角（倒锥）"},
+    "S7 Inv Both Fillet": {"zh_CN": "S7 双圆角（倒锥）"},
+
+    "Plain": {"zh_CN": "普通"},
+
+    # ── Gallery Viewport Labels ──
+    "+B.Blind": {"zh_CN": "+底盲孔"},
+    "+B.Ch+BBl": {"zh_CN": "+底倒角+底盲孔"},
+    "+B.Ch+Both": {"zh_CN": "+底倒角+双盲孔"},
+    "+B.Ch+InvTpr": {"zh_CN": "+底倒角+倒锥形通孔"},
+    "+B.Ch+Stepped": {"zh_CN": "+底倒角+台阶孔"},
+    "+B.Ch+TBl": {"zh_CN": "+底倒角+顶盲孔"},
+    "+B.Ch+Thru": {"zh_CN": "+底倒角+通孔"},
+    "+B.Ch+Tpr": {"zh_CN": "+底倒角+锥形通孔"},
+    "+B.Ch+TprBB": {"zh_CN": "+底倒角+锥形底盲孔"},
+    "+B.Ch+TprBoth": {"zh_CN": "+底倒角+锥形双盲孔"},
+    "+B.Ch+TprStep": {"zh_CN": "+底倒角+锥形台阶孔"},
+    "+B.Ch+TprTB": {"zh_CN": "+底倒角+锥形顶盲孔"},
+    "+B.Chamfer": {"zh_CN": "+底倒角"},
+    "+B.Fil+BBl": {"zh_CN": "+底圆角+底盲孔"},
+    "+B.Fil+Both": {"zh_CN": "+底圆角+双盲孔"},
+    "+B.Fil+InvTpr": {"zh_CN": "+底圆角+倒锥形通孔"},
+    "+B.Fil+Stepped": {"zh_CN": "+底圆角+台阶孔"},
+    "+B.Fil+TBl": {"zh_CN": "+底圆角+顶盲孔"},
+    "+B.Fil+Thru": {"zh_CN": "+底圆角+通孔"},
+    "+B.Fil+Tpr": {"zh_CN": "+底圆角+锥形通孔"},
+    "+B.Fil+TprBB": {"zh_CN": "+底圆角+锥形底盲孔"},
+    "+B.Fil+TprBoth": {"zh_CN": "+底圆角+锥形双盲孔"},
+    "+B.Fil+TprStep": {"zh_CN": "+底圆角+锥形台阶孔"},
+    "+B.Fil+TprTB": {"zh_CN": "+底圆角+锥形顶盲孔"},
+    "+B.Fillet": {"zh_CN": "+底圆角"},
+    "+BCh+BBl": {"zh_CN": "+底倒角+底盲孔"},
+    "+BCh+Both": {"zh_CN": "+底倒角+双盲孔"},
+    "+BCh+InvTpr": {"zh_CN": "+底倒角+倒锥形通孔"},
+    "+BCh+Stepped": {"zh_CN": "+底倒角+台阶孔"},
+    "+BCh+TBl": {"zh_CN": "+底倒角+顶盲孔"},
+    "+BCh+Thru": {"zh_CN": "+底倒角+通孔"},
+    "+BCh+TprBB": {"zh_CN": "+底倒角+锥形底盲孔"},
+    "+BCh+TprBoth": {"zh_CN": "+底倒角+锥形双盲孔"},
+    "+BCh+TprStep": {"zh_CN": "+底倒角+锥形台阶孔"},
+    "+BCh+TprTB": {"zh_CN": "+底倒角+锥形顶盲孔"},
+    "+BCh+TprTh": {"zh_CN": "+底倒角+锥形通孔"},
+    "+BFil+BBl": {"zh_CN": "+底圆角+底盲孔"},
+    "+BFil+Both": {"zh_CN": "+底圆角+双盲孔"},
+    "+BFil+InvTpr": {"zh_CN": "+底圆角+倒锥形通孔"},
+    "+BFil+Stepped": {"zh_CN": "+底圆角+台阶孔"},
+    "+BFil+TBl": {"zh_CN": "+底圆角+顶盲孔"},
+    "+BFil+Thru": {"zh_CN": "+底圆角+通孔"},
+    "+BFil+TprBB": {"zh_CN": "+底圆角+锥形底盲孔"},
+    "+BFil+TprBoth": {"zh_CN": "+底圆角+锥形双盲孔"},
+    "+BFil+TprStep": {"zh_CN": "+底圆角+锥形台阶孔"},
+    "+BFil+TprTB": {"zh_CN": "+底圆角+锥形顶盲孔"},
+    "+BFil+TprTh": {"zh_CN": "+底圆角+锥形通孔"},
+    "+Both Bl": {"zh_CN": "+双盲孔"},
+    "+Both Cham": {"zh_CN": "+双倒角"},
+    "+Both Fil": {"zh_CN": "+双圆角"},
+    "+BothBl": {"zh_CN": "+双盲孔"},
+    "+BothCh+BBl": {"zh_CN": "+双倒角+底盲孔"},
+    "+BothCh+Both": {"zh_CN": "+双倒角+双盲孔"},
+    "+BothCh+InvTpr": {"zh_CN": "+双倒角+倒锥形通孔"},
+    "+BothCh+Stepped": {"zh_CN": "+双倒角+台阶孔"},
+    "+BothCh+TBl": {"zh_CN": "+双倒角+顶盲孔"},
+    "+BothCh+Thru": {"zh_CN": "+双倒角+通孔"},
+    "+BothCh+Tpr": {"zh_CN": "+双倒角+锥形通孔"},
+    "+BothCh+TprBB": {"zh_CN": "+双倒角+锥形底盲孔"},
+    "+BothCh+TprBoth": {"zh_CN": "+双倒角+锥形双盲孔"},
+    "+BothCh+TprStep": {"zh_CN": "+双倒角+锥形台阶孔"},
+    "+BothCh+TprTB": {"zh_CN": "+双倒角+锥形顶盲孔"},
+    "+BothCham": {"zh_CN": "+双倒角"},
+    "+BothFil": {"zh_CN": "+双圆角"},
+    "+BothFil+BBl": {"zh_CN": "+双圆角+底盲孔"},
+    "+BothFil+Both": {"zh_CN": "+双圆角+双盲孔"},
+    "+BothFil+InvTpr": {"zh_CN": "+双圆角+倒锥形通孔"},
+    "+BothFil+Stepped": {"zh_CN": "+双圆角+台阶孔"},
+    "+BothFil+TBl": {"zh_CN": "+双圆角+顶盲孔"},
+    "+BothFil+Thru": {"zh_CN": "+双圆角+通孔"},
+    "+BothFil+Tpr": {"zh_CN": "+双圆角+锥形通孔"},
+    "+BothFil+TprBB": {"zh_CN": "+双圆角+锥形底盲孔"},
+    "+BothFil+TprBoth": {"zh_CN": "+双圆角+锥形双盲孔"},
+    "+BothFil+TprStep": {"zh_CN": "+双圆角+锥形台阶孔"},
+    "+BothFil+TprTB": {"zh_CN": "+双圆角+锥形顶盲孔"},
+    "+Ch+BBl": {"zh_CN": "+倒角+底盲孔"},
+    "+Ch+Both": {"zh_CN": "+倒角+双盲孔"},
+    "+Ch+InvTpr": {"zh_CN": "+倒角+倒锥形通孔"},
+    "+Ch+Stepped": {"zh_CN": "+倒角+台阶孔"},
+    "+Ch+TBl": {"zh_CN": "+倒角+顶盲孔"},
+    "+Ch+Thru": {"zh_CN": "+倒角+通孔"},
+    "+Ch+TprBB": {"zh_CN": "+倒角+锥形底盲孔"},
+    "+Ch+TprBoth": {"zh_CN": "+倒角+锥形双盲孔"},
+    "+Ch+TprStep": {"zh_CN": "+倒角+锥形台阶孔"},
+    "+Ch+TprTB": {"zh_CN": "+倒角+锥形顶盲孔"},
+    "+Ch+TprTh": {"zh_CN": "+倒角+锥形通孔"},
+    "+ChFil+BBl": {"zh_CN": "+倒角+圆角+底盲孔"},
+    "+ChFil+Both": {"zh_CN": "+倒角+圆角+双盲孔"},
+    "+ChFil+InvTpr": {"zh_CN": "+倒角+圆角+倒锥形通孔"},
+    "+ChFil+Stepped": {"zh_CN": "+倒角+圆角+台阶孔"},
+    "+ChFil+TBl": {"zh_CN": "+倒角+圆角+顶盲孔"},
+    "+ChFil+Thru": {"zh_CN": "+倒角+圆角+通孔"},
+    "+ChFil+Tpr": {"zh_CN": "+倒角+圆角+锥形通孔"},
+    "+ChFil+TprBB": {"zh_CN": "+倒角+圆角+锥形底盲孔"},
+    "+ChFil+TprBoth": {"zh_CN": "+倒角+圆角+锥形双盲孔"},
+    "+ChFil+TprStep": {"zh_CN": "+倒角+圆角+锥形台阶孔"},
+    "+ChFil+TprTB": {"zh_CN": "+倒角+圆角+锥形顶盲孔"},
+    "+ChFil+TprTh": {"zh_CN": "+倒角+圆角+锥形通孔"},
+    "+Fil+BBl": {"zh_CN": "+圆角+底盲孔"},
+    "+Fil+Both": {"zh_CN": "+圆角+双盲孔"},
+    "+Fil+InvTpr": {"zh_CN": "+圆角+倒锥形通孔"},
+    "+Fil+Stepped": {"zh_CN": "+圆角+台阶孔"},
+    "+Fil+TBl": {"zh_CN": "+圆角+顶盲孔"},
+    "+Fil+Thru": {"zh_CN": "+圆角+通孔"},
+    "+Fil+TprBB": {"zh_CN": "+圆角+锥形底盲孔"},
+    "+Fil+TprBoth": {"zh_CN": "+圆角+锥形双盲孔"},
+    "+Fil+TprStep": {"zh_CN": "+圆角+锥形台阶孔"},
+    "+Fil+TprTB": {"zh_CN": "+圆角+锥形顶盲孔"},
+    "+Fil+TprTh": {"zh_CN": "+圆角+锥形通孔"},
+    "+InvTapered": {"zh_CN": "+倒锥形通孔"},
+    "+Stepped": {"zh_CN": "+台阶孔"},
+    "+T.Blind": {"zh_CN": "+顶盲孔"},
+    "+T.Ch+B.Fil": {"zh_CN": "+顶倒角+底圆角"},
+    "+T.Ch+BBl": {"zh_CN": "+TCh+底盲孔"},
+    "+T.Ch+Both": {"zh_CN": "+TCh+双盲孔"},
+    "+T.Ch+InvTpr": {"zh_CN": "+TCh+倒锥形通孔"},
+    "+T.Ch+Stepped": {"zh_CN": "+TCh+台阶孔"},
+    "+T.Ch+TBl": {"zh_CN": "+TCh+顶盲孔"},
+    "+T.Ch+Thru": {"zh_CN": "+TCh+通孔"},
+    "+T.Ch+Tpr": {"zh_CN": "+TCh+锥形通孔"},
+    "+T.Ch+TprBB": {"zh_CN": "+TCh+锥形底盲孔"},
+    "+T.Ch+TprBoth": {"zh_CN": "+TCh+锥形双盲孔"},
+    "+T.Ch+TprStep": {"zh_CN": "+TCh+锥形台阶孔"},
+    "+T.Ch+TprTB": {"zh_CN": "+TCh+锥形顶盲孔"},
+    "+T.Chamfer": {"zh_CN": "+顶倒角"},
+    "+T.Fil+BBl": {"zh_CN": "+TFil+底盲孔"},
+    "+T.Fil+Both": {"zh_CN": "+TFil+双盲孔"},
+    "+T.Fil+InvTpr": {"zh_CN": "+TFil+倒锥形通孔"},
+    "+T.Fil+Stepped": {"zh_CN": "+TFil+台阶孔"},
+    "+T.Fil+TBl": {"zh_CN": "+TFil+顶盲孔"},
+    "+T.Fil+Thru": {"zh_CN": "+TFil+通孔"},
+    "+T.Fil+Tpr": {"zh_CN": "+TFil+锥形通孔"},
+    "+T.Fil+TprBB": {"zh_CN": "+TFil+锥形底盲孔"},
+    "+T.Fil+TprBoth": {"zh_CN": "+TFil+锥形双盲孔"},
+    "+T.Fil+TprStep": {"zh_CN": "+TFil+锥形台阶孔"},
+    "+T.Fil+TprTB": {"zh_CN": "+TFil+锥形顶盲孔"},
+    "+T.Fillet": {"zh_CN": "+顶圆角"},
+    "+Tapered": {"zh_CN": "+锥形通孔"},
+    "+TaperedThru": {"zh_CN": "+锥形通孔"},
+    "+Through": {"zh_CN": "+通孔"},
+    "+Tpr.B.Bl": {"zh_CN": "+锥形底盲孔"},
+    "+Tpr.BothBl": {"zh_CN": "+锥形双盲孔"},
+    "+Tpr.T.Bl": {"zh_CN": "+锥形顶盲孔"},
+    "+TprStep": {"zh_CN": "+锥形台阶孔"},
+    "Plain": {"zh_CN": "普通"},
 }
-
-
 def _get_language():
-    """Detect Blender's current UI language. Returns 'zh_CN' or 'en'."""
     try:
-        # Method 1: preferences
         lang = bpy.context.preferences.view.language
-        if lang and ('zh' in lang.lower() or 'chinese' in lang.lower()):
-            return 'zh_CN'
-    except Exception:
-        pass
+        if lang and ("zh" in lang.lower() or "chinese" in lang.lower()):
+            return "zh_CN"
+    except: pass
     try:
-        # Method 2: app translations locale
         locale = bpy.app.translations.locale
-        if locale and 'zh' in locale.lower():
-            return 'zh_CN'
-    except Exception:
-        pass
-    return 'en'
+        if locale and "zh" in locale.lower():
+            return "zh_CN"
+    except: pass
+    return "en"
 
 
 def _t(key, **kwargs):
-    """Translate a string key at runtime (draw methods, reports, progress).
-    For class-level attributes use English strings + register_translations()."""
     lang = _get_language()
-    if lang == 'en':
-        result = key
+    if lang == "en": result = key
     else:
         entry = _STRINGS.get(key)
         result = entry.get(lang, key) if entry else key
-    
     if kwargs:
-        try:
-            result = result.format(**kwargs)
-        except (KeyError, ValueError):
-            pass
+        try: result = result.format(**kwargs)
+        except: pass
     return result
 
 
 def _build_translations():
-    """Build translations dict for bpy.app.translations: {locale: {(ctx, en): zh}}."""
     zh_entries = {}
     for en_str, loc in _STRINGS.items():
         zh = loc.get("zh_CN", en_str)
@@ -493,17 +347,13 @@ def _build_translations():
 
 
 def register_translations():
-    """Register translations with Blender. Call from __init__.py register()."""
     try:
         trans = _build_translations()
         bpy.app.translations.register(__name__, trans)
-    except Exception:
-        pass
+    except: pass
 
 
 def unregister_translations():
-    """Unregister translations. Call from __init__.py unregister()."""
     try:
         bpy.app.translations.unregister(__name__)
-    except Exception:
-        pass
+    except: pass

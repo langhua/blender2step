@@ -57,7 +57,7 @@ def test_case(name, **params):
         bpy.ops.export_scene.step_enhanced(
             filepath=step_path,
             unit='mm',
-            use_selection=False,
+            use_selected=False,
         )
     except Exception as e:
         print(f"    SKIP: export error: {e}")

@@ -6,6 +6,7 @@ Usage: blender --background --python ci_integration_test.py
 import bpy
 import sys
 import os
+import time
 import tempfile
 
 # Ensure the built .pyd is available
@@ -61,6 +62,22 @@ def test_case(name, **params):
         )
     except Exception as e:
         print(f"    SKIP: export error: {e}")
+        failed += 1
+        return
+
+    # Pump event loop so modal timer completes the export (needed in --background)
+    from step_exporter.core import _globals as _g
+    for _ in range(600):  # max 60s
+        if _g._export_complete:
+            break
+        try:
+            bpy.ops.wm.redraw_timer(type='DRAW', iterations=1)
+        except:
+            pass
+        time.sleep(0.1)
+
+    if not _g._export_complete:
+        print(f"    FAIL: export timed out")
         failed += 1
         return
 

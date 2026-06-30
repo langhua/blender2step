@@ -19,13 +19,20 @@ def _fake(name, **attrs):
 _fake("bpy")
 _fake("bmesh")
 _fake("blf")
-_fake("mathutils")
+_fake("mathutils", Vector=type("Vector", (), {}))
 
 for sub in ["types", "props", "utils", "path", "app", "context", "data", "ops"]:
     _fake(f"bpy.{sub}")
 
 _fake("bpy_extras")
-_fake("bpy_extras.io_utils")
+_fake("bpy_extras.io_utils", ExportHelper=type("ExportHelper", (), {}))
 
 _fake("mathutils.geometry")
 _fake("mathutils.interpolate")
+
+# Commonly imported classes
+for cls in ["Panel", "Operator", "TOPBAR_MT_file_export"]:
+    sys.modules["bpy.types"].__dict__[cls] = type(cls, (), {})
+
+for cls in ["StringProperty", "FloatProperty", "IntProperty", "BoolProperty", "EnumProperty"]:
+    sys.modules["bpy.props"].__dict__[cls] = type(cls, (), {})

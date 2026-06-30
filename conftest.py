@@ -11,6 +11,7 @@ def _mock_blender():
     mock_modules = [
         "bpy",
         "bmesh",
+        "blf",
         "bpy_extras",
         "bpy.types",
         "bpy.props",

@@ -126,6 +126,8 @@ print("=" * 60)
 test_case("std", cylinder_type='standard', radius=15.0, height=40.0)
 test_case("taper", cylinder_type='tapered',
           top_radius=10.0, bottom_radius=20.0, height=40.0)
+test_case("inv_taper", cylinder_type='tapered',
+          top_radius=20.0, bottom_radius=10.0, height=40.0)
 test_case("chamfer", cylinder_type='standard', radius=15.0, height=40.0,
           chamfer_type='chamfer', chamfer_size=2.0)
 test_case("fillet", cylinder_type='standard', radius=15.0, height=40.0,

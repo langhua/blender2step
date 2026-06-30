@@ -1,49 +1,31 @@
 """
-pytest root conftest — mock Blender modules BEFORE anything imports step_exporter.
-Must be at project root so pytest loads it first.
+pytest root conftest — mock Blender modules so tests can run outside Blender.
+Must be at project root so pytest loads it before step_exporter.
 """
 import sys
-from unittest.mock import MagicMock
+import types
 
 
-class _BlenderMock(MagicMock):
-    """A MagicMock that auto-creates submodules so 'from bpy.types import X' works."""
-
-    def __init__(self, name, **kwargs):
-        super().__init__(**kwargs)
-        self.__name__ = name
-        self.__path__ = []  # makes Python treat it as a package
-
-    def __getattr__(self, name):
-        full = f"{self.__name__}.{name}"
-        if full not in sys.modules:
-            sys.modules[full] = _BlenderMock(full)
-        return sys.modules[full]
+def _fake(name, **attrs):
+    """Create a fake module that supports submodule imports."""
+    mod = types.ModuleType(name)
+    mod.__path__ = []   # mark as package
+    mod.__file__ = f"<mock:{name}>"
+    for k, v in attrs.items():
+        setattr(mod, k, v)
+    sys.modules[name] = mod
 
 
-def _mock_blender():
-    """Mock all Blender modules so step_exporter can be imported without bpy."""
-    mock_modules = [
-        "bpy",
-        "bmesh",
-        "blf",
-        "bpy_extras",
-        "bpy.types",
-        "bpy.props",
-        "bpy.utils",
-        "bpy.path",
-        "bpy.app",
-        "bpy.context",
-        "bpy.data",
-        "bpy.ops",
-        "mathutils",
-        "mathutils.geometry",
-        "mathutils.interpolate",
-        # bpy_extras submodules (auto-resolved by _BlenderMock)
-    ]
-    for name in mock_modules:
-        if name not in sys.modules:
-            sys.modules[name] = _BlenderMock(name)
+_fake("bpy")
+_fake("bmesh")
+_fake("blf")
+_fake("mathutils")
 
+for sub in ["types", "props", "utils", "path", "app", "context", "data", "ops"]:
+    _fake(f"bpy.{sub}")
 
-_mock_blender()
+_fake("bpy_extras")
+_fake("bpy_extras.io_utils")
+
+_fake("mathutils.geometry")
+_fake("mathutils.interpolate")

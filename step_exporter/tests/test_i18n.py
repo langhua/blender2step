@@ -8,7 +8,7 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from step_exporter.core.i18n import _STRINGS
+from step_exporter.core.i18n import _STRINGS, _build_translations, _t
 
 
 class TestI18nCompleteness:
@@ -75,3 +75,71 @@ class TestI18nCoverage:
     def test_all_keys_are_strings(self):
         for k in _STRINGS:
             assert isinstance(k, str), f"Non-string key: {k!r}"
+
+
+class TestBuildTranslations:
+    """Test _build_translations() — the dict transformer for Blender's i18n API."""
+
+    def test_returns_dict_with_language_keys(self):
+        result = _build_translations()
+        assert "zh_CN" in result
+        assert "zh" in result
+        assert isinstance(result["zh_CN"], dict)
+        assert isinstance(result["zh"], dict)
+
+    def test_every_key_has_translation(self):
+        result = _build_translations()
+        for en_str, loc in _STRINGS.items():
+            expected_zh = loc.get("zh_CN", en_str)
+            # Blender uses ('*', en_str) and ('Operator', en_str) as context keys
+            assert result["zh_CN"][('*', en_str)] == expected_zh
+            assert result["zh_CN"][('Operator', en_str)] == expected_zh
+
+    def test_translation_count_matches(self):
+        result = _build_translations()
+        # Each string generates 2 entries (* and Operator contexts)
+        expected_count = len(_STRINGS) * 2
+        assert len(result["zh_CN"]) == expected_count
+
+    def test_no_empty_context_keys(self):
+        result = _build_translations()
+        for ctx_key, val in result["zh_CN"].items():
+            assert isinstance(ctx_key, tuple)
+            assert len(ctx_key) == 2
+            assert ctx_key[0] in ("*", "Operator")
+            assert isinstance(ctx_key[1], str)
+            assert len(val) > 0, f"Empty translation for {ctx_key}"
+
+
+class TestTranslationLookup:
+    """Test _t() — the core translation lookup function."""
+
+    def test_en_returns_key_unchanged(self, monkeypatch):
+        """English: _t('Hello') → 'Hello'"""
+        monkeypatch.setattr("step_exporter.core.i18n._get_language", lambda: "en")
+        assert _t("Hello") == "Hello"
+        assert _t("STEP Exporter") == "STEP Exporter"
+
+    def test_zh_returns_translation(self, monkeypatch):
+        """Chinese: _t('STEP Exporter') → 'STEP 导出器'"""
+        monkeypatch.setattr("step_exporter.core.i18n._get_language", lambda: "zh_CN")
+        assert _t("STEP Exporter") == "STEP 导出器"
+
+    def test_unknown_key_returns_key_itself(self, monkeypatch):
+        """Unknown key falls back to the key string itself."""
+        monkeypatch.setattr("step_exporter.core.i18n._get_language", lambda: "zh_CN")
+        assert _t("NoSuchKey12345") == "NoSuchKey12345"
+
+    def test_format_kwargs(self, monkeypatch):
+        """Format placeholders like {version} are substituted."""
+        monkeypatch.setattr("step_exporter.core.i18n._get_language", lambda: "zh_CN")
+        # "✓ Module v{version} loaded" → "✓ 模块 v{version} 已加载"
+        result = _t("✓ Module v{version} loaded", version="4.1.1")
+        assert "4.1.1" in result
+        assert result.startswith("✓")
+
+    def test_missing_kwargs_does_not_crash(self, monkeypatch):
+        """Missing format args should not raise exception (defensive)."""
+        monkeypatch.setattr("step_exporter.core.i18n._get_language", lambda: "zh_CN")
+        result = _t("Cylinder created: {name}")  # no name= provided
+        assert isinstance(result, str)  # should not crash

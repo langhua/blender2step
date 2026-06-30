@@ -134,3 +134,27 @@ jobs:
       - name: Lint Python files
         run: ruff check step_exporter/ --output-format=github
         continue-on-error: true
+
+  # ============================================================
+  # 集成测试：生成圆柱 → 导出 STEP → 验证（需要 .pyd）
+  # ============================================================
+  integration:
+    needs: build
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download built .pyd
+        uses: actions/download-artifact@v4
+        with:
+          name: step_exporter-pyd
+          path: step_exporter/lib
+
+      - name: Download Blender 4.2
+        run: |
+          curl -L -o ${{ runner.temp }}\blender.zip "https://download.blender.org/release/Blender4.2/blender-4.2.1-windows-x64.zip"
+          tar -xf ${{ runner.temp }}\blender.zip -C ${{ runner.temp }}
+
+      - name: Run integration tests
+        run: ${{ runner.temp }}\blender-4.2.1-windows-x64\blender.exe --background --python ci_integration_test.py

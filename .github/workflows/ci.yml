@@ -95,6 +95,26 @@ jobs:
           }
 
   # ============================================================
+  # Python 单元测试（不需要 Blender，并行运行）
+  # ============================================================
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install pytest
+        run: pip install pytest
+
+      - name: Run tests
+        run: python -m pytest step_exporter/tests/test_core_utils.py -v
+
+  # ============================================================
   # Python 代码质量检查（并行运行，几秒完成）
   # ============================================================
   lint:

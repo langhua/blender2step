@@ -6,8 +6,8 @@ project(blender2step LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# ====== 1. OCCT 预编译包（从 Release 下载解压到 vcpkg_installed/） ======
-set(OCCT_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/vcpkg_installed/x64-windows-release" CACHE PATH "OCCT root")
+# ====== 1. OCCT 预编译包（从 Release 下载解压，内容直接放在 vcpkg_installed/） ======
+set(OCCT_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/vcpkg_installed" CACHE PATH "OCCT root")
 message(STATUS "OCCT path: ${OCCT_ROOT}")
 
 # ====== 2. ZLIB ======

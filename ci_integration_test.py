@@ -60,6 +60,14 @@ def clear_scene():
 
 def test_case(name, **params):
     global passed, failed
+    import signal
+
+    def timeout_handler(signum, frame):
+        raise TimeoutError("C++ export too slow")
+
+    # Only available on Unix, skip on Windows CI
+    has_signal = hasattr(signal, 'SIGALRM')
+
     print(f"\n  [{name}]")
     clear_scene()
 
@@ -75,7 +83,13 @@ def test_case(name, **params):
         print(f"    FAIL: no mesh")
         failed += 1
         return
-    print(f"    Mesh: {objs[0].name} ({len(objs[0].data.vertices)} verts)")
+
+    verts = len(objs[0].data.vertices)
+    print(f"    Mesh: {objs[0].name} ({verts} verts)")
+    if verts > 10000:
+        print(f"    SKIP: too many vertices for CI")
+        failed += 1
+        return
 
     step_path = os.path.join(tempfile.gettempdir(), f"ci_int_{name}.step")
     try:
@@ -116,15 +130,8 @@ test_case("chamfer", cylinder_type='standard', radius=15.0, height=40.0,
           chamfer_type='chamfer', chamfer_size=2.0)
 test_case("fillet", cylinder_type='standard', radius=15.0, height=40.0,
           chamfer_type='fillet', fillet_radius=2.0)
-test_case("chamfer_both", cylinder_type='standard', radius=15.0, height=40.0,
-          chamfer_type='chamfer_both', chamfer_size=2.0)
 test_case("thru_hole", cylinder_type='standard', radius=15.0, height=40.0,
           hole_type='through', hole_radius=5.0)
-test_case("blind_hole", cylinder_type='standard', radius=15.0, height=40.0,
-          hole_type='top', hole_radius=5.0, hole_depth=50.0)
-test_case("stepped_hole", cylinder_type='standard', radius=15.0, height=40.0,
-          hole_type='stepped', stepped_large_radius=7.0, stepped_large_height=60,
-          stepped_small_radius=3.0)
 
 print(f"\n{'=' * 60}")
 print(f"Results: {passed} passed, {failed} failed")

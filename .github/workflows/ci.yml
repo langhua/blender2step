@@ -111,11 +111,8 @@ jobs:
           curl -L -o ${{ runner.temp }}\blender.zip "https://download.blender.org/release/Blender4.2/blender-4.2.1-windows-x64.zip"
           tar -xf ${{ runner.temp }}\blender.zip -C ${{ runner.temp }}
 
-      - name: Install pytest
-        run: ${{ runner.temp }}\blender-4.2.1-windows-x64\4.2\python\bin\python.exe -m pip install pytest
-
       - name: Run tests
-        run: ${{ runner.temp }}\blender-4.2.1-windows-x64\4.2\python\bin\python.exe -m pytest step_exporter/tests/test_core_utils.py -v
+        run: ${{ runner.temp }}\blender-4.2.1-windows-x64\blender.exe --background --python ci_test_runner.py
 
   # ============================================================
   # Python 代码质量检查（并行运行，几秒完成）

@@ -23,42 +23,45 @@ on:
 
 jobs:
   # ============================================================
-  # C++ 编译验证（vcpkg 编译 OCCT，与本地构建完全一致）
-  # 首次运行 ~1-2h，后续利用缓存 ~5-10min
+  # C++ 编译验证（使用本地一致的 OCCT 7.8.1 预编译包）
   # ============================================================
   build:
     runs-on: windows-latest
-    timeout-minutes: 180
+    timeout-minutes: 10
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # ----- 1. vcpkg 安装 OCCT（自动缓存，首次慢后续快） -----
-      - name: Run vcpkg
-        uses: lukka/run-vcpkg@v11
-        with:
-          vcpkgGitCommitId: 8cf84605ce9764de46caeb47b9e710db9493add9
-          vcpkgJsonGlob: 'vcpkg.json'
+      # ----- 1. 下载预编译 OCCT 7.8.1（与你本地完全一致） -----
+      - name: Download pre-built OCCT
+        run: |
+          $url = "https://github.com/${{ github.repository }}/releases/download/occt-v1/occt-x64-windows-release.zip"
+          Write-Host "Downloading OCCT 7.8.1 from Release..."
+          Invoke-WebRequest -Uri $url -OutFile "${{ runner.temp }}/occt.zip"
 
-      # ----- 2. 设置 Python 3.11 -----
+      # ----- 2. 解压 -----
+      - name: Extract OCCT
+        run: |
+          Expand-Archive -Path "${{ runner.temp }}/occt.zip" -DestinationPath "${{ github.workspace }}/vcpkg_installed" -Force
+          Write-Host "OCCT 7.8.1 ready"
+
+      # ----- 3. 设置 Python 3.11 -----
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      # ----- 3. 切换到 CI CMakeLists -----
+      # ----- 4. 切换到 CI CMakeLists -----
       - name: Prepare CI CMakeLists
         run: |
           Copy-Item CMakeLists.txt CMakeLists.local.bak.txt
           Copy-Item CMakeLists.ci.txt CMakeLists.txt -Force
 
-      # ----- 4. CMake 配置 -----
+      # ----- 5. CMake 配置 -----
       - name: Configure CMake
         run: |
           cmake -B build `
-            -DCMAKE_TOOLCHAIN_FILE="${{ env.VCPKG_ROOT }}/scripts/buildsystems/vcpkg.cmake" `
-            -DVCPKG_TARGET_TRIPLET=x64-windows `
             -DPYTHON_INCLUDE_DIR="${{ env.pythonLocation }}/include" `
             -DPYTHON_LIBRARY="${{ env.pythonLocation }}/libs/python311.lib"
 

@@ -32,3 +32,4 @@ build_occt/
 vcpkg_overlay/
 test_output/
 *.blend*
+occt-x64-windows-release.zip

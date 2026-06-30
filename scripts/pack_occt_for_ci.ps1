@@ -25,14 +25,14 @@ Compress-Archive -Path "$source\include", "$source\lib", "$source\share", "$sour
 $size = [math]::Round((Get-Item $output).Length / 1MB, 1)
 Write-Host ""
 Write-Host "============================================================" -ForegroundColor Cyan
-Write-Host "打包完成: $output ($size MB)" -ForegroundColor Cyan
+Write-Host "Done: $output ($size MB)" -ForegroundColor Cyan
 Write-Host "============================================================" -ForegroundColor Cyan
 Write-Host ""
-Write-Host "下一步操作：" -ForegroundColor Yellow
-Write-Host "1. 前往 https://github.com/$env:GITHUB_REPOSITORY/releases/new" -ForegroundColor White
-Write-Host "2. 在 'Choose a tag' 输入: occt-v1 (新建)" -ForegroundColor White
-Write-Host "3. Release title 填: OCCT Pre-built" -ForegroundColor White
-Write-Host "4. 上传 $output 作为 Release asset" -ForegroundColor White
-Write-Host "5. 点击 'Publish release'" -ForegroundColor White
+Write-Host "Next steps:" -ForegroundColor Yellow
+Write-Host " 1. Go to https://github.com/langhua/blender2step/releases/new"
+Write-Host " 2. Tag: occt-v1 (create new)"
+Write-Host " 3. Title: OCCT 7.8.1 Pre-built"
+Write-Host " 4. Upload the zip file as Release asset"
+Write-Host " 5. Click Publish release"
 Write-Host ""
-Write-Host "之后每次 CI 运行都会自动下载这个预编译包，无需再编译 OCCT。" -ForegroundColor Green
+Write-Host "After this, CI will auto-download the package every run." -ForegroundColor Green

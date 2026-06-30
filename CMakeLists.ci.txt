@@ -1,18 +1,34 @@
 # CMakeLists.ci.txt — GitHub Actions CI 专用
-# 通过 vcpkg manifest 模式编译 OCCT，与本地构建一致的版本
+# 使用与你本地完全一致的 OCCT 7.8.1 预编译包（来自 GitHub Release）
 cmake_minimum_required(VERSION 3.20)
 project(blender2step LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# ====== 1. vcpkg 工具链（由 lukka/run-vcpkg 自动设置 VCPKG_ROOT） ======
-if(DEFINED ENV{VCPKG_ROOT})
-    set(CMAKE_TOOLCHAIN_FILE "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
-        CACHE STRING "Vcpkg toolchain file")
+# ====== 1. OCCT 预编译包（从 Release 下载解压到 vcpkg_installed/） ======
+set(OCCT_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/vcpkg_installed/x64-windows-release" CACHE PATH "OCCT root")
+message(STATUS "OCCT path: ${OCCT_ROOT}")
+
+# ====== 2. ZLIB ======
+set(ZLIB_LIBRARY "${OCCT_ROOT}/lib/zlib.lib" CACHE FILEPATH "ZLIB")
+set(ZLIB_INCLUDE_DIR "${OCCT_ROOT}/include" CACHE PATH "ZLIB include")
+set(ZLIB_FOUND TRUE CACHE BOOL "ZLIB found")
+if(NOT TARGET ZLIB::ZLIB)
+    add_library(ZLIB::ZLIB UNKNOWN IMPORTED)
+    set_target_properties(ZLIB::ZLIB PROPERTIES
+        IMPORTED_LOCATION "${ZLIB_LIBRARY}"
+        INTERFACE_INCLUDE_DIRECTORIES "${ZLIB_INCLUDE_DIR}"
+    )
 endif()
 
-# ====== 2. 通过 vcpkg manifest 模式查找依赖 ======
+# ====== 3. freetype ======
+set(freetype_DIR "${OCCT_ROOT}/share/freetype" CACHE PATH "freetype")
+find_package(freetype CONFIG REQUIRED)
+
+# ====== 4. OpenCASCADE 7.8.1 ======
+set(OpenCASCADE_DIR "${OCCT_ROOT}/share/opencascade" CACHE PATH "OpenCASCADE")
+set(OpenCASCADE_USE_STATIC_LIBS ON)
 find_package(OpenCASCADE CONFIG REQUIRED)
 message(STATUS "OpenCASCADE found: ${OpenCASCADE_INCLUDE_DIRS}")
 

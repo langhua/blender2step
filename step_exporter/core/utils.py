@@ -54,7 +54,7 @@ def _merge_step_files(output_path, temp_files):
     entity_re = re.compile(r'^#(\d+)\s*=(.*)$')
     
     def _renumber_refs(text, shift):
-        """Renumber entity references #\d+ in text, respecting STEP single-quote strings.
+        r"""Renumber entity references #\d+ in text, respecting STEP single-quote strings.
         Only replaces #\d+ outside of quoted strings."""
         result = []
         in_string = False

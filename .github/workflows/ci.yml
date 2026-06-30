@@ -98,24 +98,24 @@ jobs:
           }
 
   # ============================================================
-  # Python 单元测试（不需要 Blender，并行运行）
+  # Python 单元测试（Windows Blender 环境，与本地一致）
   # ============================================================
   test:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
+      - name: Download Blender 4.2
+        run: |
+          curl -L -o ${{ runner.temp }}\blender.zip "https://download.blender.org/release/Blender4.2/blender-4.2.1-windows-x64.zip"
+          tar -xf ${{ runner.temp }}\blender.zip -C ${{ runner.temp }}
 
       - name: Install pytest
-        run: pip install pytest
+        run: ${{ runner.temp }}\blender-4.2.1-windows-x64\4.2\python\bin\python.exe -m pip install pytest
 
       - name: Run tests
-        run: python -m pytest step_exporter/tests/test_core_utils.py -v
+        run: ${{ runner.temp }}\blender-4.2.1-windows-x64\4.2\python\bin\python.exe -m pytest step_exporter/tests/test_core_utils.py -v
 
   # ============================================================
   # Python 代码质量检查（并行运行，几秒完成）

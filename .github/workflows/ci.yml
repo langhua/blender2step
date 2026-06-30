@@ -1,0 +1,102 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  # ============================================================
+  # C++ 编译验证（vcpkg 编译 OCCT，与本地构建完全一致）
+  # 首次运行 ~1-2h，后续利用缓存 ~5-10min
+  # ============================================================
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ----- 1. vcpkg 安装 OCCT（自动缓存，首次慢后续快） -----
+      - name: Run vcpkg
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgGitCommitId: 8cf84605ce9764de46caeb47b9e710db9493add9
+          vcpkgJsonGlob: 'vcpkg.json'
+
+      # ----- 2. 设置 Python 3.11 -----
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # ----- 3. 切换到 CI CMakeLists -----
+      - name: Prepare CI CMakeLists
+        run: |
+          Copy-Item CMakeLists.txt CMakeLists.local.bak.txt
+          Copy-Item CMakeLists.ci.txt CMakeLists.txt -Force
+
+      # ----- 4. CMake 配置 -----
+      - name: Configure CMake
+        run: |
+          cmake -B build `
+            -DCMAKE_TOOLCHAIN_FILE="${{ env.VCPKG_ROOT }}/scripts/buildsystems/vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET=x64-windows `
+            -DPYTHON_INCLUDE_DIR="${{ env.pythonLocation }}/include" `
+            -DPYTHON_LIBRARY="${{ env.pythonLocation }}/libs/python311.lib"
+
+      # ----- 5. 编译 -----
+      - name: Build
+        run: cmake --build build --config Release
+
+      # ----- 6. 验证 -----
+      - name: Verify build output
+        run: |
+          if (Test-Path build/Release/_step_exporter.pyd) {
+            Write-Host "PASS: _step_exporter.pyd built successfully"
+            Get-Item build/Release/_step_exporter.pyd
+          } else {
+            Write-Host "FAIL: _step_exporter.pyd not found!"
+            exit 1
+          }
+
+      # ----- 7. 上传产物 -----
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: step_exporter-pyd
+          path: build/Release/_step_exporter.pyd
+          retention-days: 7
+
+      # ----- 8. 恢复 CMakeLists -----
+      - name: Restore CMakeLists
+        if: always()
+        run: |
+          if (Test-Path CMakeLists.local.bak.txt) {
+            Copy-Item CMakeLists.local.bak.txt CMakeLists.txt -Force
+            Remove-Item CMakeLists.local.bak.txt
+          }
+
+  # ============================================================
+  # Python 代码质量检查（并行运行，几秒完成）
+  # ============================================================
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install linters
+        run: pip install ruff
+
+      - name: Lint Python files
+        run: ruff check step_exporter/ --output-format=github
+        continue-on-error: true

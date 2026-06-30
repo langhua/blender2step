@@ -1,0 +1,293 @@
+Total objects: 192
+Unique outer dimension groups: 23
+
+=== Group 1 (39 objects) ===
+  Dimensions: bR=0.49 tR=0.26 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+  Objects: GS3_TprStep, GS4_BBl, GS4_InvTpr, GS4_Plain, GS4_Stepped, GS4_TBl, GS4_TprBBl, GS4_TprBoth, GS4_TprTBl, GS6_TprStep, GS7_BBl, GS7_InvTpr, GS7_Plain, GS7_Stepped, GS7_TprBBl, GS7_TprStep, GS8_BBl, GS8_InvTpr, GS8_Plain, GS8_Stepped, GS8_TprBBl, S4_BBl, S4_InvTpr, S4_Plain, S4_Stepped, S4_TBl, S4_TprBBl, S4_TprBoth, S4_TprTBl, S7_BBl, S7_InvTpr, S7_Plain, S7_Stepped, S7_TprBBl, S8_BBl, S8_InvTpr, S8_Plain, S8_Stepped, S8_TprBBl
+
+=== Group 2 (34 objects) ===
+  Dimensions: bR=0.50 tR=0.26 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+  Objects: GS1_TprStep, GS2_BBl, GS2_InvTpr, GS2_Plain, GS2_Stepped, GS2_TBl, GS2_TprBBl, GS2_TprBoth, GS2_TprTBl, GS4_TprStep, GS5_BBl, GS5_InvTpr, GS5_Plain, GS5_Stepped, GS5_TBl, GS5_TprBBl, GS5_TprBoth, GS5_TprTBl, S2_BBl, S2_InvTpr, S2_Plain, S2_Stepped, S2_TBl, S2_TprBBl, S2_TprBoth, S2_TprTBl, S5_BBl, S5_InvTpr, S5_Plain, S5_Stepped, S5_TBl, S5_TprBBl, S5_TprBoth, S5_TprTBl
+
+=== Group 3 (28 objects) ===
+  Dimensions: bR=0.49 tR=0.25 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+  Objects: GS2_TprStep, GS3_BBl, GS3_InvTpr, GS3_Plain, GS3_Stepped, GS3_TBl, GS3_TprBBl, GS3_TprBoth, GS3_TprTBl, GS5_TprStep, GS6_BBl, GS6_InvTpr, GS6_Plain, GS6_Stepped, GS6_TprBBl, S3_BBl, S3_InvTpr, S3_Plain, S3_Stepped, S3_TBl, S3_TprBBl, S3_TprBoth, S3_TprTBl, S6_BBl, S6_InvTpr, S6_Plain, S6_Stepped, S6_TprBBl
+
+=== Group 4 (22 objects) ===
+  Dimensions: bR=0.50 tR=0.25 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+  Objects: GS1_BBl, GS1_BothBl, GS1_InvTprThru, GS1_Plain, GS1_Stepped, GS1_TBl, GS1_Thru, GS1_TprBBl, GS1_TprBothBl, GS1_TprTBl, GS1_TprThru, S1_BBl, S1_BothBl, S1_InvTprThru, S1_Plain, S1_Stepped, S1_TBl, S1_Thru, S1_TprBBl, S1_TprBothBl, S1_TprTBl, S1_TprThru
+
+=== Group 5 (12 objects) ===
+  Dimensions: bR=0.47 tR=0.26 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+  Objects: GS7_TBl, GS7_TprBoth, GS7_TprTBl, GS8_TBl, GS8_TprBoth, GS8_TprTBl, S7_TBl, S7_TprBoth, S7_TprTBl, S8_TBl, S8_TprBoth, S8_TprTBl
+
+=== Group 6 (6 objects) ===
+  Dimensions: bR=0.50 tR=0.26 h=1.00 tc=0.05 tf=0.00 bc=0.00 bf=0.00
+  Objects: GS2_BothBl, GS2_Thru, GS2_TprThru, S2_BothBl, S2_Thru, S2_TprThru
+
+=== Group 7 (6 objects) ===
+  Dimensions: bR=0.45 tR=0.25 h=1.00 tc=0.00 tf=0.00 bc=0.05 bf=0.00
+  Objects: GS3_BothBl, GS3_Thru, GS3_TprThru, S3_BothBl, S3_Thru, S3_TprThru
+
+=== Group 8 (6 objects) ===
+  Dimensions: bR=0.45 tR=0.26 h=1.00 tc=0.05 tf=0.00 bc=0.05 bf=0.00
+  Objects: GS4_BothBl, GS4_Thru, GS4_TprThru, S4_BothBl, S4_Thru, S4_TprThru
+
+=== Group 9 (6 objects) ===
+  Dimensions: bR=0.50 tR=0.26 h=1.00 tc=0.00 tf=0.03 bc=0.00 bf=0.00
+  Objects: GS5_BothBl, GS5_Thru, GS5_TprThru, S5_BothBl, S5_Thru, S5_TprThru
+
+=== Group 10 (6 objects) ===
+  Dimensions: bR=0.49 tR=0.25 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.03
+  Objects: GS6_BothBl, GS6_Thru, GS6_TprThru, S6_BothBl, S6_Thru, S6_TprThru
+
+=== Group 11 (6 objects) ===
+  Dimensions: bR=0.49 tR=0.26 h=1.00 tc=0.00 tf=0.03 bc=0.00 bf=0.03
+  Objects: GS7_BothBl, GS7_Thru, GS7_TprThru, S7_BothBl, S7_Thru, S7_TprThru
+
+=== Group 12 (6 objects) ===
+  Dimensions: bR=0.49 tR=0.26 h=1.00 tc=0.05 tf=0.00 bc=0.00 bf=0.03
+  Objects: GS8_BothBl, GS8_Thru, GS8_TprThru, S8_BothBl, S8_Thru, S8_TprThru
+
+=== Group 13 (4 objects) ===
+  Dimensions: bR=0.47 tR=0.25 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+  Objects: GS6_TprBoth, GS6_TprTBl, S6_TprBoth, S6_TprTBl
+
+=== Group 14 (2 objects) ===
+  Dimensions: bR=0.47 tR=0.49 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+  Objects: GS6_TBl, S6_TBl
+
+=== Group 15 (1 objects) ===
+  Dimensions: bR=0.50 tR=0.50 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+  Objects: S1_TprStep
+
+=== Group 16 (1 objects) ===
+  Dimensions: bR=0.50 tR=0.50 h=1.00 tc=50.00 tf=0.00 bc=0.00 bf=0.00
+  Objects: S2_TprStep
+
+=== Group 17 (1 objects) ===
+  Dimensions: bR=0.49 tR=0.49 h=1.00 tc=0.00 tf=0.00 bc=50.00 bf=0.00
+  Objects: S3_TprStep
+
+=== Group 18 (1 objects) ===
+  Dimensions: bR=0.49 tR=0.49 h=1.00 tc=50.00 tf=0.00 bc=50.00 bf=0.00
+  Objects: S4_TprStep
+
+=== Group 19 (1 objects) ===
+  Dimensions: bR=0.50 tR=0.50 h=1.00 tc=0.00 tf=25.00 bc=0.00 bf=0.00
+  Objects: S5_TprStep
+
+=== Group 20 (1 objects) ===
+  Dimensions: bR=0.49 tR=0.49 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=25.00
+  Objects: S6_TprStep
+
+=== Group 21 (1 objects) ===
+  Dimensions: bR=0.49 tR=0.49 h=1.00 tc=0.00 tf=25.00 bc=0.00 bf=25.00
+  Objects: S7_TprStep
+
+=== Group 22 (1 objects) ===
+  Dimensions: bR=0.49 tR=0.49 h=1.00 tc=50.00 tf=0.00 bc=0.00 bf=25.00
+  Objects: S8_TprStep
+
+=== Group 23 (1 objects) ===
+  Dimensions: bR=0.00 tR=0.00 h=0.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+  Objects: GS8_TprStep
+
+=== Group size verification ===
+Group sizes: [1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 4, 6, 6, 6, 6, 6, 6, 6, 12, 22, 28, 34, 39]
+All groups have 12 objects: False
+Expected 16 groups: False
+
+=== Per-object details ===
+GS1_BBl              cone_blind_hole_groove    bR=0.50 tR=0.25 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS1_BothBl           cone_blind_hole_groove    bR=0.50 tR=0.25 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS1_InvTprThru       hollow_cone_grooved       bR=0.50 tR=0.25 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS1_Plain            cone_groove               bR=0.50 tR=0.25 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS1_Stepped          cone_stepped_hole_groove  bR=500.00 tR=250.00 h=1000.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS1_TBl              cone_blind_hole_groove    bR=0.50 tR=0.25 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS1_Thru             hollow_cone_grooved       bR=0.50 tR=0.25 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS1_TprBBl           cone_blind_hole_groove    bR=0.50 tR=0.25 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS1_TprBothBl        cone_blind_hole_groove    bR=500.00 tR=250.00 h=1000.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS1_TprStep          cone_stepped_hole_groove  bR=500.00 tR=262.13 h=1000.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS1_TprTBl           cone_blind_hole_groove    bR=0.50 tR=0.25 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS1_TprThru          hollow_cone_grooved       bR=0.50 tR=0.25 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS2_BBl              cone_blind_hole_groove    bR=0.50 tR=0.26 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS2_BothBl           cone_blind_hole_groove    bR=0.50 tR=0.26 h=1.00 tc=0.05 tf=0.00 bc=0.00 bf=0.00
+GS2_InvTpr           hollow_cone_grooved       bR=0.50 tR=0.26 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS2_Plain            cone_groove               bR=0.50 tR=0.26 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS2_Stepped          cone_stepped_hole_groove  bR=500.00 tR=262.10 h=1000.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS2_TBl              cone_blind_hole_groove    bR=0.50 tR=0.26 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS2_Thru             hollow_cone_grooved       bR=0.50 tR=0.26 h=1.00 tc=0.05 tf=0.00 bc=0.00 bf=0.00
+GS2_TprBBl           cone_blind_hole_groove    bR=0.50 tR=0.26 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS2_TprBoth          cone_blind_hole_groove    bR=500.00 tR=262.10 h=1000.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS2_TprStep          cone_stepped_hole_groove  bR=487.87 tR=250.00 h=1000.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS2_TprTBl           cone_blind_hole_groove    bR=0.50 tR=0.26 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS2_TprThru          hollow_cone_grooved       bR=0.50 tR=0.26 h=1.00 tc=0.05 tf=0.00 bc=0.00 bf=0.00
+GS3_BBl              cone_blind_hole_groove    bR=0.49 tR=0.25 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS3_BothBl           cone_blind_hole_groove    bR=0.45 tR=0.25 h=1.00 tc=0.00 tf=0.00 bc=0.05 bf=0.00
+GS3_InvTpr           hollow_cone_grooved       bR=0.49 tR=0.25 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS3_Plain            cone_groove               bR=0.49 tR=0.25 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS3_Stepped          cone_stepped_hole_groove  bR=487.90 tR=250.00 h=1000.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS3_TBl              cone_blind_hole_groove    bR=0.49 tR=0.25 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS3_Thru             hollow_cone_grooved       bR=0.45 tR=0.25 h=1.00 tc=0.00 tf=0.00 bc=0.05 bf=0.00
+GS3_TprBBl           cone_blind_hole_groove    bR=0.49 tR=0.25 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS3_TprBoth          cone_blind_hole_groove    bR=487.90 tR=250.00 h=1000.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS3_TprStep          cone_stepped_hole_groove  bR=487.87 tR=262.13 h=1000.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS3_TprTBl           cone_blind_hole_groove    bR=0.49 tR=0.25 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS3_TprThru          hollow_cone_grooved       bR=0.45 tR=0.25 h=1.00 tc=0.00 tf=0.00 bc=0.05 bf=0.00
+GS4_BBl              cone_blind_hole_groove    bR=0.49 tR=0.26 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS4_BothBl           cone_blind_hole_groove    bR=0.45 tR=0.26 h=1.00 tc=0.05 tf=0.00 bc=0.05 bf=0.00
+GS4_InvTpr           hollow_cone_grooved       bR=0.49 tR=0.26 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS4_Plain            cone_groove               bR=0.49 tR=0.26 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS4_Stepped          cone_stepped_hole_groove  bR=487.90 tR=262.10 h=1000.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS4_TBl              cone_blind_hole_groove    bR=0.49 tR=0.26 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS4_Thru             hollow_cone_grooved       bR=0.45 tR=0.26 h=1.00 tc=0.05 tf=0.00 bc=0.05 bf=0.00
+GS4_TprBBl           cone_blind_hole_groove    bR=0.49 tR=0.26 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS4_TprBoth          cone_blind_hole_groove    bR=487.90 tR=262.10 h=1000.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS4_TprStep          cone_stepped_hole_groove  bR=500.00 tR=256.06 h=1000.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS4_TprTBl           cone_blind_hole_groove    bR=0.49 tR=0.26 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS4_TprThru          hollow_cone_grooved       bR=0.45 tR=0.26 h=1.00 tc=0.05 tf=0.00 bc=0.05 bf=0.00
+GS5_BBl              cone_blind_hole_groove    bR=0.50 tR=0.26 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS5_BothBl           cone_blind_hole_groove    bR=0.50 tR=0.26 h=1.00 tc=0.00 tf=0.03 bc=0.00 bf=0.00
+GS5_InvTpr           hollow_cone_grooved       bR=0.50 tR=0.26 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS5_Plain            cone_groove               bR=0.50 tR=0.26 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS5_Stepped          cone_stepped_hole_groove  bR=500.00 tR=256.10 h=1000.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS5_TBl              cone_blind_hole_groove    bR=0.50 tR=0.26 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS5_Thru             hollow_cone_grooved       bR=0.50 tR=0.26 h=1.00 tc=0.00 tf=0.03 bc=0.00 bf=0.00
+GS5_TprBBl           cone_blind_hole_groove    bR=0.50 tR=0.26 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS5_TprBoth          cone_blind_hole_groove    bR=500.00 tR=256.10 h=1000.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS5_TprStep          cone_stepped_hole_groove  bR=493.94 tR=250.00 h=1000.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS5_TprTBl           cone_blind_hole_groove    bR=0.50 tR=0.26 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS5_TprThru          hollow_cone_grooved       bR=0.50 tR=0.26 h=1.00 tc=0.00 tf=0.03 bc=0.00 bf=0.00
+GS6_BBl              cone_blind_hole_groove    bR=0.49 tR=0.25 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS6_BothBl           cone_blind_hole_groove    bR=0.49 tR=0.25 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.03
+GS6_InvTpr           hollow_cone_grooved       bR=0.49 tR=0.25 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS6_Plain            cone_groove               bR=0.49 tR=0.25 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS6_Stepped          cone_stepped_hole_groove  bR=493.90 tR=250.00 h=1000.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS6_TBl              cone_blind_hole_groove    bR=0.47 tR=0.49 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS6_Thru             hollow_cone_grooved       bR=0.49 tR=0.25 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.03
+GS6_TprBBl           cone_blind_hole_groove    bR=0.49 tR=0.25 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS6_TprBoth          cone_blind_hole_groove    bR=475.00 tR=250.00 h=1000.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS6_TprStep          cone_stepped_hole_groove  bR=493.94 tR=256.06 h=1000.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS6_TprTBl           cone_blind_hole_groove    bR=0.47 tR=0.25 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS6_TprThru          hollow_cone_grooved       bR=0.49 tR=0.25 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.03
+GS7_BBl              cone_blind_hole_groove    bR=0.49 tR=0.26 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS7_BothBl           cone_blind_hole_groove    bR=0.49 tR=0.26 h=1.00 tc=0.00 tf=0.03 bc=0.00 bf=0.03
+GS7_InvTpr           hollow_cone_grooved       bR=0.49 tR=0.26 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS7_Plain            cone_groove               bR=0.49 tR=0.26 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS7_Stepped          cone_stepped_hole_groove  bR=493.90 tR=256.10 h=1000.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS7_TBl              cone_blind_hole_groove    bR=0.47 tR=0.26 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS7_Thru             hollow_cone_grooved       bR=0.49 tR=0.26 h=1.00 tc=0.00 tf=0.03 bc=0.00 bf=0.03
+GS7_TprBBl           cone_blind_hole_groove    bR=0.49 tR=0.26 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS7_TprBoth          cone_blind_hole_groove    bR=475.00 tR=256.10 h=1000.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS7_TprStep          cone_stepped_hole_groove  bR=493.94 tR=262.13 h=1000.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS7_TprTBl           cone_blind_hole_groove    bR=0.47 tR=0.26 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS7_TprThru          hollow_cone_grooved       bR=0.49 tR=0.26 h=1.00 tc=0.00 tf=0.03 bc=0.00 bf=0.03
+GS8_BBl              cone_blind_hole_groove    bR=0.49 tR=0.26 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS8_BothBl           cone_blind_hole_groove    bR=0.49 tR=0.26 h=1.00 tc=0.05 tf=0.00 bc=0.00 bf=0.03
+GS8_InvTpr           hollow_cone_grooved       bR=0.49 tR=0.26 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS8_Plain            cone_groove               bR=0.49 tR=0.26 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS8_Stepped          cone_stepped_hole_groove  bR=493.90 tR=262.10 h=1000.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS8_TBl              cone_blind_hole_groove    bR=0.47 tR=0.26 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS8_Thru             hollow_cone_grooved       bR=0.49 tR=0.26 h=1.00 tc=0.05 tf=0.00 bc=0.00 bf=0.03
+GS8_TprBBl           cone_blind_hole_groove    bR=0.49 tR=0.26 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS8_TprBoth          cone_blind_hole_groove    bR=475.00 tR=262.10 h=1000.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS8_TprStep          cone_stepped_hole_groove  bR=0.00 tR=0.00 h=0.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS8_TprTBl           cone_blind_hole_groove    bR=0.47 tR=0.26 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+GS8_TprThru          hollow_cone_grooved       bR=0.49 tR=0.26 h=1.00 tc=0.05 tf=0.00 bc=0.00 bf=0.03
+S1_BBl               cone_blind_hole           bR=0.50 tR=0.25 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+S1_BothBl            cone_blind_hole           bR=0.50 tR=0.25 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+S1_InvTprThru        hollow_cone               bR=0.50 tR=0.25 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+S1_Plain             cone                      bR=0.50 tR=0.25 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+S1_Stepped           cone_stepped_hole         bR=500.00 tR=250.00 h=1000.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+S1_TBl               cone_blind_hole           bR=0.50 tR=0.25 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+S1_Thru              hollow_cone               bR=0.50 tR=0.25 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+S1_TprBBl            cone_blind_hole           bR=0.50 tR=0.25 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+S1_TprBothBl         cone_blind_hole           bR=500.00 tR=250.00 h=1000.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+S1_TprStep           cone_stepped_hole         bR=500.00 tR=500.00 h=1000.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+S1_TprTBl            cone_blind_hole           bR=0.50 tR=0.25 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+S1_TprThru           hollow_cone               bR=0.50 tR=0.25 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+S2_BBl               cone_blind_hole           bR=0.50 tR=0.26 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+S2_BothBl            cone_blind_hole           bR=0.50 tR=0.26 h=1.00 tc=0.05 tf=0.00 bc=0.00 bf=0.00
+S2_InvTpr            hollow_cone               bR=0.50 tR=0.26 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+S2_Plain             cone_chamfer              bR=0.50 tR=0.26 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+S2_Stepped           cone_stepped_hole         bR=500.00 tR=262.10 h=1000.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+S2_TBl               cone_blind_hole           bR=0.50 tR=0.26 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+S2_Thru              hollow_cone               bR=0.50 tR=0.26 h=1.00 tc=0.05 tf=0.00 bc=0.00 bf=0.00
+S2_TprBBl            cone_blind_hole           bR=0.50 tR=0.26 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+S2_TprBoth           cone_blind_hole           bR=500.00 tR=262.10 h=1000.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+S2_TprStep           cone_stepped_hole         bR=500.00 tR=500.00 h=1000.00 tc=50.00 tf=0.00 bc=0.00 bf=0.00
+S2_TprTBl            cone_blind_hole           bR=0.50 tR=0.26 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+S2_TprThru           hollow_cone               bR=0.50 tR=0.26 h=1.00 tc=0.05 tf=0.00 bc=0.00 bf=0.00
+S3_BBl               cone_blind_hole           bR=0.49 tR=0.25 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+S3_BothBl            cone_blind_hole           bR=0.45 tR=0.25 h=1.00 tc=0.00 tf=0.00 bc=0.05 bf=0.00
+S3_InvTpr            hollow_cone               bR=0.49 tR=0.25 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+S3_Plain             cone_chamfer              bR=0.49 tR=0.25 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+S3_Stepped           cone_stepped_hole         bR=487.90 tR=250.00 h=1000.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+S3_TBl               cone_blind_hole           bR=0.49 tR=0.25 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+S3_Thru              hollow_cone               bR=0.45 tR=0.25 h=1.00 tc=0.00 tf=0.00 bc=0.05 bf=0.00
+S3_TprBBl            cone_blind_hole           bR=0.49 tR=0.25 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+S3_TprBoth           cone_blind_hole           bR=487.90 tR=250.00 h=1000.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+S3_TprStep           cone_stepped_hole         bR=487.87 tR=487.87 h=1000.00 tc=0.00 tf=0.00 bc=50.00 bf=0.00
+S3_TprTBl            cone_blind_hole           bR=0.49 tR=0.25 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+S3_TprThru           hollow_cone               bR=0.45 tR=0.25 h=1.00 tc=0.00 tf=0.00 bc=0.05 bf=0.00
+S4_BBl               cone_blind_hole           bR=0.49 tR=0.26 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+S4_BothBl            cone_blind_hole           bR=0.45 tR=0.26 h=1.00 tc=0.05 tf=0.00 bc=0.05 bf=0.00
+S4_InvTpr            hollow_cone               bR=0.49 tR=0.26 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+S4_Plain             cone_chamfer              bR=0.49 tR=0.26 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+S4_Stepped           cone_stepped_hole         bR=487.90 tR=262.10 h=1000.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+S4_TBl               cone_blind_hole           bR=0.49 tR=0.26 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+S4_Thru              hollow_cone               bR=0.45 tR=0.26 h=1.00 tc=0.05 tf=0.00 bc=0.05 bf=0.00
+S4_TprBBl            cone_blind_hole           bR=0.49 tR=0.26 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+S4_TprBoth           cone_blind_hole           bR=487.90 tR=262.10 h=1000.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+S4_TprStep           cone_stepped_hole         bR=487.87 tR=487.87 h=1000.00 tc=50.00 tf=0.00 bc=50.00 bf=0.00
+S4_TprTBl            cone_blind_hole           bR=0.49 tR=0.26 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+S4_TprThru           hollow_cone               bR=0.45 tR=0.26 h=1.00 tc=0.05 tf=0.00 bc=0.05 bf=0.00
+S5_BBl               cone_blind_hole           bR=0.50 tR=0.26 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+S5_BothBl            cone_blind_hole           bR=0.50 tR=0.26 h=1.00 tc=0.00 tf=0.03 bc=0.00 bf=0.00
+S5_InvTpr            hollow_cone               bR=0.50 tR=0.26 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+S5_Plain             cone_fillet               bR=0.50 tR=0.26 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+S5_Stepped           cone_stepped_hole         bR=500.00 tR=256.10 h=1000.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+S5_TBl               cone_blind_hole           bR=0.50 tR=0.26 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+S5_Thru              hollow_cone               bR=0.50 tR=0.26 h=1.00 tc=0.00 tf=0.03 bc=0.00 bf=0.00
+S5_TprBBl            cone_blind_hole           bR=0.50 tR=0.26 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+S5_TprBoth           cone_blind_hole           bR=500.00 tR=256.10 h=1000.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+S5_TprStep           cone_stepped_hole         bR=500.00 tR=500.00 h=1000.00 tc=0.00 tf=25.00 bc=0.00 bf=0.00
+S5_TprTBl            cone_blind_hole           bR=0.50 tR=0.26 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+S5_TprThru           hollow_cone               bR=0.50 tR=0.26 h=1.00 tc=0.00 tf=0.03 bc=0.00 bf=0.00
+S6_BBl               cone_blind_hole           bR=0.49 tR=0.25 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+S6_BothBl            cone_blind_hole           bR=0.49 tR=0.25 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.03
+S6_InvTpr            hollow_cone               bR=0.49 tR=0.25 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+S6_Plain             cone_fillet               bR=0.49 tR=0.25 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+S6_Stepped           cone_stepped_hole         bR=493.90 tR=250.00 h=1000.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+S6_TBl               cone_blind_hole           bR=0.47 tR=0.49 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+S6_Thru              hollow_cone               bR=0.49 tR=0.25 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.03
+S6_TprBBl            cone_blind_hole           bR=0.49 tR=0.25 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+S6_TprBoth           cone_blind_hole           bR=475.00 tR=250.00 h=1000.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+S6_TprStep           cone_stepped_hole         bR=493.94 tR=493.94 h=1000.00 tc=0.00 tf=0.00 bc=0.00 bf=25.00
+S6_TprTBl            cone_blind_hole           bR=0.47 tR=0.25 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+S6_TprThru           hollow_cone               bR=0.49 tR=0.25 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.03
+S7_BBl               cone_blind_hole           bR=0.49 tR=0.26 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+S7_BothBl            cone_blind_hole           bR=0.49 tR=0.26 h=1.00 tc=0.00 tf=0.03 bc=0.00 bf=0.03
+S7_InvTpr            hollow_cone               bR=0.49 tR=0.26 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+S7_Plain             cone_fillet               bR=0.49 tR=0.26 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+S7_Stepped           cone_stepped_hole         bR=493.90 tR=256.10 h=1000.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+S7_TBl               cone_blind_hole           bR=0.47 tR=0.26 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+S7_Thru              hollow_cone               bR=0.49 tR=0.26 h=1.00 tc=0.00 tf=0.03 bc=0.00 bf=0.03
+S7_TprBBl            cone_blind_hole           bR=0.49 tR=0.26 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+S7_TprBoth           cone_blind_hole           bR=475.00 tR=256.10 h=1000.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+S7_TprStep           cone_stepped_hole         bR=493.94 tR=493.94 h=1000.00 tc=0.00 tf=25.00 bc=0.00 bf=25.00
+S7_TprTBl            cone_blind_hole           bR=0.47 tR=0.26 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+S7_TprThru           hollow_cone               bR=0.49 tR=0.26 h=1.00 tc=0.00 tf=0.03 bc=0.00 bf=0.03
+S8_BBl               cone_blind_hole           bR=0.49 tR=0.26 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+S8_BothBl            cone_blind_hole           bR=0.49 tR=0.26 h=1.00 tc=0.05 tf=0.00 bc=0.00 bf=0.03
+S8_InvTpr            hollow_cone               bR=0.49 tR=0.26 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+S8_Plain             cone_chamfer_fillet       bR=0.49 tR=0.26 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+S8_Stepped           cone_stepped_hole         bR=493.90 tR=262.10 h=1000.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+S8_TBl               cone_blind_hole           bR=0.47 tR=0.26 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+S8_Thru              hollow_cone               bR=0.49 tR=0.26 h=1.00 tc=0.05 tf=0.00 bc=0.00 bf=0.03
+S8_TprBBl            cone_blind_hole           bR=0.49 tR=0.26 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+S8_TprBoth           cone_blind_hole           bR=475.00 tR=262.10 h=1000.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+S8_TprStep           cone_stepped_hole         bR=493.94 tR=493.94 h=1000.00 tc=50.00 tf=0.00 bc=0.00 bf=25.00
+S8_TprTBl            cone_blind_hole           bR=0.47 tR=0.26 h=1.00 tc=0.00 tf=0.00 bc=0.00 bf=0.00
+S8_TprThru           hollow_cone               bR=0.49 tR=0.26 h=1.00 tc=0.05 tf=0.00 bc=0.00 bf=0.03

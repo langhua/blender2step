@@ -16,6 +16,6 @@ subprocess.run([sys.executable, "-m", "pip", "install", "pytest", "-q"], check=T
 # Run pytest in-process (subprocess would lose bpy/bmesh)
 import pytest
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
-sys.exit(pytest.main(["step_exporter/tests/test_core_utils.py", "-v"]))
+sys.exit(pytest.main(["step_exporter/tests/", "-v"]))
 
 

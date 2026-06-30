@@ -15,8 +15,6 @@ class _BlenderMock(MagicMock):
         self.__path__ = []  # makes Python treat it as a package
 
     def __getattr__(self, name):
-        if name.startswith('_'):
-            raise AttributeError(name)
         full = f"{self.__name__}.{name}"
         if full not in sys.modules:
             sys.modules[full] = _BlenderMock(full)

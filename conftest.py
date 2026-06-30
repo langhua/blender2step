@@ -6,6 +6,23 @@ import sys
 from unittest.mock import MagicMock
 
 
+class _BlenderMock(MagicMock):
+    """A MagicMock that auto-creates submodules so 'from bpy.types import X' works."""
+
+    def __init__(self, name, **kwargs):
+        super().__init__(**kwargs)
+        self.__name__ = name
+        self.__path__ = []  # makes Python treat it as a package
+
+    def __getattr__(self, name):
+        if name.startswith('_'):
+            raise AttributeError(name)
+        full = f"{self.__name__}.{name}"
+        if full not in sys.modules:
+            sys.modules[full] = _BlenderMock(full)
+        return sys.modules[full]
+
+
 def _mock_blender():
     """Mock all Blender modules so step_exporter can be imported without bpy."""
     mock_modules = [
@@ -24,12 +41,11 @@ def _mock_blender():
         "mathutils",
         "mathutils.geometry",
         "mathutils.interpolate",
+        # bpy_extras submodules (auto-resolved by _BlenderMock)
     ]
     for name in mock_modules:
         if name not in sys.modules:
-            mod = MagicMock()
-            mod.__name__ = name
-            sys.modules[name] = mod
+            sys.modules[name] = _BlenderMock(name)
 
 
 _mock_blender()

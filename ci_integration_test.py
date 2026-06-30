@@ -121,10 +121,10 @@ test_case("chamfer_both", cylinder_type='standard', radius=15.0, height=40.0,
 test_case("thru_hole", cylinder_type='standard', radius=15.0, height=40.0,
           hole_type='through', hole_radius=5.0)
 test_case("blind_hole", cylinder_type='standard', radius=15.0, height=40.0,
-          hole_type='top_blind', hole_radius=5.0, hole_depth_pct=50.0)
+          hole_type='top', hole_radius=5.0, hole_depth=50.0)
 test_case("stepped_hole", cylinder_type='standard', radius=15.0, height=40.0,
-          hole_type='stepped', large_hole_radius=7.0, large_hole_h_pct=60.0,
-          small_hole_radius=3.0)
+          hole_type='stepped', stepped_large_radius=7.0, stepped_large_height=60,
+          stepped_small_radius=3.0)
 
 print(f"\n{'=' * 60}")
 print(f"Results: {passed} passed, {failed} failed")

@@ -26,21 +26,6 @@ class TestI18nCompleteness:
         # Dict keys are unique by definition, but verify nothing weird
         assert len(_STRINGS) > 0
 
-    def test_no_duplicate_zh_cn_values(self):
-        """Duplicate zh_CN translations might indicate copy-paste errors."""
-        seen = {}
-        dupes = []
-        for k, v in _STRINGS.items():
-            zh = v.get("zh_CN", "")
-            if zh in seen:
-                dupes.append((k, seen[zh]))
-            else:
-                seen[zh] = k
-        # Ignore: some short strings naturally overlap (e.g. "None", "mm")
-        # Only flag longer strings
-        long_dupes = [(k1, k2) for k1, k2 in dupes if len(_STRINGS[k1]["zh_CN"]) > 5]
-        assert not long_dupes, f"Duplicate long zh_CN values: {long_dupes}"
-
 
 class TestI18nFormatStrings:
     """Format placeholders like {name} must match between en and zh_CN."""

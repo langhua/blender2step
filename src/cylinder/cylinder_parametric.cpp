@@ -1129,12 +1129,11 @@ TopoDS_Shape create_cone_stepped_hole_parametric(
         // 自动判断锥孔位置：内顶半�?> 内底半径 �?锥孔在顶部（圆锥）；否则在底部（圆柱�?
         // 当内外径相等时（等径直孔），通过外锥方向判断：小孔在粗端，大孔在细端
         bool taper_at_top;
-        if (std::abs(inner_top_radius - inner_bottom_radius) < 0.01) {
+        if (std::abs(inner_top_radius - inner_bottom_radius) < 0.001) {
             // 等径大孔，小孔在锥体粗端
-            // 等径大孔：small_hole_height < height/2 �?小孔在底�?�?taper_at_top
             taper_at_top = (small_hole_height < height * 0.5);
         } else {
-            taper_at_top = (inner_top_radius > inner_bottom_radius + 0.01);
+            taper_at_top = (inner_top_radius > inner_bottom_radius + 0.001);
         }
         double step_z, lower_h, upper_h;
         if (taper_at_top) {
@@ -1237,7 +1236,7 @@ TopoDS_Shape create_cone_stepped_hole_parametric(
         if (taper_at_top) {
             // Large tapered hole at top, small straight hole at bottom
             double upper_h = height - lower_h;  // large hole height
-            if (std::abs(inner_top_radius - inner_bottom_radius) < 0.01) {
+            if (std::abs(inner_top_radius - inner_bottom_radius) < 0.001) {
                 // Straight large hole (cylinder)
                 gp_Ax2 upper_axis(gp_Pnt(0, 0, step_z), gp::DZ());
                 BRepPrimAPI_MakeCylinder uc(upper_axis, inner_bottom_radius, upper_h + extend);
@@ -1258,7 +1257,7 @@ TopoDS_Shape create_cone_stepped_hole_parametric(
         } else {
             // Large hole at bottom (cone or cylinder), small hole at top
             double large_h = step_z + half_h;
-            if (std::abs(inner_top_radius - inner_bottom_radius) < 0.01) {
+            if (std::abs(inner_top_radius - inner_bottom_radius) < 0.001) {
                 // Straight large hole (cylinder)
                 gp_Ax2 lower_axis(gp_Pnt(0, 0, -half_h - extend), gp::DZ());
                 BRepPrimAPI_MakeCylinder lc(lower_axis, inner_bottom_radius, large_h + extend);

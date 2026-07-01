@@ -16,6 +16,12 @@ def _on_hole_param_change(self, context=None):
     if self.hole_opening_radius < self.hole_end_radius:
         self.hole_opening_radius, self.hole_end_radius = self.hole_end_radius, self.hole_opening_radius
 
+def _swap_radii_callback(self):
+    """Swap top and bottom radius, then reset the toggle."""
+    self.top_radius, self.bottom_radius = self.bottom_radius, self.top_radius
+    self['swap_radii'] = False
+
+
 class STEP_EXPORTER_OT_create_parametric_cylinder(Operator):
     """创建参数化圆柱体（标准/锥形，带倒角/开孔）"""
     bl_idname = "step_exporter.create_parametric_cylinder"
@@ -42,6 +48,11 @@ class STEP_EXPORTER_OT_create_parametric_cylinder(Operator):
     )
     bottom_radius: FloatProperty(
         name=_t("Bottom R"), default=20.0, min=0.1, max=500.0,
+    )
+    swap_radii: BoolProperty(
+        name="Swap", default=False,
+        description="Swap top and bottom radius",
+        update=lambda self, ctx: _swap_radii_callback(self),
     )
     # 通用
     height: FloatProperty(
@@ -190,7 +201,9 @@ class STEP_EXPORTER_OT_create_parametric_cylinder(Operator):
         if self.cylinder_type == 'standard':
             box.prop(self, 'radius')
         else:
-            box.prop(self, 'top_radius')
+            row = box.row(align=True)
+            row.prop(self, 'top_radius')
+            row.prop(self, 'swap_radii', text='', icon='UV_SYNC_SELECT', toggle=False)
             box.prop(self, 'bottom_radius')
         box.prop(self, 'height')
         box.prop(self, 'segments')
@@ -546,7 +559,7 @@ def _create_holes(obj, props, S):
         large_h = props.stepped_large_height / 100.0 * H
         small_r = props.stepped_small_radius * S
         step_z = hh / 2 - large_h
-        ext_ov = H * 0.15  # 15% of height — robust overlap
+        ext_ov = H * 0.05  # 5% of height — enough overlap, clean step
         # 创建两个切割体
         cutter_large = make_hole_cutter(
             "HoleCutter_StepLarge_Tmp",
@@ -579,7 +592,7 @@ def _create_holes(obj, props, S):
         large_h = props.stepped_large_height / 100.0 * H
         small_r = props.stepped_small_radius * S
         step_z = hh / 2 - large_h
-        ext_ov = H * 0.15  # 15% of height — robust overlap + fully penetrate cone wall
+        ext_ov = H * 0.05  # 5% of height — enough overlap, clean step
         # Compute extrapolated radii so design radii match exactly at step_z and hh/2
         grad = (taper_top_r - taper_step_r) / large_h  # radius change per unit z
         r_cutter_bot = taper_step_r - ext_ov * grad   # narrower at extended bottom
@@ -632,8 +645,6 @@ def _create_holes(obj, props, S):
     bpy.ops.mesh.delete_loose()
     bpy.ops.mesh.select_all(action='SELECT')
     bpy.ops.mesh.dissolve_degenerate(threshold=0.0001)  # 溶解零面积面
-    bpy.ops.mesh.select_all(action='SELECT')
-    bpy.ops.mesh.dissolve_limited(angle_limit=0.01, delimit={'NORMAL'})  # 溶解共面薄面
     bpy.ops.mesh.select_all(action='SELECT')
     bpy.ops.mesh.normals_make_consistent(inside=False)
     bpy.ops.object.mode_set(mode='OBJECT')
@@ -777,7 +788,6 @@ def _create_groove(obj, props, S):
     bpy.ops.mesh.select_all(action='SELECT')
     bpy.ops.mesh.remove_doubles(threshold=0.0001)
     bpy.ops.mesh.delete_loose()
-    bpy.ops.mesh.normals_make_consistent(inside=False)
     bpy.ops.object.mode_set(mode='OBJECT')
 
     # Store groove parameters (mm) for analysis & parametric export

@@ -498,8 +498,8 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
         if abs(btm_r_for_cone - top_r_for_cone) / max(btm_r_for_cone, 0.001) > 0.08:
             log_to_file(f"[STEP Exporter] Grooved cone detected (bR={btm_r_for_cone:.3f} tR={top_r_for_cone:.3f}), not cylindrical")
             cylindrical_body = False
-        else:
-            cylindrical_body = True
+            _is_cone_body = True
+        # else: leave cylindrical_body as-is from previous detection
         # Also run top-down body detection to find correct body boundaries
         # (bottom-up may stop early due to fillet/chamfer at the bottom end)
         body_start_z = sorted_z[-1]
@@ -528,7 +528,7 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
             else:
                 break
         top_body_portion = (sorted_z[-1] - body_start_z) / height if height > 0 else 0
-        if top_body_portion > 0.6:
+        if top_body_portion > 0.6 and not _is_cone_body:
             cylindrical_body = True
             body_radius = top_radius
             # swap direction: body is at top, transition at bottom
@@ -713,7 +713,7 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
         else:
             log_to_file(f"[STEP Exporter]   Blind hole check: inner_r={inner_r:.6f} btm_d={bottom_hole_d:.6f} top_d={top_hole_d:.6f} — not detected")
     
-    if not cylindrical_body and bottom_radius > 0.01:
+    if not cylindrical_body and not _is_cone_body and bottom_radius > 0.01:
         above_zls = [zl for zl in sorted_z if zl > body_end_z and zl in z_radius_data]
         if above_zls:
             above_r_first = z_radius_data[above_zls[0]]
@@ -858,7 +858,8 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
         
         # === 稀疏层级的倒角/圆角快速检测（3层模式） ===
         valid_zls = [zl for zl in sorted_z if zl in z_radius_data]
-        if len(valid_zls) == 3:
+        # Skip for confirmed cones — chamfer detection misinterprets taper as chamfer
+        if not _is_cone_body and len(valid_zls) == 3:
             r0 = z_radius_data[valid_zls[0]]
             r1 = z_radius_data[valid_zls[1]]
             r2 = z_radius_data[valid_zls[2]]
@@ -1080,9 +1081,10 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                                 bottom_dr = abs(z_radius_data[bottom_transition_zls[-1]] - z_radius_data[bottom_transition_zls[0]])
                                 bottom_feature_size = max(bottom_zs, bottom_dr)
                                 body_radius = z_radius_data[bottom_transition_zls[0]]
-                                bottom_radius = body_radius
-                                top_radius = body_radius
-                                cylindrical_body = True
+                                if not _is_cone_body:
+                                    bottom_radius = body_radius
+                                    top_radius = body_radius
+                                    cylindrical_body = True
             
             # 顶部检测：检查最高2层是否半径相同（倒角特征）
             if len(valid_zls_mod) >= 4:
@@ -1102,7 +1104,8 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                         top_feature = 'chamfer'
                         top_feature_size = body_radius - top_radii[-1] if body_radius > top_radii[-1] else 0
                         top_transition_zls = top_zls_mod
-                        cylindrical_body = True
+                        if not _is_cone_body:
+                            cylindrical_body = True
     
     # 2. 分析过渡区类型
     def _classify_transition(transition_zls):
@@ -1196,7 +1199,7 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
             # 底部过渡：升序，第一个是极端，最后一个是本体边界
             top_body_r = z_radius_data.get(top_transition_zls[0], None)
             bot_body_r = z_radius_data.get(bottom_transition_zls[-1], None)
-            if top_body_r is not None and bot_body_r is not None and top_body_r > 0.001:
+            if top_body_r is not None and bot_body_r is not None and top_body_r > 0.001 and not _is_cone_body:
                 if abs(top_body_r - bot_body_r) / top_body_r < 0.05:
                     body_radius = (top_body_r + bot_body_r) / 2.0
                     bottom_radius = body_radius

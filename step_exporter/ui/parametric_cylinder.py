@@ -51,7 +51,7 @@ class STEP_EXPORTER_OT_create_parametric_cylinder(Operator):
     )
     swap_radii: BoolProperty(
         name="Swap", default=False,
-        description="Swap top and bottom radius",
+        description=_t("Swap top and bottom radius"),
         update=lambda self, ctx: _swap_radii_callback(self),
     )
     # 通用

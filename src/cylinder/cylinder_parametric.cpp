@@ -1014,7 +1014,7 @@ TopoDS_Shape create_hollow_cone_fillet_with_groove_parametric(
     double hb = groove_bottom_width / 2.0;
     double ht = groove_top_width / 2.0;
     double half_ext = groove_extrusion_length / 2.0;
-    double span = hb - ht;  // Python's cutter span for 45°
+    double span = hb - ht;
     double r_inner = mid_outer_radius - groove_depth;
     double R_surface = r_inner + span;
 
@@ -2248,7 +2248,7 @@ static bool apply_trapezoidal_groove(TopoDS_Solid& solid, double radius,
     double hb = groove_bottom_width / 2.0;  // Z half-extent at surface (wider)
     double ht = groove_top_width / 2.0;     // Z half-extent at groove floor (narrower)
     double half_ext = groove_extrusion_length / 2.0;
-    double span = hb - ht;                  // (bottom - top) / 2 = Python's cutter span for 45°
+    double span = hb - ht;
     double r_floor = radius - groove_depth;
     double r_surface = r_floor + span;
 
@@ -2367,6 +2367,9 @@ TopoDS_Shape create_cone_with_groove_parametric(
         if (bot_sz > 0.001) actual_bot_r += bot_sz;
     }
 
+    // Use compensated radii for groove positioning (matching cone_blind_hole_groove)
+    mid_r = (actual_bot_r + actual_top_r) / 2.0;
+
     // Create cone body with edge features
     TopoDS_Shape outer = create_cone_solid_parametric(actual_bot_r, actual_top_r, height);
     if (outer.IsNull()) return TopoDS_Shape();
@@ -2407,7 +2410,7 @@ TopoDS_Shape create_cone_with_groove_parametric(
     double hb = groove_bottom_width / 2.0;
     double ht = groove_top_width / 2.0;
     double half_ext = groove_extrusion_length / 2.0;
-    double span = hb - ht;  // Python's cutter span for 45°
+    double span = hb - ht;
     double r_floor = mid_r - groove_depth;
     double r_surface = r_floor + span;
 
@@ -2483,7 +2486,7 @@ TopoDS_Shape create_cone_with_blind_hole_and_groove_parametric(
     double hb = groove_bottom_width / 2.0;
     double ht = groove_top_width / 2.0;
     double half_ext = groove_extrusion_length / 2.0;
-    double span = hb - ht;  // Python's cutter span for 45°
+    double span = hb - ht;
     double r_floor = mid_r - groove_depth;
     double r_surface = r_floor + span;
 
@@ -2557,7 +2560,7 @@ TopoDS_Shape create_cone_stepped_hole_with_groove_parametric(
     double hb = groove_bottom_width / 2.0;
     double ht = groove_top_width / 2.0;
     double half_ext = groove_extrusion_length / 2.0;
-    double span = hb - ht;  // Python's cutter span for 45°
+    double span = hb - ht;
     double r_floor = mid_r - groove_depth;
     double r_surface = r_floor + span;
 

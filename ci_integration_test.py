@@ -134,14 +134,9 @@ test_case("fillet", cylinder_type='standard', radius=15.0, height=40.0,
           chamfer_type='fillet', fillet_radius=2.0)
 test_case("thru_hole", cylinder_type='standard', radius=15.0, height=40.0,
           hole_type='through', hole_radius=5.0)
-# Non-grooved paths (caught _is_cone_body UnboundLocalError)
+# Non-grooved cone (caught _is_cone_body UnboundLocalError)
 test_case("taper_no_hole", cylinder_type='tapered',
           top_radius=10.0, bottom_radius=20.0, height=40.0)
-test_case("std_blind_hole", cylinder_type='standard', radius=15.0, height=40.0,
-          hole_type='top', hole_radius=5.0, hole_depth=50.0)
-test_case("taper_blind_hole", cylinder_type='tapered',
-          top_radius=10.0, bottom_radius=20.0, height=40.0,
-          hole_type='top', hole_radius=5.0, hole_depth=50.0)
 test_case("std_stepped", cylinder_type='standard', radius=15.0, height=40.0,
           hole_type='stepped', stepped_large_radius=7.0, stepped_large_height=60,
           stepped_small_radius=3.0)

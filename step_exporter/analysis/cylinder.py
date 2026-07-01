@@ -490,6 +490,7 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
     
     body_portion = (body_end_z - sorted_z[0]) / height if height > 0 else 0
     cylindrical_body = body_portion > 0.6
+    _is_cone_body = False
     # Grooved cylinders have non-circular mid-region but are still cylindrical
     # UNLESS top and bottom radii differ significantly → cone
     if has_groove_custom:

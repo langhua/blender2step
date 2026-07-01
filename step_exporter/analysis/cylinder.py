@@ -259,6 +259,7 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
             'groove_bottom_width': obj.get('step_groove_bottom_width', 0),
             'groove_top_width': obj.get('step_groove_top_width', 0),
             'groove_extrusion_length': obj.get('step_groove_extrusion_length', 0),
+            'groove_angle': obj.get('step_groove_angle', 45.0),
         }
     
     # 阶梯孔检测
@@ -564,9 +565,9 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
         if stored_pos == 'both':
             hole_depth_top = hole_depth
         log_to_file(f"[STEP Exporter]   Blind hole from stored property: pos={stored_pos} r={hole_radius:.4f} d={hole_depth:.4f}")
-    elif stored_pos in ('stepped', 'tapered_stepped'):
+    elif stored_pos in ('stepped', 'tapered_stepped') or stored_hole_type in ('stepped', 'tapered_stepped'):
         hole_pattern_detected = True
-        hole_position = stored_pos  # 'stepped' or 'tapered_stepped'
+        hole_position = stored_hole_type if stored_hole_type in ('stepped', 'tapered_stepped') else stored_pos  # prefer hole_type for accuracy
         log_to_file(f"[STEP Exporter]   Stepped/tapered-stepped hole from stored property: type={stored_pos}")
     
     # 强制圆柱体判断：两端半径接近且顶部干净时，即使中间z层缺少外壁顶点
@@ -1847,6 +1848,7 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                     'groove_bottom_width': groove_params.get('groove_bottom_width', 0) if groove_params else 0,
                     'groove_top_width': groove_params.get('groove_top_width', 0) if groove_params else 0,
                     'groove_extrusion_length': groove_params.get('groove_extrusion_length', 0) if groove_params else 0,
+                'groove_angle': groove_params.get('groove_angle', 45.0) if groove_params else 45.0,
                 }
                 # 当外边缘有 chamfer/fillet 时，缩小锥孔口径以留出孔圆角空间
                 # C++ 已做半径补偿（outer_r += chamfer_sz 后再倒角），
@@ -1920,6 +1922,7 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                     'groove_bottom_width': groove_params.get('groove_bottom_width', 0) if groove_params else 0,
                     'groove_top_width': groove_params.get('groove_top_width', 0) if groove_params else 0,
                     'groove_extrusion_length': groove_params.get('groove_extrusion_length', 0) if groove_params else 0,
+                'groove_angle': groove_params.get('groove_angle', 45.0) if groove_params else 45.0,
                 }
             else:
                 result = {
@@ -1942,6 +1945,7 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                     'groove_bottom_width': groove_params.get('groove_bottom_width', 0) if groove_params else 0,
                     'groove_top_width': groove_params.get('groove_top_width', 0) if groove_params else 0,
                     'groove_extrusion_length': groove_params.get('groove_extrusion_length', 0) if groove_params else 0,
+                'groove_angle': groove_params.get('groove_angle', 45.0) if groove_params else 45.0,
                 }
             log_to_file(f"[STEP Exporter]   -> {result['obj_type']}! r={result['radius']} h={result['height']}")
             return result
@@ -2115,6 +2119,7 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                 'groove_bottom_width': groove_params.get('groove_bottom_width', 0) if groove_params else 0,
                 'groove_top_width': groove_params.get('groove_top_width', 0) if groove_params else 0,
                 'groove_extrusion_length': groove_params.get('groove_extrusion_length', 0) if groove_params else 0,
+                'groove_angle': groove_params.get('groove_angle', 45.0) if groove_params else 45.0,
             }
             if hole_position == 'both':
                 result['hole_depth_top'] = hole_depth_top * S
@@ -2141,6 +2146,7 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
             'groove_bottom_width': groove_params.get('groove_bottom_width', 0) if groove_params else 0,
             'groove_top_width': groove_params.get('groove_top_width', 0) if groove_params else 0,
             'groove_extrusion_length': groove_params.get('groove_extrusion_length', 0) if groove_params else 0,
+                'groove_angle': groove_params.get('groove_angle', 45.0) if groove_params else 45.0,
         }
         if hole_position == 'both':
             result['hole_depth_top'] = hole_depth_top * S
@@ -2311,6 +2317,7 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                         'groove_bottom_width': groove_params.get('groove_bottom_width', 0) if groove_params else 0,
                         'groove_top_width': groove_params.get('groove_top_width', 0) if groove_params else 0,
                         'groove_extrusion_length': groove_params.get('groove_extrusion_length', 0) if groove_params else 0,
+                'groove_angle': groove_params.get('groove_angle', 45.0) if groove_params else 45.0,
                     }
                 return {
                     'obj_type': 'cylinder_stepped_hole',
@@ -2330,6 +2337,7 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                     'groove_bottom_width': groove_params.get('groove_bottom_width', 0) if groove_params else 0,
                     'groove_top_width': groove_params.get('groove_top_width', 0) if groove_params else 0,
                     'groove_extrusion_length': groove_params.get('groove_extrusion_length', 0) if groove_params else 0,
+                'groove_angle': groove_params.get('groove_angle', 45.0) if groove_params else 45.0,
                     'pos_x': pos_x, 'pos_y': pos_y, 'pos_z': pos_z,
                 }
 
@@ -2405,6 +2413,7 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                     'groove_bottom_width': groove_params.get('groove_bottom_width', 0) if groove_params else 0,
                     'groove_top_width': groove_params.get('groove_top_width', 0) if groove_params else 0,
                     'groove_extrusion_length': groove_params.get('groove_extrusion_length', 0) if groove_params else 0,
+                'groove_angle': groove_params.get('groove_angle', 45.0) if groove_params else 45.0,
                 }
             return {
                 'obj_type': 'cylinder_stepped_hole',
@@ -2424,6 +2433,7 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                 'groove_bottom_width': groove_params.get('groove_bottom_width', 0) if groove_params else 0,
                 'groove_top_width': groove_params.get('groove_top_width', 0) if groove_params else 0,
                 'groove_extrusion_length': groove_params.get('groove_extrusion_length', 0) if groove_params else 0,
+                'groove_angle': groove_params.get('groove_angle', 45.0) if groove_params else 45.0,
             }
         # 实心圆柱外壁槽检测
         if has_groove_custom:

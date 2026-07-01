@@ -28,7 +28,7 @@
 #include <chrono>
 #include <ctime>
 
-// Debug file logger — writes to build/fillet_debug.log
+// Debug file logger �?writes to build/fillet_debug.log
 static void log_fillet_debug(const std::string& msg) {
     try {
         std::ofstream f("F:/git/blender2step/build/fillet_debug.log", std::ios::app);
@@ -91,8 +91,8 @@ static bool apply_trapezoidal_groove(TopoDS_Solid& solid, double radius,
 
 TopoDS_Shape create_cylinder_solid_parametric(double radius, double height)
 {
-    // 创建以原点为中心、Z轴为轴向的圆柱体（高度方向为 Z）
-    // BRepPrimAPI_MakeCylinder 从 (0,0,0) 向上延伸 height
+    // 创建以原点为中心、Z轴为轴向的圆柱体（高度方向为 Z�?
+    // BRepPrimAPI_MakeCylinder �?(0,0,0) 向上延伸 height
     // 我们需要圆柱体中心在原点，所以基点在 (0, 0, -height/2)
     gp_Ax2 ax2(gp_Pnt(0, 0, -height / 2.0), gp::DZ());
     BRepPrimAPI_MakeCylinder maker(ax2, radius, height);
@@ -102,7 +102,7 @@ TopoDS_Shape create_cylinder_solid_parametric(double radius, double height)
         return TopoDS_Shape();
     }
 
-    // 转换为实体
+    // 转换为实�?
     TopoDS_Solid solid;
     if (shape.ShapeType() == TopAbs_SOLID) {
         solid = TopoDS::Solid(shape);
@@ -127,13 +127,13 @@ TopoDS_Shape create_cylinder_solid_parametric(double radius, double height)
 
 TopoDS_Shape create_cone_solid_parametric(double bottom_radius, double top_radius, double height)
 {
-    // 当上下半径相同时，使用圆柱体而非圆锥体（OCC 不允许等半径锥体）
+    // 当上下半径相同时，使用圆柱体而非圆锥体（OCC 不允许等半径锥体�?
     if (std::abs(bottom_radius - top_radius) < 0.0001) {
         return create_cylinder_solid_parametric(bottom_radius, height);
     }
 
     // 圆锥体以原点为中心，Z轴为轴向
-    // BRepPrimAPI_MakeCone 从 (0,0,0) 向上延伸 height
+    // BRepPrimAPI_MakeCone �?(0,0,0) 向上延伸 height
     // 注意：MakeCone 要求 bottom_radius >= top_radius
     gp_Ax2 ax2(gp_Pnt(0, 0, -height / 2.0), gp::DZ());
     if (bottom_radius < top_radius) {
@@ -376,7 +376,7 @@ static void find_circular_edges(const TopoDS_Shape& solid,
     }
 }
 
-// ====================== 参数化锥形通孔圆柱体 ======================
+// ====================== 参数化锥形通孔圆柱�?======================
 
 TopoDS_Shape create_hollow_cylinder_tapered_solid_parametric(
     double outer_radius, double inner_radius_top, double inner_radius_bottom,
@@ -512,7 +512,7 @@ TopoDS_Shape create_cylinder_chamfer_solid_parametric(double radius, double heig
     return chamferMaker.Shape();
 }
 
-// ====================== 带顶部圆角的圆柱体 ======================
+// ====================== 带顶部圆角的圆柱�?======================
 
 TopoDS_Shape create_cylinder_fillet_solid_parametric(double radius, double height, double fillet_radius)
 {
@@ -552,7 +552,7 @@ TopoDS_Shape create_cylinder_fillet_solid_parametric(double radius, double heigh
     return filletMaker.Shape();
 }
 
-// ====================== 带顶部倒角和底部圆角的圆柱体 ======================
+// ====================== 带顶部倒角和底部圆角的圆柱�?======================
 
 TopoDS_Shape create_cylinder_chamfer_fillet_solid_parametric(
     double radius, double height,
@@ -790,7 +790,7 @@ TopoDS_Shape create_cone_chamfer_fillet_solid_parametric(
     return solid;
 }
 
-// ====================== 带顶部和底部倒角的锥体 ======================
+// ====================== 带顶部和底部倒角的锥�?======================
 
 TopoDS_Shape create_cone_chamfer_solid_parametric_both(
     double bottom_radius, double top_radius, double height,
@@ -833,7 +833,7 @@ TopoDS_Shape create_cone_chamfer_solid_parametric_both(
     return solid;
 }
 
-// ====================== 带顶部和底部圆角的锥体 ======================
+// ====================== 带顶部和底部圆角的锥�?======================
 
 TopoDS_Shape create_cone_fillet_solid_parametric_both(
     double bottom_radius, double top_radius, double height,
@@ -923,7 +923,7 @@ TopoDS_Shape create_hollow_cone_fillet_solid_parametric(
     return solid;
 }
 
-// ====================== 带顶部圆角的空心圆柱体 ======================
+// ====================== 带顶部圆角的空心圆柱�?======================
 
 TopoDS_Shape create_hollow_cylinder_fillet_solid_parametric(
     double outer_radius, double inner_radius, double height, double fillet_radius)
@@ -1011,11 +1011,12 @@ TopoDS_Shape create_hollow_cone_fillet_with_groove_parametric(
         if (bot_sz > 0.001) comp_bot_r += bot_sz;
     }
     double mid_outer_radius = (comp_bot_r + comp_top_r) / 2.0;
-    double R_surface = std::max(comp_bot_r, comp_top_r) + 1.0;
+    double hb = groove_bottom_width / 2.0;
+    double ht = groove_top_width / 2.0;
+    double half_ext = groove_extrusion_length / 2.0;
+    double span = hb - ht;  // Python's cutter span for 45°
     double r_inner = mid_outer_radius - groove_depth;
-    double hb = groove_bottom_width / 2.0;        // Z half-extent at surface (wider)
-    double ht = groove_top_width / 2.0;           // Z half-extent at groove bottom (narrower)
-    double half_ext = groove_extrusion_length / 2.0; // Y half-extent
+    double R_surface = r_inner + span;
 
     // Base face at Y = -half_ext, cross-section in XZ plane
     // Trapezoid vertices (counter-clockwise when viewed from Y+):
@@ -1110,7 +1111,7 @@ TopoDS_Shape create_hollow_cone_fillet_with_groove_parametric(
     return solid;
 }
 
-// ====================== 锥形外壁 + 台阶内孔（顶部直孔 + 下部锥孔） ======================
+// ====================== 锥形外壁 + 台阶内孔（顶部直�?+ 下部锥孔�?======================
 
 TopoDS_Shape create_cone_stepped_hole_parametric(
     double outer_bottom_radius, double outer_top_radius,
@@ -1125,27 +1126,27 @@ TopoDS_Shape create_cone_stepped_hole_parametric(
 {
     try {
         double half_h = height / 2.0;
-        // 自动判断锥孔位置：内顶半径 > 内底半径 → 锥孔在顶部（圆锥）；否则在底部（圆柱）
+        // 自动判断锥孔位置：内顶半�?> 内底半径 �?锥孔在顶部（圆锥）；否则在底部（圆柱�?
         // 当内外径相等时（等径直孔），通过外锥方向判断：小孔在粗端，大孔在细端
         bool taper_at_top;
         if (std::abs(inner_top_radius - inner_bottom_radius) < 0.01) {
             // 等径大孔，小孔在锥体粗端
-            // 等径大孔：small_hole_height < height/2 → 小孔在底部 → taper_at_top
+            // 等径大孔：small_hole_height < height/2 �?小孔在底�?�?taper_at_top
             taper_at_top = (small_hole_height < height * 0.5);
         } else {
             taper_at_top = (inner_top_radius > inner_bottom_radius + 0.01);
         }
         double step_z, lower_h, upper_h;
         if (taper_at_top) {
-            // 直孔在底部，锥孔在顶部
-            lower_h = small_hole_height;       // 底部直孔段高度
-            step_z = -half_h + lower_h;         // 直孔 → 锥孔 的分界 z
-            upper_h = height - lower_h;         // 顶部锥孔段高度
+            // 直孔在底部，锥孔在顶�?
+            lower_h = small_hole_height;       // 底部直孔段高�?
+            step_z = -half_h + lower_h;         // 直孔 �?锥孔 的分�?z
+            upper_h = height - lower_h;         // 顶部锥孔段高�?
         } else {
-            // 锥孔在底部，直孔在顶部（原始逻辑）
+            // 锥孔在底部，直孔在顶部（原始逻辑�?
             step_z = half_h - small_hole_height;
-            lower_h = step_z + half_h;          // 底部锥孔段高度
-            upper_h = half_h - step_z;          // 顶部直孔段高度
+            lower_h = step_z + half_h;          // 底部锥孔段高�?
+            upper_h = half_h - step_z;          // 顶部直孔段高�?
         }
 
         std::cout << "[STEP Exporter] cone_stepped_hole v2-FUSED: h=" << height
@@ -1356,7 +1357,7 @@ TopoDS_Shape create_cone_stepped_hole_parametric(
         return TopoDS_Shape();
     }
 }
-// ====================== 单端盲孔圆柱体 ======================
+// ====================== 单端盲孔圆柱�?======================
 
 TopoDS_Shape create_cylinder_with_blind_hole_solid_parametric(
     double radius, double height, double hole_radius, double hole_depth,
@@ -1515,8 +1516,8 @@ TopoDS_Shape create_cylinder_with_blind_hole_solid_parametric(
     // OCCT always stores the smaller radius at axis origin for cones.
     // Strategy: build expanding cone (R1=hole_radius_bottom, R2=hole_radius) at z=0,
     //   going UP to z=+depth. For bottom holes, mirror across XY plane to go DOWN.
-    // Top hole:    cone from z=0 UP to z=+depth → r=hole_radius_bottom at z=0, r=hole_radius at z=depth
-    // Bottom hole: cone mirrored: from z=0 DOWN to z=-depth → r=hole_radius at z=-depth, r=hole_radius_bottom at z=0
+    // Top hole:    cone from z=0 UP to z=+depth �?r=hole_radius_bottom at z=0, r=hole_radius at z=depth
+    // Bottom hole: cone mirrored: from z=0 DOWN to z=-depth �?r=hole_radius at z=-depth, r=hole_radius_bottom at z=0
 
     cutterR1 = hole_radius_bottom; // smaller (hole end)
     cutterR2 = hole_radius;        // larger (opening)
@@ -1687,7 +1688,7 @@ TopoDS_Shape create_cylinder_with_dual_blind_holes_solid_parametric(
             gp_Trsf t; t.SetTranslation(gp_Vec(0, 0, z));
             return BRepBuilderAPI_Transform(c, t).Shape();
         }
-        // Tapered: cone cutter — expanding cone, then translated to hole position
+        // Tapered: cone cutter �?expanding cone, then translated to hole position
         // Cone at z=0, R1=hole_radius_bottom (end), R2=hole_radius (opening), H=depth, +DZ
         // Top hole:    translate UP by (halfH - depth) so opening is at +halfH
         // Bottom hole: mirror, then translate DOWN by -(halfH - depth) so opening is at -halfH
@@ -1981,7 +1982,7 @@ TopoDS_Shape create_cone_with_blind_hole_solid_parametric(
     return solid;
 }
 
-// ====================== 圆柱阶梯孔 ======================
+// ====================== 圆柱阶梯�?======================
 TopoDS_Shape create_cylinder_stepped_hole_parametric(
     double radius, double height,
     double large_hole_r, double large_hole_h,
@@ -2056,7 +2057,7 @@ TopoDS_Shape create_cylinder_stepped_hole_parametric(
     solid = shape_to_solid(cut.Shape());
     if (solid.IsNull()) return TopoDS_Shape();
 
-    // Apply hole fillets at all openings and step edge — add all at once
+    // Apply hole fillets at all openings and step edge �?add all at once
     if (hole_fillet_r > 0.001) {
         std::vector<TopoDS_Edge> edges_to_fillet;
         std::vector<double> fillet_radii;
@@ -2073,7 +2074,7 @@ TopoDS_Shape create_cylinder_stepped_hole_parametric(
             // Top opening (large hole)
             if (std::abs(er - large_hole_r) / std::max(large_hole_r, 0.001) < 0.15 && std::abs(ez - halfH) < 0.01)
                 { edges_to_fillet.push_back(e); fillet_radii.push_back(hole_fillet_r); }
-            // Step edges — limit radius to step_w*0.45 to avoid overlap
+            // Step edges �?limit radius to step_w*0.45 to avoid overlap
             if (std::abs(ez - step_z) < 0.01) {
                 double step_fr = std::min(hole_fillet_r, step_w * 0.45);
                 if (step_fr > 0.001) {
@@ -2104,7 +2105,7 @@ TopoDS_Shape create_cylinder_stepped_hole_parametric(
     return solid;
 }
 
-// ====================== 圆柱锥形台阶孔 ======================
+// ====================== 圆柱锥形台阶�?======================
 TopoDS_Shape create_cylinder_tapered_stepped_hole_parametric(
     double radius, double height,
     double large_hole_h,
@@ -2158,7 +2159,7 @@ TopoDS_Shape create_cylinder_tapered_stepped_hole_parametric(
     double extend = 1.0;
 
     // Tapered cone cutter (wider at top): axis starts at step_z, exactly like
-    // the straight version's cylinder — ensures clean edge geometry at the step.
+    // the straight version's cylinder �?ensures clean edge geometry at the step.
     double grad = (taper_top_r - taper_step_r) / large_hole_h;
     double cone_top_ext_r = taper_top_r + extend * grad;  // extrapolated top radius
 
@@ -2184,7 +2185,7 @@ TopoDS_Shape create_cylinder_tapered_stepped_hole_parametric(
     solid = shape_to_solid(cut.Shape());
     if (solid.IsNull()) return TopoDS_Shape();
 
-    // Apply hole fillets — same pattern as create_cylinder_stepped_hole_parametric.
+    // Apply hole fillets �?same pattern as create_cylinder_stepped_hole_parametric.
     // Step edges use limited radius to avoid overlap.
     if (hole_fillet_r > 0.001) {
         std::vector<TopoDS_Edge> edges_to_fillet;
@@ -2202,7 +2203,7 @@ TopoDS_Shape create_cylinder_tapered_stepped_hole_parametric(
             // Top opening (tapered, wider)
             if (std::abs(er - taper_top_r) / std::max(taper_top_r, 0.001) < 0.15 && std::abs(ez - halfH) < 0.01)
                 { edges_to_fillet.push_back(e); fillet_radii.push_back(hole_fillet_r); }
-            // Step edges — limit radius to step_w*0.45 to avoid overlap
+            // Step edges �?limit radius to step_w*0.45 to avoid overlap
             if (std::abs(ez - step_z) < 0.01) {
                 double step_fr = std::min(hole_fillet_r, step_w * 0.45);
                 if (step_fr > 0.001) {
@@ -2233,7 +2234,7 @@ TopoDS_Shape create_cylinder_tapered_stepped_hole_parametric(
     return solid;
 }
 
-// ====================== 圆柱外壁梯形槽 ======================
+// ====================== 圆柱外壁梯形�?======================
 // ====================== Trapezoidal Groove Helper ======================
 
 static bool apply_trapezoidal_groove(TopoDS_Solid& solid, double radius,
@@ -2242,11 +2243,15 @@ static bool apply_trapezoidal_groove(TopoDS_Solid& solid, double radius,
 {
     if (groove_depth <= 0.001) return true; // no groove, nothing to do
 
-    double r_surface = radius + 1.5;  // slight overcut beyond cylinder surface
-    double r_floor = radius - groove_depth;
+    // Reconstruct the span Python used when computing groove_bottom_width.
+    // For 45° grooves: tan(45°)=1, so (bottom-top)/2 = span_python.
+    // This preserves the exact angle Python intended, accounting for cone_depth_mult etc.
     double hb = groove_bottom_width / 2.0;  // Z half-extent at surface (wider)
     double ht = groove_top_width / 2.0;     // Z half-extent at groove floor (narrower)
     double half_ext = groove_extrusion_length / 2.0;
+    double span = hb - ht;                  // (bottom - top) / 2 = Python's cutter span for 45°
+    double r_floor = radius - groove_depth;
+    double r_surface = r_floor + span;
 
     // Build trapezoid face at Y = -half_ext, cross-section in XZ plane
     BRepBuilderAPI_MakePolygon wireMaker;
@@ -2400,11 +2405,12 @@ TopoDS_Shape create_cone_with_groove_parametric(
 
     // Create trapezoidal groove cutter at mid-height
     // Use compensated max radius + margin to ensure cutter extends outside cone at all Z levels
-    double r_surface = std::max(actual_bot_r, actual_top_r) + 1.0;
-    double r_floor = mid_r - groove_depth;
     double hb = groove_bottom_width / 2.0;
     double ht = groove_top_width / 2.0;
     double half_ext = groove_extrusion_length / 2.0;
+    double span = hb - ht;  // Python's cutter span for 45°
+    double r_floor = mid_r - groove_depth;
+    double r_surface = r_floor + span;
 
     BRepBuilderAPI_MakePolygon wireMaker;
     wireMaker.Add(gp_Pnt(r_surface, -half_ext,  hb));
@@ -2475,11 +2481,12 @@ TopoDS_Shape create_cone_with_blind_hole_and_groove_parametric(
         if (bot_sz > 0.001) comp_bot_r += bot_sz;
     }
     double mid_r = (comp_bot_r + comp_top_r) / 2.0;
-    double r_surface = std::max(comp_bot_r, comp_top_r) + 1.0;
-    double r_floor = mid_r - groove_depth;
     double hb = groove_bottom_width / 2.0;
     double ht = groove_top_width / 2.0;
     double half_ext = groove_extrusion_length / 2.0;
+    double span = hb - ht;  // Python's cutter span for 45°
+    double r_floor = mid_r - groove_depth;
+    double r_surface = r_floor + span;
 
     BRepBuilderAPI_MakePolygon wireMaker;
     wireMaker.Add(gp_Pnt(r_surface, -half_ext,  hb));
@@ -2548,11 +2555,12 @@ TopoDS_Shape create_cone_stepped_hole_with_groove_parametric(
         if (bot_sz > 0.001) comp_bot_r += bot_sz;
     }
     double mid_r = (comp_bot_r + comp_top_r) / 2.0;
-    double r_surface = std::max(comp_bot_r, comp_top_r) + 1.0;
-    double r_floor = mid_r - groove_depth;
     double hb = groove_bottom_width / 2.0;
     double ht = groove_top_width / 2.0;
     double half_ext = groove_extrusion_length / 2.0;
+    double span = hb - ht;  // Python's cutter span for 45°
+    double r_floor = mid_r - groove_depth;
+    double r_surface = r_floor + span;
 
     BRepBuilderAPI_MakePolygon wireMaker;
     wireMaker.Add(gp_Pnt(r_surface, -half_ext,  hb));

@@ -11,7 +11,6 @@ class STEP_EXPORTER_PT_cylinder_panel(Panel):
     bl_region_type = 'UI'
     bl_category = _t("STEP Export")
     bl_parent_id = "STEP_EXPORTER_PT_main_panel"
-    bl_options = {'DEFAULT_CLOSED'}
     
     def draw(self, context):
         layout = self.layout

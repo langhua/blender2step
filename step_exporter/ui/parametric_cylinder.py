@@ -378,13 +378,13 @@ def _generate_parametric_cylinder(props):
         obj['fillet_radius_edge'] = props.fillet_radius
         obj['cylinder_original_radius'] = props.radius
     
-    # === 3. 创建孔 ===
-    if props.hole_type != 'none':
-        _create_holes(obj, props, S)
-
-    # === 4. 创建外壁梯形槽 ===
+    # === 3. 创建外壁梯形槽（必须在孔之前，避免凹槽与孔几何交叉产生残留） ===
     if props.groove_enabled:
         _create_groove(obj, props, S)
+
+    # === 4. 创建孔 ===
+    if props.hole_type != 'none':
+        _create_holes(obj, props, S)
     
     # 存储圆倒角参数到自定义属性，供导出时读取
     if props.hole_fillet_radius > 0:
@@ -503,6 +503,11 @@ def _create_holes(obj, props, S):
     
     hh = H
     ext = max(hr_end, hole_d * 0.5) if props.hole_type != 'through' else max(hr_end, H * 0.5)
+    # Blind holes: also extend cutter past hole bottom to avoid boolean residuals
+    if props.hole_type in ('top', 'bottom', 'both'):
+        ext_bottom = max(hr_end * 2.0, H * 0.05)
+    else:
+        ext_bottom = 0.0
     
     log_to_file(f"[STEP Exporter] _create_holes: H={H:.4f} hole_d={hole_d:.4f} opening_r={hr_opening:.4f} end_r={hr_end:.4f} ext={ext:.4f} type={props.hole_type}")
     
@@ -515,24 +520,24 @@ def _create_holes(obj, props, S):
         # 顶部孔：开口在顶面(z=hh/2)，孔底在(z=hh/2-hole_d)
         cutters.append(make_hole_cutter(
             "HoleCutter_Top",
-            hh / 2 - hole_d, hh / 2 + ext, hr_end, hr_opening
+            hh / 2 - hole_d - ext_bottom, hh / 2 + ext, hr_end, hr_opening
         ))
     elif props.hole_type == 'bottom':
         # 底部孔：开口在底面(z=-hh/2)，孔底在(z=-hh/2+hole_d)
         cutters.append(make_hole_cutter(
             "HoleCutter_Bottom",
-            -hh / 2 - ext, -hh / 2 + hole_d, hr_opening, hr_end
+            -hh / 2 - ext, -hh / 2 + hole_d + ext_bottom, hr_opening, hr_end
         ))
     elif props.hole_type == 'both':
         # 顶部孔：开口在顶面
         cutters.append(make_hole_cutter(
             "HoleCutter_Top",
-            hh / 2 - hole_d, hh / 2 + ext, hr_end, hr_opening
+            hh / 2 - hole_d - ext_bottom, hh / 2 + ext, hr_end, hr_opening
         ))
         # 底部孔：开口在底面
         cutters.append(make_hole_cutter(
             "HoleCutter_Bottom",
-            -hh / 2 - ext, -hh / 2 + hole_d, hr_opening, hr_end
+            -hh / 2 - ext, -hh / 2 + hole_d + ext_bottom, hr_opening, hr_end
         ))
 
     elif props.hole_type == 'stepped':
@@ -541,17 +546,31 @@ def _create_holes(obj, props, S):
         large_h = props.stepped_large_height / 100.0 * H
         small_r = props.stepped_small_radius * S
         step_z = hh / 2 - large_h
-        ext_ov = H * 0.15  # 15% of height — robust overlap for clean boolean
-        # 大孔切割体（从顶部延伸到台阶下方）
-        cutters.append(make_hole_cutter(
-            "HoleCutter_StepLarge",
+        ext_ov = H * 0.15  # 15% of height — robust overlap
+        # 创建两个切割体
+        cutter_large = make_hole_cutter(
+            "HoleCutter_StepLarge_Tmp",
             step_z - ext_ov, hh / 2 + ext_ov, large_r, large_r
-        ))
-        # 小孔切割体（从台阶上方延伸到底部下方）
-        cutters.append(make_hole_cutter(
-            "HoleCutter_StepSmall",
+        )
+        cutter_small = make_hole_cutter(
+            "HoleCutter_StepSmall_Tmp",
             -hh / 2 - ext_ov, step_z + ext_ov, small_r, small_r
-        ))
+        )
+        # 先合并两个切割体（Boolean UNION），消除内部重叠面
+        cutter_large.hide_set(False)
+        cutter_small.hide_set(False)
+        bpy.ops.object.select_all(action='DESELECT')
+        cutter_large.select_set(True)
+        bpy.context.view_layer.objects.active = cutter_large
+        mod_union = cutter_large.modifiers.new(name="Bool_Union_Step", type='BOOLEAN')
+        mod_union.object = cutter_small
+        mod_union.operation = 'UNION'
+        bpy.ops.object.modifier_apply(modifier="Bool_Union_Step")
+        cutter_large.name = "HoleCutter_StepCombined"
+        cutter_large.hide_set(True)
+        cutter_large.hide_render = True
+        bpy.data.objects.remove(cutter_small, do_unlink=True)
+        cutters.append(cutter_large)
 
     elif props.hole_type == 'tapered_stepped':
         # 锥形台阶孔：锥形孔从顶部到台阶（大口在上），小直孔从台阶到底部
@@ -606,11 +625,15 @@ def _create_holes(obj, props, S):
             log_to_file(f"[STEP Exporter] _boolean_difference: WARNING {mod_name} apply failed: {e}")
     log_to_file(f"[STEP Exporter] _boolean_difference: all {len(cutters)} modifiers applied, target verts={len(obj.data.vertices)}")
     
-    # 清理布尔运算产生的退化几何（合并重复顶点、删除零面积面）
+    # 清理布尔运算产生的退化几何
     bpy.ops.object.mode_set(mode='EDIT')
     bpy.ops.mesh.select_all(action='SELECT')
     bpy.ops.mesh.remove_doubles(threshold=0.0001)
     bpy.ops.mesh.delete_loose()
+    bpy.ops.mesh.select_all(action='SELECT')
+    bpy.ops.mesh.dissolve_degenerate(threshold=0.0001)  # 溶解零面积面
+    bpy.ops.mesh.select_all(action='SELECT')
+    bpy.ops.mesh.dissolve_limited(angle_limit=0.01, delimit={'NORMAL'})  # 溶解共面薄面
     bpy.ops.mesh.select_all(action='SELECT')
     bpy.ops.mesh.normals_make_consistent(inside=False)
     bpy.ops.object.mode_set(mode='OBJECT')
@@ -651,15 +674,18 @@ def _create_holes(obj, props, S):
         small_r = props.stepped_small_radius * S
         taper_top_r = props.tapered_step_top_radius * S
         taper_step_r = props.tapered_step_bottom_radius * S
-        obj['hole_type'] = 'stepped'  # 导出时使用直台阶孔参数化路径（锥度在STEP中近似为直孔）
-        obj['hole_position'] = 'stepped'
+        obj['hole_type'] = 'tapered_stepped'  # 必须区分，检测代码据此判断锥形台阶孔
+        obj['hole_position'] = 'tapered_stepped'
         obj['hole_depth'] = large_h
-        obj['hole_is_stepped'] = True   # 触发 cylinder_tapered_stepped_hole 参数化导出
+        obj['hole_is_stepped'] = True
         obj['hole_is_tapered'] = True
-        obj['hole_opening_radius'] = props.tapered_step_top_radius  # mm (供参考)
-        obj['hole_end_radius'] = props.tapered_step_bottom_radius  # mm (供参考)
-        obj['hole_stepped_large_r'] = props.stepped_large_radius  # mm — 用大孔默认值保证参数化导出安全
+        obj['hole_taper_top_r'] = props.tapered_step_top_radius    # mm — top opening
+        obj['hole_taper_step_r'] = props.tapered_step_bottom_radius  # mm — at step
+        obj['hole_stepped_small_r'] = props.stepped_small_radius   # mm
+        obj['hole_opening_radius'] = props.tapered_step_top_radius  # mm — used by detection
+        obj['hole_end_radius'] = props.tapered_step_bottom_radius   # mm — used by detection
         obj['hole_stepped_large_h'] = props.stepped_large_height / 100.0 * props.height  # mm
+        log_to_file(f"[STEP Exporter] _create_holes: stored tapered_stepped large_r={props.stepped_large_radius:.1f}mm large_h={props.stepped_large_height/100.0*props.height:.1f}mm small_r={props.stepped_small_radius:.1f}mm")
         obj['hole_stepped_small_r'] = props.stepped_small_radius  # mm
         obj['hole_taper_top_r'] = props.tapered_step_top_radius  # mm
         obj['hole_taper_step_r'] = props.tapered_step_bottom_radius  # mm
@@ -758,7 +784,8 @@ def _create_groove(obj, props, S):
     obj['step_groove_depth'] = groove_depth_mm
     obj['step_groove_bottom_width'] = groove_bot_w_mm
     obj['step_groove_top_width'] = props.groove_top_width
-    obj['step_groove_extrusion_length'] = 2.0 * (R_mid / S) + 4.0  # through-slot, convert back to mm
+    obj['step_groove_extrusion_length'] = 2.0 * (R_mid / S) + 4.0
+    obj['step_groove_angle'] = math.degrees(angle_rad)  # degrees, for C++ export
 
 
 def _boolean_difference(target, cutter):

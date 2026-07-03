@@ -2299,7 +2299,7 @@ PyObject* export_top_shell_filleted_step(PyObject* self, PyObject* args) {
                 parsed_count = sscanf_s(entry.c_str(), "%lf,%lf,%lf,%lf,%lf,%lf", &cx, &cy, &cz, &wlen, &hole_type, &fillet_radius);
                 if ((parsed_count == 5 || parsed_count == 6) && wlen > 0 && hole_type == 1.0) {
                     // Circular hole on side wall (Y direction): cylinder at (cx, cy, cz)
-                    double cyl_height = wall_thickness + 10.0;
+                    double cyl_height = wall_thickness + 100.0;  // extra overshoot for boundary safety
                     // Create cylinder centered on the hole position
                     gp_Ax2 cylAxes(gp_Pnt(cx, cy - cyl_height / 2.0, cz), gp_Dir(0, 1, 0));
                     BRepPrimAPI_MakeCylinder cylMaker(cylAxes, wlen, cyl_height);
@@ -2365,7 +2365,7 @@ PyObject* export_top_shell_filleted_step(PyObject* self, PyObject* args) {
                         if (rcr > rw * 0.49) rcr = rw * 0.49;
                         if (rcr > rh * 0.49) rcr = rh * 0.49;
 
-                        double cut_depth = wall_thickness + 20.0;
+                        double cut_depth = wall_thickness + 100.0;  // extra overshoot for boundary safety
 
                         // Build box at target position, then fillet Y-direction corner edges
                         double boxX = cx - rw / 2.0;

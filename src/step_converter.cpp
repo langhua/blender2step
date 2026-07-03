@@ -25,6 +25,10 @@ bool export_shape_to_step(const TopoDS_Shape& shape, const char* filename) {
 
         // 添加虚拟顶点以强制单位上下文提前写入
         // 解决Bambu Studio等软件在单位定义位于文件末尾时无法识别的问题
+        // 注意：该虚拟顶点会产生 GEOMETRICALLY_BOUNDED_WIREFRAME_SHAPE_REPRESENTATION，
+        // 导致 FreeCAD 等软件无法打开合并后的 STEP 文件。
+        // 单位上下文已通过 Interface_Static::SetCVal("write.step.unit", "MM") 正确设置。
+        /*
         try {
             gp_Pnt dummyPoint(0, 0, 0);
             BRepBuilderAPI_MakeVertex dummyVertex(dummyPoint);
@@ -38,6 +42,7 @@ bool export_shape_to_step(const TopoDS_Shape& shape, const char* filename) {
         } catch (const std::exception& e) {
             std::cerr << "WARNING: Dummy vertex creation failed (std): " << e.what() << ", continuing..." << std::endl;
         }
+        */
 
         // [Comment]
         IFSelect_ReturnStatus status = writer.Transfer(shape, STEPControl_AsIs);

@@ -906,20 +906,20 @@ def _parametric_export_staged():
                     except:
                         pass
             elif successful_count == 1:
+                # Single file: still run through merge to strip wireframe chain
                 try:
                     temp_file = successful_temp_files[0]
                     temp_size = os.path.getsize(temp_file) if os.path.exists(temp_file) else -1
                     log_to_file(f"[STEP Exporter] Merging single file: {temp_file} ({temp_size} bytes) -> {data['filepath']}")
-                    os.replace(temp_file, data['filepath'])
+                    _merge_step_files(data['filepath'], [temp_file])
                     log_to_file(f"[STEP Exporter] Single file merge OK")
                 except Exception as merge_err:
-                    log_to_file(f"[STEP Exporter] os.replace failed: {merge_err}, trying shutil.copy2")
-                    import shutil
+                    log_to_file(f"[STEP Exporter] _merge_step_files failed: {merge_err}, trying os.replace")
                     try:
+                        os.replace(temp_file, data['filepath'])
+                    except:
+                        import shutil
                         shutil.copy2(temp_file, data['filepath'])
-                        log_to_file(f"[STEP Exporter] shutil.copy2 fallback OK")
-                    except Exception as copy_err:
-                        log_to_file(f"[STEP Exporter] shutil.copy2 also failed: {copy_err}")
                 finally:
                     try:
                         _merge_log_files(os.path.dirname(data['filepath']), data['filepath'])

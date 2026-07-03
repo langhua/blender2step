@@ -860,7 +860,7 @@ def create_top_shell_scene():
     print("=" * 60)
 
     print("[1/5] Clearing scene...")
-    clear_scene()
+    # clear_scene()  # disabled: allow mixing
 
     width = 100.0
     depth = 70.0
@@ -967,7 +967,7 @@ def create_top_shell_scene():
     # window_data 格式: cx,cy,cz,radius,1[,fillet_radius] (type=1 表示圆孔)
     # 所有数值以毫米 (mm) 存储，匹配 C++ 导出函数期望
     hole_relative_cx = (hole_cx - shell_loc.x) * S  # 26.0mm
-    hole_relative_cy = (depth / 2.0) * S  # 后壁
+    hole_relative_cy = ((depth - wall_thickness) / 2.0) * S  # 壁中间，不是外壁
     hole_relative_cz = (hole_cz - shell_loc.z) * S  # -2.0mm
     hole_data = f"{hole_relative_cx:.3f},{hole_relative_cy:.3f},{hole_relative_cz:.3f},{hole_radius_outer * S:.3f},1,{hole_fillet_radius * S:.3f}"
     shell_with_holes["hole_fillet_radius"] = hole_fillet_radius * S  # 单独属性，方便在Blender中修改 (mm)
@@ -1030,7 +1030,7 @@ def create_top_shell_scene():
     # 格式: cx,cy,cz,width,height,2,corner_radius[,fillet_radius] (type=2 表示圆角矩形孔)
     # 所有数值以毫米 (mm) 存储，匹配 C++ 导出函数期望
     rect_hole_relative_cx = (rect_hole_cx - shell_loc.x) * S  # -24.0mm
-    rect_hole_relative_cy = (depth / 2.0) * S  # 后壁
+    rect_hole_relative_cy = ((depth - wall_thickness) / 2.0) * S  # 壁中间，不是外壁
     rect_hole_relative_cz = (rect_hole_cz - shell_loc.z) * S  # -2.0mm
     rect_hole_fillet_radius = 0.3  # 圆角矩形孔圆倒角半径 (m)
     rect_hole_data = f"{rect_hole_relative_cx:.3f},{rect_hole_relative_cy:.3f},{rect_hole_relative_cz:.3f},{rect_hole_w * S:.3f},{rect_hole_h * S:.3f},2,{rect_hole_cr * S:.3f},{rect_hole_fillet_radius * S:.3f}"
@@ -1089,7 +1089,7 @@ def create_top_shell_simple():
     print("=" * 60)
 
     print("[1/3] Clearing scene...")
-    clear_scene()
+    # clear_scene()  # disabled: allow mixing
 
     width = 100.0
     depth = 70.0

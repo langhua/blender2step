@@ -1,8 +1,8 @@
-"""Cone gallery — Inverted (widening up): 8 shelves × 12 columns = 96 combos.
+"""Cone gallery �?Inverted (widening up): 8 shelves × 12 columns = 96 combos.
 
 === 单位约定 (Unit Convention) ===
-Blender 原生: 米 (m)
-自定义属性 (Custom Properties): 毫米 (mm) — 存储时 ×1000
+Blender 原生: �?(m)
+自定义属�?(Custom Properties): 毫米 (mm) �?存储�?×1000
 """
 import bpy, math
 
@@ -24,6 +24,21 @@ def clear():
     bpy.ops.object.select_all(action='SELECT')
     bpy.ops.object.delete(use_global=False)
 
+def setup_collection(name):
+    coll = bpy.data.collections.get(name)
+    if not coll:
+        coll = bpy.data.collections.new(name)
+        bpy.context.scene.collection.children.link(coll)
+    for lc in bpy.context.view_layer.layer_collection.children:
+        if lc.name == name:
+            bpy.context.view_layer.active_layer_collection = lc
+            break
+
+def _ensure_in_view_layer(obj):
+    """Ensure object is selectable by linking to scene collection if needed."""
+    if obj.name not in bpy.context.view_layer.objects:
+        bpy.context.scene.collection.objects.link(obj)
+
 def _add_edge_bevel_mod(obj, chamfer_type, fillet_r):
     """Add a Bevel modifier (weight-limited) �?applied AFTER Boolean.
     Uses edge bevel weights, which persist correctly through Boolean operations."""
@@ -39,6 +54,7 @@ def _add_edge_bevel_mod(obj, chamfer_type, fillet_r):
         return
 
     hh = H / 2.0
+    _ensure_in_view_layer(obj)
     bpy.context.view_layer.objects.active = obj
     bpy.ops.object.mode_set(mode='EDIT')
     bpy.ops.mesh.select_mode(type='EDGE')
@@ -48,7 +64,7 @@ def _add_edge_bevel_mod(obj, chamfer_type, fillet_r):
 
     if ctype == 'chamfer_fillet':
         # Post-processing approach (like cylinder gallery):
-        # skip modifiers here — handled by _bevel_mixed_edges() after all modifiers applied.
+        # skip modifiers here �?handled by _bevel_mixed_edges() after all modifiers applied.
         bpy.ops.object.mode_set(mode='OBJECT')
         obj['chamfer_type'] = ctype
         obj['chamfer_size'] = CH_SZ * 1000
@@ -107,7 +123,7 @@ def add_cone(y, z, name, br, tr, chamfer_type=None, fillet_r=0,
     bpy.ops.object.mode_set(mode='OBJECT')
 
     # Store radii for post-processing (_bevel_mixed_edges)
-    # Store radii for post-processing (_bevel_mixed_edges) — mm convention, ×1000
+    # Store radii for post-processing (_bevel_mixed_edges) �?mm convention, ×1000
     obj['cone_bottom_r'] = br * 1000
     obj['cone_top_r'] = tr * 1000
 
@@ -286,13 +302,14 @@ def _bevel_mixed_edges():
         if obj.get('chamfer_type') != 'chamfer_fillet':
             continue
 
-        # Get stored radii (set in add_cone) — stored in mm, convert to m
+        # Get stored radii (set in add_cone) �?stored in mm, convert to m
         br = obj.get('cone_bottom_r', 500) / 1000
         tr = obj.get('cone_top_r', 250) / 1000
+        _ensure_in_view_layer(obj)
         bpy.context.view_layer.objects.active = obj
         hh = H / 2.0
 
-        # Top: chamfer (segments=1, width=CH_SZ) — only outer cone edges
+        # Top: chamfer (segments=1, width=CH_SZ) �?only outer cone edges
         bpy.ops.object.mode_set(mode='EDIT')
         bpy.ops.mesh.select_mode(type='EDGE')
         bpy.ops.mesh.select_all(action='DESELECT')
@@ -308,7 +325,7 @@ def _bevel_mixed_edges():
         bpy.ops.mesh.bevel(offset=CH_SZ, offset_type='OFFSET',
                            segments=1, profile=0.5, affect='EDGES')
 
-        # Bottom: fillet (segments=8, width=FR_R) — only outer cone edges
+        # Bottom: fillet (segments=8, width=FR_R) �?only outer cone edges
         bpy.ops.mesh.select_all(action='DESELECT')
         bm = bmesh.from_edit_mesh(obj.data)
         bm.edges.ensure_lookup_table()
@@ -333,6 +350,7 @@ def apply_all_modifiers():
             continue
         bpy.ops.object.select_all(action='DESELECT')
         obj.select_set(True)
+        _ensure_in_view_layer(obj)
         bpy.context.view_layer.objects.active = obj
         for mod in list(obj.modifiers):
             if mod.type == 'BEVEL':
@@ -352,6 +370,7 @@ def apply_all_modifiers():
     for obj in list(bpy.data.objects):
         if not (obj.name.startswith('S') or obj.name.startswith('GS')) or obj.name.startswith('CUT_') or obj.name.startswith('GCUT_') or obj.name.startswith('L'):
             continue
+        _ensure_in_view_layer(obj)
         bpy.context.view_layer.objects.active = obj
         bpy.ops.object.mode_set(mode='EDIT')
         bpy.ops.mesh.select_all(action='SELECT')
@@ -432,6 +451,7 @@ def _bevel_hole_openings():
         if not openings:
             continue
 
+        _ensure_in_view_layer(obj)
         bpy.context.view_layer.objects.active = obj
         bpy.ops.object.mode_set(mode='EDIT')
         bpy.ops.mesh.select_mode(type='EDGE')
@@ -479,6 +499,7 @@ def _apply_modifiers_to(obj):
         return
     bpy.ops.object.select_all(action='DESELECT')
     obj.select_set(True)
+    _ensure_in_view_layer(obj)
     bpy.context.view_layer.objects.active = obj
     for mod in list(obj.modifiers):
         if mod.type == 'BEVEL':
@@ -498,6 +519,7 @@ def _apply_modifiers_to(obj):
         import bmesh as _bm
         _br = obj.get('cone_bottom_r', 500) / 1000
         _tr = obj.get('cone_top_r', 250) / 1000
+        _ensure_in_view_layer(obj)
         bpy.context.view_layer.objects.active = obj
         _hh = H / 2.0
         bpy.ops.object.mode_set(mode='EDIT')
@@ -578,6 +600,7 @@ def _apply_modifiers_to(obj):
                 openings.append((-H / 2, r_surf))
                 openings.append((-H / 2 + hole_depth, r_hole_end))
         if openings:
+            _ensure_in_view_layer(obj)
             bpy.context.view_layer.objects.active = obj
             bpy.ops.object.mode_set(mode='EDIT')
             bpy.ops.mesh.select_mode(type='EDGE')
@@ -621,7 +644,7 @@ def _post_process_one(obj):
     return
 
 
-# Groove parameters — trapezoidal through-slot
+# Groove parameters �?trapezoidal through-slot
 # Groove utilities shared with cylinder gallery and cone gallery
 from groove_utils import add_trapezoidal_groove, apply_groove, GRV_DEPTH, GRV_TOP_W
 
@@ -636,7 +659,7 @@ def _add_groove_to_cone(obj):
 
 
 # ===== BUILD =====
-clear()
+setup_collection("Cone Gallery ▽")
 Z_BASE = H / 2
 STEP_Y = max(BOT_R, TOP_R) * 2 + GAP_Y
 
@@ -658,7 +681,7 @@ def _make_row(name_sfx, hole, hd, he, label):
     return (name_sfx, hole, hd, he, label)
 
 SHELVES = [
-    # S1: No Edge — 12 hole variants
+    # S1: No Edge �?12 hole variants
     (_t("S1 Inv No Edge"), None, 0, [
         _make_row("Plain", None, 0, None, _t("Plain")),
         _make_row("TBl", "top", HOLE_D, None, _t("+T.Blind")),
@@ -673,7 +696,7 @@ SHELVES = [
         _make_row("Stepped", "stepped", STEP_LARGE_H, None, _t("+Stepped")),
         _make_row("TprStep", "tapered_stepped", STEP_LARGE_H, None, _t("+TprStep")),
     ]),
-    # S2: Top Chamfer — 12 hole variants
+    # S2: Top Chamfer �?12 hole variants
     (_t("S2 Inv T.Chamfer"), "chamfer", 0, [
         _make_row("Plain", None, 0, None, _t("+T.Chamfer")),
         _make_row("TBl", "top", HOLE_D, None, _t("+T.Ch+TBl")),
@@ -688,7 +711,7 @@ SHELVES = [
         _make_row("Stepped", "stepped", STEP_LARGE_H, None, _t("+T.Ch+Stepped")),
         _make_row("TprStep", "tapered_stepped", STEP_LARGE_H, None, _t("+T.Ch+TprStep")),
     ]),
-    # S3: Bottom Chamfer — 12 hole variants
+    # S3: Bottom Chamfer �?12 hole variants
     (_t("S3 Inv B.Chamfer"), "bottom_chamfer", 0, [
         _make_row("Plain", None, 0, None, _t("+B.Chamfer")),
         _make_row("TBl", "top", HOLE_D, None, _t("+B.Ch+TBl")),
@@ -703,7 +726,7 @@ SHELVES = [
         _make_row("Stepped", "stepped", STEP_LARGE_H, None, _t("+B.Ch+Stepped")),
         _make_row("TprStep", "tapered_stepped", STEP_LARGE_H, None, _t("+B.Ch+TprStep")),
     ]),
-    # S4: Both Chamfer — 12 hole variants
+    # S4: Both Chamfer �?12 hole variants
     (_t("S4 Inv Both Chamfer"), "chamfer_both", 0, [
         _make_row("Plain", None, 0, None, _t("+Both Cham")),
         _make_row("TBl", "top", HOLE_D, None, _t("+BothCh+TBl")),
@@ -718,7 +741,7 @@ SHELVES = [
         _make_row("Stepped", "stepped", STEP_LARGE_H, None, _t("+BothCh+Stepped")),
         _make_row("TprStep", "tapered_stepped", STEP_LARGE_H, None, _t("+BothCh+TprStep")),
     ]),
-    # S5: Top Fillet — 12 hole variants
+    # S5: Top Fillet �?12 hole variants
     (_t("S5 Inv T.Fillet"), "fillet", FR_R, [
         _make_row("Plain", None, 0, None, _t("+T.Fillet")),
         _make_row("TBl", "top", HOLE_D, None, _t("+T.Fil+TBl")),
@@ -733,7 +756,7 @@ SHELVES = [
         _make_row("Stepped", "stepped", STEP_LARGE_H, None, _t("+T.Fil+Stepped")),
         _make_row("TprStep", "tapered_stepped", STEP_LARGE_H, None, _t("+T.Fil+TprStep")),
     ]),
-    # S6: Bottom Fillet — 12 hole variants
+    # S6: Bottom Fillet �?12 hole variants
     (_t("S6 Inv B.Fillet"), "bottom_fillet", FR_R, [
         _make_row("Plain", None, 0, None, _t("+B.Fillet")),
         _make_row("TBl", "top", HOLE_D, None, _t("+B.Fil+TBl")),
@@ -748,7 +771,7 @@ SHELVES = [
         _make_row("Stepped", "stepped", STEP_LARGE_H, None, _t("+B.Fil+Stepped")),
         _make_row("TprStep", "tapered_stepped", STEP_LARGE_H, None, _t("+B.Fil+TprStep")),
     ]),
-    # S7: Both Fillet — 12 hole variants
+    # S7: Both Fillet �?12 hole variants
     (_t("S7 Inv Both Fillet"), "fillet_both", FR_R, [
         _make_row("Plain", None, 0, None, _t("+Both Fil")),
         _make_row("TBl", "top", HOLE_D, None, _t("+BothFil+TBl")),
@@ -763,7 +786,7 @@ SHELVES = [
         _make_row("Stepped", "stepped", STEP_LARGE_H, None, _t("+BothFil+Stepped")),
         _make_row("TprStep", "tapered_stepped", STEP_LARGE_H, None, _t("+BothFil+TprStep")),
     ]),
-    # S8: Top Chamfer + Bottom Fillet — 12 hole variants
+    # S8: Top Chamfer + Bottom Fillet �?12 hole variants
     (_t("S8 Inv T.Ch+B.Fil"), "chamfer_fillet", FR_R, [
         _make_row("Plain", None, 0, None, _t("+T.Ch+B.Fil")),
         _make_row("TBl", "top", HOLE_D, None, _t("+ChFil+TBl")),

@@ -435,7 +435,7 @@ def create_bottom_shell_scene():
     print("="*60)
 
     print("[1/2] Clearing scene...")
-    clear_scene()
+    # clear_scene()  # disabled: allow mixing
 
     print("[2/2] Creating bottom shell...")
     shell = create_bottom_shell(
@@ -552,7 +552,7 @@ def create_both_bottom_shells_scene():
     print("="*60)
 
     print("[1/4] Clearing scene...")
-    clear_scene()
+    # clear_scene()  # disabled: allow mixing
 
     width = 100.0
     depth = 70.0
@@ -1090,7 +1090,7 @@ def create_filleted_bottom_shells_scene():
     log_to_file("="*60)
 
     print("[1/4] Clearing scene...")
-    clear_scene()
+    # clear_scene()  # disabled: allow mixing
 
     width = 100.0
     depth = 70.0
@@ -1183,7 +1183,7 @@ def create_filleted_bottom_shells_with_holes_scene():
     log_to_file("="*60)
 
     print("[1/5] Clearing scene...")
-    clear_scene()
+    # clear_scene()  # disabled: allow mixing
 
     width = 100.0
     depth = 70.0

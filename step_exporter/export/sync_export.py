@@ -320,19 +320,20 @@ def _export_parametric_sync(filepath, bottom_shells, top_shells, cylinders, step
                 import shutil
                 shutil.copy2(successful_temp_files[0], filepath)
     elif successful_count == 1:
+        # Single file: still run through merge to strip wireframe chain
         try:
             temp_file = successful_temp_files[0]
             temp_size = os.path.getsize(temp_file)
             log_to_file(f"[STEP Exporter] Merging single file: {temp_file} ({temp_size} bytes) -> {filepath}")
-            os.replace(temp_file, filepath)
+            _merge_step_files(filepath, [temp_file])
             log_to_file(f"[STEP Exporter] Single file merge OK")
         except Exception as merge_err:
-            log_to_file(f"[STEP Exporter] os.replace failed: {merge_err}, trying shutil.copy2")
-            import shutil
+            log_to_file(f"[STEP Exporter] _merge_step_files failed: {merge_err}, trying os.replace")
             try:
+                os.replace(temp_file, filepath)
+            except:
+                import shutil
                 shutil.copy2(temp_file, filepath)
-                log_to_file(f"[STEP Exporter] shutil.copy2 fallback OK")
-            except Exception as copy_err:
                 log_to_file(f"[STEP Exporter] shutil.copy2 also failed: {copy_err}")
     else:
         log_to_file(f"[STEP Exporter] No parametric objects exported successfully")

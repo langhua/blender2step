@@ -28,9 +28,25 @@ Z_GAP = H * 2 + 0.8
 X_LABEL = R + 0.35
 Y_OFFSET = 4 * 2.0 + 4.0  # right grid Y+ offset: 4 cylinder widths + 4m spacing
 
+def _ensure_in_view_layer(obj):
+    """Ensure object is selectable by linking to scene collection if needed."""
+    if obj.name not in bpy.context.view_layer.objects:
+        bpy.context.scene.collection.objects.link(obj)
+
 def clear():
     bpy.ops.object.select_all(action='SELECT')
     bpy.ops.object.delete(use_global=False)
+
+def setup_collection(name):
+    """Create or get a collection and set it active so new objects go there."""
+    coll = bpy.data.collections.get(name)
+    if not coll:
+        coll = bpy.data.collections.new(name)
+        bpy.context.scene.collection.children.link(coll)
+    for lc in bpy.context.view_layer.layer_collection.children:
+        if lc.name == name:
+            bpy.context.view_layer.active_layer_collection = lc
+            break
 
 def _add_edge_bevel_mod(obj, chamfer_type, fillet_r):
     """Add Bevel modifier(s) for edge chamfer/fillet.
@@ -56,6 +72,7 @@ def _add_edge_bevel_mod(obj, chamfer_type, fillet_r):
 
     # Single type: use edge bevel weight (proven reliable with Boolean)
     hh = H / 2.0
+    _ensure_in_view_layer(obj)
     bpy.context.view_layer.objects.active = obj
     bpy.ops.object.mode_set(mode='EDIT')
     bpy.ops.mesh.select_mode(type='EDGE')
@@ -246,6 +263,7 @@ def apply_all_modifiers():
             continue
         bpy.ops.object.select_all(action='DESELECT')
         obj.select_set(True)
+        _ensure_in_view_layer(obj)
         bpy.context.view_layer.objects.active = obj
         # Apply Bevel modifiers first (before Booleans change vertex indices)
         for mod in list(obj.modifiers):
@@ -309,6 +327,7 @@ def _bevel_hole_openings():
                 openings.append((-H / 2 + hole_depth, default_r))
         if not openings:
             continue
+        _ensure_in_view_layer(obj)
         bpy.context.view_layer.objects.active = obj
         bpy.ops.object.mode_set(mode='EDIT')
         bpy.ops.mesh.select_mode(type='EDGE')
@@ -338,6 +357,7 @@ def _bevel_mixed_edges():
         if obj.get('chamfer_type') != 'chamfer_fillet':
             continue
 
+        _ensure_in_view_layer(obj)
         bpy.context.view_layer.objects.active = obj
         hh = H / 2.0
 
@@ -523,6 +543,7 @@ def _apply_modifiers_to(obj):
         return
     bpy.ops.object.select_all(action='DESELECT')
     obj.select_set(True)
+    _ensure_in_view_layer(obj)
     bpy.context.view_layer.objects.active = obj
     for mod in list(obj.modifiers):
         if mod.type == 'BEVEL':
@@ -573,6 +594,7 @@ def _apply_modifiers_to(obj):
                 openings.append((-H / 2, default_r))
                 openings.append((-H / 2 + hole_depth, default_r))
         if openings:
+            _ensure_in_view_layer(obj)
             bpy.context.view_layer.objects.active = obj
             bpy.ops.object.mode_set(mode='EDIT')
             bpy.ops.mesh.select_mode(type='EDGE')
@@ -606,6 +628,9 @@ def _post_process_one(obj):
     if obj.get('chamfer_type') != 'chamfer_fillet':
         return
     import bmesh
+    # Temporarily link to view layer if excluded by collection toggle
+    if obj.name not in bpy.context.view_layer.objects:
+        bpy.context.view_layer.objects.link(obj)
     bpy.context.view_layer.objects.active = obj
     hh = H / 2.0
     bpy.ops.object.mode_set(mode='EDIT')
@@ -639,7 +664,7 @@ def _post_process_one(obj):
 
 def build(progress_cb=None):
     """Create left-side cylinders only. Use add_grooved_copies() for right side."""
-    clear()
+    setup_collection("Cylinder Gallery")
     total = sum(len(s[3]) for s in SHELVES)
     done = 0
 

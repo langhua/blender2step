@@ -371,6 +371,22 @@ def _analyze_top_shell_from_mesh(obj, context, scale):
     
     # 应用单位缩放：所有尺寸参数 × scale (mm=1000, m=1)
     S = scale if scale > 0 else 1.0
+    
+    # 缩放 window_data 中 4 值矩形窗口条目 (cx,cy,wlen,wwid 单位=m) → mm
+    # 5+ 值条目 (圆形/圆角矩形孔) 在场景创建时已经是 mm，不需要缩放
+    if window_data:
+        scaled_entries = []
+        for entry in window_data.split(';'):
+            parts = entry.split(',')
+            if len(parts) == 4:
+                # 矩形窗口，单位=m，缩放到 mm
+                scaled = [str(float(p) * S) for p in parts]
+                scaled_entries.append(','.join(scaled))
+            else:
+                # 圆形/圆角矩形孔，已经是 mm
+                scaled_entries.append(entry)
+        window_data = ';'.join(scaled_entries)
+        log_to_file(f"[STEP Exporter]   window_data scaled: {window_data[:200]}...")
 
     return {
         'obj': obj,

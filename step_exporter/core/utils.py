@@ -43,6 +43,91 @@ def _verify_step_shell(filepath):
         return 0, []
 
 
+def _strip_wireframe_chain(entities):
+    """Remove wireframe product chain entities, keeping only solid geometry.
+    
+    Each temp file has: wireframe product (#1~#22 approx) + solid product (#23+).
+    Strategy: find MANIFOLD_SOLID_BREP → follow to ADVANCED_BREP_SHAPE_REPRESENTATION
+    → follow to SHAPE_DEFINITION_REPRESENTATION → keep product chain from there.
+    Remove everything else except shared context (#1 APPLICATION_PROTOCOL_DEFINITION,
+    #2 APPLICATION_CONTEXT).
+    
+    Returns filtered list of (id, entity_text) tuples.
+    """
+    from collections import deque
+    
+    if len(entities) < 2:
+        return entities
+    
+    # Build id→text map and reference map
+    entity_map = {}
+    entity_refs = {}
+    for eid, text in entities:
+        entity_map[eid] = text
+        entity_refs[eid] = {int(x) for x in re.findall(r'#(\d+)', text)}
+    
+    # Step 1: Find the solid root (MANIFOLD_SOLID_BREP)
+    solid_brep_id = None
+    for eid, text in entities:
+        if 'MANIFOLD_SOLID_BREP' in text:
+            solid_brep_id = eid
+            break
+    
+    if solid_brep_id is None:
+        return entities  # No solid, keep everything
+    
+    # Step 2: Find ADVANCED_BREP_SHAPE_REPRESENTATION that references solid_brep_id
+    advanced_brep_id = None
+    for eid, text in entities:
+        if 'ADVANCED_BREP_SHAPE_REPRESENTATION' in text and solid_brep_id in entity_refs.get(eid, set()):
+            advanced_brep_id = eid
+            break
+    
+    if advanced_brep_id is None:
+        return entities
+    
+    # Step 3: Find SHAPE_DEFINITION_REPRESENTATION that references advanced_brep_id
+    sdr_id = None
+    pds_id = None
+    for eid, text in entities:
+        if 'SHAPE_DEFINITION_REPRESENTATION' in text and advanced_brep_id in entity_refs.get(eid, set()):
+            sdr_id = eid
+            # Extract referenced PRODUCT_DEFINITION_SHAPE id (the ref that is NOT advanced_brep_id)
+            refs = entity_refs[eid] - {advanced_brep_id}
+            if refs:
+                pds_id = min(refs)  # Typically the lower-numbered ref is PDS
+            break
+    
+    if sdr_id is None:
+        return entities
+    
+    # Step 4: Follow product chain from PRODUCT_DEFINITION_SHAPE
+    # PDS → PRODUCT_DEFINITION → (PRODUCT_DEFINITION_FORMATION, PRODUCT_DEFINITION_CONTEXT)
+    # PDF → PRODUCT → PRODUCT_CONTEXT
+    # Also: PRODUCT_RELATED_PRODUCT_CATEGORY
+    keep_ids = {1, 2}  # Always keep APPLICATION_PROTOCOL_DEFINITION and APPLICATION_CONTEXT
+    
+    # BFS to collect all reachable entities from solid side
+    visited = set()
+    queue = deque([sdr_id, advanced_brep_id])
+    if pds_id:
+        queue.append(pds_id)
+    
+    while queue:
+        eid = queue.popleft()
+        if eid in visited:
+            continue
+        if eid not in entity_map:
+            continue
+        visited.add(eid)
+        keep_ids.add(eid)
+        for ref in entity_refs[eid]:
+            if ref not in visited:
+                queue.append(ref)
+    
+    return [(eid, text) for eid, text in entities if eid in keep_ids]
+
+
 def _merge_step_files(output_path, temp_files):
     """将多个 STEP 文件合并为一个，重新编号实体 ID"""
     
@@ -120,6 +205,9 @@ def _merge_step_files(output_path, temp_files):
         
         if current_entity is not None:
             entities.append((current_id, current_entity))
+        
+        # Strip wireframe product chain (dummy vertex, if any) from each temp file
+        entities = _strip_wireframe_chain(entities)
         
         id_shift = max_entity_id
         

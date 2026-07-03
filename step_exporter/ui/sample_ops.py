@@ -157,11 +157,15 @@ class STEP_EXPORTER_OT_create_cylinder_gallery(Operator):
 
             if self._shelf_idx >= len(m.SHELVES):
 
+                cyl_coll = bpy.data.collections.get(self._gallery_coll_name)
+                self._cyl_names = {o.name for o in cyl_coll.all_objects} if cyl_coll else set()
+
                 self._left_cyls = [o for o in bpy.data.objects
 
                                   if o.name.startswith('C') and not o.name.startswith('CUT_')
 
-                                  and not o.name.startswith('L')]
+                                  and not o.name.startswith('L')
+                                  and o.name in self._cyl_names]
                 self._left_cyls.sort(key=lambda o: (-o.location.z, o.location.y))
 
                 self._mod_idx = 0
@@ -288,20 +292,25 @@ class STEP_EXPORTER_OT_create_cylinder_gallery(Operator):
 
         if self._phase == 3:
 
+            cyl_coll = bpy.data.collections.get(self._gallery_coll_name)
+            self._cyl_names = {o.name for o in cyl_coll.all_objects} if cyl_coll else set()
+
             self._left_cyls = [o for o in bpy.data.objects
 
                               if o.name.startswith('C') and not o.name.startswith('CUT_')
 
                               and not o.name.startswith('GC') and not o.name.startswith('L')
 
-                              and o.name[1:2].isdigit()]
+                              and o.name[1:2].isdigit()
+                              and o.name in self._cyl_names]
             self._left_cyls.sort(key=lambda o: (-o.location.z, o.location.y))
 
             self._labels_left = [o for o in bpy.data.objects
 
                                 if o.name.startswith('L') and not o.name.startswith('LS')
 
-                                and not o.name.startswith('GC')]
+                                and not o.name.startswith('GC')
+                                and o.name in self._cyl_names]
 
             # DEBUG: log label collection
             print(f"[DEBUG Phase3] Found {len(self._left_cyls)} left cylinders, {len(self._labels_left)} left labels")
@@ -316,7 +325,8 @@ class STEP_EXPORTER_OT_create_cylinder_gallery(Operator):
 
             self._shelf_labels_left = [o for o in bpy.data.objects
 
-                                      if o.name.startswith('LS')]
+                                      if o.name.startswith('LS')
+                                      and o.name in self._cyl_names]
 
             for obj in self._shelf_labels_left:
 
@@ -398,7 +408,8 @@ class STEP_EXPORTER_OT_create_cylinder_gallery(Operator):
 
             self._grooved_list = [o for o in bpy.data.objects
 
-                                 if o.name.startswith('GC') and not o.name.startswith('CUT_')]
+                                 if o.name.startswith('GC') and not o.name.startswith('CUT_')
+                                 and o.name in self._cyl_names]
             self._grooved_list.sort(key=lambda o: (-o.location.z, o.location.y))
 
             self._mod_idx = 0
@@ -483,8 +494,15 @@ class STEP_EXPORTER_OT_create_cylinder_gallery(Operator):
 
         import create_cylinder_gallery as m
 
-        m.clear()
+        m.setup_collection("Cylinder Gallery")
 
+        # Check if gallery already exists
+        coll = bpy.data.collections.get("Cylinder Gallery")
+        if coll and any(o for o in coll.objects if o.name.startswith('C') and not o.name.startswith('CUT_')):
+            self.report({'WARNING'}, _t("Cylinder Gallery already exists — please delete it first"))
+            return {'CANCELLED'}
+
+        self._gallery_coll_name = "Cylinder Gallery"
         self._mod = m
 
         self._phase = 0
@@ -702,24 +720,30 @@ class STEP_EXPORTER_OT_create_cone_gallery(Operator):
 
         if self._phase == 3:
 
+            coll = bpy.data.collections.get(self._gallery_coll_name)
+            self._coll_names = {o.name for o in coll.all_objects} if coll else set()
+
             self._left_cones = [o for o in bpy.data.objects
 
                                if o.name.startswith('S') and not o.name.startswith('CUT_')
 
                                and not o.name.startswith('GS') and not o.name.startswith('L')
 
-                               and o.name[1:2].isdigit()]
+                               and o.name[1:2].isdigit()
+                               and o.name in self._coll_names]
             self._left_cones.sort(key=lambda o: (-o.location.z, o.location.y))
 
             self._labels_left = [o for o in bpy.data.objects
 
                                 if o.name.startswith('L') and not o.name.startswith('LS')
 
-                                and not o.name.startswith('GL')]
+                                and not o.name.startswith('GL')
+                                and o.name in self._coll_names]
 
             self._shelf_labels_left = [o for o in bpy.data.objects
 
-                                      if o.name.startswith('LS')]
+                                      if o.name.startswith('LS')
+                                      and o.name in self._coll_names]
 
             for obj in self._shelf_labels_left:
 
@@ -789,7 +813,8 @@ class STEP_EXPORTER_OT_create_cone_gallery(Operator):
 
             self._grooved_list = [o for o in bpy.data.objects
 
-                                 if o.name.startswith('GS') and not o.name.startswith('CUT_')]
+                                 if o.name.startswith('GS') and not o.name.startswith('CUT_')
+                                 and o.name in self._coll_names]
             self._grooved_list.sort(key=lambda o: (-o.location.z, o.location.y))
 
             self._mod_idx = 0
@@ -874,8 +899,15 @@ class STEP_EXPORTER_OT_create_cone_gallery(Operator):
 
         import create_cone_gallery as m
 
-        m.clear()
+        m.setup_collection("Cone Gallery △")
 
+        # Check if gallery already exists
+        coll = bpy.data.collections.get("Cone Gallery △")
+        if coll and any(o for o in coll.objects if (o.name.startswith('S') or o.name.startswith('GS')) and not o.name.startswith('CUT_')):
+            self.report({'WARNING'}, _t("Cone Gallery already exists — please delete it first"))
+            return {'CANCELLED'}
+
+        self._gallery_coll_name = "Cone Gallery △"
         self._mod = m
 
         self._shelf_idx = 0
@@ -1089,24 +1121,30 @@ class STEP_EXPORTER_OT_create_cone_gallery_inverted(Operator):
 
         if self._phase == 3:
 
+            coll = bpy.data.collections.get(self._gallery_coll_name)
+            self._coll_names = {o.name for o in coll.all_objects} if coll else set()
+
             self._left_cones = [o for o in bpy.data.objects
 
                                if o.name.startswith('S') and not o.name.startswith('CUT_')
 
                                and not o.name.startswith('GS') and not o.name.startswith('L')
 
-                               and o.name[1:2].isdigit()]
+                               and o.name[1:2].isdigit()
+                               and o.name in self._coll_names]
             self._left_cones.sort(key=lambda o: (-o.location.z, o.location.y))
 
             self._labels_left = [o for o in bpy.data.objects
 
                                 if o.name.startswith('L') and not o.name.startswith('LS')
 
-                                and not o.name.startswith('GL')]
+                                and not o.name.startswith('GL')
+                                and o.name in self._coll_names]
 
             self._shelf_labels_left = [o for o in bpy.data.objects
 
-                                      if o.name.startswith('LS')]
+                                      if o.name.startswith('LS')
+                                      and o.name in self._coll_names]
 
             for obj in self._shelf_labels_left:
 
@@ -1176,7 +1214,8 @@ class STEP_EXPORTER_OT_create_cone_gallery_inverted(Operator):
 
             self._grooved_list = [o for o in bpy.data.objects
 
-                                 if o.name.startswith('GS') and not o.name.startswith('CUT_')]
+                                 if o.name.startswith('GS') and not o.name.startswith('CUT_')
+                                 and o.name in self._coll_names]
             self._grooved_list.sort(key=lambda o: (-o.location.z, o.location.y))
 
             self._mod_idx = 0
@@ -1261,8 +1300,15 @@ class STEP_EXPORTER_OT_create_cone_gallery_inverted(Operator):
 
         import create_cone_gallery_inverted as m
 
-        m.clear()
+        m.setup_collection("Cone Gallery ▽")
 
+        # Check if gallery already exists
+        coll = bpy.data.collections.get("Cone Gallery ▽")
+        if coll and any(o for o in coll.objects if (o.name.startswith('S') or o.name.startswith('GS')) and not o.name.startswith('CUT_')):
+            self.report({'WARNING'}, _t("Cone Gallery already exists — please delete it first"))
+            return {'CANCELLED'}
+
+        self._gallery_coll_name = "Cone Gallery ▽"
         self._mod = m
 
         self._shelf_idx = 0
@@ -1299,8 +1345,15 @@ class STEP_EXPORTER_OT_create_cone_gallery_inverted(Operator):
 
         import create_cone_gallery_inverted as m
 
-        m.clear()
+        m.setup_collection("Cone Gallery ▽")
 
+        # Check if gallery already exists
+        coll = bpy.data.collections.get("Cone Gallery ▽")
+        if coll and any(o for o in coll.objects if (o.name.startswith('S') or o.name.startswith('GS')) and not o.name.startswith('CUT_')):
+            self.report({'WARNING'}, _t("Cone Gallery already exists — please delete it first"))
+            return {'CANCELLED'}
+
+        self._gallery_coll_name = "Cone Gallery ▽"
         self._mod = m
 
         self._shelf_idx = 0

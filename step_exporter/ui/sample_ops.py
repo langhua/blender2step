@@ -73,6 +73,30 @@ class STEP_EXPORTER_OT_create_bottom_shell(Operator):
 
 
 
+class STEP_EXPORTER_OT_create_rect_box(Operator):
+
+    """Create a simple open-top rectangular box (wall=2mm)"""
+
+    bl_idname = "step_exporter.create_rect_box"
+
+    bl_label = _t("Create Rect Box")
+
+    bl_description = _t("Create a simple open-top rectangular box with 2mm wall thickness")
+
+    bl_options = {'REGISTER', 'UNDO'}
+
+    
+
+    def execute(self, context):
+
+        script_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'examples', 'create_rect_box.py')
+
+        exec(compile(open(script_path).read(), script_path, 'exec'), {'__name__': '__main__', '__file__': script_path})
+
+        self.report({'INFO'}, _t("Rect box created"))
+
+        return {'FINISHED'}
+
 
 
 class STEP_EXPORTER_OT_create_cylinder(Operator):

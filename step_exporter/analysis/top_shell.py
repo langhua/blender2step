@@ -372,19 +372,32 @@ def _analyze_top_shell_from_mesh(obj, context, scale):
     # 应用单位缩放：所有尺寸参数 × scale (mm=1000, m=1)
     S = scale if scale > 0 else 1.0
     
-    # 缩放 window_data 中 4 值矩形窗口条目 (cx,cy,wlen,wwid 单位=m) → mm
-    # 5+ 值条目 (圆形/圆角矩形孔) 在场景创建时已经是 mm，不需要缩放
+    # 缩放 window_data 中矩形窗口条目:
+    #   4值: cx,cy,wlen,wwid → 全部缩放到mm (默认box)
+    #   5-6值, type=0或3: cx,cy,wlen,wwid,type[,angle] → 前4值缩放
+    #   5-6值, type=1: cx,cy,cz,radius,1[,fillet] → 圆形孔, 已经是mm
+    #   7-8值, type=2: cx,cy,cz,w,h,2,cr[,fillet] → 圆角矩形孔, 已经是mm
     if window_data:
         scaled_entries = []
         for entry in window_data.split(';'):
             parts = entry.split(',')
-            if len(parts) == 4:
-                # 矩形窗口，单位=m，缩放到 mm
+            n = len(parts)
+            if n >= 7:
+                # Rounded-rect hole: type=2 at index 5, already mm
+                scaled_entries.append(entry)
+            elif n == 5 or n == 6:
+                if parts[4] == '1':
+                    # Circular hole: cx,cy,cz,radius,1[,fillet], already mm
+                    scaled_entries.append(entry)
+                else:
+                    # Window: cx,cy,wlen,wwid,type[,angle], scale first 4
+                    scaled = [str(float(parts[i]) * S) for i in range(4)]
+                    scaled.extend(parts[4:])
+                    scaled_entries.append(','.join(scaled))
+            elif n == 4:
+                # Window: cx,cy,wlen,wwid, scale all
                 scaled = [str(float(p) * S) for p in parts]
                 scaled_entries.append(','.join(scaled))
-            else:
-                # 圆形/圆角矩形孔，已经是 mm
-                scaled_entries.append(entry)
         window_data = ';'.join(scaled_entries)
         log_to_file(f"[STEP Exporter]   window_data scaled: {window_data[:200]}...")
 

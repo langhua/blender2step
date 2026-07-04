@@ -18,6 +18,9 @@ TopoDS_Shape create_solid_from_mesh(const std::vector<std::vector<double>>& vert
                                     bool make_solid = true,
                                     double scale = 1.0);
 
+// Shape utility functions
+TopoDS_Solid ensure_solid(const TopoDS_Shape& shape);
+
 // Curve shape functions
 TopoDS_Shape create_shape_from_curve_data(const std::vector<std::map<std::string, PyObject*>>& splines_data, double scale = 1.0);
 TopoDS_Shape create_shape_from_curve_dict(PyObject* obj_dict, double scale = 1.0);

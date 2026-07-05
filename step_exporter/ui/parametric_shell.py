@@ -12,6 +12,16 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
     bl_label = _t("Parametric Shell")
     bl_options = {'REGISTER', 'UNDO'}
 
+    # ── Unit ──
+    unit: EnumProperty(
+        name=_t("Unit"),
+        items=[
+            ('mm', "mm", "Millimeters"),
+            ('m', "m", "Meters"),
+        ],
+        default='mm',
+    )
+
     # ── Corner type ──
     corner_type: EnumProperty(
         name=_t("Corner"),
@@ -25,25 +35,26 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
     # ── Dimensions ──
     width: FloatProperty(
         name=_t("Width (X)"), default=100.0, min=1.0, max=10000.0,
-        description="Width along X axis (mm)")
+        description="Width along X axis")
     depth: FloatProperty(
         name=_t("Depth (Y)"), default=80.0, min=1.0, max=10000.0,
-        description="Depth along Y axis (mm)")
+        description="Depth along Y axis")
     height: FloatProperty(
         name=_t("Height (Z)"), default=50.0, min=1.0, max=10000.0,
-        description="Height along Z axis (mm)")
+        description="Height along Z axis")
     thickness: FloatProperty(
         name=_t("Wall Thickness"), default=2.0, min=0.1, max=1000.0,
-        description="Wall thickness (mm)")
+        description="Wall thickness")
     corner_radius: FloatProperty(
         name=_t("Corner Radius"), default=5.0, min=0.1, max=1000.0,
-        description="Fillet radius for rounded corners (mm)")
+        description="Fillet radius for rounded corners")
 
     def invoke(self, context, event):
         return context.window_manager.invoke_props_dialog(self, width=320)
 
     def draw(self, context):
         layout = self.layout
+        layout.prop(self, 'unit')
         layout.prop(self, 'corner_type')
         layout.separator()
         layout.prop(self, 'width')
@@ -58,12 +69,15 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         cr = self.corner_radius if self.corner_type == 'rounded' else 0.0
         cr = max(0.0, min(cr, w / 2 - t, d / 2 - t))
 
+        # Unit scaling: S converts user unit → meters (Blender internal)
+        S = 0.001 if self.unit == 'mm' else 1.0
+
         bm = bmesh.new()
 
         if cr <= 0.001:
-            self._build_square(bm, w, d, h, t)
+            self._build_square(bm, w * S, d * S, h * S, t * S)
         else:
-            self._build_rounded(bm, w, d, h, t, cr)
+            self._build_rounded(bm, w * S, d * S, h * S, t * S, cr * S)
 
         # Create mesh object
         mesh = bpy.data.meshes.new("ParamShell")
@@ -75,7 +89,7 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         bpy.context.view_layer.objects.active = obj
         obj.select_set(True)
 
-        # Store params
+        # Store params (in user-facing unit)
         obj['width'] = w
         obj['depth'] = d
         obj['height'] = h
@@ -83,8 +97,10 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         obj['corner_type'] = self.corner_type
         obj['corner_radius'] = cr
         obj['object_type'] = 'parametric_shell'
+        obj['unit'] = self.unit
 
-        self.report({'INFO'}, f"Shell: {w:.0f}×{d:.0f}×{h:.0f}mm, wall={t:.1f}mm")
+        unit_label = "mm" if self.unit == 'mm' else "m"
+        self.report({'INFO'}, f"Shell: {w:.0f}×{d:.0f}×{h:.0f}{unit_label}, wall={t:.1f}{unit_label}")
         return {'FINISHED'}
 
     # ── Square corners ────────────────────────────────────
@@ -134,7 +150,7 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         """Build open-top box with rounded corners via clean CCW profile sweep."""
         seg = 12
         hw, hd = w / 2, d / 2
-        ir = max(cr - t, 0.1)
+        ir = max(cr - t, 0.0001)  # minimum inner radius (0.1mm)
 
         # Corner centers: cc[0]=front-left, cc[1]=front-right, cc[2]=back-right, cc[3]=back-left
         occ = [(-hw+cr, -hd+cr), (hw-cr, -hd+cr), (hw-cr, hd-cr), (-hw+cr, hd-cr)]

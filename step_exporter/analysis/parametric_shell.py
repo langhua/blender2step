@@ -20,15 +20,18 @@ def _analyze_parametric_shell_from_mesh(obj, context=None, scale=1.0):
     log_to_file(f"[STEP Exporter] Parametric shell: {w:.0f}x{d:.0f}x{h:.0f}mm"
                 f" wall={t:.1f} corner={corner_type} cr={cr:.1f}")
 
-    # Scale dimensions and position: Blender BU values × scale → mm for STEP
-    w_mm = w * scale
-    d_mm = d * scale
-    h_mm = h * scale
-    t_mm = t * scale
-    cr_mm = cr * scale
+    # Read unit (default 'm' for backward compat with objects created before unit support)
+    unit = obj.get('unit', 'm')
+    # Conversion factor to mm for STEP output
+    unit_factor = 1000.0 if unit == 'm' else 1.0
 
-    log_to_file(f"[STEP Exporter]   blender_loc=({obj.location.x:.4f}, {obj.location.y:.4f}, {obj.location.z:.4f}) scale={scale}")
-    log_to_file(f"[STEP Exporter]   dims: {w_mm:.1f}x{d_mm:.1f}x{h_mm:.1f}mm wall={t_mm:.2f} cr={cr_mm:.2f}")
+    w_mm = w * unit_factor
+    d_mm = d * unit_factor
+    h_mm = h * unit_factor
+    t_mm = t * unit_factor
+    cr_mm = cr * unit_factor
+
+    log_to_file(f"[STEP Exporter]   unit={unit}, factor={unit_factor}, dims={w_mm:.1f}x{d_mm:.1f}x{h_mm:.1f}mm")
 
     return {
         'obj': obj,

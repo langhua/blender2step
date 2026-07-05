@@ -2790,8 +2790,20 @@ TopoDS_Shape create_parametric_shell_solid(double width, double depth, double he
             double ow = ring_outer_bot_hw * 2.0, od = ring_outer_bot_hd * 2.0;
             double iw = ring_inner_bot_hw * 2.0, id = ring_inner_bot_hd * 2.0;
             if (iw > 0.01 && id > 0.01) {
-                TopoDS_Shape oBox = create_rounded_box_solid(ow, od, rim_height, 0.0);
-                TopoDS_Shape iBox = create_rounded_box_solid(iw, id, rim_height + 2.0, 0.0);
+                double ring_cr, inner_ring_cr;
+                if (rounded) {
+                    if (is_outside) {
+                        ring_cr = std::max(0.0, cr - rim_width);
+                        inner_ring_cr = inner_cr;
+                    } else {
+                        ring_cr = cr;
+                        inner_ring_cr = std::max(0.0, inner_cr + rim_width);
+                    }
+                } else {
+                    ring_cr = 0.0; inner_ring_cr = 0.0;
+                }
+                TopoDS_Shape oBox = create_rounded_box_solid(ow, od, rim_height, ring_cr);
+                TopoDS_Shape iBox = create_rounded_box_solid(iw, id, rim_height + 2.0, inner_ring_cr);
                 TopoDS_Solid so, si;
                 auto toSolid = [](TopoDS_Shape& s) -> TopoDS_Solid {
                     if (s.ShapeType() == TopAbs_SOLID) return TopoDS::Solid(s);

@@ -7,12 +7,12 @@ from ..core.i18n import _t
 
 
 class STEP_EXPORTER_OT_create_parametric_shell(Operator):
-    """?????????????"""
+    """创建参数化外壳（无盖盒子）"""
     bl_idname = "step_exporter.create_parametric_shell"
     bl_label = _t("Parametric Shell")
     bl_options = {'REGISTER', 'UNDO'}
 
-    # ?? Unit ??
+    # ── Unit ──
     unit: EnumProperty(
         name=_t("Unit"),
         items=[
@@ -22,17 +22,17 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         default='mm',
     )
 
-    # ?? Corner type ??
+    # ── Corner type ──
     corner_type: EnumProperty(
         name=_t("Corner"),
         items=[
-            ('square', "Square (??)", "Sharp square corners"),
-            ('rounded', "Rounded (??)", "Rounded corners"),
+            ('square', "Square (直角)", "Sharp square corners"),
+            ('rounded', "Rounded (圆角)", "Rounded corners"),
         ],
         default='square',
     )
 
-    # ?? Dimensions ??
+    # ── Dimensions ──
     width: FloatProperty(
         name=_t("Width (X)"), default=100.0, min=1.0, max=10000.0,
         description="Width along X axis")
@@ -54,8 +54,8 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         name=_t("Rim Type"),
         items=[
             ('none', "None (无)", "No rim"),
-            ('inside', "Inside (内壳边)", "Rim on the inside, extruding up"),
-            ('outside', "Outside (外壳边)", "Rim on the outside, extruding up"),
+            ('inside', "Inside (内壳边)", "Rim on the inside"),
+            ('outside', "Outside (外壳边)", "Rim on the outside"),
         ],
         default='none',
     )
@@ -107,7 +107,7 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         rw = self.rim_width if self.rim_type != 'none' else 0.0
         rh = self.rim_height if self.rim_type != 'none' else 0.0
 
-        # Unit scaling: S converts user unit ? meters (Blender internal)
+        # Unit scaling: S converts user unit → meters (Blender internal)
         S = 0.001 if self.unit == 'mm' else 1.0
 
         bm = bmesh.new()
@@ -147,10 +147,10 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         obj['rim_top_ratio'] = self.rim_top_ratio
 
         unit_label = "mm" if self.unit == 'mm' else "m"
-        self.report({'INFO'}, f"Shell: {w:.0f}?{d:.0f}?{h:.0f}{unit_label}, wall={t:.1f}{unit_label}")
+        self.report({'INFO'}, f"Shell: {w:.0f}×{d:.0f}×{h:.0f}{unit_label}, wall={t:.1f}{unit_label}")
         return {'FINISHED'}
 
-    # ?? Square corners ????????????????????????????????????
+    # ── Square corners ────────────────────────────────────
 
     def _build_square(self, bm, w, d, h, t, rw=0, rh=0, rim_type='none',
                       rim_shape='rect', top_ratio=1.0):
@@ -194,61 +194,55 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         if rim_type != 'none' and rw > 0 and rh > 0:
             is_outside = (rim_type == 'outside')
             if is_outside:
-                # Outside: 外壁向上rh → 向内rw*ratio → 向内斜下到rw位置(Z=h)
-                wall_top = [o[4], o[5], o[6], o[7]]              # outer wall top
+                # Outside: 外壁向上rh → 向内rw*ratio → 向内斜下到rw位置
+                wall_top = [o[4], o[5], o[6], o[7]]
                 ot = [bm.verts.new((-hw, -hd, h+rh)), bm.verts.new((hw, -hd, h+rh)),
                       bm.verts.new((hw,  hd, h+rh)), bm.verts.new((-hw,  hd, h+rh))]
                 it = [bm.verts.new((-hw+rw*top_ratio, -hd+rw*top_ratio, h+rh)),
                       bm.verts.new((hw-rw*top_ratio, -hd+rw*top_ratio, h+rh)),
                       bm.verts.new((hw-rw*top_ratio,  hd-rw*top_ratio, h+rh)),
                       bm.verts.new((-hw+rw*top_ratio,  hd-rw*top_ratio, h+rh))]
-                ib = [bm.verts.new((-hw+rw, -hd+rw, h)),         # outer wall - rw inward at Z=h
+                ib = [bm.verts.new((-hw+rw, -hd+rw, h)),
                       bm.verts.new((hw-rw, -hd+rw, h)),
                       bm.verts.new((hw-rw,  hd-rw, h)),
                       bm.verts.new((-hw+rw,  hd-rw, h))]
                 wt = wall_top
-                # ① 向上: wall_top(Z=h) → ot(Z=h+rh)
                 bm.faces.new([wt[0], ot[0], ot[1], wt[1]])
                 bm.faces.new([wt[1], ot[1], ot[2], wt[2]])
                 bm.faces.new([wt[2], ot[2], ot[3], wt[3]])
                 bm.faces.new([wt[3], ot[3], ot[0], wt[0]])
-                # ② 向内水平: ot → it (ratio=0时宽度为0)
                 if top_ratio > 0.001:
                     bm.faces.new([ot[0], it[0], it[1], ot[1]])
                     bm.faces.new([ot[1], it[1], it[2], ot[2]])
                     bm.faces.new([ot[2], it[2], it[3], ot[3]])
                     bm.faces.new([ot[3], it[3], it[0], ot[0]])
-                # ③ 向内斜下: (ot/it)(Z=h+rh) → ib(Z=h, rw位置)
                 bm.faces.new([it[0], ib[0], ib[1], it[1]])
                 bm.faces.new([it[1], ib[1], ib[2], it[2]])
                 bm.faces.new([it[2], ib[2], ib[3], it[3]])
                 bm.faces.new([it[3], ib[3], ib[0], it[0]])
             else:
-                # Inside: 内壁向上rh → 向外rw*ratio → 向外斜下到rw位置(Z=h)
-                wall_top = [i[4], i[5], i[6], i[7]]              # inner wall top
+                # Inside: 内壁向上rh → 向外rw*ratio → 向外斜下到rw位置
+                wall_top = [i[4], i[5], i[6], i[7]]
                 it = [bm.verts.new((-hw+t, -hd+t, h+rh)), bm.verts.new((hw-t, -hd+t, h+rh)),
                       bm.verts.new((hw-t,  hd-t, h+rh)), bm.verts.new((-hw+t,  hd-t, h+rh))]
                 ot = [bm.verts.new((-hw+t-rw*top_ratio, -hd+t-rw*top_ratio, h+rh)),
                       bm.verts.new((hw-t+rw*top_ratio, -hd+t-rw*top_ratio, h+rh)),
                       bm.verts.new((hw-t+rw*top_ratio,  hd-t+rw*top_ratio, h+rh)),
                       bm.verts.new((-hw+t-rw*top_ratio,  hd-t+rw*top_ratio, h+rh))]
-                ob = [bm.verts.new((-hw+t-rw, -hd+t-rw, h)),     # inner wall + rw outward at Z=h
+                ob = [bm.verts.new((-hw+t-rw, -hd+t-rw, h)),
                       bm.verts.new((hw-t+rw, -hd+t-rw, h)),
                       bm.verts.new((hw-t+rw,  hd-t+rw, h)),
                       bm.verts.new((-hw+t-rw,  hd-t+rw, h))]
                 wt = wall_top
-                # ① 向上: wall_top(Z=h) → it(Z=h+rh)
                 bm.faces.new([wt[0], it[0], it[1], wt[1]])
                 bm.faces.new([wt[1], it[1], it[2], wt[2]])
                 bm.faces.new([wt[2], it[2], it[3], wt[3]])
                 bm.faces.new([wt[3], it[3], it[0], wt[0]])
-                # ② 向外水平: it → ot (ratio=0时宽度为0)
                 if top_ratio > 0.001:
                     bm.faces.new([it[0], ot[0], ot[1], it[1]])
                     bm.faces.new([it[1], ot[1], ot[2], it[2]])
                     bm.faces.new([it[2], ot[2], ot[3], it[3]])
                     bm.faces.new([it[3], ot[3], ot[0], it[0]])
-                # ③ 向外斜下: (it/ot)(Z=h+rh) → ob(Z=h, rw位置)
                 bm.faces.new([ot[0], ob[0], ob[1], ot[1]])
                 bm.faces.new([ot[1], ob[1], ob[2], ot[2]])
                 bm.faces.new([ot[2], ob[2], ob[3], ot[3]])
@@ -256,7 +250,7 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
 
         bm.normal_update()
 
-    # ?? Rounded corners ???????????????????????????????????
+    # ── Rounded corners ───────────────────────────────────
 
     def _build_rounded(self, bm, w, d, h, t, cr, rw=0, rh=0, rim_type='none',
                        rim_shape='rect', top_ratio=1.0):
@@ -269,43 +263,43 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         occ = [(-hw+cr, -hd+cr), (hw-cr, -hd+cr), (hw-cr, hd-cr), (-hw+cr, hd-cr)]
 
         def make_profile(cr_val, off):
-            """CCW profile: right? ? arc(br) ? back? ? arc(bl) ? left? ? arc(fl) ? front? ? arc(fr)
+            """CCW profile: right↑ → arc(br) → back← → arc(bl) → left↓ → arc(fl) → front→ → arc(fr)
             off = 0 for outer, off = t for inner (flat edges offset inward by wall thickness)"""
             n = seg
             pts = []
             rhw, rhd = hw - off, hd - off  # reduced half-width/depth for inner walls
-            # 1. Right edge flat: (rhw, -rhd+cr_val) ? (rhw, rhd-cr_val), going +Y
+            # 1. Right edge flat: (rhw, -rhd+cr_val) → (rhw, rhd-cr_val), going +Y
             for i in range(1, n + 1):
                 y = -rhd + cr_val + (2*(rhd - cr_val)) * i / n
                 pts.append((rhw, y))
-            # 2. Back-right arc (0 ? ?/2) at cc[2]
+            # 2. Back-right arc (0 → π/2) at cc[2]
             cx, cy = occ[2]
             for j in range(1, n + 1):
                 a = j * (math.pi/2) / n
                 pts.append((cx + cr_val*math.cos(a), cy + cr_val*math.sin(a)))
-            # 3. Back edge flat: (rhw-cr_val, rhd) ? (-rhw+cr_val, rhd), going -X
+            # 3. Back edge flat: (rhw-cr_val, rhd) → (-rhw+cr_val, rhd), going -X
             for i in range(1, n + 1):
                 x = rhw - cr_val - (2*(rhw - cr_val)) * i / n
                 pts.append((x, rhd))
-            # 4. Back-left arc (?/2 ? ?) at cc[3]
+            # 4. Back-left arc (π/2 → π) at cc[3]
             cx, cy = occ[3]
             for j in range(1, n + 1):
                 a = math.pi/2 + j*(math.pi/2)/n
                 pts.append((cx + cr_val*math.cos(a), cy + cr_val*math.sin(a)))
-            # 5. Left edge flat: (-rhw, rhd-cr_val) ? (-rhw, -rhd+cr_val), going -Y
+            # 5. Left edge flat: (-rhw, rhd-cr_val) → (-rhw, -rhd+cr_val), going -Y
             for i in range(1, n + 1):
                 y = rhd - cr_val - (2*(rhd - cr_val)) * i / n
                 pts.append((-rhw, y))
-            # 6. Front-left arc (? ? 3?/2) at cc[0]
+            # 6. Front-left arc (π → 3π/2) at cc[0]
             cx, cy = occ[0]
             for j in range(1, n + 1):
                 a = math.pi + j*(math.pi/2)/n
                 pts.append((cx + cr_val*math.cos(a), cy + cr_val*math.sin(a)))
-            # 7. Front edge flat: (-rhw+cr_val, -rhd) ? (rhw-cr_val, -rhd), going +X
+            # 7. Front edge flat: (-rhw+cr_val, -rhd) → (rhw-cr_val, -rhd), going +X
             for i in range(1, n + 1):
                 x = -rhw + cr_val + (2*(rhw - cr_val)) * i / n
                 pts.append((x, -rhd))
-            # 8. Front-right arc (3?/2 ? 2?) at cc[1]
+            # 8. Front-right arc (3π/2 → 2π) at cc[1]
             cx, cy = occ[1]
             for j in range(1, n + 1):
                 a = 3*math.pi/2 + j*(math.pi/2)/n
@@ -343,6 +337,61 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
             j2 = (j+1) % nv
             bm.faces.new([outer_top[j], outer_top[j2], inner_top[j2], inner_top[j]])
 
-        bm.normal_update()
+        # ── Rim (壳边) ──
+        if rim_type != 'none' and rw > 0 and rh > 0:
+            is_outside = (rim_type == 'outside')
+            if is_outside:
+                # Outside: 外壁向上rh → 向内rw*ratio → 斜下到rw位置
+                wall_pts = outer_top
+                wall_xy = [(v.co.x, v.co.y) for v in outer_top]
+                ot_pts = wall_xy
+                it_pts = make_profile(cr - rw * top_ratio, rw * top_ratio)
+                ib_pts = make_profile(cr - rw, rw)
+            else:
+                # Inside: 内壁向上rh → 向外rw*ratio → 斜下到rw位置
+                wall_pts = inner_top
+                wall_xy = [(v.co.x, v.co.y) for v in inner_top]
+                it_pts = wall_xy
+                ot_pts = make_profile(ir + rw * top_ratio, t - rw * top_ratio)
+                ob_pts = make_profile(ir + rw, t - rw)
+
+            # Vertices
+            it = [bm.verts.new((x, y, h+rh)) for x, y in it_pts]  # inner top (up from wall)
+            if is_outside:
+                ib = [bm.verts.new((x, y, h)) for x, y in ib_pts]
+                ot = [bm.verts.new((x, y, h+rh)) for x, y in wall_xy]  # outer top = wall up
+            else:
+                ot = [bm.verts.new((x, y, h+rh)) for x, y in ot_pts]  # outer top (outward)
+                ob = [bm.verts.new((x, y, h)) for x, y in ob_pts]  # outer bottom (down from top)
+            bm.verts.ensure_lookup_table()
+
+            if is_outside:
+                # ① Up: outer wall(Z=h) → ot(Z=h+rh)
+                for j in range(nv):
+                    j2 = (j+1) % nv
+                    bm.faces.new([wall_pts[j], wall_pts[j2], ot[j2], ot[j]])
+                # ② Inward: ot → it
+                if top_ratio > 0.001:
+                    for j in range(nv):
+                        j2 = (j+1) % nv
+                        bm.faces.new([ot[j], ot[j2], it[j2], it[j]])
+                # ③ Down: it(Z=h+rh) → ib(Z=h)
+                for j in range(nv):
+                    j2 = (j+1) % nv
+                    bm.faces.new([it[j], it[j2], ib[j2], ib[j]])
+            else:
+                # ① Up: inner wall(Z=h) → it(Z=h+rh)
+                for j in range(nv):
+                    j2 = (j+1) % nv
+                    bm.faces.new([wall_pts[j], wall_pts[j2], it[j2], it[j]])
+                # ② Outward: it → ot
+                if top_ratio > 0.001:
+                    for j in range(nv):
+                        j2 = (j+1) % nv
+                        bm.faces.new([it[j], it[j2], ot[j2], ot[j]])
+                # ③ Down: ot(Z=h+rh) → ob(Z=h)
+                for j in range(nv):
+                    j2 = (j+1) % nv
+                    bm.faces.new([ot[j], ot[j2], ob[j2], ob[j]])
 
         bm.normal_update()

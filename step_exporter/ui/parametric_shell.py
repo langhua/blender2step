@@ -194,48 +194,61 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         if rim_type != 'none' and rw > 0 and rh > 0:
             is_outside = (rim_type == 'outside')
             if is_outside:
-                # Outside: 外壁向上rh → 向内rw → 向下rh (倒U形帽)
-                wall_top = [o[4], o[5], o[6], o[7]]
-                # ① 向上: 外壁顶 → 外壁上缘 (Z=h+rh)
+                # Outside: 外壁向上rh → 向内rw*ratio → 向内斜下到rw位置(Z=h)
+                wall_top = [o[4], o[5], o[6], o[7]]              # outer wall top
                 ot = [bm.verts.new((-hw, -hd, h+rh)), bm.verts.new((hw, -hd, h+rh)),
                       bm.verts.new((hw,  hd, h+rh)), bm.verts.new((-hw,  hd, h+rh))]
-                # ② 向内: 外壁上缘 → 内缘 (Z=h+rh)
-                it = [bm.verts.new((-hw+rw, -hd+rw, h+rh)), bm.verts.new((hw-rw, -hd+rw, h+rh)),
-                      bm.verts.new((hw-rw,  hd-rw, h+rh)), bm.verts.new((-hw+rw,  hd-rw, h+rh))]
-                # ③ 向下: 内缘 → 内缘底部 (Z=h)
-                ib = [bm.verts.new((-hw+rw, -hd+rw, h)), bm.verts.new((hw-rw, -hd+rw, h)),
-                      bm.verts.new((hw-rw,  hd-rw, h)), bm.verts.new((-hw+rw,  hd-rw, h))]
+                it = [bm.verts.new((-hw+rw*top_ratio, -hd+rw*top_ratio, h+rh)),
+                      bm.verts.new((hw-rw*top_ratio, -hd+rw*top_ratio, h+rh)),
+                      bm.verts.new((hw-rw*top_ratio,  hd-rw*top_ratio, h+rh)),
+                      bm.verts.new((-hw+rw*top_ratio,  hd-rw*top_ratio, h+rh))]
+                ib = [bm.verts.new((-hw+rw, -hd+rw, h)),         # outer wall - rw inward at Z=h
+                      bm.verts.new((hw-rw, -hd+rw, h)),
+                      bm.verts.new((hw-rw,  hd-rw, h)),
+                      bm.verts.new((-hw+rw,  hd-rw, h))]
                 wt = wall_top
+                # ① 向上: wall_top(Z=h) → ot(Z=h+rh)
                 bm.faces.new([wt[0], ot[0], ot[1], wt[1]])
                 bm.faces.new([wt[1], ot[1], ot[2], wt[2]])
                 bm.faces.new([wt[2], ot[2], ot[3], wt[3]])
                 bm.faces.new([wt[3], ot[3], ot[0], wt[0]])
-                bm.faces.new([ot[0], it[0], it[1], ot[1]])
-                bm.faces.new([ot[1], it[1], it[2], ot[2]])
-                bm.faces.new([ot[2], it[2], it[3], ot[3]])
-                bm.faces.new([ot[3], it[3], it[0], ot[0]])
+                # ② 向内水平: ot → it (ratio=0时宽度为0)
+                if top_ratio > 0.001:
+                    bm.faces.new([ot[0], it[0], it[1], ot[1]])
+                    bm.faces.new([ot[1], it[1], it[2], ot[2]])
+                    bm.faces.new([ot[2], it[2], it[3], ot[3]])
+                    bm.faces.new([ot[3], it[3], it[0], ot[0]])
+                # ③ 向内斜下: (ot/it)(Z=h+rh) → ib(Z=h, rw位置)
                 bm.faces.new([it[0], ib[0], ib[1], it[1]])
                 bm.faces.new([it[1], ib[1], ib[2], it[2]])
                 bm.faces.new([it[2], ib[2], ib[3], it[3]])
                 bm.faces.new([it[3], ib[3], ib[0], it[0]])
             else:
-                # Inside: 内壁向上rh → 向外rw → 向下rh (倒U形帽，对称)
-                wall_top = [i[4], i[5], i[6], i[7]]
+                # Inside: 内壁向上rh → 向外rw*ratio → 向外斜下到rw位置(Z=h)
+                wall_top = [i[4], i[5], i[6], i[7]]              # inner wall top
                 it = [bm.verts.new((-hw+t, -hd+t, h+rh)), bm.verts.new((hw-t, -hd+t, h+rh)),
                       bm.verts.new((hw-t,  hd-t, h+rh)), bm.verts.new((-hw+t,  hd-t, h+rh))]
-                ot = [bm.verts.new((-hw+t-rw, -hd+t-rw, h+rh)), bm.verts.new((hw-t+rw, -hd+t-rw, h+rh)),
-                      bm.verts.new((hw-t+rw,  hd-t+rw, h+rh)), bm.verts.new((-hw+t-rw,  hd-t+rw, h+rh))]
-                ob = [bm.verts.new((-hw+t-rw, -hd+t-rw, h)), bm.verts.new((hw-t+rw, -hd+t-rw, h)),
-                      bm.verts.new((hw-t+rw,  hd-t+rw, h)), bm.verts.new((-hw+t-rw,  hd-t+rw, h))]
+                ot = [bm.verts.new((-hw+t-rw*top_ratio, -hd+t-rw*top_ratio, h+rh)),
+                      bm.verts.new((hw-t+rw*top_ratio, -hd+t-rw*top_ratio, h+rh)),
+                      bm.verts.new((hw-t+rw*top_ratio,  hd-t+rw*top_ratio, h+rh)),
+                      bm.verts.new((-hw+t-rw*top_ratio,  hd-t+rw*top_ratio, h+rh))]
+                ob = [bm.verts.new((-hw+t-rw, -hd+t-rw, h)),     # inner wall + rw outward at Z=h
+                      bm.verts.new((hw-t+rw, -hd+t-rw, h)),
+                      bm.verts.new((hw-t+rw,  hd-t+rw, h)),
+                      bm.verts.new((-hw+t-rw,  hd-t+rw, h))]
                 wt = wall_top
+                # ① 向上: wall_top(Z=h) → it(Z=h+rh)
                 bm.faces.new([wt[0], it[0], it[1], wt[1]])
                 bm.faces.new([wt[1], it[1], it[2], wt[2]])
                 bm.faces.new([wt[2], it[2], it[3], wt[3]])
                 bm.faces.new([wt[3], it[3], it[0], wt[0]])
-                bm.faces.new([it[0], ot[0], ot[1], it[1]])
-                bm.faces.new([it[1], ot[1], ot[2], it[2]])
-                bm.faces.new([it[2], ot[2], ot[3], it[3]])
-                bm.faces.new([it[3], ot[3], ot[0], it[0]])
+                # ② 向外水平: it → ot (ratio=0时宽度为0)
+                if top_ratio > 0.001:
+                    bm.faces.new([it[0], ot[0], ot[1], it[1]])
+                    bm.faces.new([it[1], ot[1], ot[2], it[2]])
+                    bm.faces.new([it[2], ot[2], ot[3], it[3]])
+                    bm.faces.new([it[3], ot[3], ot[0], it[0]])
+                # ③ 向外斜下: (it/ot)(Z=h+rh) → ob(Z=h, rw位置)
                 bm.faces.new([ot[0], ob[0], ob[1], ot[1]])
                 bm.faces.new([ot[1], ob[1], ob[2], ot[2]])
                 bm.faces.new([ot[2], ob[2], ob[3], ot[3]])

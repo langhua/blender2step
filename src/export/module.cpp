@@ -2714,47 +2714,80 @@ TopoDS_Shape create_parametric_shell_solid(double width, double depth, double he
     // ── Rim: subtract a ring from the top to carve the rim profile ──
     if (has_rim) {
         bool is_outside = (rim_type && strcmp(rim_type, "outside") == 0);
+        bool is_trapezoid = (rim_shape && strcmp(rim_shape, "trapezoid") == 0 && rim_top_ratio < 0.999);
+        double ratio = is_trapezoid ? std::max(0.0, rim_top_ratio) : 1.0;
 
         // Shell goes Z=0 to Z=height+rh. Rim notch is from Z=height to Z=height+rh.
-        // For inside rim: cut ring from OUTSIDE (removes outer wall top)
-        // For outside rim: cut ring from INSIDE (removes inner wall top)
-        double ring_outer_w, ring_outer_d, ring_inner_w, ring_inner_d;
+        double ring_outer_bot_w, ring_outer_bot_d, ring_inner_w, ring_inner_d;
         if (is_outside) {
-            // Cut ring from INSIDE: removes inner wall top → outer rim remains
-            ring_outer_w = width - 2.0 * rim_width;
-            ring_outer_d = depth - 2.0 * rim_width;
+            ring_outer_bot_w = width - 2.0 * rim_width;
+            ring_outer_bot_d = depth - 2.0 * rim_width;
             ring_inner_w = width - 4.0 * rim_width;
             ring_inner_d = depth - 4.0 * rim_width;
         } else {
-            // Cut ring from OUTSIDE: removes outer wall top → inner rim remains
-            ring_outer_w = width + 2.0 * rim_width;
-            ring_outer_d = depth + 2.0 * rim_width;
+            ring_outer_bot_w = width + 2.0 * rim_width;
+            ring_outer_bot_d = depth + 2.0 * rim_width;
             ring_inner_w = width - 2.0 * rim_width;
             ring_inner_d = depth - 2.0 * rim_width;
         }
 
         if (ring_inner_w > 0.01 && ring_inner_d > 0.01) {
-            TopoDS_Shape ringOuter = create_rounded_box_solid(ring_outer_w, ring_outer_d, rim_height, 0.0);
-            TopoDS_Shape ringInner = create_rounded_box_solid(ring_inner_w, ring_inner_d, rim_height + 2.0, 0.0);
 
-            TopoDS_Solid ringOuterSolid, ringInnerSolid;
-            if (ringOuter.ShapeType() == TopAbs_SOLID) ringOuterSolid = TopoDS::Solid(ringOuter);
-            else { BRepBuilderAPI_MakeSolid sm; for (TopExp_Explorer e(ringOuter, TopAbs_SHELL); e.More(); e.Next()) sm.Add(TopoDS::Shell(e.Current())); if (sm.IsDone()) ringOuterSolid = sm.Solid(); }
-            if (ringInner.ShapeType() == TopAbs_SOLID) ringInnerSolid = TopoDS::Solid(ringInner);
-            else { BRepBuilderAPI_MakeSolid sm; for (TopExp_Explorer e(ringInner, TopAbs_SHELL); e.More(); e.Next()) sm.Add(TopoDS::Shell(e.Current())); if (sm.IsDone()) ringInnerSolid = sm.Solid(); }
+            TopoDS_Shape ring;
+            if (is_trapezoid) {
+                // Trapezoid ring via ThruSections loft
+                double ring_hw_bot = ring_outer_bot_w / 2.0;
+                double ring_hd_bot = ring_outer_bot_d / 2.0;
+                double ring_hw_top = ring_hw_bot - (1.0 - ratio) * (ring_hw_bot - ring_inner_w / 2.0);
+                double ring_hd_top = ring_hd_bot - (1.0 - ratio) * (ring_hd_bot - ring_inner_d / 2.0);
 
-            if (!ringOuterSolid.IsNull() && !ringInnerSolid.IsNull()) {
-                BRepAlgoAPI_Cut ringCut(ringOuterSolid, ringInnerSolid);
-                if (ringCut.IsDone()) {
-                    TopoDS_Shape ring = ringCut.Shape();
-                    // Position ring: center at Z = height + rim_height/2 (covers Z=height to Z=height+rh)
-                    gp_Trsf ringTrsf;
-                    ringTrsf.SetTranslation(gp_Vec(0, 0, height + rim_height / 2.0));
-                    ring = BRepBuilderAPI_Transform(ring, ringTrsf).Shape();
-
-                    BRepAlgoAPI_Cut rimCut(result, ring);
-                    if (rimCut.IsDone()) result = rimCut.Shape();
+                auto MakeRectWire = [](double hw, double hd, double z) -> TopoDS_Wire {
+                    BRepBuilderAPI_MakePolygon poly;
+                    poly.Add(gp_Pnt(-hw, -hd, z)); poly.Add(gp_Pnt(hw, -hd, z));
+                    poly.Add(gp_Pnt(hw,  hd, z)); poly.Add(gp_Pnt(-hw,  hd, z));
+                    poly.Close();
+                    return poly.Wire();
+                };
+                TopoDS_Wire wBot = MakeRectWire(ring_hw_bot, ring_hd_bot, 0.0);
+                TopoDS_Wire wTop = MakeRectWire(ring_hw_top, ring_hd_top, rim_height);
+                BRepOffsetAPI_ThruSections loft(true, true, true);
+                loft.AddWire(wBot);
+                loft.AddWire(wTop);
+                loft.Build();
+                if (loft.IsDone()) {
+                    TopoDS_Shape outerSolid = loft.Shape();
+                    TopoDS_Shape innerShape = create_rounded_box_solid(ring_inner_w, ring_inner_d, rim_height + 2.0, 0.0);
+                    TopoDS_Solid innerSolid;
+                    if (innerShape.ShapeType() == TopAbs_SOLID) innerSolid = TopoDS::Solid(innerShape);
+                    else { BRepBuilderAPI_MakeSolid sm; for (TopExp_Explorer e(innerShape, TopAbs_SHELL); e.More(); e.Next()) sm.Add(TopoDS::Shell(e.Current())); if (sm.IsDone()) innerSolid = sm.Solid(); }
+                    if (!innerSolid.IsNull()) {
+                        BRepAlgoAPI_Cut c(outerSolid, innerSolid);
+                        if (c.IsDone()) ring = c.Shape();
+                    }
                 }
+            } else {
+                // Rectangular ring
+                TopoDS_Shape ringOuter = create_rounded_box_solid(ring_outer_bot_w, ring_outer_bot_d, rim_height, 0.0);
+                TopoDS_Shape ringInner = create_rounded_box_solid(ring_inner_w, ring_inner_d, rim_height + 2.0, 0.0);
+
+                TopoDS_Solid ringOuterSolid, ringInnerSolid;
+                if (ringOuter.ShapeType() == TopAbs_SOLID) ringOuterSolid = TopoDS::Solid(ringOuter);
+                else { BRepBuilderAPI_MakeSolid sm; for (TopExp_Explorer e(ringOuter, TopAbs_SHELL); e.More(); e.Next()) sm.Add(TopoDS::Shell(e.Current())); if (sm.IsDone()) ringOuterSolid = sm.Solid(); }
+                if (ringInner.ShapeType() == TopAbs_SOLID) ringInnerSolid = TopoDS::Solid(ringInner);
+                else { BRepBuilderAPI_MakeSolid sm; for (TopExp_Explorer e(ringInner, TopAbs_SHELL); e.More(); e.Next()) sm.Add(TopoDS::Shell(e.Current())); if (sm.IsDone()) ringInnerSolid = sm.Solid(); }
+
+                if (!ringOuterSolid.IsNull() && !ringInnerSolid.IsNull()) {
+                    BRepAlgoAPI_Cut c(ringOuterSolid, ringInnerSolid);
+                    if (c.IsDone()) ring = c.Shape();
+                }
+            }
+
+            if (!ring.IsNull()) {
+                gp_Trsf ringTrsf;
+                ringTrsf.SetTranslation(gp_Vec(0, 0, height + rim_height / 2.0));
+                ring = BRepBuilderAPI_Transform(ring, ringTrsf).Shape();
+                BRepAlgoAPI_Cut rimCut(result, ring);
+                if (rimCut.IsDone()) result = rimCut.Shape();
             }
         }
     }

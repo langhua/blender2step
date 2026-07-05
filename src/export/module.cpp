@@ -25,12 +25,16 @@
 #include <gp_Trsf.hxx>
 #include <BRepBuilderAPI_Transform.hxx>
 #include <BRepBuilderAPI_MakeSolid.hxx>
+#include <TopExp.hxx>
+#include <BRep_Tool.hxx>
+#include <BRepAdaptor_Curve.hxx>
 #include <TopExp_Explorer.hxx>
 #include <BRepCheck_Analyzer.hxx>
 #include <BRepGProp.hxx>
 #include <GProp_GProps.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
+#include <TopoDS_Iterator.hxx>
 #include <TopLoc_Location.hxx>
 #include <string>
 
@@ -2634,6 +2638,168 @@ PyObject* merge_step_files(PyObject* self, PyObject* args) {
     }
 }
 
+// ── Parametric Shell (open-top box) ──────────────────────────────
+
+TopoDS_Shape create_parametric_shell_solid(double width, double depth, double height,
+                                            double thickness, const char* corner_type,
+                                            double corner_radius) {
+    bool rounded = (corner_type && strcmp(corner_type, "rounded") == 0 && corner_radius > 0.001);
+    double cr = rounded ? std::min(corner_radius, std::min(width/2.0, depth/2.0)) : 0.0;
+
+    // ── Closed hollow box: outer and inner both centered at origin ──
+    // Outer: full box. Inner: all dimensions smaller by 2*thickness.
+    // Cut produces a closed solid with solid floor, walls, and ceiling.
+    double outer_cr = rounded ? cr : 0.0;
+    TopoDS_Shape outerShape = create_rounded_box_solid(width, depth, height, outer_cr);
+    if (outerShape.IsNull()) return TopoDS_Shape();
+
+    // Ensure outer is a solid
+    TopoDS_Solid outerSolid;
+    if (outerShape.ShapeType() == TopAbs_SOLID) {
+        outerSolid = TopoDS::Solid(outerShape);
+    } else {
+        BRepBuilderAPI_MakeSolid sm;
+        for (TopExp_Explorer exp(outerShape, TopAbs_SHELL); exp.More(); exp.Next())
+            sm.Add(TopoDS::Shell(exp.Current()));
+        if (!sm.IsDone()) return TopoDS_Shape();
+        outerSolid = sm.Solid();
+    }
+
+    double inner_w = width - 2.0 * thickness;
+    double inner_d = depth - 2.0 * thickness;
+    double inner_h = height - thickness + 1.0;  // extends above outer for clean open-top cut
+    if (inner_w <= 0 || inner_d <= 0 || inner_h <= 0) {
+        return outerShape;  // wall too thick, return solid box
+    }
+
+    double inner_cr = rounded ? std::max(0.0, cr - thickness) : 0.0;
+    TopoDS_Shape innerShape = create_rounded_box_solid(inner_w, inner_d, inner_h, inner_cr);
+    if (innerShape.IsNull()) return outerShape;
+
+    // Ensure inner is a solid
+    TopoDS_Solid innerSolid;
+    if (innerShape.ShapeType() == TopAbs_SOLID) {
+        innerSolid = TopoDS::Solid(innerShape);
+    } else {
+        BRepBuilderAPI_MakeSolid sm;
+        for (TopExp_Explorer exp(innerShape, TopAbs_SHELL); exp.More(); exp.Next())
+            sm.Add(TopoDS::Shell(exp.Current()));
+        if (!sm.IsDone()) return outerShape;
+        innerSolid = sm.Solid();
+    }
+
+    // Shift inner up: bottom at z=thickness, top extends above outer
+    double inner_z_offset = thickness + inner_h / 2.0;
+    gp_Trsf innerTrsf;
+    innerTrsf.SetTranslation(gp_Vec(0, 0, inner_z_offset));
+    TopLoc_Location innerLoc(innerTrsf);
+    innerSolid.Move(innerLoc);
+
+    // Boolean cut: outer - inner → open-top shell
+    BRepAlgoAPI_Cut cutMaker(outerSolid, innerSolid);
+    if (!cutMaker.IsDone()) return outerShape;
+    TopoDS_Shape result = cutMaker.Shape();
+
+    // Shift up by height/2: outer box is centered at origin, but Blender
+    // convention has bottom face at Z=0. Move so bottom is at Z=0.
+    gp_Trsf shiftUp;
+    shiftUp.SetTranslation(gp_Vec(0, 0, height / 2.0));
+    result = BRepBuilderAPI_Transform(result, shiftUp).Shape();
+
+    return result;
+}
+
+// ── Python-facing export function ────────────────────────────────
+
+PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
+    const char* filename; const char* corner_type = "square"; const char* step_schema = "AP214IS";
+    const char* unit = "MILLIMETER"; int enable_logging = 1;
+    double width, depth, height, thickness, corner_radius = 0.0;
+    double pos_x = 0.0, pos_y = 0.0, pos_z = 0.0;
+
+    if (!PyArg_ParseTuple(args, "sdddd|dsdddssi",
+                          &filename, &width, &depth, &height, &thickness,
+                          &corner_radius, &corner_type,
+                          &pos_x, &pos_y, &pos_z,
+                          &step_schema, &unit, &enable_logging)) {
+        PyErr_SetString(PyExc_TypeError,
+            "export_parametric_shell_step() expected: filename, width, depth, height, thickness"
+            "[, corner_radius, corner_type, pos_x, pos_y, pos_z, step_schema, unit, enable_logging]");
+        return NULL;
+    }
+
+    std::cout << "\n[STEP Exporter] =========================================" << std::endl;
+    std::cout << "[STEP Exporter] Exporting parametric shell to: " << filename << std::endl;
+    std::cout << "[STEP Exporter]   dims: " << width << "x" << depth << "x" << height
+              << " wall=" << thickness << " corner=" << corner_type << " r=" << corner_radius << std::endl;
+    std::cout << "[STEP Exporter]   pos=(" << pos_x << "," << pos_y << "," << pos_z << ")" << std::endl;
+
+    try {
+        TopoDS_Shape shape = create_parametric_shell_solid(width, depth, height,
+                                                            thickness, corner_type, corner_radius);
+        if (shape.IsNull()) { Py_RETURN_FALSE; }
+
+        // Fix if needed
+        BRepCheck_Analyzer ana(shape);
+        if (!ana.IsValid()) {
+            shape = fix_shape_enhanced(shape, 0.001);
+        }
+
+        // Translate
+        if (pos_x != 0.0 || pos_y != 0.0 || pos_z != 0.0) {
+            gp_Trsf trsf;
+            trsf.SetTranslation(gp_Vec(pos_x, pos_y, pos_z));
+            shape = BRepBuilderAPI_Transform(shape, trsf).Shape();
+        }
+
+        // Write STEP
+        std::string logPath;
+        const char* log_filename = nullptr;
+        if (enable_logging) {
+            logPath = std::string(filename) + ".log";
+            log_filename = logPath.c_str();
+        }
+        STEPControl_Writer writer;
+        StdoutRedirectState redirectState = setup_step_writer(
+            writer, filename, step_schema, unit, 1, enable_logging, log_filename);
+
+        // Dummy vertex workaround
+        BRepBuilderAPI_MakeVertex vm(gp_Pnt(0,0,0));
+        if (vm.IsDone()) writer.Transfer(vm.Vertex(), STEPControl_AsIs);
+
+        IFSelect_ReturnStatus ts = writer.Transfer(shape, STEPControl_AsIs);
+        if (ts != IFSelect_RetDone) {
+            Py_RETURN_FALSE;
+        }
+
+        IFSelect_ReturnStatus ws = writer.Write(filename);
+        if (redirectState.stdout_redirected && redirectState.log_file) {
+            _dup2(redirectState.saved_stdout_fd, _fileno(stdout));
+            fclose(redirectState.log_file);
+        }
+
+        if (ws == IFSelect_RetDone) {
+            int fc = 0;
+            for (TopExp_Explorer e(shape, TopAbs_FACE); e.More(); e.Next()) fc++;
+            std::cout << "[STEP Exporter]   shell: " << fc << " faces" << std::endl;
+            Py_RETURN_TRUE;
+        }
+        Py_RETURN_FALSE;
+    }
+    catch (const Standard_Failure& e) {
+        std::cerr << "[STEP Exporter] OCCT error: " << e.GetMessageString() << std::endl;
+        Py_RETURN_FALSE;
+    }
+    catch (const std::exception& e) {
+        std::cerr << "[STEP Exporter] Error: " << e.what() << std::endl;
+        Py_RETURN_FALSE;
+    }
+    catch (...) {
+        std::cerr << "[STEP Exporter] Unknown error" << std::endl;
+        Py_RETURN_FALSE;
+    }
+}
+
 // 模块方法定义表
 static PyMethodDef step_exporter_methods[] = {
     {"export_step", export_step, METH_VARARGS, "Export simple shape to STEP"},
@@ -2645,6 +2811,7 @@ static PyMethodDef step_exporter_methods[] = {
     {"export_bottom_shell_filleted_step", export_bottom_shell_filleted_step, METH_VARARGS, "Export bottom shell with bottom fillets directly to STEP"},
     {"export_bottom_shell_filleted_with_holes_step", export_bottom_shell_filleted_with_holes_step, METH_VARARGS, "Export bottom shell with bottom fillets and corner holes directly to STEP"},
     {"export_top_shell_filleted_step", export_top_shell_filleted_step, METH_VARARGS, "Export top shell (tapered, lofted) with fillets and window directly to STEP"},
+    {"export_parametric_shell_step", export_parametric_shell_step, METH_VARARGS, "Export parametric open-top shell (box with wall thickness) to STEP"},
     {"export_cylinder_step", export_cylinder_step, METH_VARARGS, "Export parametric cylinder to STEP"},
     {"export_cone_step", export_cone_step, METH_VARARGS, "Export parametric cone to STEP"},
     {"export_hollow_cylinder_step", export_hollow_cylinder_step, METH_VARARGS, "Export parametric hollow cylinder to STEP"},

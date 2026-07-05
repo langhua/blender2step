@@ -44,14 +44,10 @@ def _verify_step_shell(filepath):
 
 
 def _strip_wireframe_chain(entities):
-    """Remove wireframe product chain entities, keeping only solid geometry.
+    """Remove wireframe product chain entities, keeping only solid/surface geometry.
     
-    Each temp file has: wireframe product (#1~#22 approx) + solid product (#23+).
-    Strategy: find ALL MANIFOLD_SOLID_BREP entities → follow each to their
-    ADVANCED_BREP_SHAPE_REPRESENTATION → SHAPE_DEFINITION_REPRESENTATION
-    → keep all product chains.
-    Remove everything else except shared context (#1 APPLICATION_PROTOCOL_DEFINITION,
-    #2 APPLICATION_CONTEXT).
+    Recognizes both MANIFOLD_SOLID_BREP (closed solids) and
+    SHELL_BASED_SURFACE_MODEL (open shells like parametric shell).
     
     Returns filtered list of (id, entity_text) tuples.
     """
@@ -67,37 +63,40 @@ def _strip_wireframe_chain(entities):
         entity_map[eid] = text
         entity_refs[eid] = {int(x) for x in re.findall(r'#(\d+)', text)}
     
-    # Step 1: Find ALL solid roots (MANIFOLD_SOLID_BREP) — there may be multiple
-    # (main shape + debug cutters)
-    solid_brep_ids = []
+    # Step 1: Find ALL geometry roots:
+    #   - MANIFOLD_SOLID_BREP (closed solids) referenced by ADVANCED_BREP_SHAPE_REPRESENTATION
+    #   - SHELL_BASED_SURFACE_MODEL (open shells) referenced by MANIFOLD_SURFACE_SHAPE_REPRESENTATION
+    geometry_roots = []  # list of (root_id, shape_rep_id, shape_rep_keyword)
     for eid, text in entities:
         if 'MANIFOLD_SOLID_BREP' in text:
-            solid_brep_ids.append(eid)
+            geometry_roots.append((eid, 'ADVANCED_BREP_SHAPE_REPRESENTATION'))
+        elif 'SHELL_BASED_SURFACE_MODEL' in text:
+            geometry_roots.append((eid, 'MANIFOLD_SURFACE_SHAPE_REPRESENTATION'))
     
-    if not solid_brep_ids:
-        return entities  # No solid, keep everything
+    if not geometry_roots:
+        return entities  # No geometry, keep everything
     
     keep_ids = {1, 2}  # Always keep APPLICATION_PROTOCOL_DEFINITION and APPLICATION_CONTEXT
+    log_root_count = 0
     
-    # Process each solid chain
-    for solid_brep_id in solid_brep_ids:
-        # Step 2: Find ADVANCED_BREP_SHAPE_REPRESENTATION that references this solid_brep_id
-        advanced_brep_id = None
+    for root_id, shape_rep_keyword in geometry_roots:
+        # Step 2: Find shape representation that references this root
+        shape_rep_id = None
         for eid, text in entities:
-            if 'ADVANCED_BREP_SHAPE_REPRESENTATION' in text and solid_brep_id in entity_refs.get(eid, set()):
-                advanced_brep_id = eid
+            if shape_rep_keyword in text and root_id in entity_refs.get(eid, set()):
+                shape_rep_id = eid
                 break
         
-        if advanced_brep_id is None:
+        if shape_rep_id is None:
             continue
         
-        # Step 3: Find SHAPE_DEFINITION_REPRESENTATION that references advanced_brep_id
+        # Step 3: Find SHAPE_DEFINITION_REPRESENTATION that references shape_rep_id
         sdr_id = None
         pds_id = None
         for eid, text in entities:
-            if 'SHAPE_DEFINITION_REPRESENTATION' in text and advanced_brep_id in entity_refs.get(eid, set()):
+            if 'SHAPE_DEFINITION_REPRESENTATION' in text and shape_rep_id in entity_refs.get(eid, set()):
                 sdr_id = eid
-                refs = entity_refs[eid] - {advanced_brep_id}
+                refs = entity_refs[eid] - {shape_rep_id}
                 if refs:
                     pds_id = min(refs)
                 break
@@ -105,9 +104,9 @@ def _strip_wireframe_chain(entities):
         if sdr_id is None:
             continue
         
-        # BFS from this solid chain
+        # BFS from this geometry chain
         visited = set()
-        queue = deque([sdr_id, advanced_brep_id])
+        queue = deque([sdr_id, shape_rep_id])
         if pds_id:
             queue.append(pds_id)
         
@@ -122,6 +121,11 @@ def _strip_wireframe_chain(entities):
             for ref in entity_refs[eid]:
                 if ref not in visited:
                     queue.append(ref)
+    
+    # Debug logging
+    all_entity_ids = {eid for eid, _ in entities}
+    kept_count = len([eid for eid in all_entity_ids if eid in keep_ids])
+    log_to_file(f"[MERGE DEBUG] _strip_wireframe_chain: {len(entities)} entities -> {kept_count} kept, roots={len(geometry_roots)}")
     
     return [(eid, text) for eid, text in entities if eid in keep_ids]
 
@@ -205,7 +209,9 @@ def _merge_step_files(output_path, temp_files):
             entities.append((current_id, current_entity))
         
         # Strip wireframe product chain (dummy vertex, if any) from each temp file
+        log_to_file(f"[MERGE DEBUG] Processing temp file: {len(entities)} entities before strip")
         entities = _strip_wireframe_chain(entities)
+        log_to_file(f"[MERGE DEBUG] After strip: {len(entities)} entities, id_shift={max_entity_id}")
         
         id_shift = max_entity_id
         

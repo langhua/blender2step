@@ -1,0 +1,219 @@
+"""Parametric shell (open-top box) generation."""
+import math
+import bpy, bmesh
+from bpy.types import Operator
+from bpy.props import FloatProperty, EnumProperty
+from ..core.i18n import _t
+
+
+class STEP_EXPORTER_OT_create_parametric_shell(Operator):
+    """创建参数化外壳（无盖盒子）"""
+    bl_idname = "step_exporter.create_parametric_shell"
+    bl_label = _t("Parametric Shell")
+    bl_options = {'REGISTER', 'UNDO'}
+
+    # ── Corner type ──
+    corner_type: EnumProperty(
+        name=_t("Corner"),
+        items=[
+            ('square', "Square (直角)", "Sharp square corners"),
+            ('rounded', "Rounded (圆角)", "Rounded corners"),
+        ],
+        default='square',
+    )
+
+    # ── Dimensions ──
+    width: FloatProperty(
+        name=_t("Width (X)"), default=100.0, min=1.0, max=10000.0,
+        description="Width along X axis (mm)")
+    depth: FloatProperty(
+        name=_t("Depth (Y)"), default=80.0, min=1.0, max=10000.0,
+        description="Depth along Y axis (mm)")
+    height: FloatProperty(
+        name=_t("Height (Z)"), default=50.0, min=1.0, max=10000.0,
+        description="Height along Z axis (mm)")
+    thickness: FloatProperty(
+        name=_t("Wall Thickness"), default=2.0, min=0.1, max=1000.0,
+        description="Wall thickness (mm)")
+    corner_radius: FloatProperty(
+        name=_t("Corner Radius"), default=5.0, min=0.1, max=1000.0,
+        description="Fillet radius for rounded corners (mm)")
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_props_dialog(self, width=320)
+
+    def draw(self, context):
+        layout = self.layout
+        layout.prop(self, 'corner_type')
+        layout.separator()
+        layout.prop(self, 'width')
+        layout.prop(self, 'depth')
+        layout.prop(self, 'height')
+        layout.prop(self, 'thickness')
+        if self.corner_type == 'rounded':
+            layout.prop(self, 'corner_radius')
+
+    def execute(self, context):
+        w, d, h, t = self.width, self.depth, self.height, self.thickness
+        cr = self.corner_radius if self.corner_type == 'rounded' else 0.0
+        cr = max(0.0, min(cr, w / 2 - t, d / 2 - t))
+
+        bm = bmesh.new()
+
+        if cr <= 0.001:
+            self._build_square(bm, w, d, h, t)
+        else:
+            self._build_rounded(bm, w, d, h, t, cr)
+
+        # Create mesh object
+        mesh = bpy.data.meshes.new("ParamShell")
+        bm.to_mesh(mesh)
+        bm.free()
+
+        obj = bpy.data.objects.new("ParamShell", mesh)
+        bpy.context.collection.objects.link(obj)
+        bpy.context.view_layer.objects.active = obj
+        obj.select_set(True)
+
+        # Store params
+        obj['width'] = w
+        obj['depth'] = d
+        obj['height'] = h
+        obj['wall_thickness'] = t
+        obj['corner_type'] = self.corner_type
+        obj['corner_radius'] = cr
+        obj['object_type'] = 'parametric_shell'
+
+        self.report({'INFO'}, f"Shell: {w:.0f}×{d:.0f}×{h:.0f}mm, wall={t:.1f}mm")
+        return {'FINISHED'}
+
+    # ── Square corners ────────────────────────────────────
+
+    def _build_square(self, bm, w, d, h, t):
+        hw, hd = w / 2, d / 2
+        o = [  # outer vertices
+            bm.verts.new((-hw, -hd, 0)), bm.verts.new((hw, -hd, 0)),
+            bm.verts.new((hw,  hd, 0)), bm.verts.new((-hw,  hd, 0)),
+            bm.verts.new((-hw, -hd, h)), bm.verts.new((hw, -hd, h)),
+            bm.verts.new((hw,  hd, h)), bm.verts.new((-hw,  hd, h)),
+        ]
+        i = [  # inner vertices (offset by thickness)
+            bm.verts.new((-hw+t, -hd+t, t)), bm.verts.new((hw-t, -hd+t, t)),
+            bm.verts.new((hw-t,  hd-t, t)), bm.verts.new((-hw+t,  hd-t, t)),
+            bm.verts.new((-hw+t, -hd+t, h)), bm.verts.new((hw-t, -hd+t, h)),
+            bm.verts.new((hw-t,  hd-t, h)), bm.verts.new((-hw+t,  hd-t, h)),
+        ]
+        bm.verts.ensure_lookup_table()
+
+        def f(vi):
+            return bm.faces.new([bm.verts[v] for v in vi])
+
+        f([0,1,2,3])   # outer bottom
+        f([4,0,3,7])   # outer left
+        f([1,5,6,2])   # outer right
+        f([2,6,7,3])   # outer back
+        f([0,4,5,1])   # outer front
+
+        f([8,11,10,9]) # inner bottom
+        f([12,8,9,13]) # inner front
+        f([13,9,10,14])# inner right
+        f([14,10,11,15])# inner back
+        f([15,11,8,12])# inner left
+
+        # Top rim
+        f([4,12,15,7])
+        f([7,15,14,6])
+        f([6,14,13,5])
+        f([5,13,12,4])
+
+        bm.normal_update()
+
+    # ── Rounded corners ───────────────────────────────────
+
+    def _build_rounded(self, bm, w, d, h, t, cr):
+        """Build open-top box with rounded corners via clean CCW profile sweep."""
+        seg = 12
+        hw, hd = w / 2, d / 2
+        ir = max(cr - t, 0.1)
+
+        # Corner centers: cc[0]=front-left, cc[1]=front-right, cc[2]=back-right, cc[3]=back-left
+        occ = [(-hw+cr, -hd+cr), (hw-cr, -hd+cr), (hw-cr, hd-cr), (-hw+cr, hd-cr)]
+
+        def make_profile(cr_val, off):
+            """CCW profile: right↑ → arc(br) → back← → arc(bl) → left↓ → arc(fl) → front→ → arc(fr)
+            off = 0 for outer, off = t for inner (flat edges offset inward by wall thickness)"""
+            n = seg
+            pts = []
+            rhw, rhd = hw - off, hd - off  # reduced half-width/depth for inner walls
+            # 1. Right edge flat: (rhw, -rhd+cr_val) → (rhw, rhd-cr_val), going +Y
+            for i in range(1, n + 1):
+                y = -rhd + cr_val + (2*(rhd - cr_val)) * i / n
+                pts.append((rhw, y))
+            # 2. Back-right arc (0 → π/2) at cc[2]
+            cx, cy = occ[2]
+            for j in range(1, n + 1):
+                a = j * (math.pi/2) / n
+                pts.append((cx + cr_val*math.cos(a), cy + cr_val*math.sin(a)))
+            # 3. Back edge flat: (rhw-cr_val, rhd) → (-rhw+cr_val, rhd), going -X
+            for i in range(1, n + 1):
+                x = rhw - cr_val - (2*(rhw - cr_val)) * i / n
+                pts.append((x, rhd))
+            # 4. Back-left arc (π/2 → π) at cc[3]
+            cx, cy = occ[3]
+            for j in range(1, n + 1):
+                a = math.pi/2 + j*(math.pi/2)/n
+                pts.append((cx + cr_val*math.cos(a), cy + cr_val*math.sin(a)))
+            # 5. Left edge flat: (-rhw, rhd-cr_val) → (-rhw, -rhd+cr_val), going -Y
+            for i in range(1, n + 1):
+                y = rhd - cr_val - (2*(rhd - cr_val)) * i / n
+                pts.append((-rhw, y))
+            # 6. Front-left arc (π → 3π/2) at cc[0]
+            cx, cy = occ[0]
+            for j in range(1, n + 1):
+                a = math.pi + j*(math.pi/2)/n
+                pts.append((cx + cr_val*math.cos(a), cy + cr_val*math.sin(a)))
+            # 7. Front edge flat: (-rhw+cr_val, -rhd) → (rhw-cr_val, -rhd), going +X
+            for i in range(1, n + 1):
+                x = -rhw + cr_val + (2*(rhw - cr_val)) * i / n
+                pts.append((x, -rhd))
+            # 8. Front-right arc (3π/2 → 2π) at cc[1]
+            cx, cy = occ[1]
+            for j in range(1, n + 1):
+                a = 3*math.pi/2 + j*(math.pi/2)/n
+                pts.append((cx + cr_val*math.cos(a), cy + cr_val*math.sin(a)))
+            return pts
+
+        # Build outer & inner profiles
+        outer_pts = make_profile(cr, 0)      # outer: no offset
+        inner_pts = make_profile(ir, t)      # inner: offset inward by thickness
+
+        nv = len(outer_pts)  # same as len(inner_pts)
+
+        # Vertices
+        outer_bot = [bm.verts.new((x, y, 0)) for x, y in outer_pts]
+        outer_top = [bm.verts.new((x, y, h)) for x, y in outer_pts]
+        inner_top = [bm.verts.new((x, y, h)) for x, y in inner_pts]
+        inner_bot = [bm.verts.new((x, y, t)) for x, y in inner_pts]
+        bm.verts.ensure_lookup_table()
+
+        # Faces
+        # Outer bottom
+        bm.faces.new(list(reversed(outer_bot)))
+        # Outer walls
+        for j in range(nv):
+            j2 = (j+1) % nv
+            bm.faces.new([outer_bot[j], outer_bot[j2], outer_top[j2], outer_top[j]])
+        # Inner walls
+        for j in range(nv):
+            j2 = (j+1) % nv
+            bm.faces.new([inner_bot[j], inner_bot[j2], inner_top[j2], inner_top[j]])
+        # Inner bottom
+        bm.faces.new(inner_bot)
+        # Top rim
+        for j in range(nv):
+            j2 = (j+1) % nv
+            bm.faces.new([outer_top[j], outer_top[j2], inner_top[j2], inner_top[j]])
+
+        bm.normal_update()
+
+        bm.normal_update()

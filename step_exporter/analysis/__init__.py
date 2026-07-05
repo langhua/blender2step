@@ -1,3 +1,4 @@
 from .top_shell import _analyze_top_shell_from_mesh
 from .bottom_shell import _analyze_bottom_shell_from_mesh
 from .cylinder import _analyze_cylinder_from_mesh
+from .parametric_shell import _analyze_parametric_shell_from_mesh

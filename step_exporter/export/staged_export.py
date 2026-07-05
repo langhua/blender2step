@@ -696,6 +696,7 @@ def _parametric_export_staged():
         shells = data.get('shells', [])
         top_shells_data = data.get('top_shells', [])
         cylinders = data.get('cylinders', [])
+        parametric_shells = data.get('parametric_shells', [])
         regular_objects = data.get('regular_objects', [])
         
         import _step_exporter as cpp_exporter
@@ -705,7 +706,7 @@ def _parametric_export_staged():
             _g._export_start_time = time.time()
             _g._stage_start_time = time.time()
             
-            total_objects = len(shells) + len(top_shells_data) + len(cylinders) + len(regular_objects)
+            total_objects = len(shells) + len(top_shells_data) + len(cylinders) + len(parametric_shells) + len(regular_objects)
             if total_objects == 0:
                 log_to_file(f"[STEP Exporter] No objects to export")
                 end_progress(context)
@@ -714,7 +715,7 @@ def _parametric_export_staged():
                 _g._export_success = True
                 return None
             
-            log_to_file(f"[STEP Exporter] Staged export: {len(shells)} bottom + {len(top_shells_data)} top + {len(cylinders)} cyl + {len(regular_objects)} mesh")
+            log_to_file(f"[STEP Exporter] Staged export: {len(shells)} bottom + {len(top_shells_data)} top + {len(cylinders)} cyl + {len(parametric_shells)} shell + {len(regular_objects)} mesh")
             _g._parametric_export_stage = 1
             _g._parametric_export_idx = 0
             _g._parametric_temp_files = []
@@ -733,6 +734,8 @@ def _parametric_export_staged():
             all_objects.append(('top_shell', tparams))
         for cparams in cylinders:
             all_objects.append(('cylinder', cparams))
+        for pparams in parametric_shells:
+            all_objects.append(('parametric_shell', pparams))
         for obj in regular_objects:
             all_objects.append(('regular', obj))
         total_objects = len(all_objects)
@@ -807,6 +810,19 @@ def _parametric_export_staged():
                     obj_subtype = cparams.get('obj_type', 'cylinder')
                     log_to_file(f"[STEP Exporter] Exporting {obj_subtype} {obj_num}/{total_objects}...")
                     success = _export_cylinder_staged(cpp_exporter, temp_file, cparams, data)
+                
+                elif obj_type == 'parametric_shell':
+                    pparams = obj_params
+                    log_to_file(f"[STEP Exporter] Exporting parametric shell {obj_num}/{total_objects} (C++)...")
+                    success = cpp_exporter.export_parametric_shell_step(
+                        temp_file,
+                        pparams['width'], pparams['depth'], pparams['height'],
+                        pparams['wall_thickness'],
+                        pparams.get('corner_radius', 0.0),
+                        pparams.get('corner_type', 'square'),
+                        pparams.get('pos_x', 0.0), pparams.get('pos_y', 0.0), pparams.get('pos_z', 0.0),
+                        data['step_schema'], data['step_unit'],
+                        1 if data['enable_logging'] else 0)
                 
                 elif obj_type == 'regular':
                     obj = obj_params

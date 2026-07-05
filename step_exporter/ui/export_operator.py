@@ -754,7 +754,7 @@ def _execute_analysis_and_export(operator, params):
     import bpy
     from ..core import _globals as _g
     from ..core.utils import log_to_file, _merge_log_files
-    from ..analysis import _analyze_cylinder_from_mesh, _analyze_bottom_shell_from_mesh, _analyze_top_shell_from_mesh
+    from ..analysis import _analyze_cylinder_from_mesh, _analyze_bottom_shell_from_mesh, _analyze_top_shell_from_mesh, _analyze_parametric_shell_from_mesh
     from ..export import _export_worker_timer, _parametric_export_staged
     from ..export.progress_report import start_progress, update_progress, end_progress, set_operator, clear_operator
     
@@ -771,7 +771,7 @@ def _execute_analysis_and_export(operator, params):
         obj.name                     # 同名位置按字母序
     ))
     
-    # 根据选择的单位确定缩放值
+    # 根据选择的单位确定缩放值 (Blender BU → mm)
     if unit == 'mm':
         scale = 1000.0
     else:
@@ -783,12 +783,20 @@ def _execute_analysis_and_export(operator, params):
     bottom_shells = []
     top_shells = []
     cylinder_objects = []
+    parametric_shells = []
     regular_export_objects = []
     
     total_objects = len(_g._export_objects)
     for idx, obj in enumerate(_g._export_objects):
         if obj.type == 'MESH':
             log_to_file(f"[STEP Exporter] Checking: {obj.name}")
+            
+            # 优先检查 parametric_shell（避免被误判为圆柱）
+            shell_params = _analyze_parametric_shell_from_mesh(obj, context, scale)
+            if shell_params:
+                parametric_shells.append(shell_params)
+                log_to_file(f"[STEP Exporter] Found parametric_shell: {obj.name}")
+                continue
             
             # 优先尝试参数化分析（圆柱/圆锥检测）
             # 即使对象有 step_use_mesh 标记，也先尝试参数化——网格可能已被布尔操作破坏
@@ -829,10 +837,10 @@ def _execute_analysis_and_export(operator, params):
             pct = int(1 + 7 * idx / max(1, total_objects))
             update_progress(pct, f"分析物体 {idx+1}/{total_objects}...", context)
     
-    total_parametric = len(bottom_shells) + len(top_shells) + len(cylinder_objects)
-    log_to_file(f"[STEP Exporter] Total objects: {len(_g._export_objects)}, bottom_shells: {len(bottom_shells)}, top_shells: {len(top_shells)}, cylinders: {len(cylinder_objects)}, regular: {len(regular_export_objects)}")
+    total_parametric = len(bottom_shells) + len(top_shells) + len(cylinder_objects) + len(parametric_shells)
+    log_to_file(f"[STEP Exporter] Total objects: {len(_g._export_objects)}, bottom_shells: {len(bottom_shells)}, top_shells: {len(top_shells)}, cylinders: {len(cylinder_objects)}, parametric_shells: {len(parametric_shells)}, regular: {len(regular_export_objects)}")
     
-    if bottom_shells or top_shells or cylinder_objects:
+    if bottom_shells or top_shells or cylinder_objects or parametric_shells:
         log_to_file(f"[STEP Exporter] Found {total_parametric} parametric object(s), using parametric export")
         update_progress(10, f"分析完成，开始导出 {total_parametric} 个参数化物体...", context)
 
@@ -841,6 +849,7 @@ def _execute_analysis_and_export(operator, params):
             'shells': bottom_shells,
             'top_shells': top_shells,
             'cylinders': cylinder_objects,
+            'parametric_shells': parametric_shells,
             'regular_objects': regular_export_objects,
             'step_schema': step_schema,
             'step_unit': step_unit,

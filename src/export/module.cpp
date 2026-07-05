@@ -2755,17 +2755,44 @@ TopoDS_Shape create_parametric_shell_solid(double width, double depth, double he
 
         TopoDS_Shape ring;
         if (tapered) {
-            // Trapezoid ring via ThruSections loft
-            auto MakeWire = [](double hw, double hd, double z) -> TopoDS_Wire {
-                BRepBuilderAPI_MakePolygon p;
-                p.Add(gp_Pnt(-hw, -hd, z)); p.Add(gp_Pnt(hw, -hd, z));
-                p.Add(gp_Pnt(hw,  hd, z)); p.Add(gp_Pnt(-hw,  hd, z));
-                p.Close(); return p.Wire();
+            // Trapezoid ring via ThruSections loft with rounded corners
+            auto MakeRoundedWire = [](double hw, double hd, double rad, double z) -> TopoDS_Wire {
+                if (rad < 0.01) {
+                    BRepBuilderAPI_MakePolygon p;
+                    p.Add(gp_Pnt(-hw, -hd, z)); p.Add(gp_Pnt(hw, -hd, z));
+                    p.Add(gp_Pnt(hw,  hd, z)); p.Add(gp_Pnt(-hw,  hd, z));
+                    p.Close(); return p.Wire();
+                }
+                BRepBuilderAPI_MakeWire mw;
+                // Right flat: (hw, -hd+rad) → (hw, hd-rad)
+                mw.Add(BRepBuilderAPI_MakeEdge(gp_Pnt(hw, -hd+rad, z), gp_Pnt(hw, hd-rad, z)));
+                // BR arc
+                mw.Add(BRepBuilderAPI_MakeEdge(gp_Circ(gp_Ax2(gp_Pnt(hw-rad, hd-rad, z), gp::DZ()), rad), 0.0, M_PI/2));
+                // Back flat: (hw-rad, hd) → (-hw+rad, hd)
+                mw.Add(BRepBuilderAPI_MakeEdge(gp_Pnt(hw-rad, hd, z), gp_Pnt(-hw+rad, hd, z)));
+                // BL arc
+                mw.Add(BRepBuilderAPI_MakeEdge(gp_Circ(gp_Ax2(gp_Pnt(-hw+rad, hd-rad, z), gp::DZ()), rad), M_PI/2, M_PI));
+                // Left flat: (-hw, hd-rad) → (-hw, -hd+rad)
+                mw.Add(BRepBuilderAPI_MakeEdge(gp_Pnt(-hw, hd-rad, z), gp_Pnt(-hw, -hd+rad, z)));
+                // FL arc
+                mw.Add(BRepBuilderAPI_MakeEdge(gp_Circ(gp_Ax2(gp_Pnt(-hw+rad, -hd+rad, z), gp::DZ()), rad), M_PI, 3*M_PI/2));
+                // Front flat: (-hw+rad, -hd) → (hw-rad, -hd)
+                mw.Add(BRepBuilderAPI_MakeEdge(gp_Pnt(-hw+rad, -hd, z), gp_Pnt(hw-rad, -hd, z)));
+                // FR arc
+                mw.Add(BRepBuilderAPI_MakeEdge(gp_Circ(gp_Ax2(gp_Pnt(hw-rad, -hd+rad, z), gp::DZ()), rad), 3*M_PI/2, 2*M_PI));
+                return mw.Wire();
             };
-            TopoDS_Wire ob = MakeWire(ring_outer_bot_hw, ring_outer_bot_hd, 0.0);
-            TopoDS_Wire ot = MakeWire(ring_outer_top_hw, ring_outer_top_hd, rim_height);
-            TopoDS_Wire ib = MakeWire(ring_inner_bot_hw, ring_inner_bot_hd, 0.0);
-            TopoDS_Wire it = MakeWire(ring_inner_top_hw, ring_inner_top_hd, rim_height);
+
+            // Corner radius at ring position: rad = hw_ring - hw + cr
+            auto ringRad = [&](double hw_ring) { return rounded ? std::max(0.0, hw_ring - width/2.0 + cr) : 0.0; };
+            double orad_bot = ringRad(ring_outer_bot_hw);
+            double orad_top = ringRad(ring_outer_top_hw);
+            double irad_bot = ringRad(ring_inner_bot_hw);
+            double irad_top = ringRad(ring_inner_top_hw);
+            TopoDS_Wire ob = MakeRoundedWire(ring_outer_bot_hw, ring_outer_bot_hd, orad_bot, 0.0);
+            TopoDS_Wire ot = MakeRoundedWire(ring_outer_top_hw, ring_outer_top_hd, orad_top, rim_height);
+            TopoDS_Wire ib = MakeRoundedWire(ring_inner_bot_hw, ring_inner_bot_hd, irad_bot, 0.0);
+            TopoDS_Wire it = MakeRoundedWire(ring_inner_top_hw, ring_inner_top_hd, irad_top, rim_height);
 
             BRepOffsetAPI_ThruSections loftO(true, true, true), loftI(true, true, true);
             loftO.AddWire(ob); loftO.AddWire(ot); loftO.Build();

@@ -25,6 +25,8 @@
 #include <gp_Trsf.hxx>
 #include <BRepBuilderAPI_Transform.hxx>
 #include <BRepBuilderAPI_MakeSolid.hxx>
+#include <BRepBuilderAPI_MakePolygon.hxx>
+#include <BRepOffsetAPI_ThruSections.hxx>
 #include <TopExp.hxx>
 #include <BRep_Tool.hxx>
 #include <BRepAdaptor_Curve.hxx>
@@ -2642,15 +2644,21 @@ PyObject* merge_step_files(PyObject* self, PyObject* args) {
 
 TopoDS_Shape create_parametric_shell_solid(double width, double depth, double height,
                                             double thickness, const char* corner_type,
-                                            double corner_radius) {
+                                            double corner_radius,
+                                            const char* rim_type,
+                                            double rim_width, double rim_height,
+                                            const char* rim_shape,
+                                            double rim_top_ratio) {
     bool rounded = (corner_type && strcmp(corner_type, "rounded") == 0 && corner_radius > 0.001);
     double cr = rounded ? std::min(corner_radius, std::min(width/2.0, depth/2.0)) : 0.0;
+    bool has_rim = (rim_type && strcmp(rim_type, "none") != 0 && rim_width > 0.001 && rim_height > 0.001);
 
-    // ── Closed hollow box: outer and inner both centered at origin ──
-    // Outer: full box. Inner: all dimensions smaller by 2*thickness.
-    // Cut produces a closed solid with solid floor, walls, and ceiling.
+    // With rim: shell height = height + rim_height (rim carved from top)
+    double total_h = has_rim ? height + rim_height : height;
+
+    // ── Outer and inner boxes for shell ──
     double outer_cr = rounded ? cr : 0.0;
-    TopoDS_Shape outerShape = create_rounded_box_solid(width, depth, height, outer_cr);
+    TopoDS_Shape outerShape = create_rounded_box_solid(width, depth, total_h, outer_cr);
     if (outerShape.IsNull()) return TopoDS_Shape();
 
     // Ensure outer is a solid
@@ -2667,16 +2675,15 @@ TopoDS_Shape create_parametric_shell_solid(double width, double depth, double he
 
     double inner_w = width - 2.0 * thickness;
     double inner_d = depth - 2.0 * thickness;
-    double inner_h = height - thickness + 1.0;  // extends above outer for clean open-top cut
+    double inner_h = total_h - thickness + 1.0;  // extends above outer for clean open-top cut
     if (inner_w <= 0 || inner_d <= 0 || inner_h <= 0) {
-        return outerShape;  // wall too thick, return solid box
+        return outerShape;
     }
 
     double inner_cr = rounded ? std::max(0.0, cr - thickness) : 0.0;
     TopoDS_Shape innerShape = create_rounded_box_solid(inner_w, inner_d, inner_h, inner_cr);
     if (innerShape.IsNull()) return outerShape;
 
-    // Ensure inner is a solid
     TopoDS_Solid innerSolid;
     if (innerShape.ShapeType() == TopAbs_SOLID) {
         innerSolid = TopoDS::Solid(innerShape);
@@ -2688,23 +2695,69 @@ TopoDS_Shape create_parametric_shell_solid(double width, double depth, double he
         innerSolid = sm.Solid();
     }
 
-    // Shift inner up: bottom at z=thickness, top extends above outer
-    double inner_z_offset = thickness + inner_h / 2.0;
+    // Inner bottom at outer_bottom + thickness
+    double inner_z_offset = -total_h / 2.0 + thickness + inner_h / 2.0;
     gp_Trsf innerTrsf;
     innerTrsf.SetTranslation(gp_Vec(0, 0, inner_z_offset));
-    TopLoc_Location innerLoc(innerTrsf);
-    innerSolid.Move(innerLoc);
+    innerSolid.Move(TopLoc_Location(innerTrsf));
 
     // Boolean cut: outer - inner → open-top shell
     BRepAlgoAPI_Cut cutMaker(outerSolid, innerSolid);
     if (!cutMaker.IsDone()) return outerShape;
     TopoDS_Shape result = cutMaker.Shape();
 
-    // Shift up by height/2: outer box is centered at origin, but Blender
-    // convention has bottom face at Z=0. Move so bottom is at Z=0.
+    // Shift: bottom at Z=0
     gp_Trsf shiftUp;
-    shiftUp.SetTranslation(gp_Vec(0, 0, height / 2.0));
+    shiftUp.SetTranslation(gp_Vec(0, 0, total_h / 2.0));
     result = BRepBuilderAPI_Transform(result, shiftUp).Shape();
+
+    // ── Rim: subtract a ring from the top to carve the rim profile ──
+    if (has_rim) {
+        bool is_outside = (rim_type && strcmp(rim_type, "outside") == 0);
+
+        // Shell goes Z=0 to Z=height+rh. Rim notch is from Z=height to Z=height+rh.
+        // For inside rim: cut ring from OUTSIDE (removes outer wall top)
+        // For outside rim: cut ring from INSIDE (removes inner wall top)
+        double ring_outer_w, ring_outer_d, ring_inner_w, ring_inner_d;
+        if (is_outside) {
+            // Cut ring from INSIDE: removes inner wall top → outer rim remains
+            ring_outer_w = width - 2.0 * rim_width;
+            ring_outer_d = depth - 2.0 * rim_width;
+            ring_inner_w = width - 4.0 * rim_width;
+            ring_inner_d = depth - 4.0 * rim_width;
+        } else {
+            // Cut ring from OUTSIDE: removes outer wall top → inner rim remains
+            ring_outer_w = width + 2.0 * rim_width;
+            ring_outer_d = depth + 2.0 * rim_width;
+            ring_inner_w = width - 2.0 * rim_width;
+            ring_inner_d = depth - 2.0 * rim_width;
+        }
+
+        if (ring_inner_w > 0.01 && ring_inner_d > 0.01) {
+            TopoDS_Shape ringOuter = create_rounded_box_solid(ring_outer_w, ring_outer_d, rim_height, 0.0);
+            TopoDS_Shape ringInner = create_rounded_box_solid(ring_inner_w, ring_inner_d, rim_height + 2.0, 0.0);
+
+            TopoDS_Solid ringOuterSolid, ringInnerSolid;
+            if (ringOuter.ShapeType() == TopAbs_SOLID) ringOuterSolid = TopoDS::Solid(ringOuter);
+            else { BRepBuilderAPI_MakeSolid sm; for (TopExp_Explorer e(ringOuter, TopAbs_SHELL); e.More(); e.Next()) sm.Add(TopoDS::Shell(e.Current())); if (sm.IsDone()) ringOuterSolid = sm.Solid(); }
+            if (ringInner.ShapeType() == TopAbs_SOLID) ringInnerSolid = TopoDS::Solid(ringInner);
+            else { BRepBuilderAPI_MakeSolid sm; for (TopExp_Explorer e(ringInner, TopAbs_SHELL); e.More(); e.Next()) sm.Add(TopoDS::Shell(e.Current())); if (sm.IsDone()) ringInnerSolid = sm.Solid(); }
+
+            if (!ringOuterSolid.IsNull() && !ringInnerSolid.IsNull()) {
+                BRepAlgoAPI_Cut ringCut(ringOuterSolid, ringInnerSolid);
+                if (ringCut.IsDone()) {
+                    TopoDS_Shape ring = ringCut.Shape();
+                    // Position ring: center at Z = height + rim_height/2 (covers Z=height to Z=height+rh)
+                    gp_Trsf ringTrsf;
+                    ringTrsf.SetTranslation(gp_Vec(0, 0, height + rim_height / 2.0));
+                    ring = BRepBuilderAPI_Transform(ring, ringTrsf).Shape();
+
+                    BRepAlgoAPI_Cut rimCut(result, ring);
+                    if (rimCut.IsDone()) result = rimCut.Shape();
+                }
+            }
+        }
+    }
 
     return result;
 }
@@ -2716,15 +2769,19 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
     const char* unit = "MILLIMETER"; int enable_logging = 1;
     double width, depth, height, thickness, corner_radius = 0.0;
     double pos_x = 0.0, pos_y = 0.0, pos_z = 0.0;
+    const char* rim_type = "none"; double rim_width = 0.0, rim_height = 0.0;
+    const char* rim_shape = "rect"; double rim_top_ratio = 1.0;
 
-    if (!PyArg_ParseTuple(args, "sdddd|dsdddssi",
+    if (!PyArg_ParseTuple(args, "sdddd|dsdddsddssisd",
                           &filename, &width, &depth, &height, &thickness,
                           &corner_radius, &corner_type,
                           &pos_x, &pos_y, &pos_z,
-                          &step_schema, &unit, &enable_logging)) {
+                          &rim_type, &rim_width, &rim_height,
+                          &step_schema, &unit, &enable_logging,
+                          &rim_shape, &rim_top_ratio)) {
         PyErr_SetString(PyExc_TypeError,
             "export_parametric_shell_step() expected: filename, width, depth, height, thickness"
-            "[, corner_radius, corner_type, pos_x, pos_y, pos_z, step_schema, unit, enable_logging]");
+            "[, corner_radius, corner_type, pos_x, pos_y, pos_z, rim_type, rim_width, rim_height, step_schema, unit, enable_logging, rim_shape, rim_top_ratio]");
         return NULL;
     }
 
@@ -2736,7 +2793,9 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
 
     try {
         TopoDS_Shape shape = create_parametric_shell_solid(width, depth, height,
-                                                            thickness, corner_type, corner_radius);
+                                                            thickness, corner_type, corner_radius,
+                                                            rim_type, rim_width, rim_height,
+                                                            rim_shape, rim_top_ratio);
         if (shape.IsNull()) { Py_RETURN_FALSE; }
 
         // Fix if needed

@@ -821,8 +821,13 @@ def _parametric_export_staged():
                         pparams.get('corner_radius', 0.0),
                         pparams.get('corner_type', 'square'),
                         pparams.get('pos_x', 0.0), pparams.get('pos_y', 0.0), pparams.get('pos_z', 0.0),
+                        pparams.get('rim_type', 'none'),
+                        pparams.get('rim_width', 0.0),
+                        pparams.get('rim_height', 0.0),
                         data['step_schema'], data['step_unit'],
-                        1 if data['enable_logging'] else 0)
+                        1 if data['enable_logging'] else 0,
+                        pparams.get('rim_shape', 'rect'),
+                        pparams.get('rim_top_ratio', 1.0))
                 
                 elif obj_type == 'regular':
                     obj = obj_params

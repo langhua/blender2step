@@ -31,7 +31,15 @@ def _analyze_parametric_shell_from_mesh(obj, context=None, scale=1.0):
     t_mm = t * unit_factor
     cr_mm = cr * unit_factor
 
+    rim_type = obj.get('rim_type', 'none')
+    rim_w_mm = obj.get('rim_width', 1.0) * unit_factor if rim_type != 'none' else 0.0
+    rim_h_mm = obj.get('rim_height', 1.0) * unit_factor if rim_type != 'none' else 0.0
+    rim_shape = obj.get('rim_shape', 'rect')
+    rim_top_ratio = obj.get('rim_top_ratio', 100.0) / 100.0  # 0.0-1.0
+
     log_to_file(f"[STEP Exporter]   unit={unit}, factor={unit_factor}, dims={w_mm:.1f}x{d_mm:.1f}x{h_mm:.1f}mm")
+    if rim_type != 'none':
+        log_to_file(f"[STEP Exporter]   rim={rim_type} rw={rim_w_mm:.1f} rh={rim_h_mm:.1f} shape={rim_shape} ratio={rim_top_ratio:.2f}")
 
     return {
         'obj': obj,
@@ -42,6 +50,11 @@ def _analyze_parametric_shell_from_mesh(obj, context=None, scale=1.0):
         'wall_thickness': t_mm,
         'corner_type': corner_type,
         'corner_radius': cr_mm,
+        'rim_type': rim_type,
+        'rim_width': rim_w_mm,
+        'rim_height': rim_h_mm,
+        'rim_shape': rim_shape,
+        'rim_top_ratio': rim_top_ratio,
         'pos_x': obj.location.x * scale,
         'pos_y': obj.location.y * scale,
         'pos_z': obj.location.z * scale,

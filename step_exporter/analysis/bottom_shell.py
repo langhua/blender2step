@@ -22,6 +22,31 @@ def _analyze_bottom_shell_from_mesh(obj, context, scale):
     if obj.type != 'MESH':
         return None
     
+    # Quick path: read from custom properties if explicitly tagged
+    if obj.get('object_type') == 'bottom_shell' and obj.get('_params_from_props'):
+        w = obj.get('width', 100.0); d = obj.get('depth', 80.0)
+        oh = obj.get('outer_height', 30.0); bt = obj.get('bottom_thickness', 2.0)
+        wt = obj.get('wall_thickness', 2.0); cr = obj.get('corner_radius', 5.0)
+        ofr = obj.get('outer_fillet_radius', 10.0); ifr = obj.get('inner_fillet_radius', 8.0)
+        sh = obj.get('step_height', 1.0)
+        has_holes = obj.get('has_holes', False)
+        hr = obj.get('hole_radius', 3.0); hox = obj.get('hole_offset_x', 15.0)
+        hoy = obj.get('hole_offset_y', 15.0)
+        log_to_file(f"[STEP Exporter] Bottom shell from props: {w:.0f}x{d:.0f}x{oh:.0f}mm"
+                    f" wall={wt:.1f} cr={cr:.1f} ofr={ofr:.1f} ifr={ifr:.1f} holes={has_holes}"
+                    f" pos=({obj.location.x*scale:.0f},{obj.location.y*scale:.0f},{obj.location.z*scale:.0f})")
+        return {
+            'obj': obj, 'obj_type': 'bottom_shell',
+            'width': w, 'depth': d, 'outer_height': oh,
+            'bottom_thickness': bt, 'wall_thickness': wt,
+            'corner_radius': cr, 'outer_fillet_radius': ofr,
+            'inner_fillet_radius': ifr, 'step_height': sh,
+            'has_holes': has_holes, 'hole_radius': hr,
+            'hole_offset_x': hox, 'hole_offset_y': hoy,
+            'pos_x': obj.location.x, 'pos_y': obj.location.y,
+            'pos_z': obj.location.z + oh / 2.0,  # bottom shell has bottom at -oh/2, compensate to Z=0
+        }
+    
     import bmesh
     from collections import defaultdict
     

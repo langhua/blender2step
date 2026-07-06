@@ -78,7 +78,7 @@ def create_filleted_shell_blender(name, width, depth, outer_height,
     me = bpy.data.meshes.new(name=name)
     bm = bmesh.new()
 
-    fillet_segments = 32
+    fillet_segments = 16
 
     # --- Outer bottom + fillet rings ---
     outer_bot_hw = hw - outer_fillet_radius
@@ -165,7 +165,35 @@ def create_filleted_shell_blender(name, width, depth, outer_height,
     bpy.context.view_layer.objects.active = obj
     obj.select_set(True)
     obj.location = location
-    # Recalculate normals + flat shading (avoids black faces on N-gons)
+    # Tag for STEP export: parametric shell (no holes) or bottom_shell with holes
+    if holes:
+        obj['object_type'] = 'bottom_shell'
+        obj['_params_from_props'] = True
+        obj['width'] = width
+        obj['depth'] = depth
+        obj['outer_height'] = outer_height
+        obj['bottom_thickness'] = bottom_thickness
+        obj['wall_thickness'] = wall_thickness
+        obj['corner_radius'] = corner_radius
+        obj['outer_fillet_radius'] = outer_fillet_radius
+        obj['inner_fillet_radius'] = inner_fillet_radius
+        obj['step_height'] = step_height
+        obj['has_holes'] = True
+        obj['hole_radius'] = holes[0]
+        obj['hole_offset_x'] = holes[1]
+        obj['hole_offset_y'] = holes[2]
+    else:
+        obj['object_type'] = 'parametric_shell'
+        obj['width'] = width
+        obj['depth'] = depth
+        obj['height'] = outer_height - step_height
+        obj['wall_thickness'] = wall_thickness
+        obj['corner_type'] = 'rounded' if corner_radius > 0 else 'square'
+        obj['corner_radius'] = corner_radius
+        obj['bottom_fillet'] = outer_fillet_radius
+        obj['rim_type'] = 'none'
+        obj['unit'] = 'mm'
+    # Recalculate normals + flat shading
     bpy.ops.object.mode_set(mode='EDIT')
     bpy.ops.mesh.select_all(action='SELECT')
     bpy.ops.mesh.normals_make_consistent(inside=False)
@@ -204,16 +232,15 @@ def create_filleted_shell_blender(name, width, depth, outer_height,
 
 
 def create_filleted_bottom_shells_scene():
-    """Create 2 filleted bottom shells: plain + with corner holes."""
-    seg = 64  # doubled for smoother walls
-    # Plain shell
+    """Create 2 filleted bottom shells: plain (high-res) + with holes (lower-res for mesh export)."""
+    # Plain shell: high resolution for Blender preview
     create_filleted_shell_blender(
         "Shell_R10_F10x10", 100, 80, 30, 2, 2, 10, 10, 8,
-        (-80, 50, 0), segments=seg)
-    # With 4 corner holes
+        (-80, 50, 0), segments=64)
+    # Hole version: lower resolution so mesh-to-STEP doesn't hang
     create_filleted_shell_blender(
         "Shell_Holes", 100, 80, 30, 2, 2, 10, 10, 8,
-        (80, 50, 0), segments=seg, holes=(3.0, 15.0, 15.0))
+        (80, 50, 0), segments=16, holes=(3.0, 15.0, 15.0))
     print("Created 2 filleted bottom shells.")
 
 

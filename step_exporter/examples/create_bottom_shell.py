@@ -165,34 +165,25 @@ def create_filleted_shell_blender(name, width, depth, outer_height,
     bpy.context.view_layer.objects.active = obj
     obj.select_set(True)
     obj.location = location
-    # Tag for STEP export: parametric shell (no holes) or bottom_shell with holes
+    # Tag for STEP export: both use bottom_shell for two-level step support
+    obj['object_type'] = 'bottom_shell'
+    obj['_params_from_props'] = True
+    obj['width'] = width
+    obj['depth'] = depth
+    obj['outer_height'] = outer_height
+    obj['bottom_thickness'] = bottom_thickness
+    obj['wall_thickness'] = wall_thickness
+    obj['corner_radius'] = corner_radius
+    obj['outer_fillet_radius'] = outer_fillet_radius
+    obj['inner_fillet_radius'] = inner_fillet_radius
+    obj['step_height'] = step_height
     if holes:
-        obj['object_type'] = 'bottom_shell'
-        obj['_params_from_props'] = True
-        obj['width'] = width
-        obj['depth'] = depth
-        obj['outer_height'] = outer_height
-        obj['bottom_thickness'] = bottom_thickness
-        obj['wall_thickness'] = wall_thickness
-        obj['corner_radius'] = corner_radius
-        obj['outer_fillet_radius'] = outer_fillet_radius
-        obj['inner_fillet_radius'] = inner_fillet_radius
-        obj['step_height'] = step_height
         obj['has_holes'] = True
         obj['hole_radius'] = holes[0]
         obj['hole_offset_x'] = holes[1]
         obj['hole_offset_y'] = holes[2]
     else:
-        obj['object_type'] = 'parametric_shell'
-        obj['width'] = width
-        obj['depth'] = depth
-        obj['height'] = outer_height - step_height
-        obj['wall_thickness'] = wall_thickness
-        obj['corner_type'] = 'rounded' if corner_radius > 0 else 'square'
-        obj['corner_radius'] = corner_radius
-        obj['bottom_fillet'] = outer_fillet_radius
-        obj['rim_type'] = 'none'
-        obj['unit'] = 'mm'
+        obj['has_holes'] = False
     # Recalculate normals + flat shading
     bpy.ops.object.mode_set(mode='EDIT')
     bpy.ops.mesh.select_all(action='SELECT')

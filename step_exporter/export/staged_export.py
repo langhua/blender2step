@@ -813,7 +813,8 @@ def _parametric_export_staged():
                 
                 elif obj_type == 'parametric_shell':
                     pparams = obj_params
-                    log_to_file(f"[STEP Exporter] Exporting parametric shell {obj_num}/{total_objects} (C++)...")
+                    bf_val = pparams.get('bottom_fillet', 0.0)
+                    log_to_file(f"[STEP Exporter] Exporting parametric shell {obj_num}/{total_objects} (C++), bf={bf_val}...")
                     success = cpp_exporter.export_parametric_shell_step(
                         temp_file,
                         pparams['width'], pparams['depth'], pparams['height'],
@@ -827,7 +828,8 @@ def _parametric_export_staged():
                         data['step_schema'], data['step_unit'],
                         1 if data['enable_logging'] else 0,
                         pparams.get('rim_shape', 'rect'),
-                        pparams.get('rim_top_ratio', 1.0))
+                        pparams.get('rim_top_ratio', 1.0),
+                        bf_val)
                 
                 elif obj_type == 'regular':
                     obj = obj_params

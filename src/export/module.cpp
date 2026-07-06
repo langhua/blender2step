@@ -1,8 +1,11 @@
 // STEP Exporter module initialization and Python interface
 #include "../include/step_exporter_internal.h"
+#include <fstream>
 #include <STEPControl_Writer.hxx>
 #include <STEPControl_Reader.hxx>
 #include <TopoDS_Compound.hxx>
+#include <TopTools_ListOfShape.hxx>
+#include <TopTools_ListIteratorOfListOfShape.hxx>
 #include <BRep_Builder.hxx>
 #include <BRepBuilderAPI_MakeVertex.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
@@ -2648,8 +2651,9 @@ TopoDS_Shape create_parametric_shell_solid(double width, double depth, double he
                                             const char* rim_type,
                                             double rim_width, double rim_height,
                                             const char* rim_shape,
-                                            double rim_top_ratio) {
-    bool rounded = (corner_type && strcmp(corner_type, "rounded") == 0 && corner_radius > 0.001);
+                                            double rim_top_ratio,
+                                            double bottom_fillet) {
+    bool rounded = (corner_type && (strcmp(corner_type, "rounded") == 0 || strcmp(corner_type, "curved") == 0) && corner_radius > 0.001);
     double cr = rounded ? std::min(corner_radius, std::min(width/2.0, depth/2.0)) : 0.0;
     bool has_rim = (rim_type && strcmp(rim_type, "none") != 0 && rim_width > 0.001 && rim_height > 0.001);
     bool is_trapezoid = false;
@@ -2679,6 +2683,38 @@ TopoDS_Shape create_parametric_shell_solid(double width, double depth, double he
         outerSolid = sm.Solid();
     }
 
+    // Bottom fillet on outer solid (before boolean, matching Blender direct construction)
+    if (bottom_fillet > 0.001) {
+        double outer_bottom_z = -total_h / 2.0;
+        
+        // Write debug to log file
+        std::ofstream dbg("f:/git/blender2step/step_exporter/_cpp_dbg.txt", std::ios::app);
+        dbg << "[CPP] filleting outer: r=" << bottom_fillet
+            << " bottom_z=" << outer_bottom_z << " total_h=" << total_h << std::endl;
+        
+        TopoDS_Shape filleted = apply_bottom_fillet_to_box(outerSolid, bottom_fillet, outer_bottom_z);
+        
+        dbg << "[CPP] outer fillet result type=" << filleted.ShapeType()
+            << " (SOLID=" << TopAbs_SOLID << ")" << std::endl;
+        dbg << "[CPP] outerSolid ptr before=" << (void*)&outerSolid
+            << " filleted ptr=" << (void*)&filleted << std::endl;
+        
+        // Extract solid from result
+        if (filleted.ShapeType() == TopAbs_SOLID) {
+            outerSolid = TopoDS::Solid(filleted);
+            dbg << "[CPP] outer fillet OK (direct solid)" << std::endl;
+        } else {
+            TopExp_Explorer exp(filleted, TopAbs_SOLID);
+            if (exp.More()) {
+                outerSolid = TopoDS::Solid(exp.Current());
+                dbg << "[CPP] outer fillet OK (extracted from compound)" << std::endl;
+            } else {
+                dbg << "[CPP] outer fillet FAILED - no solid found!" << std::endl;
+            }
+        }
+        dbg.close();
+    }
+
     double inner_w = width - 2.0 * thickness;
     double inner_d = depth - 2.0 * thickness;
     double inner_h = total_h - thickness + 1.0;  // extends above outer for clean open-top cut
@@ -2706,6 +2742,35 @@ TopoDS_Shape create_parametric_shell_solid(double width, double depth, double he
     gp_Trsf innerTrsf;
     innerTrsf.SetTranslation(gp_Vec(0, 0, inner_z_offset));
     innerSolid.Move(TopLoc_Location(innerTrsf));
+
+    // Bottom fillet on inner solid (inner radius = outer_fillet - thickness)
+    if (bottom_fillet > 0.001) {
+        double inner_fillet_r = std::max(bottom_fillet - thickness, 0.001);
+        double inner_bottom_z = -total_h / 2.0 + thickness;
+        
+        std::ofstream dbg("f:/git/blender2step/step_exporter/_cpp_dbg.txt", std::ios::app);
+        dbg << "[CPP] filleting inner: r=" << inner_fillet_r
+            << " bottom_z=" << inner_bottom_z << std::endl;
+        
+        TopoDS_Shape filleted = apply_bottom_fillet_to_box(innerSolid, inner_fillet_r, inner_bottom_z);
+        
+        dbg << "[CPP] inner fillet result type=" << filleted.ShapeType()
+            << " (SOLID=" << TopAbs_SOLID << ")" << std::endl;
+        
+        if (filleted.ShapeType() == TopAbs_SOLID) {
+            innerSolid = TopoDS::Solid(filleted);
+            dbg << "[CPP] inner fillet OK (direct solid)" << std::endl;
+        } else {
+            TopExp_Explorer exp(filleted, TopAbs_SOLID);
+            if (exp.More()) {
+                innerSolid = TopoDS::Solid(exp.Current());
+                dbg << "[CPP] inner fillet OK (extracted from compound)" << std::endl;
+            } else {
+                dbg << "[CPP] inner fillet FAILED - no solid found!" << std::endl;
+            }
+        }
+        dbg.close();
+    }
 
     // Boolean cut: outer - inner → open-top shell
     BRepAlgoAPI_Cut cutMaker(outerSolid, innerSolid);
@@ -2868,31 +2933,35 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
     double pos_x = 0.0, pos_y = 0.0, pos_z = 0.0;
     const char* rim_type = "none"; double rim_width = 0.0, rim_height = 0.0;
     const char* rim_shape = "rect"; double rim_top_ratio = 1.0;
+    double bottom_fillet = 0.0;
 
-    if (!PyArg_ParseTuple(args, "sdddd|dsdddsddssisd",
+    if (!PyArg_ParseTuple(args, "sdddd|dsdddsddssisdd",
                           &filename, &width, &depth, &height, &thickness,
                           &corner_radius, &corner_type,
                           &pos_x, &pos_y, &pos_z,
                           &rim_type, &rim_width, &rim_height,
                           &step_schema, &unit, &enable_logging,
-                          &rim_shape, &rim_top_ratio)) {
+                          &rim_shape, &rim_top_ratio,
+                          &bottom_fillet)) {
         PyErr_SetString(PyExc_TypeError,
             "export_parametric_shell_step() expected: filename, width, depth, height, thickness"
-            "[, corner_radius, corner_type, pos_x, pos_y, pos_z, rim_type, rim_width, rim_height, step_schema, unit, enable_logging, rim_shape, rim_top_ratio]");
+            "[, corner_radius, corner_type, pos_x, pos_y, pos_z, rim_type, rim_width, rim_height, step_schema, unit, enable_logging, rim_shape, rim_top_ratio, bottom_fillet]");
         return NULL;
     }
 
     std::cout << "\n[STEP Exporter] =========================================" << std::endl;
     std::cout << "[STEP Exporter] Exporting parametric shell to: " << filename << std::endl;
     std::cout << "[STEP Exporter]   dims: " << width << "x" << depth << "x" << height
-              << " wall=" << thickness << " corner=" << corner_type << " r=" << corner_radius << std::endl;
+              << " wall=" << thickness << " corner=" << corner_type << " r=" << corner_radius
+              << " bf=" << bottom_fillet << std::endl;
     std::cout << "[STEP Exporter]   pos=(" << pos_x << "," << pos_y << "," << pos_z << ")" << std::endl;
 
     try {
         TopoDS_Shape shape = create_parametric_shell_solid(width, depth, height,
                                                             thickness, corner_type, corner_radius,
                                                             rim_type, rim_width, rim_height,
-                                                            rim_shape, rim_top_ratio);
+                                                            rim_shape, rim_top_ratio,
+                                                            bottom_fillet);
         if (shape.IsNull()) { Py_RETURN_FALSE; }
 
         // Fix if needed

@@ -588,7 +588,7 @@ TopoDS_Shape create_bottom_shell_with_corner_holes(double width, double depth, d
     return result;
 }
 
-static TopoDS_Shape apply_bottom_fillet_to_box(const TopoDS_Shape& boxShape, double fillet_radius, double bottom_z)
+TopoDS_Shape apply_bottom_fillet_to_box(const TopoDS_Shape& boxShape, double fillet_radius, double bottom_z)
 {
     if (fillet_radius <= 0.001) {
         return boxShape;

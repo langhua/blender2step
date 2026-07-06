@@ -1,6 +1,6 @@
 """Parametric shell (open-top box) generation."""
 import math
-import bpy, bmesh
+import bpy, bmesh, mathutils
 from bpy.types import Operator
 from bpy.props import FloatProperty, EnumProperty
 from ..core.i18n import _t
@@ -28,6 +28,7 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         items=[
             ('square', "Square (直角)", "Sharp square corners"),
             ('rounded', "Rounded (圆角)", "Rounded corners"),
+            ('curved', "Curved (曲面)", "Large-radius curved corners"),
         ],
         default='square',
     )
@@ -48,6 +49,9 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
     corner_radius: FloatProperty(
         name=_t("Corner Radius"), default=5.0, min=0.1, max=1000.0,
         description="Fillet radius for rounded corners")
+    bottom_fillet: FloatProperty(
+        name=_t("Bottom Fillet"), default=0.0, min=0.0, max=100.0,
+        description="Fillet radius at bottom edges (0 = sharp)")
 
     # ── Rim (壳边) ──
     rim_type: EnumProperty(
@@ -89,8 +93,9 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         layout.prop(self, 'depth')
         layout.prop(self, 'height')
         layout.prop(self, 'thickness')
-        if self.corner_type == 'rounded':
+        if self.corner_type in ('rounded', 'curved'):
             layout.prop(self, 'corner_radius')
+        layout.prop(self, 'bottom_fillet')
         layout.separator()
         layout.prop(self, 'rim_type')
         if self.rim_type != 'none':
@@ -102,34 +107,31 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
 
     def execute(self, context):
         w, d, h, t = self.width, self.depth, self.height, self.thickness
-        cr = self.corner_radius if self.corner_type == 'rounded' else 0.0
+        if self.corner_type == 'curved':
+            cr = self.corner_radius if self.corner_radius > 0 else min(w, d) / 2 * 0.8
+        else:
+            cr = self.corner_radius if self.corner_type == 'rounded' else 0.0
         cr = max(0.0, min(cr, w / 2 - t, d / 2 - t))
         rw = self.rim_width if self.rim_type != 'none' else 0.0
         rh = self.rim_height if self.rim_type != 'none' else 0.0
-
-        # Unit scaling: S converts user unit → meters (Blender internal)
+        bf = self.bottom_fillet
         S = 0.001 if self.unit == 'mm' else 1.0
 
-        bm = bmesh.new()
+        ws, ds, hs, ts = w * S, d * S, h * S, t * S
+        crs, rws, rhs, bfs = cr * S, rw * S, rh * S, bf * S
 
-        if cr <= 0.001:
-            self._build_square(bm, w * S, d * S, h * S, t * S,
-                               rw * S, rh * S, self.rim_type,
-                               self.rim_shape, self.rim_top_ratio / 100.0)
+        # Build shell: direct construction when bottom fillet present (C++ parity)
+        if bfs > 0.0001:
+            obj = self._build_shell_direct(ws, ds, hs, ts, crs, rws, rhs,
+                                           self.rim_type, self.rim_shape,
+                                           self.rim_top_ratio / 100.0, bfs)
         else:
-            self._build_rounded(bm, w * S, d * S, h * S, t * S, cr * S,
-                                rw * S, rh * S, self.rim_type,
-                                self.rim_shape, self.rim_top_ratio / 100.0)
+            total_h = hs + rhs if rw > 0 and self.rim_type != 'none' and self.rim_shape == 'rect' else hs
+            obj = self._build_boolean_shell(ws, ds, total_h, ts, crs, rws, rhs,
+                                             self.rim_type, self.rim_shape,
+                                             self.rim_top_ratio / 100.0, bfs)
 
-        # Create mesh object
-        mesh = bpy.data.meshes.new("ParamShell")
-        bm.to_mesh(mesh)
-        bm.free()
-
-        obj = bpy.data.objects.new("ParamShell", mesh)
-        bpy.context.collection.objects.link(obj)
-        bpy.context.view_layer.objects.active = obj
-        obj.select_set(True)
+        # Store params (in user-facing unit)
 
         # Store params (in user-facing unit)
         obj['width'] = w
@@ -145,15 +147,187 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         obj['rim_height'] = self.rim_height
         obj['rim_shape'] = self.rim_shape
         obj['rim_top_ratio'] = self.rim_top_ratio
+        obj['bottom_fillet'] = self.bottom_fillet
 
         unit_label = "mm" if self.unit == 'mm' else "m"
         self.report({'INFO'}, f"Shell: {w:.0f}×{d:.0f}×{h:.0f}{unit_label}, wall={t:.1f}{unit_label}")
         return {'FINISHED'}
 
+    # ── Boolean shell builder ─────────────────────────────
+
+    def _make_solid_box(self, w, d, h, cr):
+        """Create a solid rounded box BMesh, centered at origin."""
+        bm = bmesh.new()
+        if cr < 0.0001:
+            bmesh.ops.create_cube(bm, size=1.0)
+            scale_mat = mathutils.Matrix.Scale(w, 4, (1,0,0)) @ mathutils.Matrix.Scale(d, 4, (0,1,0)) @ mathutils.Matrix.Scale(h, 4, (0,0,1))
+            bmesh.ops.transform(bm, matrix=scale_mat, verts=bm.verts[:])
+        else:
+            import math
+            hw, hd, hh = w / 2, d / 2, h / 2
+            seg = max(8, int(cr / min(w, d) * 64))
+            pts = []
+            # Profile (CCW, centered at Z=0)
+            def add_arc(cx, cy, r, a0, a1, n):
+                for i in range(n + 1):
+                    a = a0 + (a1 - a0) * i / n
+                    pts.append((cx + r * math.cos(a), cy + r * math.sin(a)))
+            def add_flat(x0, y0, x1, y1, n):
+                for i in range(n + 1):
+                    t = i / n
+                    pts.append((x0 + (x1 - x0) * t, y0 + (y1 - y0) * t))
+            add_flat(hw, -hd + cr, hw, hd - cr, seg)
+            add_arc(hw - cr, hd - cr, cr, 0, math.pi/2, seg)
+            add_flat(hw - cr, hd, -hw + cr, hd, seg)
+            add_arc(-hw + cr, hd - cr, cr, math.pi/2, math.pi, seg)
+            add_flat(-hw, hd - cr, -hw, -hd + cr, seg)
+            add_arc(-hw + cr, -hd + cr, cr, math.pi, 3*math.pi/2, seg)
+            add_flat(-hw + cr, -hd, hw - cr, -hd, seg)
+            add_arc(hw - cr, -hd + cr, cr, 3*math.pi/2, 2*math.pi, seg)
+            nv = len(pts)
+            top_v = [bm.verts.new((x, y, hh)) for x, y in pts]
+            bot_v = [bm.verts.new((x, y, -hh)) for x, y in pts]
+            tc = bm.verts.new((0, 0, hh))
+            bc = bm.verts.new((0, 0, -hh))
+            bm.verts.ensure_lookup_table()
+            for i in range(nv):
+                j = (i + 1) % nv
+                bm.faces.new([bot_v[i], bot_v[j], top_v[j], top_v[i]])
+                bm.faces.new([tc, top_v[i], top_v[j]])
+                bm.faces.new([bc, bot_v[j], bot_v[i]])
+        bm.normal_update()
+        return bm
+
+    def _apply_bool(self, obj, other_obj, op='DIFFERENCE'):
+        """Apply boolean modifier to obj using other_obj."""
+        bpy.context.view_layer.objects.active = obj
+        if bpy.context.mode != 'OBJECT':
+            bpy.ops.object.mode_set(mode='OBJECT')
+        mod = obj.modifiers.new(name="Bool", type='BOOLEAN')
+        mod.object = other_obj
+        mod.operation = op
+        mod.solver = 'EXACT'
+        other_obj.hide_viewport = True
+        bpy.context.view_layer.update()
+        bpy.ops.object.modifier_apply(modifier="Bool")
+
+    def _bm_to_object(self, bm, name):
+        mesh = bpy.data.meshes.new(name)
+        bm.to_mesh(mesh)
+        bm.free()
+        obj = bpy.data.objects.new(name, mesh)
+        bpy.context.collection.objects.link(obj)
+        return obj
+
+    def _build_boolean_shell(self, w, d, total_h, t, cr, rw, rh, rim_type, rim_shape, top_ratio, bf):
+        """Build shell via Boolean (outer - inner), matching C++."""
+        # Outer solid
+        outer_bm = self._make_solid_box(w, d, total_h, cr)
+        outer = self._bm_to_object(outer_bm, "ShellOuter")
+
+        # Bevel ONLY bottom perimeter edges (Z ≈ -total_h/2), matching C++ BRepFilletAPI
+        if bf > 0.0001:
+            bpy.context.view_layer.objects.active = outer
+            bpy.ops.object.mode_set(mode='EDIT')
+            bpy.ops.mesh.select_all(action='DESELECT')
+            bpy.ops.object.mode_set(mode='OBJECT')
+            mesh = outer.data
+            bottom_z = -total_h / 2
+            for edge in mesh.edges:
+                v0 = mesh.vertices[edge.vertices[0]]
+                v1 = mesh.vertices[edge.vertices[1]]
+                if abs(v0.co.z - bottom_z) < 0.001 and abs(v1.co.z - bottom_z) < 0.001:
+                    # Skip spokes to center vertex (for rounded boxes)
+                    if abs(v0.co.x) < 0.001 and abs(v0.co.y) < 0.001:
+                        continue
+                    if abs(v1.co.x) < 0.001 and abs(v1.co.y) < 0.001:
+                        continue
+                    edge.select = True
+            bpy.ops.object.mode_set(mode='EDIT')
+            bpy.ops.mesh.bevel(offset=bf, segments=64, profile=0.5, affect='EDGES')
+            bpy.ops.object.mode_set(mode='OBJECT')
+
+        # Inner solid (smaller, shifted up so bottom = t above outer bottom)
+        iw, id_ = w - 2*t, d - 2*t
+        ih = total_h  # same height as outer; shifted up by t → top protrudes for clean cut
+        inner_bm = self._make_solid_box(max(iw, 0.001), max(id_, 0.001), max(ih, 0.001), max(cr - t, 0))
+        inner = self._bm_to_object(inner_bm, "ShellInner")
+        inner.location.z = t  # bottom at -total_h/2 + t, top at total_h/2 + t
+
+        # Boolean difference (outer - inner)
+        self._apply_bool(outer, inner)
+        bpy.data.objects.remove(inner, do_unlink=True)
+
+        # Rim cut (rect only for now via boolean)
+        if rim_type != 'none' and rw > 0.0001 and rh > 0.0001:
+            is_out = (rim_type == 'outside')
+            if is_out:
+                rw_o, rw_i = (w - 2*rw), (w - 4*rw)
+                rd_o, rd_i = (d - 2*rw), (d - 4*rw)
+            else:
+                rw_o, rw_i = (w + 2*rw), (w - 2*rw)
+                rd_o, rd_i = (d + 2*rw), (d - 2*rw)
+            ring_o = self._bm_to_object(self._make_solid_box(max(rw_o,0.001), max(rd_o,0.001), rh, 0), "RingO")
+            ring_i = self._bm_to_object(self._make_solid_box(max(rw_i,0.001), max(rd_i,0.001), rh+0.002, 0), "RingI")
+            ring_o.location.z = total_h - rh/2
+            ring_i.location.z = total_h - rh/2
+            self._apply_bool(ring_o, ring_i)
+            ring_o.location.z = total_h - rh/2
+            self._apply_bool(outer, ring_o)
+            bpy.data.objects.remove(ring_o, do_unlink=True)
+            bpy.data.objects.remove(ring_i, do_unlink=True)
+
+        # Shift so bottom at Z=0
+        outer.location.z = total_h / 2
+        outer.name = "ParamShell"
+        outer.data.name = "ParamShell"
+        return outer
+
+    # ── Direct shell with bottom fillet ───────────────────
+
+    def _build_shell_direct(self, w, d, h, t, cr, rw, rh, rim_type, rim_shape, top_ratio, bf):
+        """Build shell via direct BMesh construction + bottom edge bevel.
+        
+        Unlike the boolean approach, this method constructs the shell as a single
+        manifold mesh and then bevels the bottom edges (both outer and inner),
+        ensuring walls and bottom remain connected and adapt to the fillet shape.
+        """
+        bm = bmesh.new()
+        if cr < 0.0001:
+            self._build_square(bm, w, d, h, t, rw, rh, rim_type, rim_shape, top_ratio, 0)
+        else:
+            self._build_rounded(bm, w, d, h, t, cr, rw, rh, rim_type, rim_shape, top_ratio, 0)
+
+        obj = self._bm_to_object(bm, "ShellBody")
+
+        if bf > 0.0001:
+            # Bevel both outer (Z=0) and inner (Z=t) bottom perimeter edges
+            bpy.context.view_layer.objects.active = obj
+            bpy.ops.object.mode_set(mode='EDIT')
+            bpy.ops.mesh.select_all(action='DESELECT')
+            bpy.ops.object.mode_set(mode='OBJECT')
+
+            mesh = obj.data
+            for edge in mesh.edges:
+                v0 = mesh.vertices[edge.vertices[0]]
+                v1 = mesh.vertices[edge.vertices[1]]
+                z0, z1 = v0.co.z, v1.co.z
+                if (abs(z0) < 0.001 and abs(z1) < 0.001) or \
+                   (abs(z0 - t) < 0.001 and abs(z1 - t) < 0.001):
+                    edge.select = True
+
+            bpy.ops.object.mode_set(mode='EDIT')
+            bpy.ops.mesh.bevel(offset=bf, segments=64, profile=0.5, affect='EDGES')
+            bpy.ops.object.mode_set(mode='OBJECT')
+
+        obj.name = "ParamShell"
+        obj.data.name = "ParamShell"
+        return obj
+
     # ── Square corners ────────────────────────────────────
 
     def _build_square(self, bm, w, d, h, t, rw=0, rh=0, rim_type='none',
-                      rim_shape='rect', top_ratio=1.0):
+                      rim_shape='rect', top_ratio=1.0, bf=0.0):
         hw, hd = w / 2, d / 2
         o = [  # outer vertices
             bm.verts.new((-hw, -hd, 0)), bm.verts.new((hw, -hd, 0)),
@@ -253,7 +427,7 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
     # ── Rounded corners ───────────────────────────────────
 
     def _build_rounded(self, bm, w, d, h, t, cr, rw=0, rh=0, rim_type='none',
-                       rim_shape='rect', top_ratio=1.0):
+                       rim_shape='rect', top_ratio=1.0, bf=0.0):
         """Build open-top box with rounded corners via clean CCW profile sweep."""
         seg = 12
         hw, hd = w / 2, d / 2
@@ -395,3 +569,7 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
                     bm.faces.new([ot[j], ot[j2], ob[j2], ob[j]])
 
         bm.normal_update()
+
+    # ── Helpers ────────────────────────────────────────────
+
+    # (Bottom fillet applied via Bevel modifier in execute())

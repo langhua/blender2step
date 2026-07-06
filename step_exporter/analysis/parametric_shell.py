@@ -36,10 +36,13 @@ def _analyze_parametric_shell_from_mesh(obj, context=None, scale=1.0):
     rim_h_mm = obj.get('rim_height', 1.0) * unit_factor if rim_type != 'none' else 0.0
     rim_shape = obj.get('rim_shape', 'rect')
     rim_top_ratio = obj.get('rim_top_ratio', 100.0) / 100.0  # 0.0-1.0
+    bf = obj.get('bottom_fillet', 0.0) * unit_factor
 
     log_to_file(f"[STEP Exporter]   unit={unit}, factor={unit_factor}, dims={w_mm:.1f}x{d_mm:.1f}x{h_mm:.1f}mm")
     if rim_type != 'none':
         log_to_file(f"[STEP Exporter]   rim={rim_type} rw={rim_w_mm:.1f} rh={rim_h_mm:.1f} shape={rim_shape} ratio={rim_top_ratio:.2f}")
+    if bf > 0:
+        log_to_file(f"[STEP Exporter]   bottom_fillet={bf:.1f}mm")
 
     return {
         'obj': obj,
@@ -55,6 +58,7 @@ def _analyze_parametric_shell_from_mesh(obj, context=None, scale=1.0):
         'rim_height': rim_h_mm,
         'rim_shape': rim_shape,
         'rim_top_ratio': rim_top_ratio,
+        'bottom_fillet': bf,
         'pos_x': obj.location.x * scale,
         'pos_y': obj.location.y * scale,
         'pos_z': obj.location.z * scale,

@@ -60,7 +60,15 @@ TopoDS_Shape create_bottom_shell_filleted_with_holes_solid(double width, double 
 // Parametric shell (open-top box)
 TopoDS_Shape create_parametric_shell_solid(double width, double depth, double height,
                                             double thickness, const char* corner_type,
-                                            double corner_radius);
+                                            double corner_radius,
+                                            const char* rim_type,
+                                            double rim_width, double rim_height,
+                                            const char* rim_shape,
+                                            double rim_top_ratio,
+                                            double bottom_fillet = 0.0);
+
+// Bottom fillet utility (used by both bottom_shell and parametric_shell)
+TopoDS_Shape apply_bottom_fillet_to_box(const TopoDS_Shape& boxShape, double fillet_radius, double bottom_z);
 // Rounded rectangle wire helper (shared with rounded_box.cpp)
 TopoDS_Wire create_rounded_rect_wire(double width, double depth, double cr, double z, double y_offset);
 

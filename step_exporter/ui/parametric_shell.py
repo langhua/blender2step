@@ -510,7 +510,7 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
             inset = total_inset * (1.0 - math.cos(math.pi / 2 * t_frac))
             lyr_hw = hw_outer - inset
             lyr_hd = hd_outer - inset
-            lyr_cr = max(cr - inset, 0.001)
+            lyr_cr = cr  # constant corner radius at all heights
             pts = _profile(lyr_hw, lyr_hd, lyr_cr, seg)
             outer_layers.append([bm.verts.new((x, y, z_val)) for x, y in pts])
         
@@ -534,7 +534,7 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
             inset = total_inset * (1.0 - math.cos(math.pi / 2 * t_frac))
             lyr_hw = iw / 2.0 - inset
             lyr_hd = id_ / 2.0 - inset
-            lyr_cr = max(icr - inset, 0.001)
+            lyr_cr = icr  # constant corner radius at all heights
             pts = _profile(lyr_hw, lyr_hd, lyr_cr, seg)
             inner_layers.append([bm.verts.new((x, y, z_val)) for x, y in pts])
         

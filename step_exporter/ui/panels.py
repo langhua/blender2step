@@ -66,7 +66,6 @@ class STEP_EXPORTER_PT_sample_generators(Panel):
         col.operator("step_exporter.create_top_shell", text=_t("Top Shell"), icon='MESH_PLANE')
         col.operator("step_exporter.create_bottom_shell", text=_t("Bottom Shell"), icon='MESH_PLANE')
         col.operator("step_exporter.create_cylinder_gallery", text=_t("Cylinder Gallery"), icon='MESH_CYLINDER')
-        col.operator("step_exporter.create_rect_box", text=_t("Rect Box (2mm)"), icon='MESH_CUBE')
         col.operator("step_exporter.create_cone_gallery", text=_t("Cone Gallery △"), icon='MESH_CONE')
         col.operator("step_exporter.create_cone_gallery_inverted", text=_t("Cone Gallery ▽"), icon='MESH_CONE')
 

@@ -7,8 +7,8 @@
 - **No need to copy files to Blender** — the junction means any change to the git repo is instantly available in Blender.
 
 ## Design Rule
-- **Blender preview must match STEP exactly** — BMesh preview and C++ STEP export must produce identical geometry. Use the same algorithmic approach (e.g., Boolean ops) for both, not separate implementations that diverge.
-- **Bottom fillet → direct shell construction** — 当设置底部圆角(bf>0)时，禁止使用 Boolean 切削方式（底面和侧壁会分离），必须使用 `_build_square`/`_build_rounded` 直接构建壳体的方法，然后对底部边（外层 Z=0 + 内层 Z=t）统一倒角。内外倒角半径让 Blender 自动生成。
+- **Blender preview must match STEP exactly** — BMesh preview and C++ STEP export must produce identical geometry. Use the same algorithmic approach for both, not separate implementations that diverge.
+- **Bottom fillet → manual arc-ring construction** — 禁止使用任何 bevel/bpy.ops/bmesh.ops.bevel/Bevel Modifier 方式。必须手动构建圆角过渡环：将 XY 轮廓向内缩小 fillet_radius 形成底面（圆心辐条式），然后沿四分之一圆弧用 sin(θ)/1-cos(θ) 插值生成多层过渡环（expand = r*sin(θ), rise = r*(1-cos(θ))），每层与上层用 quad 连接。内外圆角半径分别为 bf 和 max(bf-t, 0.001)。C++ 侧对应使用 apply_bottom_fillet_to_box 对内外 Solid 分别倒角后布尔切削。
 
 ## Build
 - C++ build: `cd f:\git\blender2step\build` → `cmake --build . --config Release`

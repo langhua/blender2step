@@ -4,6 +4,7 @@ import bpy, bmesh, mathutils
 from bpy.types import Operator
 from bpy.props import FloatProperty, EnumProperty
 from ..core.i18n import _t
+from ..core.profile_utils import make_profile, add_fillet_rings
 
 
 class STEP_EXPORTER_OT_create_parametric_shell(Operator):
@@ -286,144 +287,96 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
     # ── Direct shell with bottom fillet (manual construction) ──
 
     def _build_shell_direct(self, w, d, h, t, cr, rw, rh, rim_type, rim_shape, top_ratio, bf):
-        """Build shell with bottom fillet via manual arc-ring construction.
-        
-        Matches the bottom shell example approach: create fillet transition
-        rings using sin/cos interpolation along a quarter-circle profile,
-        then build walls and bottom faces directly. No bevel operator needed.
-        """
+        """Build shell with bottom fillet via shared profile_utils."""
         import math
         
         hw, hd = w / 2.0, d / 2.0
         seg = max(32, int(cr / min(w, d) * 64)) if cr > 0.0001 else 1
-        
-        # --- Build outer and inner XY profiles ---
-        if cr < 0.0001:
-            outer_pts = [(-hw, -hd), (hw, -hd), (hw, hd), (-hw, hd)]
-            inner_pts = [(-hw+t, -hd+t), (hw-t, -hd+t), (hw-t, hd-t), (-hw+t, hd-t)]
-        else:
-            ir = max(cr - t, 0.0001)
-            def _make_profile(cr_val, off):
-                n = seg
-                pts = []
-                rhw, rhd = hw - off, hd - off
-                # Dynamic corner centers (match offset and corner radius)
-                cc = [(-rhw+cr_val, -rhd+cr_val), (rhw-cr_val, -rhd+cr_val),
-                      (rhw-cr_val, rhd-cr_val), (-rhw+cr_val, rhd-cr_val)]
-                for i in range(1, n + 1):
-                    y = -rhd + cr_val + (2*(rhd - cr_val)) * i / n
-                    pts.append((rhw, y))
-                cx, cy = cc[2]
-                for j in range(1, n + 1):
-                    a = j * (math.pi/2) / n
-                    pts.append((cx + cr_val*math.cos(a), cy + cr_val*math.sin(a)))
-                for i in range(1, n + 1):
-                    x = rhw - cr_val - (2*(rhw - cr_val)) * i / n
-                    pts.append((x, rhd))
-                cx, cy = cc[3]
-                for j in range(1, n + 1):
-                    a = math.pi/2 + j*(math.pi/2)/n
-                    pts.append((cx + cr_val*math.cos(a), cy + cr_val*math.sin(a)))
-                for i in range(1, n + 1):
-                    y = rhd - cr_val - (2*(rhd - cr_val)) * i / n
-                    pts.append((-rhw, y))
-                cx, cy = cc[0]
-                for j in range(1, n + 1):
-                    a = math.pi + j*(math.pi/2)/n
-                    pts.append((cx + cr_val*math.cos(a), cy + cr_val*math.sin(a)))
-                for i in range(1, n + 1):
-                    x = -rhw + cr_val + (2*(rhw - cr_val)) * i / n
-                    pts.append((x, -rhd))
-                cx, cy = cc[1]
-                for j in range(1, n + 1):
-                    a = 3*math.pi/2 + j*(math.pi/2)/n
-                    pts.append((cx + cr_val*math.cos(a), cy + cr_val*math.sin(a)))
-                return pts
-            outer_pts = _make_profile(cr, 0)
-            inner_pts = _make_profile(ir, t)
-        
-        num_pts = len(outer_pts)
+        ir = max(cr - t, 0.0001)
         outer_fillet_r = bf
-        inner_fillet_r = max(bf - t, 0.001) if bf > 0.0001 else 0.0
+        inner_fillet_r = max(bf - t, 0.001)
         fillet_seg = 32
         
         bm = bmesh.new()
         
-        # --- Compute bottom profiles (true offset, not center-shrink) ---
-        # Outer bottom: profile offset by bf, corner_radius reduced by bf
-        # Inner bottom: profile offset by t+inner_fillet_r, corner_radius reduced by inner_fillet_r
+        # --- Profiles ---
         if cr < 0.0001:
-            # Square: simple offset rectangle
-            outer_bottom_pts = [(-hw+bf, -hd+bf), (hw-bf, -hd+bf),
-                                (hw-bf, hd-bf), (-hw+bf, hd-bf)]
+            outer_pts = [(-hw, -hd), (hw, -hd), (hw, hd), (-hw, hd)]
+            inner_pts = [(-hw+t, -hd+t), (hw-t, -hd+t), (hw-t, hd-t), (-hw+t, hd-t)]
+            num_pts = 4
+            # Square bottom profiles (simple offset)
+            outer_bot_pts = [(-hw+bf, -hd+bf), (hw-bf, -hd+bf), (hw-bf, hd-bf), (-hw+bf, hd-bf)]
             ib_off = t + inner_fillet_r
-            inner_bottom_pts = [(-hw+ib_off, -hd+ib_off), (hw-ib_off, -hd+ib_off),
-                                (hw-ib_off, hd-ib_off), (-hw+ib_off, hd-ib_off)]
+            inner_bot_pts = [(-hw+ib_off, -hd+ib_off), (hw-ib_off, -hd+ib_off),
+                             (hw-ib_off, hd-ib_off), (-hw+ib_off, hd-ib_off)]
+            # Outer bottom
+            outer_bot_v = [bm.verts.new((x, y, 0)) for x, y in outer_bot_pts]
+            bm.faces.new(list(reversed(outer_bot_v)))
+            # Outer fillet rings (square: linear interp)
+            outer_prev = outer_bot_v
+            for si in range(1, fillet_seg + 1):
+                frac = si / fillet_seg; ang = math.pi/2*frac
+                sin_a = math.sin(ang); rise = bf*(1-math.cos(ang))
+                ring_off = bf*(1-sin_a)
+                ring_pts = [(-hw+ring_off,-hd+ring_off),(hw-ring_off,-hd+ring_off),
+                            (hw-ring_off,hd-ring_off),(-hw+ring_off,hd-ring_off)]
+                ring = [bm.verts.new((x,y,rise)) for x,y in ring_pts]
+                for i in range(4): j=(i+1)%4; bm.faces.new([outer_prev[i],outer_prev[j],ring[j],ring[i]])
+                outer_prev = ring
+            outer_top_v = [bm.verts.new((x,y,h)) for x,y in outer_pts]
+            for i in range(4): j=(i+1)%4; bm.faces.new([outer_prev[i],outer_prev[j],outer_top_v[j],outer_top_v[i]])
+            # Inner bottom
+            inner_bot_v = [bm.verts.new((x,y,t)) for x,y in inner_bot_pts]
+            bm.faces.new(inner_bot_v)
+            # Inner fillet rings
+            inner_prev = inner_bot_v
+            for si in range(1, fillet_seg + 1):
+                frac = si/fillet_seg; ang = math.pi/2*frac
+                sin_a = math.sin(ang); rise = inner_fillet_r*(1-math.cos(ang))
+                ring_off = ib_off - inner_fillet_r*sin_a
+                ring_pts = [(-hw+ring_off,-hd+ring_off),(hw-ring_off,-hd+ring_off),
+                            (hw-ring_off,hd-ring_off),(-hw+ring_off,hd-ring_off)]
+                ring = [bm.verts.new((x,y,t+rise)) for x,y in ring_pts]
+                for i in range(4): j=(i+1)%4; bm.faces.new([inner_prev[i],inner_prev[j],ring[j],ring[i]])
+                inner_prev = ring
+            inner_top_v = [bm.verts.new((x,y,h)) for x,y in inner_pts]
+            for i in range(4): j=(i+1)%4; bm.faces.new([inner_prev[i],inner_prev[j],inner_top_v[j],inner_top_v[i]])
         else:
-            outer_bottom_pts = _make_profile(max(cr - bf, 0.0), bf)
-            ib_off = t + inner_fillet_r
-            inner_bottom_pts = _make_profile(max(ir - inner_fillet_r, 0.0), ib_off)
-        
-        # --- Outer bottom face (single N-gon, no center spokes) ---
-        outer_bot_v = [bm.verts.new((x, y, 0)) for x, y in outer_bottom_pts]
-        bm.faces.new(list(reversed(outer_bot_v)))
-        
-        # --- Outer fillet rings (profile-based: transitioning corner radius) ---
-        outer_prev = outer_bot_v
-        r_bot_o = max(cr - bf, 0.0)
-        for si in range(1, fillet_seg + 1):
-            frac = si / fillet_seg
-            ang = math.pi / 2.0 * frac
-            sin_a = math.sin(ang)
-            rise = outer_fillet_r * (1.0 - math.cos(ang))
-            ring_cr = r_bot_o + (cr - r_bot_o) * sin_a
-            ring_off = bf * (1.0 - sin_a)
-            ring_pts = _make_profile(ring_cr, ring_off) if cr > 0.0001 else \
-                       [(-hw+ring_off, -hd+ring_off), (hw-ring_off, -hd+ring_off),
-                        (hw-ring_off, hd-ring_off), (-hw+ring_off, hd-ring_off)]
-            ring = [bm.verts.new((x, y, rise)) for x, y in ring_pts]
+            # Rounded: use shared utilities
+            outer_pts = make_profile(hw, hd, cr, seg)
+            inner_pts = make_profile(hw - t, hd - t, ir, seg)
+            num_pts = 8 * seg
+            
+            # Outer fillet + walls
+            bot_cr_o = max(cr - bf, 0.0)
+            outer_bot_v, outer_fillet_top, _ = add_fillet_rings(
+                bm, hw, hd, cr, hw-bf, hd-bf, bot_cr_o, 0.0, bf, fillet_seg, seg)
+            
+            # Outer walls up to z=h
+            outer_top_v = [bm.verts.new((x, y, h)) for x, y in outer_pts]
             for i in range(num_pts):
                 j = (i + 1) % num_pts
-                bm.faces.new([outer_prev[i], outer_prev[j], ring[j], ring[i]])
-            outer_prev = ring
-        
-        # --- Outer walls (last fillet ring → z=h) ---
-        outer_top_v = [bm.verts.new((x, y, h)) for x, y in outer_pts]
-        for i in range(num_pts):
-            j = (i + 1) % num_pts
-            bm.faces.new([outer_prev[i], outer_prev[j], outer_top_v[j], outer_top_v[i]])
-        
-        # --- Inner bottom face (single N-gon) ---
-        inner_bot_v = [bm.verts.new((x, y, t)) for x, y in inner_bottom_pts]
-        bm.faces.new(inner_bot_v)
-        
-        # --- Inner fillet rings (profile-based: transitioning corner radius) ---
-        inner_prev = inner_bot_v
-        r_bot_i = max(ir - inner_fillet_r, 0.0)
-        off_bot_i = t + inner_fillet_r
-        for si in range(1, fillet_seg + 1):
-            frac = si / fillet_seg
-            ang = math.pi / 2.0 * frac
-            sin_a = math.sin(ang)
-            rise = inner_fillet_r * (1.0 - math.cos(ang))
-            ring_cr = r_bot_i + (ir - r_bot_i) * sin_a
-            ring_off = off_bot_i - inner_fillet_r * sin_a
-            ring_pts = _make_profile(ring_cr, ring_off) if cr > 0.0001 else \
-                       [(-hw+ring_off, -hd+ring_off), (hw-ring_off, -hd+ring_off),
-                        (hw-ring_off, hd-ring_off), (-hw+ring_off, hd-ring_off)]
-            ring = [bm.verts.new((x, y, t + rise)) for x, y in ring_pts]
+                bm.faces.new([outer_fillet_top[i], outer_fillet_top[j], outer_top_v[j], outer_top_v[i]])
+            
+            # Inner fillet + walls
+            inner_wall_hw = hw - t
+            inner_wall_hd = hd - t
+            inner_wall_cr = ir
+            inner_bot_hw = inner_wall_hw - inner_fillet_r
+            inner_bot_hd = inner_wall_hd - inner_fillet_r
+            inner_bot_cr = max(inner_wall_cr - inner_fillet_r, 0.0)
+            inner_bot_v, inner_fillet_top, _ = add_fillet_rings(
+                bm, inner_wall_hw, inner_wall_hd, inner_wall_cr,
+                inner_bot_hw, inner_bot_hd, inner_bot_cr,
+                t, inner_fillet_r, fillet_seg, seg)
+            
+            # Inner walls up to z=h
+            inner_top_v = [bm.verts.new((x, y, h)) for x, y in inner_pts]
             for i in range(num_pts):
                 j = (i + 1) % num_pts
-                bm.faces.new([inner_prev[i], inner_prev[j], ring[j], ring[i]])
-            inner_prev = ring
+                bm.faces.new([inner_fillet_top[i], inner_fillet_top[j], inner_top_v[j], inner_top_v[i]])
         
-        # --- Inner walls (last fillet ring → z=h) ---
-        inner_top_v = [bm.verts.new((x, y, h)) for x, y in inner_pts]
-        for i in range(num_pts):
-            j = (i + 1) % num_pts
-            bm.faces.new([inner_prev[i], inner_prev[j], inner_top_v[j], inner_top_v[i]])
-        
-        # --- Top rim (connecting outer and inner walls at z=h) ---
+        # --- Top rim ---
         for i in range(num_pts):
             j = (i + 1) % num_pts
             bm.faces.new([outer_top_v[i], outer_top_v[j], inner_top_v[j], inner_top_v[i]])
@@ -437,10 +390,12 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
                 ot_v = [bm.verts.new((x, y, h + rh)) for x, y in outer_pts]
                 it_v, ib_v = [], []
                 if ratio > 0.001:
-                    it_pts = _make_profile(max(cr - rw*(1-ratio), 0.001), rw*(1-ratio)) if cr>0.0001 else \
+                    it_cr = max(cr - rw*(1-ratio), 0.001)
+                    it_pts = make_profile(hw - rw*(1-ratio), hd - rw*(1-ratio), it_cr, seg) if cr>0.0001 else \
                              [(x-rw*(1-ratio)*(1 if x>0 else -1), y-rw*(1-ratio)*(1 if y>0 else -1)) for x,y in outer_pts]
                     it_v = [bm.verts.new((x, y, h + rh)) for x, y in it_pts]
-                ib_pts = _make_profile(max(cr - rw, 0.001), rw) if cr>0.0001 else \
+                ib_cr = max(cr - rw, 0.001)
+                ib_pts = make_profile(hw - rw, hd - rw, ib_cr, seg) if cr>0.0001 else \
                          [(x-rw*(1 if x>0 else -1), y-rw*(1 if y>0 else -1)) for x,y in outer_pts]
                 ib_v = [bm.verts.new((x, y, h)) for x, y in ib_pts]
                 for i in range(num_pts):
@@ -448,40 +403,37 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
                     bm.faces.new([wall_pts[i], wall_pts[j], ot_v[j], ot_v[i]])
                 if ratio > 0.001:
                     for i in range(num_pts):
-                        j = (i+1) % num_pts
-                        bm.faces.new([ot_v[i], ot_v[j], it_v[j], it_v[i]])
+                        j = (i+1) % num_pts; bm.faces.new([ot_v[i], ot_v[j], it_v[j], it_v[i]])
                     for i in range(num_pts):
-                        j = (i+1) % num_pts
-                        bm.faces.new([it_v[i], it_v[j], ib_v[j], ib_v[i]])
+                        j = (i+1) % num_pts; bm.faces.new([it_v[i], it_v[j], ib_v[j], ib_v[i]])
                 else:
                     for i in range(num_pts):
-                        j = (i+1) % num_pts
-                        bm.faces.new([ot_v[i], ot_v[j], ib_v[j], ib_v[i]])
+                        j = (i+1) % num_pts; bm.faces.new([ot_v[i], ot_v[j], ib_v[j], ib_v[i]])
             else:
                 wall_pts = inner_top_v
                 it_v = [bm.verts.new((x, y, h + rh)) for x, y in inner_pts]
                 ot_v, ob_v = [], []
                 if ratio > 0.001:
-                    ot_pts = _make_profile(max(cr - t + rw*ratio, 0.001), max(t - rw*ratio, 0.001)) if cr>0.0001 else \
+                    ot_cr = max(cr - t + rw*ratio, 0.001)
+                    ot_off = max(t - rw*ratio, 0.001)
+                    ot_pts = make_profile(hw - ot_off, hd - ot_off, ot_cr, seg) if cr>0.0001 else \
                              [(x+rw*ratio*(1 if x>0 else -1), y+rw*ratio*(1 if y>0 else -1)) for x,y in inner_pts]
                     ot_v = [bm.verts.new((x, y, h + rh)) for x, y in ot_pts]
-                ob_pts = _make_profile(max(cr - t + rw, 0.001), max(t - rw, 0.001)) if cr>0.0001 else \
+                ob_cr = max(cr - t + rw, 0.001)
+                ob_off = max(t - rw, 0.001)
+                ob_pts = make_profile(hw - ob_off, hd - ob_off, ob_cr, seg) if cr>0.0001 else \
                          [(x+rw*(1 if x>0 else -1), y+rw*(1 if y>0 else -1)) for x,y in inner_pts]
                 ob_v = [bm.verts.new((x, y, h)) for x, y in ob_pts]
                 for i in range(num_pts):
-                    j = (i+1) % num_pts
-                    bm.faces.new([wall_pts[i], wall_pts[j], it_v[j], it_v[i]])
+                    j = (i+1) % num_pts; bm.faces.new([wall_pts[i], wall_pts[j], it_v[j], it_v[i]])
                 if ratio > 0.001:
                     for i in range(num_pts):
-                        j = (i+1) % num_pts
-                        bm.faces.new([it_v[i], it_v[j], ot_v[j], ot_v[i]])
+                        j = (i+1) % num_pts; bm.faces.new([it_v[i], it_v[j], ot_v[j], ot_v[i]])
                     for i in range(num_pts):
-                        j = (i+1) % num_pts
-                        bm.faces.new([ot_v[i], ot_v[j], ob_v[j], ob_v[i]])
+                        j = (i+1) % num_pts; bm.faces.new([ot_v[i], ot_v[j], ob_v[j], ob_v[i]])
                 else:
                     for i in range(num_pts):
-                        j = (i+1) % num_pts
-                        bm.faces.new([it_v[i], it_v[j], ob_v[j], ob_v[i]])
+                        j = (i+1) % num_pts; bm.faces.new([it_v[i], it_v[j], ob_v[j], ob_v[i]])
         
         bm.normal_update()
         obj = self._bm_to_object(bm, "ShellBody")

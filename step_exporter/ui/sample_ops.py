@@ -45,29 +45,19 @@ class STEP_EXPORTER_OT_create_bottom_shell(Operator):
 
     bl_label = _t("Create Bottom Shell")
 
-    bl_description = _t("Create a bottom shell sample with bolt holes")
+    bl_description = _t("Create a gallery of filleted bottom shell samples")
 
     bl_options = {'REGISTER', 'UNDO'}
 
-    
-
     def execute(self, context):
-
         script_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'examples', 'create_bottom_shell.py')
-
         old_argv = sys.argv
-
         try:
-
-            sys.argv = [sys.argv[0] if len(sys.argv) > 0 else "", "with_holes"]
-
+            sys.argv = [sys.argv[0] if len(sys.argv) > 0 else "", "gallery"]
             exec(compile(open(script_path).read(), script_path, 'exec'), {'__name__': '__main__'})
-
         finally:
-
             sys.argv = old_argv
-
-        self.report({'INFO'}, _t("Bottom shell created"))
+        self.report({'INFO'}, _t("Bottom shell gallery created"))
 
         return {'FINISHED'}
 

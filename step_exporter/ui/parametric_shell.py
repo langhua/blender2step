@@ -305,6 +305,7 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         if corner_type == 'curved' and cr > 0.0001:
             return self._build_curved_shell(w, d, h, t, cr, rw, rh, rim_type, rim_shape, top_ratio, bf, curve_ratio)
         
+        print(f"[Direct] rounded/square path, bf={bf*1000:.1f}mm")
         hw, hd = w / 2.0, d / 2.0
         seg = max(32, int(cr / min(w, d) * 64)) if cr > 0.0001 else 1
         ir = max(cr - t, 0.0001)
@@ -363,7 +364,7 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
             num_pts = 8 * seg
             
             # Outer fillet + walls
-            bot_cr_o = max(cr - bf, 0.0)
+            bot_cr_o = cr  # keep corner radius constant
             outer_bot_v, outer_fillet_top, _ = add_fillet_rings(
                 bm, hw, hd, cr, hw-bf, hd-bf, bot_cr_o, 0.0, bf, fillet_seg, seg)
             
@@ -379,7 +380,7 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
             inner_wall_cr = ir
             inner_bot_hw = inner_wall_hw - inner_fillet_r
             inner_bot_hd = inner_wall_hd - inner_fillet_r
-            inner_bot_cr = max(inner_wall_cr - inner_fillet_r, 0.0)
+            inner_bot_cr = inner_wall_cr  # keep corner radius constant
             inner_bot_v, inner_fillet_top, _ = add_fillet_rings(
                 bm, inner_wall_hw, inner_wall_hd, inner_wall_cr,
                 inner_bot_hw, inner_bot_hd, inner_bot_cr,
@@ -531,7 +532,7 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
                 offset = bf * (1.0 - sin_t)
                 hw -= offset
                 hd -= (hd_outer / hw_outer * offset) if hw_outer > 0 else 0
-                r = max(cr - offset, 0.001)
+                # Keep corner radius constant; only wall position changes
             pts = _profile(hw, hd, r, seg)
             outer_layers.append([bm.verts.new((x, y, z_val)) for x, y in pts])
         
@@ -561,7 +562,7 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
                 offset = bf * (1.0 - sin_t)
                 hw -= offset
                 hd -= (inner_wall_hd / inner_wall_hw * offset) if inner_wall_hw > 0 else 0
-                r = max(icr - offset, 0.001)
+                # Keep corner radius constant
             pts = _profile(hw, hd, r, seg)
             inner_layers.append([bm.verts.new((x, y, z_val)) for x, y in pts])
         

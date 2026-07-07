@@ -582,6 +582,13 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         obj.data.name = "ParamShell"
         for f in obj.data.polygons:
             f.use_smooth = True
+        # Mark bottom-perimeter edges as sharp (local coords, bottom at z=-hh)
+        for e in obj.data.edges:
+            v0, v1 = e.vertices
+            z0 = obj.data.vertices[v0].co.z
+            z1 = obj.data.vertices[v1].co.z
+            if abs(z0 + hh) < 0.0001 and abs(z1 + hh) < 0.0001:
+                e.use_edge_sharp = True
         
         print(f"[Curved] bf={bf*1000:.1f}mm inset={total_inset*1000:.1f}mm "
               f"v={len(obj.data.vertices)} f={len(obj.data.polygons)}")

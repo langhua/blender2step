@@ -59,6 +59,7 @@ def _analyze_parametric_shell_from_mesh(obj, context=None, scale=1.0):
         'rim_shape': rim_shape,
         'rim_top_ratio': rim_top_ratio,
         'bottom_fillet': bf,
+        'curve_ratio': obj.get('curve_ratio', 0.5) / 100.0 if obj.get('corner_type') == 'curved' else 0.5,
         'pos_x': obj.location.x, 'pos_y': obj.location.y,
         'pos_z': obj.location.z,
     }

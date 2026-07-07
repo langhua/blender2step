@@ -624,8 +624,9 @@ TopoDS_Shape apply_bottom_fillet_to_box(const TopoDS_Shape& boxShape, double fil
 
         bool isHorizontal = fabs(pFirst.Z() - pLast.Z()) < Precision::Confusion();
         bool isAtBottom = fabs(pFirst.Z() - bottom_z) < 0.01;
+        bool isLinear = (curve.GetType() == GeomAbs_Line);  // skip arc/corner edges
 
-        if (isHorizontal && isAtBottom) {
+        if (isHorizontal && isAtBottom && isLinear) {
             filletMaker.Add(fillet_radius, edge);
             filletCount++;
         }

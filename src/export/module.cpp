@@ -28,6 +28,7 @@
 #include <gp_Trsf.hxx>
 #include <BRepBuilderAPI_Transform.hxx>
 #include <BRepBuilderAPI_MakeSolid.hxx>
+#include <ShapeUpgrade_UnifySameDomain.hxx>
 #include <BRepBuilderAPI_MakePolygon.hxx>
 #include <BRepOffsetAPI_ThruSections.hxx>
 #include <TopExp.hxx>
@@ -2652,9 +2653,11 @@ TopoDS_Shape create_parametric_shell_solid(double width, double depth, double he
                                             double rim_width, double rim_height,
                                             const char* rim_shape,
                                             double rim_top_ratio,
-                                            double bottom_fillet) {
-    bool rounded = (corner_type && (strcmp(corner_type, "rounded") == 0 || strcmp(corner_type, "curved") == 0) && corner_radius > 0.001);
-    double cr = rounded ? std::min(corner_radius, std::min(width/2.0, depth/2.0)) : 0.0;
+                                            double bottom_fillet,
+                                            double curve_ratio) {
+    bool rounded = (corner_type && (strcmp(corner_type, "rounded") == 0) && corner_radius > 0.001);
+    bool curved = (corner_type && (strcmp(corner_type, "curved") == 0) && corner_radius > 0.001);
+    double cr = (rounded || curved) ? std::min(corner_radius, std::min(width/2.0, depth/2.0)) : 0.0;
     bool has_rim = (rim_type && strcmp(rim_type, "none") != 0 && rim_width > 0.001 && rim_height > 0.001);
     bool is_trapezoid = false;
     double ratio = 1.0;
@@ -2665,6 +2668,102 @@ TopoDS_Shape create_parametric_shell_solid(double width, double depth, double he
 
     // Always build shell at height+rh when rim, then carve rim profile
     double total_h = has_rim ? height + rim_height : height;
+
+    // ── Curved (cosine) path: solid loft with embedded bottom fillet ──
+    if (curved) {
+        double hw = width / 2.0, hd = depth / 2.0;
+        double total_inset = std::min(hw, hd) * curve_ratio * 0.5;
+        double hh = total_h / 2.0;
+        int nLayers = 16;
+        int bfSegs = (bottom_fillet > 0.001) ? 8 : 0;
+        double bf = bottom_fillet;
+
+        // Build layers bottom→top: fillet zone then cosine wall
+        auto buildLayers = [&](double base_hw, double base_hd, double base_cr,
+                                double z_shift) {
+            std::vector<double> zs, hws, hds;
+
+            // 1. Bottom fillet zone: z from -hh+z_shift to -hh+z_shift+bf
+            if (bf > 0.001) {
+                for (int i = 0; i <= bfSegs; i++) {
+                    double z = -hh + z_shift + bf * i / bfSegs;
+                    double s = (double)i / bfSegs;
+                    double offset = bf * (1.0 - sin(M_PI / 2.0 * s));
+                    // Cosine inset at THIS z (not at wall_bot)
+                    double t = (hh - (z - z_shift)) / (2.0 * hh);
+                    t = std::max(0.0, std::min(1.0, t));
+                    double cos_inset = total_inset * (1.0 - cos(M_PI / 2.0 * t));
+                    zs.push_back(z);
+                    hws.push_back(base_hw - cos_inset - offset);
+                    hds.push_back(base_hd - cos_inset - offset);
+                }
+            }
+
+            // 2. Cosine wall: z from -hh+z_shift+bf to +hh+z_shift
+            double wall_bot = -hh + z_shift + bf;
+            double wall_top = hh + z_shift;
+            int start_i = (bf > 0.001) ? 1 : 0;  // skip duplicate at wall_bot
+            for (int i = start_i; i <= nLayers; i++) {
+                double z = wall_bot + (wall_top - wall_bot) * i / nLayers;
+                double t = (hh - (z - z_shift)) / (2.0 * hh);
+                t = std::max(0.0, std::min(1.0, t));
+                double inset = total_inset * (1.0 - cos(M_PI / 2.0 * t));
+                zs.push_back(z);
+                hws.push_back(base_hw - inset);
+                hds.push_back(base_hd - inset);
+            }
+            return std::make_tuple(zs, hws, hds);
+        };
+
+        // Helper: create closed solid via ThruSections (solid mode, smooth)
+        auto makeSolid = [&](const std::vector<double>& hw_arr,
+                             const std::vector<double>& hd_arr,
+                             const std::vector<double>& z_arr,
+                             double cr_val) -> TopoDS_Solid {
+            BRepOffsetAPI_ThruSections loft(true, false, 1e-6);
+            for (size_t i = 0; i < hw_arr.size(); i++) {
+                TopoDS_Wire w = create_rounded_rect_wire(
+                    hw_arr[i] * 2.0, hd_arr[i] * 2.0, cr_val, z_arr[i], 0.0);
+                if (w.IsNull()) return TopoDS_Solid();
+                loft.AddWire(w);
+            }
+            loft.Build();
+            if (!loft.IsDone()) return TopoDS_Solid();
+            TopoDS_Shape s = loft.Shape();
+            return s.ShapeType() == TopAbs_SOLID ? TopoDS::Solid(s) : TopoDS_Solid();
+        };
+
+        // Outer solid (z_shift = 0)
+        auto [oz, ohw, ohd] = buildLayers(hw, hd, cr, 0.0);
+        TopoDS_Solid outerSolid = makeSolid(ohw, ohd, oz, cr);
+        if (outerSolid.IsNull()) return TopoDS_Shape();
+
+        // Inner solid: z_shift = thickness
+        double iw = hw - thickness, id_ = hd - thickness;
+        double icr = std::min(cr, std::min(iw, id_) - 0.01);
+        if (icr < 0.01) icr = 0.01;
+        auto [iz, ihw, ihd] = buildLayers(iw, id_, icr, thickness);
+        TopoDS_Solid innerSolid = makeSolid(ihw, ihd, iz, icr);
+        if (innerSolid.IsNull()) return TopoDS_Shape();
+
+        // Boolean: outer - inner → shell
+        BRepAlgoAPI_Cut cut(outerSolid, innerSolid);
+        if (!cut.IsDone()) return TopoDS_Shape();
+        TopoDS_Shape result = cut.Shape();
+
+        // Merge faces for cleaner output
+        ShapeUpgrade_UnifySameDomain unifier(result, true, true, true);
+        unifier.Build();
+        result = unifier.Shape();
+
+        // Shift to Z=0
+        gp_Trsf shiftUp;
+        shiftUp.SetTranslation(gp_Vec(0, 0, hh));
+        result = BRepBuilderAPI_Transform(result, shiftUp).Shape();
+        return result;
+    }
+
+    // ── Rounded/Square path: box-based solid ──
 
     // ── Outer and inner boxes for shell ──
     double outer_cr = rounded ? cr : 0.0;
@@ -2934,18 +3033,19 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
     const char* rim_type = "none"; double rim_width = 0.0, rim_height = 0.0;
     const char* rim_shape = "rect"; double rim_top_ratio = 1.0;
     double bottom_fillet = 0.0;
+    double curve_ratio = 0.5;
 
-    if (!PyArg_ParseTuple(args, "sdddd|dsdddsddssisdd",
+    if (!PyArg_ParseTuple(args, "sdddd|dsdddsddssisddd",
                           &filename, &width, &depth, &height, &thickness,
                           &corner_radius, &corner_type,
                           &pos_x, &pos_y, &pos_z,
                           &rim_type, &rim_width, &rim_height,
                           &step_schema, &unit, &enable_logging,
                           &rim_shape, &rim_top_ratio,
-                          &bottom_fillet)) {
+                          &bottom_fillet, &curve_ratio)) {
         PyErr_SetString(PyExc_TypeError,
             "export_parametric_shell_step() expected: filename, width, depth, height, thickness"
-            "[, corner_radius, corner_type, pos_x, pos_y, pos_z, rim_type, rim_width, rim_height, step_schema, unit, enable_logging, rim_shape, rim_top_ratio, bottom_fillet]");
+            "[, corner_radius, corner_type, pos_x, pos_y, pos_z, rim_type, rim_width, rim_height, step_schema, unit, enable_logging, rim_shape, rim_top_ratio, bottom_fillet, curve_ratio]");
         return NULL;
     }
 
@@ -2953,7 +3053,7 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
     std::cout << "[STEP Exporter] Exporting parametric shell to: " << filename << std::endl;
     std::cout << "[STEP Exporter]   dims: " << width << "x" << depth << "x" << height
               << " wall=" << thickness << " corner=" << corner_type << " r=" << corner_radius
-              << " bf=" << bottom_fillet << std::endl;
+              << " bf=" << bottom_fillet << " curve=" << curve_ratio << std::endl;
     std::cout << "[STEP Exporter]   pos=(" << pos_x << "," << pos_y << "," << pos_z << ")" << std::endl;
 
     try {
@@ -2961,7 +3061,7 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                                                             thickness, corner_type, corner_radius,
                                                             rim_type, rim_width, rim_height,
                                                             rim_shape, rim_top_ratio,
-                                                            bottom_fillet);
+                                                            bottom_fillet, curve_ratio);
         if (shape.IsNull()) { Py_RETURN_FALSE; }
 
         // Fix if needed

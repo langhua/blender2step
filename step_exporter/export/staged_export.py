@@ -829,7 +829,8 @@ def _parametric_export_staged():
                         1 if data['enable_logging'] else 0,
                         pparams.get('rim_shape', 'rect'),
                         pparams.get('rim_top_ratio', 1.0),
-                        bf_val)
+                        bf_val,
+                        pparams.get('curve_ratio', 0.5))
                 
                 elif obj_type == 'regular':
                     obj = obj_params

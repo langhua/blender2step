@@ -65,7 +65,8 @@ TopoDS_Shape create_parametric_shell_solid(double width, double depth, double he
                                             double rim_width, double rim_height,
                                             const char* rim_shape,
                                             double rim_top_ratio,
-                                            double bottom_fillet = 0.0);
+                                            double bottom_fillet = 0.0,
+                                            double curve_ratio = 0.5);
 
 // Bottom fillet utility (used by both bottom_shell and parametric_shell)
 TopoDS_Shape apply_bottom_fillet_to_box(const TopoDS_Shape& boxShape, double fillet_radius, double bottom_z);

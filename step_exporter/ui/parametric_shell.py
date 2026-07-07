@@ -459,18 +459,14 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
     # ── Curved-corner shell (cosine walls, smaller bottom) ──
 
     def _build_curved_shell(self, w, d, h, t, cr, rw, rh, rim_type, rim_shape, top_ratio, bf, curve_ratio):
-        """Build shell with cosine-curved walls via direct mesh construction.
-        
-        Builds outer and inner wall layers in a single BMesh (no boolean needed).
-        The cosine curve transitions from full-width at top to inset-width at bottom.
-        """
+        """Build shell with cosine walls + bottom fillet via edge bridging."""
         import math
         
         hw_outer, hd_outer = w / 2.0, d / 2.0
         hh = h / 2.0
-        total_inset = bf + min(hw_outer, hd_outer) * curve_ratio * 0.5
-        seg = max(24, int(cr / min(w, d) * 48))
-        side_segs = seg * 2
+        total_inset = min(hw_outer, hd_outer) * curve_ratio * 0.5
+        seg = max(32, int(cr / min(w, d) * 64))
+        side_segs = seg * 4
         num_pts = 8 * seg
         
         def _profile(hw_a, hd_a, cr_a, n):
@@ -500,76 +496,93 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
                 a=3*math.pi/2+j*(math.pi/2)/n; pts.append((cx+cr_a*math.cos(a),cy+cr_a*math.sin(a)))
             return pts
         
+        def _layer_at_z(z_target):
+            t_frac = (hh - z_target) / (2 * hh)
+            t_frac = max(0.0, min(1.0, t_frac))
+            return total_inset * (1.0 - math.cos(math.pi / 2 * t_frac))
+        
+        def _connect_layers(layers, reversed_winding=False):
+            """Create quads between consecutive layers."""
+            for li in range(len(layers) - 1):
+                cur, nxt = layers[li], layers[li + 1]
+                for i in range(num_pts):
+                    j = (i + 1) % num_pts
+                    if reversed_winding:
+                        bm.faces.new([cur[j], cur[i], nxt[i], nxt[j]])
+                    else:
+                        bm.faces.new([cur[i], cur[j], nxt[j], nxt[i]])
+        
         bm = bmesh.new()
         
-        # --- Outer wall layers (top→bottom) ---
+        # ── Outer wall: one continuous loop from +hh to -hh (wall extends into fillet) ──
+        bf_segs = max(12, int(bf / min(w, d) * 96)) if bf > 0.0001 else 0
+        total_steps = side_segs + bf_segs
         outer_layers = []
-        for sl in range(0, side_segs + 1):
-            z_val = hh - (2 * hh) * sl / side_segs
-            t_frac = sl / side_segs
-            inset = total_inset * (1.0 - math.cos(math.pi / 2 * t_frac))
-            lyr_hw = hw_outer - inset
-            lyr_hd = hd_outer - inset
-            lyr_cr = cr  # constant corner radius at all heights
-            pts = _profile(lyr_hw, lyr_hd, lyr_cr, seg)
+        for sl in range(0, total_steps + 1):
+            z_val = hh - 2 * hh * sl / total_steps
+            inset = _layer_at_z(z_val)
+            hw = hw_outer - inset
+            hd = hd_outer - (hd_outer / hw_outer * inset) if hw_outer > 0 else 0
+            r = cr
+            if bf > 0.0001 and z_val < -hh + bf:
+                s = (z_val + hh) / bf
+                s = max(0.0, min(1.0, s))
+                sin_t = math.sin(math.pi / 2 * s)
+                offset = bf * (1.0 - sin_t)
+                hw -= offset
+                hd -= (hd_outer / hw_outer * offset) if hw_outer > 0 else 0
+                r = max(cr - offset, 0.001)
+            pts = _profile(hw, hd, r, seg)
             outer_layers.append([bm.verts.new((x, y, z_val)) for x, y in pts])
         
-        # Outer wall quads (layer→layer)
-        for li in range(len(outer_layers) - 1):
-            cur = outer_layers[li]
-            nxt = outer_layers[li + 1]
-            for i in range(num_pts):
-                j = (i + 1) % num_pts
-                bm.faces.new([cur[i], cur[j], nxt[j], nxt[i]])
+        _connect_layers(outer_layers, reversed_winding=False)
+        bm.faces.new(list(reversed(outer_layers[-1])))  # bottom face
         
-        # --- Inner wall layers (from +hh down to -hh+t, same cosine shape as outer) ---
-        iw = w - 2 * t
-        id_ = d - 2 * t
+        # ── Inner wall: one continuous loop from +hh to inner_bot_z ──
+        inner_fillet_r = max(bf - t, 0.0)
+        inner_bot_z = -hh + t
+        inner_wall_hw = (w - 2 * t) / 2.0
+        inner_wall_hd = (d - 2 * t) / 2.0
         icr = max(cr - t, 0.0001)
+        ibf_segs = max(12, int(inner_fillet_r / min(w, d) * 96)) if inner_fillet_r > 0.0001 else 0
+        itotal_steps = side_segs + ibf_segs
         inner_layers = []
-        inner_z_range = 2 * hh - t  # from +hh to -hh+t
-        for sl in range(0, side_segs + 1):
-            z_val = hh - inner_z_range * sl / side_segs
-            t_frac = (hh - z_val) / (2 * hh)  # same t_frac → same cosine position
-            inset = total_inset * (1.0 - math.cos(math.pi / 2 * t_frac))
-            lyr_hw = iw / 2.0 - inset
-            lyr_hd = id_ / 2.0 - inset
-            lyr_cr = icr  # constant corner radius at all heights
-            pts = _profile(lyr_hw, lyr_hd, lyr_cr, seg)
+        for sl in range(0, itotal_steps + 1):
+            z_val = hh - (hh - inner_bot_z) * sl / itotal_steps
+            inset = _layer_at_z(z_val)
+            hw = inner_wall_hw - inset
+            hd = inner_wall_hd - (inner_wall_hd / inner_wall_hw * inset) if inner_wall_hw > 0 else 0
+            r = icr
+            if inner_fillet_r > 0.0001 and z_val < inner_bot_z + inner_fillet_r:
+                s = (z_val - inner_bot_z) / inner_fillet_r
+                s = max(0.0, min(1.0, s))
+                sin_t = math.sin(math.pi / 2 * s)
+                offset = inner_fillet_r * (1.0 - sin_t)
+                hw -= offset
+                hd -= (inner_wall_hd / inner_wall_hw * offset) if inner_wall_hw > 0 else 0
+                r = max(icr - offset, 0.001)
+            pts = _profile(hw, hd, r, seg)
             inner_layers.append([bm.verts.new((x, y, z_val)) for x, y in pts])
         
-        # Inner wall quads (layer→layer)
-        for li in range(len(inner_layers) - 1):
-            cur = inner_layers[li]
-            nxt = inner_layers[li + 1]
-            for i in range(num_pts):
-                j = (i + 1) % num_pts
-                # Inner walls face inward (reversed winding)
-                bm.faces.new([cur[j], cur[i], nxt[i], nxt[j]])
+        _connect_layers(inner_layers, reversed_winding=True)
+        bm.faces.new(inner_layers[-1])  # inner bottom face
         
-        # --- Top rim: flat frame connecting outer top to inner top (same Z = +hh) ---
-        ot = outer_layers[0]   # outer top (z = +hh)
-        it = inner_layers[0]   # inner top (z = +hh, inset by t)
+        # ── Top rim ──
+        ot = outer_layers[0]; it = inner_layers[0]
         for i in range(num_pts):
             j = (i + 1) % num_pts
             bm.faces.new([ot[i], ot[j], it[j], it[i]])
         
-        # --- Bottom face (outer bottom, closed) ---
-        ob = outer_layers[-1]  # outer bottom (z = -hh)
-        bot_c = bm.verts.new((0, 0, -hh))
-        for i in range(num_pts):
-            j = (i + 1) % num_pts
-            bm.faces.new([bot_c, ob[j], ob[i]])
-        
         bm.normal_update()
         obj = self._bm_to_object(bm, "CurvedShell")
-        
-        # Shift so bottom at Z=0
         obj.location.z = hh
         obj.name = "ParamShell"
         obj.data.name = "ParamShell"
+        for f in obj.data.polygons:
+            f.use_smooth = True
         
-        print(f"[Curved] Direct shell: {len(obj.data.vertices)}v, {len(obj.data.polygons)}f, total_inset={total_inset:.4f}")
+        print(f"[Curved] bf={bf*1000:.1f}mm inset={total_inset*1000:.1f}mm "
+              f"v={len(obj.data.vertices)} f={len(obj.data.polygons)}")
         return obj
 
     def _make_curved_solid(self, w, d, h, cr, total_inset, name):

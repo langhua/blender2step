@@ -465,8 +465,8 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         hw_outer, hd_outer = w / 2.0, d / 2.0
         hh = h / 2.0
         total_inset = min(hw_outer, hd_outer) * curve_ratio * 0.5
-        seg = max(32, int(cr / min(w, d) * 64))
-        side_segs = seg * 4
+        seg = max(24, int(cr / min(w, d) * 48))
+        side_segs = seg * 2
         num_pts = 8 * seg
         
         def _profile(hw_a, hd_a, cr_a, n):
@@ -515,7 +515,7 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         bm = bmesh.new()
         
         # ── Outer wall: one continuous loop from +hh to -hh (wall extends into fillet) ──
-        bf_segs = max(12, int(bf / min(w, d) * 96)) if bf > 0.0001 else 0
+        bf_segs = max(16, int(bf / min(w, d) * 128)) if bf > 0.0001 else 0
         total_steps = side_segs + bf_segs
         outer_layers = []
         for sl in range(0, total_steps + 1):
@@ -538,26 +538,27 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         _connect_layers(outer_layers, reversed_winding=False)
         bm.faces.new(list(reversed(outer_layers[-1])))  # bottom face
         
-        # ── Inner wall: one continuous loop from +hh to inner_bot_z ──
-        inner_fillet_r = max(bf - t, 0.0)
+        # ── Inner wall: same fillet as outer ──
+        inner_fillet_r = bf  # same as outer
         inner_bot_z = -hh + t
         inner_wall_hw = (w - 2 * t) / 2.0
         inner_wall_hd = (d - 2 * t) / 2.0
         icr = max(cr - t, 0.0001)
-        ibf_segs = max(12, int(inner_fillet_r / min(w, d) * 96)) if inner_fillet_r > 0.0001 else 0
+        ibf_segs = max(16, int(bf / min(w, d) * 128)) if bf > 0.0001 else 0
         itotal_steps = side_segs + ibf_segs
         inner_layers = []
+        inner_z_bot = inner_bot_z  # z goes to actual bottom, fillet zone determined by condition
         for sl in range(0, itotal_steps + 1):
-            z_val = hh - (hh - inner_bot_z) * sl / itotal_steps
+            z_val = hh - (hh - inner_z_bot) * sl / itotal_steps
             inset = _layer_at_z(z_val)
             hw = inner_wall_hw - inset
             hd = inner_wall_hd - (inner_wall_hd / inner_wall_hw * inset) if inner_wall_hw > 0 else 0
             r = icr
-            if inner_fillet_r > 0.0001 and z_val < inner_bot_z + inner_fillet_r:
-                s = (z_val - inner_bot_z) / inner_fillet_r
+            if bf > 0.0001 and z_val < inner_bot_z + bf:
+                s = (z_val - inner_bot_z) / bf
                 s = max(0.0, min(1.0, s))
                 sin_t = math.sin(math.pi / 2 * s)
-                offset = inner_fillet_r * (1.0 - sin_t)
+                offset = bf * (1.0 - sin_t)
                 hw -= offset
                 hd -= (inner_wall_hd / inner_wall_hw * offset) if inner_wall_hw > 0 else 0
                 r = max(icr - offset, 0.001)

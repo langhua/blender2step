@@ -42,6 +42,18 @@
 			"command": "python _fix_cone_labels.py",
 			"isBackground": false,
 			"problemMatcher": []
+		},
+		{
+			"label": "Check Merged STEP",
+			"type": "shell",
+			"command": "python f:\\git\\blender2step\\_check_merged.py",
+			"group": "none"
+		},
+		{
+			"label": "Clean temp files",
+			"type": "shell",
+			"command": "python f:\\git\\blender2step\\_clean_temp.py",
+			"group": "none"
 		}
 	]
 }

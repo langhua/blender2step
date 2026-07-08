@@ -3016,7 +3016,14 @@ TopoDS_Shape create_parametric_shell_solid(double width, double depth, double he
             t.SetTranslation(gp_Vec(0, 0, ring_z));
             ring = BRepBuilderAPI_Transform(ring, t).Shape();
             BRepAlgoAPI_Cut rc(result, ring);
-            if (rc.IsDone()) result = rc.Shape();
+            if (rc.IsDone()) {
+                result = rc.Shape();
+                // Extract the main solid from compound (ignore loose sub-shapes)
+                TopExp_Explorer exp(result, TopAbs_SOLID);
+                if (exp.More()) {
+                    result = exp.Current();
+                }
+            }
         }
     }
 

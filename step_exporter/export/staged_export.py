@@ -814,7 +814,7 @@ def _parametric_export_staged():
                 elif obj_type == 'parametric_shell':
                     pparams = obj_params
                     bf_val = pparams.get('bottom_fillet', 0.0)
-                    log_to_file(f"[STEP Exporter] Exporting parametric shell {obj_num}/{total_objects} (C++), bf={bf_val}...")
+                    log_to_file(f"[STEP Exporter] Exporting parametric shell {obj_num}/{total_objects} (C++), bf={bf_val}, pos=({pparams.get('pos_x',0):.4f},{pparams.get('pos_y',0):.4f},{pparams.get('pos_z',0):.4f})...")
                     success = cpp_exporter.export_parametric_shell_step(
                         temp_file,
                         pparams['width'], pparams['depth'], pparams['height'],

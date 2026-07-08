@@ -43,8 +43,8 @@ def _analyze_bottom_shell_from_mesh(obj, context, scale):
             'inner_fillet_radius': ifr, 'step_height': sh,
             'has_holes': has_holes, 'hole_radius': hr,
             'hole_offset_x': hox, 'hole_offset_y': hoy,
-            'pos_x': obj.location.x, 'pos_y': obj.location.y,
-            'pos_z': obj.location.z + oh / 2.0,  # bottom shell has bottom at -oh/2, compensate to Z=0
+            'pos_x': obj.location.x * scale, 'pos_y': obj.location.y * scale,
+            'pos_z': (obj.location.z + oh / 2.0) * scale,  # bottom shell has bottom at -oh/2, compensate to Z=0
         }
     
     import bmesh

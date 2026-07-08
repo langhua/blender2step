@@ -2762,36 +2762,98 @@ TopoDS_Shape create_parametric_shell_solid(double width, double depth, double he
         shiftUp.SetTranslation(gp_Vec(0, 0, hh));
         result = BRepBuilderAPI_Transform(result, shiftUp).Shape();
 
-        // ── Rim for curved shell (shell height = h, no extra rim_height in total_h) ──
+        // ── Rim for curved shell (same approach as box-based path) ──
         if (has_rim) {
             bool is_outside = (rim_type && strcmp(rim_type, "outside") == 0);
-            double ring_hw_o, ring_hw_i, ring_hd_o, ring_hd_i;
+            bool is_trapezoid = (rim_shape && strcmp(rim_shape, "trapezoid") == 0);
+            double ratio = is_trapezoid ? std::max(0.0, rim_top_ratio) : 1.0;
+            bool tapered = is_trapezoid && (ratio < 0.999);
+
+            // Ring dimensions at bottom (z=0) and top (z=rim_height)
+            double ring_outer_bot_hw, ring_inner_bot_hw;
+            double ring_outer_bot_hd, ring_inner_bot_hd;
+            double ring_outer_top_hw, ring_inner_top_hw;
+            double ring_outer_top_hd, ring_inner_top_hd;
+
             if (is_outside) {
-                // Outside: ring from (outer_wall - rw) to (inner_wall - rw)
-                // Extends past inner wall by rim_width for clean boolean cut
-                ring_hw_o = width / 2.0 - rim_width;                  // outer_wall - rw
-                ring_hw_i = width / 2.0 - thickness - rim_width;      // inner_wall - rw (past inner wall)
-                ring_hd_o = depth / 2.0 - rim_width;
-                ring_hd_i = depth / 2.0 - thickness - rim_width;
+                ring_outer_bot_hw = width / 2.0 - rim_width;
+                ring_outer_bot_hd = depth / 2.0 - rim_width;
+                ring_inner_bot_hw = width / 2.0 - thickness;
+                ring_inner_bot_hd = depth / 2.0 - thickness;
+                ring_outer_top_hw = width / 2.0 - rim_width * ratio;
+                ring_outer_top_hd = depth / 2.0 - rim_width * ratio;
+                ring_inner_top_hw = ring_inner_bot_hw;
+                ring_inner_top_hd = ring_inner_bot_hd;
             } else {
-                // Inside: ring from (inner_wall + rw) to (outer_wall + rw)
-                ring_hw_o = width / 2.0 + rim_width;            // outer_wall + rw margin
-                ring_hw_i = width / 2.0 - thickness + rim_width; // inner_wall + shelf
-                ring_hd_o = depth / 2.0 + rim_width;
-                ring_hd_i = depth / 2.0 - thickness + rim_width;
+                ring_outer_bot_hw = width / 2.0 + rim_width;
+                ring_outer_bot_hd = depth / 2.0 + rim_width;
+                ring_inner_bot_hw = width / 2.0 - thickness + rim_width;
+                ring_inner_bot_hd = depth / 2.0 - thickness + rim_width;
+                ring_outer_top_hw = ring_outer_bot_hw;
+                ring_outer_top_hd = ring_outer_bot_hd;
+                ring_inner_top_hw = width / 2.0 - thickness + rim_width * ratio;
+                ring_inner_top_hd = depth / 2.0 - thickness + rim_width * ratio;
             }
-            double ow = ring_hw_o * 2.0, od = ring_hd_o * 2.0;
-            double iw = ring_hw_i * 2.0, id = ring_hd_i * 2.0;
-            if (iw > 0.01 && id > 0.01) {
-                // For curved/rounded corners, rim ring must have matching corner radius
-                // to avoid boolean cut failures at corners.
-                // Note: curved inner wall has same cr as outer (icr=cr),
-                //       rounded inner wall has cr-thickness.
+
+            TopoDS_Shape ring;
+            if (tapered) {
+                // Trapezoid: loft tapered ring via ThruSections (same as box-based path)
+                auto MakeRoundedWire = [](double hw, double hd, double rad, double z) -> TopoDS_Wire {
+                    if (rad < 0.01) {
+                        BRepBuilderAPI_MakePolygon p;
+                        p.Add(gp_Pnt(-hw, -hd, z)); p.Add(gp_Pnt(hw, -hd, z));
+                        p.Add(gp_Pnt(hw,  hd, z)); p.Add(gp_Pnt(-hw,  hd, z));
+                        p.Close(); return p.Wire();
+                    }
+                    BRepBuilderAPI_MakeWire mw;
+                    mw.Add(BRepBuilderAPI_MakeEdge(gp_Pnt(hw, -hd+rad, z), gp_Pnt(hw, hd-rad, z)));
+                    mw.Add(BRepBuilderAPI_MakeEdge(gp_Circ(gp_Ax2(gp_Pnt(hw-rad, hd-rad, z), gp::DZ()), rad), 0.0, M_PI/2));
+                    mw.Add(BRepBuilderAPI_MakeEdge(gp_Pnt(hw-rad, hd, z), gp_Pnt(-hw+rad, hd, z)));
+                    mw.Add(BRepBuilderAPI_MakeEdge(gp_Circ(gp_Ax2(gp_Pnt(-hw+rad, hd-rad, z), gp::DZ()), rad), M_PI/2, M_PI));
+                    mw.Add(BRepBuilderAPI_MakeEdge(gp_Pnt(-hw, hd-rad, z), gp_Pnt(-hw, -hd+rad, z)));
+                    mw.Add(BRepBuilderAPI_MakeEdge(gp_Circ(gp_Ax2(gp_Pnt(-hw+rad, -hd+rad, z), gp::DZ()), rad), M_PI, 3*M_PI/2));
+                    mw.Add(BRepBuilderAPI_MakeEdge(gp_Pnt(-hw+rad, -hd, z), gp_Pnt(hw-rad, -hd, z)));
+                    mw.Add(BRepBuilderAPI_MakeEdge(gp_Circ(gp_Ax2(gp_Pnt(hw-rad, -hd+rad, z), gp::DZ()), rad), 3*M_PI/2, 2*M_PI));
+                    return mw.Wire();
+                };
+                // Corner radius: rad = hw_ring - hw + cr (concentric with shell corners)
                 bool has_corners = rounded || curved;
-                double inner_wall_cr = curved ? cr : (rounded ? std::max(0.0, cr - thickness) : 0.0);
+                auto ringRad = [&](double hw_ring) { return has_corners ? std::max(0.0, hw_ring - width/2.0 + cr) : 0.0; };
+                double orad_bot = ringRad(ring_outer_bot_hw);
+                double orad_top = ringRad(ring_outer_top_hw);
+                double irad_bot = ringRad(ring_inner_bot_hw);
+                double irad_top = ringRad(ring_inner_top_hw);
+                TopoDS_Wire ob = MakeRoundedWire(ring_outer_bot_hw, ring_outer_bot_hd, orad_bot, 0.0);
+                TopoDS_Wire ot = MakeRoundedWire(ring_outer_top_hw, ring_outer_top_hd, orad_top, rim_height);
+                TopoDS_Wire ib = MakeRoundedWire(ring_inner_bot_hw, ring_inner_bot_hd, irad_bot, 0.0);
+                TopoDS_Wire it = MakeRoundedWire(ring_inner_top_hw, ring_inner_top_hd, irad_top, rim_height);
+
+                BRepOffsetAPI_ThruSections loftO(true, true, true), loftI(true, true, true);
+                loftO.AddWire(ob); loftO.AddWire(ot); loftO.Build();
+                loftI.AddWire(ib); loftI.AddWire(it); loftI.Build();
+                if (loftO.IsDone() && loftI.IsDone()) {
+                    TopoDS_Solid so, si;
+                    auto toSolid = [](TopoDS_Shape& s) -> TopoDS_Solid {
+                        if (s.ShapeType() == TopAbs_SOLID) return TopoDS::Solid(s);
+                        BRepBuilderAPI_MakeSolid sm;
+                        for (TopExp_Explorer e(s, TopAbs_SHELL); e.More(); e.Next())
+                            sm.Add(TopoDS::Shell(e.Current()));
+                        return sm.IsDone() ? sm.Solid() : TopoDS_Solid();
+                    };
+                    TopoDS_Shape oShape = loftO.Shape(), iShape = loftI.Shape();
+                    so = toSolid(oShape); si = toSolid(iShape);
+                    if (!so.IsNull() && !si.IsNull()) {
+                        BRepAlgoAPI_Cut c(so, si);
+                        if (c.IsDone()) ring = c.Shape();
+                    }
+                }
+            } else {
+                // Rectangular ring via box subtraction
+                double ow = ring_outer_bot_hw * 2.0, od = ring_outer_bot_hd * 2.0;
+                double iw = ring_inner_bot_hw * 2.0, id = ring_inner_bot_hd * 2.0;
+                bool has_corners = rounded || curved;
                 double ring_cr = has_corners ? (is_outside ? std::max(cr - rim_width, 0.0) : cr + rim_width) : 0.0;
-                // Outside: inner ring extends past inner wall, use cr-thickness (matches Blender)
-                // Inside:  inner ring follows inner wall + rim_width offset
+                double inner_wall_cr = curved ? cr : (rounded ? std::max(0.0, cr - thickness) : 0.0);
                 double inner_ring_cr = has_corners ? (is_outside ? std::max(cr - thickness, 0.0) : inner_wall_cr + rim_width) : 0.0;
                 TopoDS_Shape oBox = create_rounded_box_solid(ow, od, rim_height + 2.0, ring_cr);
                 TopoDS_Shape iBox = create_rounded_box_solid(iw, id, rim_height + 4.0, inner_ring_cr);
@@ -2806,18 +2868,19 @@ TopoDS_Shape create_parametric_shell_solid(double width, double depth, double he
                 so = toSolid(oBox); si = toSolid(iBox);
                 if (!so.IsNull() && !si.IsNull()) {
                     BRepAlgoAPI_Cut c(so, si);
-                    if (c.IsDone()) {
-                        TopoDS_Shape ring = c.Shape();
-                        gp_Trsf t;
-                        t.SetTranslation(gp_Vec(0, 0, height - rim_height / 2.0));
-                        ring = BRepBuilderAPI_Transform(ring, t).Shape();
-                        BRepAlgoAPI_Cut rc(result, ring);
-                        if (rc.IsDone()) {
-                            result = rc.Shape();
-                            TopExp_Explorer exp(result, TopAbs_SOLID);
-                            if (exp.More()) result = exp.Current();
-                        }
-                    }
+                    if (c.IsDone()) ring = c.Shape();
+                }
+            }
+
+            if (!ring.IsNull()) {
+                gp_Trsf t;
+                t.SetTranslation(gp_Vec(0, 0, height - rim_height / 2.0));
+                ring = BRepBuilderAPI_Transform(ring, t).Shape();
+                BRepAlgoAPI_Cut rc(result, ring);
+                if (rc.IsDone()) {
+                    result = rc.Shape();
+                    TopExp_Explorer exp(result, TopAbs_SOLID);
+                    if (exp.More()) result = exp.Current();
                 }
             }
         }

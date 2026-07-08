@@ -255,18 +255,40 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         bpy.context.collection.objects.link(obj)
         return obj
 
-    def _make_rim_ring_debug(self, w, d, t, rw, rh, rim_type, z_pos, cr=0.0):
-        """Create RimRing debug object (wireframe) at given Z position."""
+    def _make_rim_ring_debug(self, w, d, t, rw, rh, rim_type, z_pos, cr=0.0, rim_shape='rect', top_ratio=1.0):
+        """Create RimRing cutter at given Z position.
+        When rim_shape='trapezoid', top profile is narrower by top_ratio."""
         if rim_type == 'none' or rw < 0.0001 or rh < 0.0001:
             return None
         rtw = rw
         is_out = (rim_type == 'outside')
+        tapered = (rim_shape == 'trapezoid' and 0.001 < top_ratio < 0.999)
         if is_out:
             rw_o, rw_i = w - 2*rtw, max((w - 2*rtw) - 2*t, 0.001)
             rd_o, rd_i = d - 2*rtw, max((d - 2*rtw) - 2*t, 0.001)
         else:
             rw_o, rw_i = w + 2*rtw, max(w - 2*t + 2*rtw, 0.001)
             rd_o, rd_i = d + 2*rtw, max(d - 2*t + 2*rtw, 0.001)
+        # Trapezoid: ring is 2*rh tall centered at z=h. Profiles at z=h±rh.
+        # Actual shelf is at midpoint z=h (linear interp). Top profile compensates:
+        #   top = shelf_at_h − (bottom − shelf_at_h) = 2*shelf_at_h − bottom
+        # Inside:  shelf edge = inner_wall + rw*ratio
+        # Outside: shelf edge = outer_wall - rw*ratio
+        rw_o_top, rd_o_top = rw_o, rd_o
+        rw_i_top, rd_i_top = rw_i, rd_i
+        if tapered:
+            if is_out:
+                # Outside: shelf outer edge at z=h = outer_wall - rw*ratio
+                #   top = 2*(outer_wall - rw*ratio) - (outer_wall - rw)
+                #       = outer_wall - rw*(2*ratio - 1)
+                rw_o_top = max(w - 2*rtw*(2*top_ratio - 1), 0.001)
+                rd_o_top = max(d - 2*rtw*(2*top_ratio - 1), 0.001)
+            else:
+                # Inside: shelf inner edge at z=h = inner_wall + rw*ratio
+                #   top = 2*(inner_wall + rw*ratio) - (inner_wall + rw)
+                #       = inner_wall + rw*(2*ratio - 1)
+                rw_i_top = max(w - 2*t + 2*rtw*(2*top_ratio - 1), 0.001)
+                rd_i_top = max(d - 2*t + 2*rtw*(2*top_ratio - 1), 0.001)
         rm = bmesh.new()
         r_half = rh
         use_rounded = (cr > 0.0001)
@@ -282,11 +304,30 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
             seg = max(8, int(cr / min(w, d) * 64))
             o_pts = make_profile(hw_o, hd_o, cr_o, seg)
             i_pts = make_profile(hw_i, hd_i, cr_i, seg)
+            # Top profiles (narrower for trapezoid)
+            hw_o_top = max(rw_o_top, 0.001) / 2.0
+            hd_o_top = max(rd_o_top, 0.001) / 2.0
+            hw_i_top = max(rw_i_top, 0.001) / 2.0
+            hd_i_top = max(rd_i_top, 0.001) / 2.0
+            if tapered:
+                if is_out:
+                    # Outside: compensated corner radius for top profile
+                    cr_o_top = max(cr - rtw*(2*top_ratio - 1), 0.0001)
+                    o_top_pts = make_profile(hw_o_top, hd_o_top, cr_o_top, seg)
+                    i_top_pts = i_pts
+                else:
+                    # Inside: compensated corner radius for top profile
+                    cr_i_top = max(cr - t + rtw*(2*top_ratio - 1), 0.0001)
+                    i_top_pts = make_profile(hw_i_top, hd_i_top, cr_i_top, seg)
+                    o_top_pts = o_pts
+            else:
+                o_top_pts = o_pts
+                i_top_pts = i_pts
             # Build ring tube from profiles
             ob_v = [rm.verts.new((x, y, -r_half)) for x, y in o_pts]
-            ot_v = [rm.verts.new((x, y,  r_half)) for x, y in o_pts]
+            ot_v = [rm.verts.new((x, y,  r_half)) for x, y in o_top_pts]
             ib_v = [rm.verts.new((x, y, -r_half)) for x, y in i_pts]
-            it_v = [rm.verts.new((x, y,  r_half)) for x, y in i_pts]
+            it_v = [rm.verts.new((x, y,  r_half)) for x, y in i_top_pts]
             n = len(o_pts)
             for i in range(n):
                 j = (i + 1) % n
@@ -297,14 +338,26 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         else:
             hw_o, hd_o = rw_o / 2.0, rd_o / 2.0
             hw_i, hd_i = max(rw_i, 0.001) / 2.0, max(rd_i, 0.001) / 2.0
+            # Top profiles (narrower for trapezoid)
+            hw_o_top = max(rw_o_top, 0.001) / 2.0
+            hd_o_top = max(rd_o_top, 0.001) / 2.0
+            hw_i_top = max(rw_i_top, 0.001) / 2.0
+            hd_i_top = max(rd_i_top, 0.001) / 2.0
+            if tapered:
+                if is_out:
+                    # Outside: outer moves, inner stays
+                    hw_i_top, hd_i_top = hw_i, hd_i
+                else:
+                    # Inside: inner moves, outer stays
+                    hw_o_top, hd_o_top = hw_o, hd_o
             ob = [rm.verts.new((x, y, -r_half)) for x, y in
                   [(-hw_o,-hd_o),(hw_o,-hd_o),(hw_o,hd_o),(-hw_o,hd_o)]]
             ot_v = [rm.verts.new((x, y, r_half)) for x, y in
-                   [(-hw_o,-hd_o),(hw_o,-hd_o),(hw_o,hd_o),(-hw_o,hd_o)]]
+                   [(-hw_o_top,-hd_o_top),(hw_o_top,-hd_o_top),(hw_o_top,hd_o_top),(-hw_o_top,hd_o_top)]]
             ib = [rm.verts.new((x, y, -r_half)) for x, y in
                   [(-hw_i,-hd_i),(hw_i,-hd_i),(hw_i,hd_i),(-hw_i,hd_i)]]
             it_v = [rm.verts.new((x, y, r_half)) for x, y in
-                   [(-hw_i,-hd_i),(hw_i,-hd_i),(hw_i,hd_i),(-hw_i,hd_i)]]
+                   [(-hw_i_top,-hd_i_top),(hw_i_top,-hd_i_top),(hw_i_top,hd_i_top),(-hw_i_top,hd_i_top)]]
             for i in range(4):
                 j = (i+1)%4
                 rm.faces.new([ob[i], ob[j], ot_v[j], ot_v[i]])
@@ -699,7 +752,7 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         
         # ── Rim via boolean (same approach as _build_boolean_shell) ──
         if rim_type != 'none' and rw > 0.0001 and rh > 0.0001:
-            ring = self._make_rim_ring_debug(w, d, t, rw, rh, rim_type, h, cr)
+            ring = self._make_rim_ring_debug(w, d, t, rw, rh, rim_type, h, cr, rim_shape, top_ratio)
             if ring:
                 # Shift shell so bottom at Z=0, then apply rim boolean
                 obj.location.z = h / 2.0

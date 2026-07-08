@@ -2730,7 +2730,8 @@ TopoDS_Shape create_parametric_shell_solid(double width, double depth, double he
             loft.Build();
             if (!loft.IsDone()) return TopoDS_Solid();
             TopoDS_Shape s = loft.Shape();
-            return s.ShapeType() == TopAbs_SOLID ? TopoDS::Solid(s) : TopoDS_Solid();
+            // Validate and fix face orientation (ensure positive volume)
+            return ensure_solid(s);
         };
 
         // Outer solid (z_shift = 0)
@@ -2751,8 +2752,8 @@ TopoDS_Shape create_parametric_shell_solid(double width, double depth, double he
         if (!cut.IsDone()) return TopoDS_Shape();
         TopoDS_Shape result = cut.Shape();
 
-        // Merge faces for cleaner output
-        ShapeUpgrade_UnifySameDomain unifier(result, true, true, true);
+        // Merge faces for cleaner output (ConcatBSplines=false avoids merging wall faces)
+        ShapeUpgrade_UnifySameDomain unifier(result, true, true, false);
         unifier.Build();
         result = unifier.Shape();
 
@@ -2760,6 +2761,60 @@ TopoDS_Shape create_parametric_shell_solid(double width, double depth, double he
         gp_Trsf shiftUp;
         shiftUp.SetTranslation(gp_Vec(0, 0, hh));
         result = BRepBuilderAPI_Transform(result, shiftUp).Shape();
+
+        // ── Rim for curved shell (shell height = h, no extra rim_height in total_h) ──
+        if (has_rim) {
+            bool is_outside = (rim_type && strcmp(rim_type, "outside") == 0);
+            double ring_hw_o, ring_hw_i, ring_hd_o, ring_hd_i;
+            if (is_outside) {
+                // Outside: ring from (outer_wall - rw) to inner_wall
+                ring_hw_o = width / 2.0 - rim_width;           // outer_wall - rw
+                ring_hw_i = width / 2.0 - thickness;            // inner_wall
+                ring_hd_o = depth / 2.0 - rim_width;
+                ring_hd_i = depth / 2.0 - thickness;
+            } else {
+                // Inside: ring from (inner_wall + rw) to (outer_wall + rw)
+                ring_hw_o = width / 2.0 + rim_width;            // outer_wall + rw margin
+                ring_hw_i = width / 2.0 - thickness + rim_width; // inner_wall + shelf
+                ring_hd_o = depth / 2.0 + rim_width;
+                ring_hd_i = depth / 2.0 - thickness + rim_width;
+            }
+            double ow = ring_hw_o * 2.0, od = ring_hd_o * 2.0;
+            double iw = ring_hw_i * 2.0, id = ring_hd_i * 2.0;
+            if (iw > 0.01 && id > 0.01) {
+                // For curved/rounded corners, rim ring must have matching corner radius
+                // to avoid boolean cut failures at corners
+                bool has_corners = rounded || curved;
+                double ring_cr = has_corners ? (is_outside ? std::max(cr - rim_width, 0.0) : cr + rim_width) : 0.0;
+                double inner_ring_cr = has_corners ? (is_outside ? std::max(cr - thickness, 0.0) : std::max(cr - thickness + rim_width, 0.0)) : 0.0;
+                TopoDS_Shape oBox = create_rounded_box_solid(ow, od, rim_height + 2.0, ring_cr);
+                TopoDS_Shape iBox = create_rounded_box_solid(iw, id, rim_height + 4.0, inner_ring_cr);
+                TopoDS_Solid so, si;
+                auto toSolid = [](TopoDS_Shape& s) -> TopoDS_Solid {
+                    if (s.ShapeType() == TopAbs_SOLID) return TopoDS::Solid(s);
+                    BRepBuilderAPI_MakeSolid sm;
+                    for (TopExp_Explorer e(s, TopAbs_SHELL); e.More(); e.Next())
+                        sm.Add(TopoDS::Shell(e.Current()));
+                    return sm.IsDone() ? sm.Solid() : TopoDS_Solid();
+                };
+                so = toSolid(oBox); si = toSolid(iBox);
+                if (!so.IsNull() && !si.IsNull()) {
+                    BRepAlgoAPI_Cut c(so, si);
+                    if (c.IsDone()) {
+                        TopoDS_Shape ring = c.Shape();
+                        gp_Trsf t;
+                        t.SetTranslation(gp_Vec(0, 0, height - rim_height / 2.0));
+                        ring = BRepBuilderAPI_Transform(ring, t).Shape();
+                        BRepAlgoAPI_Cut rc(result, ring);
+                        if (rc.IsDone()) {
+                            result = rc.Shape();
+                            TopExp_Explorer exp(result, TopAbs_SOLID);
+                            if (exp.More()) result = exp.Current();
+                        }
+                    }
+                }
+            }
+        }
         return result;
     }
 

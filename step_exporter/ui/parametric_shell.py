@@ -49,10 +49,10 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         description="Wall thickness")
     corner_radius: FloatProperty(
         name=_t("Corner Radius"), default=5.0, min=0.1, max=1000.0,
-        description="Fillet radius for rounded corners")
+        description="Fillet radius for rounded corners (min 2.7mm when Cosine + Rim)")
     bottom_fillet: FloatProperty(
         name=_t("Bottom Fillet"), default=0.0, min=0.0, max=100.0,
-        description="Fillet radius at bottom edges (0 = sharp)")
+        description="Fillet radius at bottom edges (min 0.1mm when Cosine + Rim)")
 
     # ── Rim (壳边) ──
     rim_type: EnumProperty(
@@ -92,6 +92,15 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         name=_t("Cosine Ratio"), default=50.0, min=0.0, max=100.0, subtype='PERCENTAGE',
         description="Bottom shrink ratio for cosine walls (0=flat wall, 100=max curve)")
 
+    # ── Dynamic clamping for curved + rim ──
+    def _clamp_cr_bf(self):
+        """When curved corners + rim present, enforce minimum cr=2.7, bf=0.1 to avoid geometry issues."""
+        if self.corner_type == 'curved' and self.rim_type != 'none':
+            if self.corner_radius < 2.7:
+                self.corner_radius = 2.7
+            if self.bottom_fillet < 0.1:
+                self.bottom_fillet = 0.1
+
     def invoke(self, context, event):
         return context.window_manager.invoke_props_dialog(self, width=320)
 
@@ -109,6 +118,10 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         if self.corner_type == 'curved':
             layout.prop(self, 'curve_ratio')
         layout.prop(self, 'bottom_fillet')
+        # Hint: minimum values for curved + rim
+        if self.corner_type == 'curved' and self.rim_type != 'none':
+            hint = layout.box()
+            hint.label(text="Cosine + Rim: CR ≥ 2.7mm, BF ≥ 0.1mm", icon='INFO')
         layout.separator()
         layout.prop(self, 'rim_type')
         if self.rim_type != 'none':
@@ -121,6 +134,9 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         layout.prop(self, 'debug_keep_cutters')
 
     def execute(self, context):
+        # Clamp minimum values for curved + rim shells
+        self._clamp_cr_bf()
+
         w, d, h, t = self.width, self.depth, self.height, self.thickness
         if self.corner_type == 'curved':
             cr = self.corner_radius if self.corner_radius > 0 else min(w, d) / 2 * 0.8
@@ -239,7 +255,7 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         bpy.context.collection.objects.link(obj)
         return obj
 
-    def _make_rim_ring_debug(self, w, d, t, rw, rh, rim_type, z_pos):
+    def _make_rim_ring_debug(self, w, d, t, rw, rh, rim_type, z_pos, cr=0.0):
         """Create RimRing debug object (wireframe) at given Z position."""
         if rim_type == 'none' or rw < 0.0001 or rh < 0.0001:
             return None
@@ -252,23 +268,50 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
             rw_o, rw_i = w + 2*rtw, max(w - 2*t + 2*rtw, 0.001)
             rd_o, rd_i = d + 2*rtw, max(d - 2*t + 2*rtw, 0.001)
         rm = bmesh.new()
-        hw_o, hd_o = rw_o / 2.0, rd_o / 2.0
-        hw_i, hd_i = max(rw_i, 0.001) / 2.0, max(rd_i, 0.001) / 2.0
         r_half = rh
-        ob = [rm.verts.new((x, y, -r_half)) for x, y in
-              [(-hw_o,-hd_o),(hw_o,-hd_o),(hw_o,hd_o),(-hw_o,hd_o)]]
-        ot_v = [rm.verts.new((x, y, r_half)) for x, y in
-               [(-hw_o,-hd_o),(hw_o,-hd_o),(hw_o,hd_o),(-hw_o,hd_o)]]
-        ib = [rm.verts.new((x, y, -r_half)) for x, y in
-              [(-hw_i,-hd_i),(hw_i,-hd_i),(hw_i,hd_i),(-hw_i,hd_i)]]
-        it_v = [rm.verts.new((x, y, r_half)) for x, y in
-               [(-hw_i,-hd_i),(hw_i,-hd_i),(hw_i,hd_i),(-hw_i,hd_i)]]
-        for i in range(4):
-            j = (i+1)%4
-            rm.faces.new([ob[i], ob[j], ot_v[j], ot_v[i]])
-            rm.faces.new([ib[j], ib[i], it_v[i], it_v[j]])
-            rm.faces.new([ot_v[i], ot_v[j], it_v[j], it_v[i]])
-            rm.faces.new([ob[i], ob[j], ib[j], ib[i]])
+        use_rounded = (cr > 0.0001)
+        if use_rounded:
+            hw_o, hd_o = rw_o / 2.0, rd_o / 2.0
+            hw_i, hd_i = max(rw_i, 0.001) / 2.0, max(rd_i, 0.001) / 2.0
+            if is_out:
+                cr_o = max(cr - rtw, 0.0001)
+                cr_i = max(cr - t, 0.0001)
+            else:
+                cr_o = max(cr + rtw, 0.0001)
+                cr_i = max(cr - t + rtw, 0.0001)
+            seg = max(8, int(cr / min(w, d) * 64))
+            o_pts = make_profile(hw_o, hd_o, cr_o, seg)
+            i_pts = make_profile(hw_i, hd_i, cr_i, seg)
+            # Build ring tube from profiles
+            ob_v = [rm.verts.new((x, y, -r_half)) for x, y in o_pts]
+            ot_v = [rm.verts.new((x, y,  r_half)) for x, y in o_pts]
+            ib_v = [rm.verts.new((x, y, -r_half)) for x, y in i_pts]
+            it_v = [rm.verts.new((x, y,  r_half)) for x, y in i_pts]
+            n = len(o_pts)
+            for i in range(n):
+                j = (i + 1) % n
+                rm.faces.new([ob_v[i], ob_v[j], ot_v[j], ot_v[i]])
+                rm.faces.new([ib_v[j], ib_v[i], it_v[i], it_v[j]])
+                rm.faces.new([ot_v[i], ot_v[j], it_v[j], it_v[i]])
+                rm.faces.new([ob_v[i], ob_v[j], ib_v[j], ib_v[i]])
+        else:
+            hw_o, hd_o = rw_o / 2.0, rd_o / 2.0
+            hw_i, hd_i = max(rw_i, 0.001) / 2.0, max(rd_i, 0.001) / 2.0
+            ob = [rm.verts.new((x, y, -r_half)) for x, y in
+                  [(-hw_o,-hd_o),(hw_o,-hd_o),(hw_o,hd_o),(-hw_o,hd_o)]]
+            ot_v = [rm.verts.new((x, y, r_half)) for x, y in
+                   [(-hw_o,-hd_o),(hw_o,-hd_o),(hw_o,hd_o),(-hw_o,hd_o)]]
+            ib = [rm.verts.new((x, y, -r_half)) for x, y in
+                  [(-hw_i,-hd_i),(hw_i,-hd_i),(hw_i,hd_i),(-hw_i,hd_i)]]
+            it_v = [rm.verts.new((x, y, r_half)) for x, y in
+                   [(-hw_i,-hd_i),(hw_i,-hd_i),(hw_i,hd_i),(-hw_i,hd_i)]]
+            for i in range(4):
+                j = (i+1)%4
+                rm.faces.new([ob[i], ob[j], ot_v[j], ot_v[i]])
+                rm.faces.new([ib[j], ib[i], it_v[i], it_v[j]])
+                rm.faces.new([ot_v[i], ot_v[j], it_v[j], it_v[i]])
+                rm.faces.new([ob[i], ob[j], ib[j], ib[i]])
+        rm.normal_update()
         ring = self._bm_to_object(rm, "RimRing")
         ring.location.z = z_pos
         ring.hide_viewport = False
@@ -326,7 +369,7 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         # Rim cut via boolean with ring
         if rim_type != 'none' and rw > 0.0001 and rh > 0.0001:
             # Build ring using helper
-            ring = self._make_rim_ring_debug(w, d, t, rw, rh, rim_type, total_h)
+            ring = self._make_rim_ring_debug(w, d, t, rw, rh, rim_type, total_h, cr)
             if ring:
                 # Apply boolean on outer
                 bpy.context.view_layer.objects.active = outer
@@ -459,7 +502,7 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
                     it_pts = make_profile(hw - rw*(1-ratio), hd - rw*(1-ratio), it_cr, seg) if cr>0.0001 else \
                              [(x-rw*(1-ratio)*(1 if x>0 else -1), y-rw*(1-ratio)*(1 if y>0 else -1)) for x,y in outer_pts]
                     it_v = [bm.verts.new((x, y, h + rh)) for x, y in it_pts]
-                ib_cr = max(cr - rw, 0.001)
+                ib_cr = max(cr - rw, 0.0001)
                 ib_pts = make_profile(hw - rw, hd - rw, ib_cr, seg) if cr>0.0001 else \
                          [(x-rw*(1 if x>0 else -1), y-rw*(1 if y>0 else -1)) for x,y in outer_pts]
                 ib_v = [bm.verts.new((x, y, h)) for x, y in ib_pts]
@@ -480,12 +523,12 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
                 tapered = (0.001 < ratio < 0.999)
                 if tapered:
                     ot_cr = max(cr - t + rw*ratio, 0.001)
-                    ot_off = max(t - rw*ratio, 0.001)
+                    ot_off = max(t - rw*ratio, 0.0001)
                     ot_pts = make_profile(hw - ot_off, hd - ot_off, ot_cr, seg) if cr>0.0001 else \
                              [(x+rw*ratio*(1 if x>0 else -1), y+rw*ratio*(1 if y>0 else -1)) for x,y in inner_pts]
                     ot_v = [bm.verts.new((x, y, h + rh)) for x, y in ot_pts]
-                ob_cr = max(cr - t + rw, 0.001)
-                ob_off = max(t - rw, 0.001)
+                ob_cr = max(cr - t + rw, 0.0001)
+                ob_off = max(t - rw, 0.0001)
                 ob_pts = make_profile(hw - ob_off, hd - ob_off, ob_cr, seg) if cr>0.0001 else \
                          [(x+rw*(1 if x>0 else -1), y+rw*(1 if y>0 else -1)) for x,y in inner_pts]
                 ob_v = [bm.verts.new((x, y, h)) for x, y in ob_pts]
@@ -506,7 +549,7 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         
         # Debug: show rim ring if keep_cutters
         if keep_cutters and rim_type != 'none':
-            self._make_rim_ring_debug(w, d, t, rw, rh, rim_type, h + rh)
+            self._make_rim_ring_debug(w, d, t, rw, rh, rim_type, h + rh, cr)
         
         return obj
 
@@ -589,21 +632,16 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
             pts = _profile(hw, hd, r, seg)
             outer_layers.append([bm.verts.new((x, y, z_val)) for x, y in pts])
         
-        _connect_layers(outer_layers, reversed_winding=False)
-        bm.faces.new(list(reversed(outer_layers[-1])))  # bottom face
+        _connect_layers(outer_layers, reversed_winding=True)
+        bm.faces.new(list(reversed(outer_layers[-1])))  # bottom face (DOWN normal)
         
-        # ── Inner wall: same fillet as outer ──
+        # ── Inner wall: same fillet as outer, rim handled by boolean ──
         inner_fillet_r = bf  # same as outer
-        has_rim = (rw > 0.0001 and rh > 0.0001 and rim_type != 'none')
         inner_bot_z = -hh + t
-        inner_top_z = hh - rh if has_rim else hh
-        inner_wall_hw_base = (w - 2 * t) / 2.0
-        inner_wall_hd_base = (d - 2 * t) / 2.0
-        # If rim, inner top is narrower by rim_width (rim creates inward step)
-        rim_inset = rw if has_rim else 0.0
-        inner_wall_hw = inner_wall_hw_base - rim_inset
-        inner_wall_hd = inner_wall_hd_base - rim_inset
-        icr = max(cr - t - rim_inset, 0.0001)
+        inner_top_z = hh
+        inner_wall_hw = (w - 2 * t) / 2.0
+        inner_wall_hd = (d - 2 * t) / 2.0
+        icr = max(cr - t, 0.0001)
         ibf_segs = max(16, int(bf / min(w, d) * 128)) if bf > 0.0001 else 0
         itotal_steps = side_segs + ibf_segs
         inner_layers = []
@@ -624,32 +662,17 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
             pts = _profile(hw, hd, r, seg)
             inner_layers.append([bm.verts.new((x, y, z_val)) for x, y in pts])
         
-        _connect_layers(inner_layers, reversed_winding=True)
-        bm.faces.new(inner_layers[-1])  # inner bottom face
+        _connect_layers(inner_layers, reversed_winding=False)
+        bm.faces.new(list(reversed(inner_layers[-1])))  # inner bottom face (DOWN normal)
         
-        # ── Top rim ──
-        if has_rim:
-            # Rim vertical ring from z=hh-rh to z=hh, connecting inner top to outer top
-            rim_bot = inner_layers[0]  # inner top at z=hh-rh
-            # Rim top: at z=hh, same dimensions as rim_bot but at higher z
-            rim_top = [bm.verts.new((v.co.x, v.co.y, hh)) for v in rim_bot]
-            for i in range(num_pts):
-                j = (i + 1) % num_pts
-                bm.faces.new([rim_bot[i], rim_bot[j], rim_top[j], rim_top[i]])
-            # Horizontal rim face from outer top to rim top
-            ot = outer_layers[0]
-            for i in range(num_pts):
-                j = (i + 1) % num_pts
-                bm.faces.new([ot[i], ot[j], rim_top[j], rim_top[i]])
-        else:
-            ot = outer_layers[0]; it = inner_layers[0]
-            for i in range(num_pts):
-                j = (i + 1) % num_pts
-                bm.faces.new([ot[i], ot[j], it[j], it[i]])
+        # ── Top face: connect outer to inner ──
+        ot = outer_layers[0]; it = inner_layers[0]
+        for i in range(num_pts):
+            j = (i + 1) % num_pts
+            bm.faces.new([ot[i], ot[j], it[j], it[i]])
         
         bm.normal_update()
         obj = self._bm_to_object(bm, "CurvedShell")
-        obj.location.z = hh
         obj.name = "ParamShell"
         obj.data.name = "ParamShell"
         for f in obj.data.polygons:
@@ -674,9 +697,21 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         print(f"[Curved] bf={bf*1000:.1f}mm inset={total_inset*1000:.1f}mm "
               f"v={len(obj.data.vertices)} f={len(obj.data.polygons)}")
         
-        # Debug: show rim ring if keep_cutters
-        if keep_cutters and rim_type != 'none':
-            self._make_rim_ring_debug(w, d, t, rw, rh, rim_type, h + rh)
+        # ── Rim via boolean (same approach as _build_boolean_shell) ──
+        if rim_type != 'none' and rw > 0.0001 and rh > 0.0001:
+            ring = self._make_rim_ring_debug(w, d, t, rw, rh, rim_type, h, cr)
+            if ring:
+                # Shift shell so bottom at Z=0, then apply rim boolean
+                obj.location.z = h / 2.0
+                self._apply_bool(obj, ring, op='DIFFERENCE', solver='FAST')
+                if not keep_cutters:
+                    bpy.data.objects.remove(ring, do_unlink=True)
+                else:
+                    ring.hide_viewport = False
+                    ring.hide_select = False
+        else:
+            # Shift shell so bottom at Z=0
+            obj.location.z = h / 2.0
         
         return obj
 

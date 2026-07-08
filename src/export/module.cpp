@@ -2666,16 +2666,16 @@ TopoDS_Shape create_parametric_shell_solid(double width, double depth, double he
         ratio = is_trapezoid ? std::max(0.0, rim_top_ratio) : 1.0;
     }
 
-    // Always build shell at height+rh when rim, then carve rim profile
-    double total_h = has_rim ? height + rim_height : height;
+    // Curved path: rim is horizontal ring at top, not extra height
+    double total_h = (curved || !has_rim) ? height : height + rim_height;
 
     // ── Curved (cosine) path: solid loft with embedded bottom fillet ──
     if (curved) {
         double hw = width / 2.0, hd = depth / 2.0;
         double total_inset = std::min(hw, hd) * curve_ratio * 0.5;
         double hh = total_h / 2.0;
-        int nLayers = 16;
-        int bfSegs = (bottom_fillet > 0.001) ? 8 : 0;
+        int nLayers = 12;
+        int bfSegs = (bottom_fillet > 0.001) ? 6 : 0;
         double bf = bottom_fillet;
 
         // Build layers bottom→top: fillet zone then cosine wall
@@ -2720,7 +2720,7 @@ TopoDS_Shape create_parametric_shell_solid(double width, double depth, double he
                              const std::vector<double>& hd_arr,
                              const std::vector<double>& z_arr,
                              double cr_val) -> TopoDS_Solid {
-            BRepOffsetAPI_ThruSections loft(true, false, 1e-6);
+            BRepOffsetAPI_ThruSections loft(true, false, 1e-6);  // solid, smooth
             for (size_t i = 0; i < hw_arr.size(); i++) {
                 TopoDS_Wire w = create_rounded_rect_wire(
                     hw_arr[i] * 2.0, hd_arr[i] * 2.0, cr_val, z_arr[i], 0.0);

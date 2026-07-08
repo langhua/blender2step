@@ -56,17 +56,17 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
 
     # ── Rim (壳边) ──
     rim_type: EnumProperty(
-        name=_t("Rim Type"),
+        name=_t("Rim Top Type"),
         items=[
             ('none', "None (无)", "No rim"),
-            ('inside', "Inside (内壳边)", "Rim on the inside"),
-            ('outside', "Outside (外壳边)", "Rim on the outside"),
+            ('inside', "Inside (内台阶)", "Rim top shelf on the inside"),
+            ('outside', "Outside (外台阶)", "Rim top shelf on the outside"),
         ],
         default='none',
     )
     rim_width: FloatProperty(
-        name=_t("Rim Width"), default=1.0, min=0.1, max=1000.0,
-        description="Rim width (bottom)")
+        name=_t("Rim Top Width"), default=1.0, min=0.1, max=1000.0,
+        description="Visible shelf width at the top edge (Rim Top)")
     rim_height: FloatProperty(
         name=_t("Rim Height"), default=1.0, min=0.1, max=1000.0,
         description="Rim extrusion height")
@@ -269,24 +269,54 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         self._apply_bool(outer, inner)
         bpy.data.objects.remove(inner, do_unlink=True)
 
-        # Rim cut (rect only for now via boolean)
+        # Rim cut via boolean with ring
         if rim_type != 'none' and rw > 0.0001 and rh > 0.0001:
+            rtw = rw  # Rim Top Width
             is_out = (rim_type == 'outside')
             if is_out:
-                rw_o, rw_i = (w - 2*rw), (w - 4*rw)
-                rd_o, rd_i = (d - 2*rw), (d - 4*rw)
+                # Outside Rim Top: ring outer = w-2*rtw, inner = outer - 2*t
+                rw_o, rw_i = w - 2*rtw, max((w - 2*rtw) - 2*t, 0.001)
+                rd_o, rd_i = d - 2*rtw, max((d - 2*rtw) - 2*t, 0.001)
             else:
-                rw_o, rw_i = (w + 2*rw), (w - 2*rw)
-                rd_o, rd_i = (d + 2*rw), (d - 2*rw)
-            ring_o = self._bm_to_object(self._make_solid_box(max(rw_o,0.001), max(rd_o,0.001), rh, 0), "RingO")
-            ring_i = self._bm_to_object(self._make_solid_box(max(rw_i,0.001), max(rd_i,0.001), rh+0.002, 0), "RingI")
-            ring_o.location.z = total_h - rh/2
-            ring_i.location.z = total_h - rh/2
-            self._apply_bool(ring_o, ring_i)
-            ring_o.location.z = total_h - rh/2
-            self._apply_bool(outer, ring_o)
-            bpy.data.objects.remove(ring_o, do_unlink=True)
-            bpy.data.objects.remove(ring_i, do_unlink=True)
+                # Inside Rim Top: ring_inner = w-2*(t-rtw), ring_outer = w+2*rtw
+                rw_o, rw_i = w + 2*rtw, max(w - 2*(t - rtw), 0.001)
+                rd_o, rd_i = d + 2*rtw, max(d - 2*(t - rtw), 0.001)
+            # Build ring as BMesh
+            rm = bmesh.new()
+            hw_o, hd_o = rw_o / 2.0, rd_o / 2.0
+            hw_i, hd_i = max(rw_i, 0.001) / 2.0, max(rd_i, 0.001) / 2.0
+            ring_h = rh * 2.0
+            rh_half = ring_h / 2.0
+            ob = [rm.verts.new((x, y, -rh_half)) for x, y in
+                  [(-hw_o,-hd_o),(hw_o,-hd_o),(hw_o,hd_o),(-hw_o,hd_o)]]
+            ot_v = [rm.verts.new((x, y, rh_half)) for x, y in
+                   [(-hw_o,-hd_o),(hw_o,-hd_o),(hw_o,hd_o),(-hw_o,hd_o)]]
+            ib = [rm.verts.new((x, y, -rh_half)) for x, y in
+                  [(-hw_i,-hd_i),(hw_i,-hd_i),(hw_i,hd_i),(-hw_i,hd_i)]]
+            it_v = [rm.verts.new((x, y, rh_half)) for x, y in
+                   [(-hw_i,-hd_i),(hw_i,-hd_i),(hw_i,hd_i),(-hw_i,hd_i)]]
+            for i in range(4):
+                j = (i+1)%4
+                rm.faces.new([ob[i], ob[j], ot_v[j], ot_v[i]])
+            for i in range(4):
+                j = (i+1)%4
+                rm.faces.new([ib[j], ib[i], it_v[i], it_v[j]])
+            for i in range(4):
+                j = (i+1)%4
+                rm.faces.new([ot_v[i], ot_v[j], it_v[j], it_v[i]])
+            for i in range(4):
+                j = (i+1)%4
+                rm.faces.new([ob[i], ob[j], ib[j], ib[i]])
+            ring = self._bm_to_object(rm, "RimRing")
+            ring.location.z = total_h / 2  # outer local top (outer at world origin)
+            # Apply boolean on outer
+            bpy.context.view_layer.objects.active = outer
+            mod = outer.modifiers.new(name="RimBool", type='BOOLEAN')
+            mod.object = ring
+            mod.operation = 'DIFFERENCE'
+            mod.solver = 'FAST'  # Blender 4.2.1: EXACT solver is unreliable
+            bpy.ops.object.modifier_apply(modifier="RimBool")
+            bpy.data.objects.remove(ring, do_unlink=True)
 
         # Shift so bottom at Z=0
         outer.location.z = total_h / 2
@@ -541,16 +571,22 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         
         # ── Inner wall: same fillet as outer ──
         inner_fillet_r = bf  # same as outer
+        has_rim = (rw > 0.0001 and rh > 0.0001 and rim_type != 'none')
         inner_bot_z = -hh + t
-        inner_wall_hw = (w - 2 * t) / 2.0
-        inner_wall_hd = (d - 2 * t) / 2.0
-        icr = max(cr - t, 0.0001)
+        inner_top_z = hh - rh if has_rim else hh
+        inner_wall_hw_base = (w - 2 * t) / 2.0
+        inner_wall_hd_base = (d - 2 * t) / 2.0
+        # If rim, inner top is narrower by rim_width (rim creates inward step)
+        rim_inset = rw if has_rim else 0.0
+        inner_wall_hw = inner_wall_hw_base - rim_inset
+        inner_wall_hd = inner_wall_hd_base - rim_inset
+        icr = max(cr - t - rim_inset, 0.0001)
         ibf_segs = max(16, int(bf / min(w, d) * 128)) if bf > 0.0001 else 0
         itotal_steps = side_segs + ibf_segs
         inner_layers = []
-        inner_z_bot = inner_bot_z  # z goes to actual bottom, fillet zone determined by condition
+        inner_z_bot = inner_bot_z
         for sl in range(0, itotal_steps + 1):
-            z_val = hh - (hh - inner_z_bot) * sl / itotal_steps
+            z_val = inner_top_z - (inner_top_z - inner_z_bot) * sl / itotal_steps
             inset = _layer_at_z(z_val)
             hw = inner_wall_hw - inset
             hd = inner_wall_hd - (inner_wall_hd / inner_wall_hw * inset) if inner_wall_hw > 0 else 0
@@ -562,7 +598,6 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
                 offset = bf * (1.0 - sin_t)
                 hw -= offset
                 hd -= (inner_wall_hd / inner_wall_hw * offset) if inner_wall_hw > 0 else 0
-                # Keep corner radius constant
             pts = _profile(hw, hd, r, seg)
             inner_layers.append([bm.verts.new((x, y, z_val)) for x, y in pts])
         
@@ -570,10 +605,24 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         bm.faces.new(inner_layers[-1])  # inner bottom face
         
         # ── Top rim ──
-        ot = outer_layers[0]; it = inner_layers[0]
-        for i in range(num_pts):
-            j = (i + 1) % num_pts
-            bm.faces.new([ot[i], ot[j], it[j], it[i]])
+        if has_rim:
+            # Rim vertical ring from z=hh-rh to z=hh, connecting inner top to outer top
+            rim_bot = inner_layers[0]  # inner top at z=hh-rh
+            # Rim top: at z=hh, same dimensions as rim_bot but at higher z
+            rim_top = [bm.verts.new((v.co.x, v.co.y, hh)) for v in rim_bot]
+            for i in range(num_pts):
+                j = (i + 1) % num_pts
+                bm.faces.new([rim_bot[i], rim_bot[j], rim_top[j], rim_top[i]])
+            # Horizontal rim face from outer top to rim top
+            ot = outer_layers[0]
+            for i in range(num_pts):
+                j = (i + 1) % num_pts
+                bm.faces.new([ot[i], ot[j], rim_top[j], rim_top[i]])
+        else:
+            ot = outer_layers[0]; it = inner_layers[0]
+            for i in range(num_pts):
+                j = (i + 1) % num_pts
+                bm.faces.new([ot[i], ot[j], it[j], it[i]])
         
         bm.normal_update()
         obj = self._bm_to_object(bm, "CurvedShell")
@@ -582,12 +631,21 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         obj.data.name = "ParamShell"
         for f in obj.data.polygons:
             f.use_smooth = True
-        # Mark bottom-perimeter edges as sharp (local coords, bottom at z=-hh)
+        # Mark corner vertical edges, top rim, and bottom-perimeter edges as sharp
         for e in obj.data.edges:
             v0, v1 = e.vertices
             z0 = obj.data.vertices[v0].co.z
             z1 = obj.data.vertices[v1].co.z
+            # Bottom perimeter
             if abs(z0 + hh) < 0.0001 and abs(z1 + hh) < 0.0001:
+                e.use_edge_sharp = True
+            # Top perimeter (outer + inner rim)
+            elif abs(z0 - hh) < 0.0001 and abs(z1 - hh) < 0.0001:
+                e.use_edge_sharp = True
+            # Vertical corner edges: both verts at same profile index (multiple of seg)
+            idx0 = v0 % num_pts
+            idx1 = v1 % num_pts
+            if idx0 == idx1 and (idx0 % seg == 0):
                 e.use_edge_sharp = True
         
         print(f"[Curved] bf={bf*1000:.1f}mm inset={total_inset*1000:.1f}mm "

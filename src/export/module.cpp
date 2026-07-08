@@ -2842,9 +2842,9 @@ TopoDS_Shape create_parametric_shell_solid(double width, double depth, double he
     innerTrsf.SetTranslation(gp_Vec(0, 0, inner_z_offset));
     innerSolid.Move(TopLoc_Location(innerTrsf));
 
-    // Bottom fillet on inner solid (inner radius = outer_fillet - thickness)
+    // Bottom fillet on inner solid (same radius as outer)
     if (bottom_fillet > 0.001) {
-        double inner_fillet_r = std::max(bottom_fillet - thickness, 0.001);
+        double inner_fillet_r = bottom_fillet;
         double inner_bottom_z = -total_h / 2.0 + thickness;
         
         std::ofstream dbg("f:/git/blender2step/step_exporter/_cpp_dbg.txt", std::ios::app);
@@ -2903,10 +2903,10 @@ TopoDS_Shape create_parametric_shell_solid(double width, double depth, double he
             ring_inner_top_hw = ring_inner_bot_hw;                // inner wall stays
             ring_inner_top_hd = ring_inner_bot_hd;
         } else {
-            // Inside: cut from OUTSIDE of wall. Ring between (innerwall+rw) and outerwall+extra
-            ring_outer_bot_hw = width / 2.0 + rim_width;          // outerwall + rw (safe margin)
+            // Inside: rim cuts inward from inner wall by rim_width
+            ring_outer_bot_hw = width / 2.0 + rim_width;          // outer wall + margin
             ring_outer_bot_hd = depth / 2.0 + rim_width;
-            ring_inner_bot_hw = width / 2.0 - thickness + rim_width;  // innerwall + rw
+            ring_inner_bot_hw = width / 2.0 - thickness + rim_width;  // inner wall + shelf
             ring_inner_bot_hd = depth / 2.0 - thickness + rim_width;
             // Top: inner boundary tapers (rim gets narrower)  
             ring_outer_top_hw = ring_outer_bot_hw;                // outer stays

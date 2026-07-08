@@ -1,0 +1,77 @@
+[CPP] filleting outer: r=2 bottom_z=-25.5 total_h=51
+[CPP] outer fillet result type=0 (SOLID=2)
+[CPP] outerSolid ptr before=000000FC98DFE390 filleted ptr=000000FC98DFE378
+[CPP] outer fillet OK (extracted from compound)
+[CPP] filleting inner: r=0.001 bottom_z=-23.5
+[CPP] inner fillet result type=2 (SOLID=2)
+[CPP] inner fillet OK (direct solid)
+[CPP] filleting outer: r=2 bottom_z=-25.5 total_h=51
+[CPP] outer fillet result type=0 (SOLID=2)
+[CPP] outerSolid ptr before=000000FC98DFE390 filleted ptr=000000FC98DFE378
+[CPP] outer fillet OK (extracted from compound)
+[CPP] filleting inner: r=0.001 bottom_z=-23.5
+[CPP] inner fillet result type=2 (SOLID=2)
+[CPP] inner fillet OK (direct solid)
+[CPP] filleting outer: r=2 bottom_z=-25.5 total_h=51
+[CPP] outer fillet result type=0 (SOLID=2)
+[CPP] outerSolid ptr before=00000028253FDDE0 filleted ptr=00000028253FDDC8
+[CPP] outer fillet OK (extracted from compound)
+[CPP] filleting inner: r=0.001 bottom_z=-23.5
+[CPP] inner fillet result type=2 (SOLID=2)
+[CPP] inner fillet OK (direct solid)
+[CPP] filleting outer: r=2 bottom_z=-25.5 total_h=51
+[CPP] outer fillet result type=0 (SOLID=2)
+[CPP] outerSolid ptr before=00000028253FDDE0 filleted ptr=00000028253FDDC8
+[CPP] outer fillet OK (extracted from compound)
+[CPP] filleting inner: r=0.001 bottom_z=-23.5
+[CPP] inner fillet result type=2 (SOLID=2)
+[CPP] inner fillet OK (direct solid)
+[CPP] filleting outer: r=2 bottom_z=-25.5 total_h=51
+[CPP] outer fillet result type=0 (SOLID=2)
+[CPP] outerSolid ptr before=00000031F8FFE2B0 filleted ptr=00000031F8FFE298
+[CPP] outer fillet OK (extracted from compound)
+[CPP] filleting inner: r=0.001 bottom_z=-23.5
+[CPP] inner fillet result type=2 (SOLID=2)
+[CPP] inner fillet OK (direct solid)
+[CPP] filleting outer: r=2 bottom_z=-25.5 total_h=51
+[CPP] outer fillet result type=0 (SOLID=2)
+[CPP] outerSolid ptr before=00000031F8FFE2B0 filleted ptr=00000031F8FFE298
+[CPP] outer fillet OK (extracted from compound)
+[CPP] filleting inner: r=0.001 bottom_z=-23.5
+[CPP] inner fillet result type=2 (SOLID=2)
+[CPP] inner fillet OK (direct solid)
+[CPP] filleting outer: r=2 bottom_z=-25.5 total_h=51
+[CPP] outer fillet result type=0 (SOLID=2)
+[CPP] outerSolid ptr before=00000057FFBFE2B0 filleted ptr=00000057FFBFE298
+[CPP] outer fillet OK (extracted from compound)
+[CPP] filleting inner: r=2 bottom_z=-23.5
+[CPP] inner fillet result type=0 (SOLID=2)
+[CPP] inner fillet OK (extracted from compound)
+[CPP] filleting outer: r=2 bottom_z=-25 total_h=50
+[CPP] outer fillet result type=0 (SOLID=2)
+[CPP] outerSolid ptr before=00000057FFBFE2B0 filleted ptr=00000057FFBFE298
+[CPP] outer fillet OK (extracted from compound)
+[CPP] filleting inner: r=2 bottom_z=-23
+[CPP] inner fillet result type=0 (SOLID=2)
+[CPP] inner fillet OK (extracted from compound)
+[CPP] filleting outer: r=2 bottom_z=-25.5 total_h=51
+[CPP] outer fillet result type=0 (SOLID=2)
+[CPP] outerSolid ptr before=000000124A5FDCD0 filleted ptr=000000124A5FDCB8
+[CPP] outer fillet OK (extracted from compound)
+[CPP] filleting inner: r=2 bottom_z=-23.5
+[CPP] inner fillet result type=0 (SOLID=2)
+[CPP] inner fillet OK (extracted from compound)
+[CPP] filleting outer: r=2 bottom_z=-25.5 total_h=51
+[CPP] outer fillet result type=0 (SOLID=2)
+[CPP] outerSolid ptr before=000000124A5FDCD0 filleted ptr=000000124A5FDCB8
+[CPP] outer fillet OK (extracted from compound)
+[CPP] filleting inner: r=2 bottom_z=-23.5
+[CPP] inner fillet result type=0 (SOLID=2)
+[CPP] inner fillet OK (extracted from compound)
+[CPP] filleting outer: r=2 bottom_z=-25.5 total_h=51
+[CPP] outer fillet result type=0 (SOLID=2)
+[CPP] outerSolid ptr before=000000124A5FDCD0 filleted ptr=000000124A5FDCB8
+[CPP] outer fillet OK (extracted from compound)
+[CPP] filleting inner: r=2 bottom_z=-23.5
+[CPP] inner fillet result type=0 (SOLID=2)
+[CPP] inner fillet OK (extracted from compound)

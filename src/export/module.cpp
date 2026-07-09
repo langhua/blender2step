@@ -3323,7 +3323,7 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                 else if (parsed >= 7 && fabs(type_code - 2.0) < 1e-6) {
                     double rw = r_or_w, rh = extra1, rcr = extra2;  // w,h from extra1/extra2
                     if (rcr <= 0) rcr = 0.5;
-                    double cut_d = thickness * 2.0;  // only through one wall
+                    double cut_d = thickness * 4.0;  // through one wall with margin
                     // Box orientation per face_code:
                     // 0/1 bottom/top: rrect in XY, extrude Z; fillet Z-parallel edges
                     // 2/3 left/right:  rrect in YZ, extrude X; fillet X-parallel edges

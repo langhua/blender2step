@@ -1480,6 +1480,78 @@ class STEP_EXPORTER_OT_clear_shell_holes(Operator):
         return {'FINISHED'}
 
 
+class STEP_EXPORTER_OT_edit_shell_hole(Operator):
+    """Edit a hole on the parametric shell"""
+    bl_idname = "step_exporter.edit_shell_hole"
+    bl_label = "Edit Hole"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    hole_index: bpy.props.IntProperty(default=-1)
+    edit_type: bpy.props.EnumProperty(name="Type", items=[('round', "Round", ""), ('rrect', "Rounded Rect", "")])
+    edit_radius: bpy.props.FloatProperty(name="Radius", default=5.0, min=0.1, max=500.0)
+    edit_width: bpy.props.FloatProperty(name="Width", default=10.0, min=0.1, max=500.0)
+    edit_height: bpy.props.FloatProperty(name="Height", default=8.0, min=0.1, max=500.0)
+    edit_cr: bpy.props.FloatProperty(name="Corner R", default=2.0, min=0.0, max=500.0)
+
+    @classmethod
+    def poll(cls, context):
+        obj = context.active_object
+        return obj and obj.get('object_type') == 'parametric_shell' and obj.get('window_data', '')
+
+    def invoke(self, context, event):
+        obj = context.active_object
+        holes = _parse_hole_list(obj)
+        if self.hole_index < 0 or self.hole_index >= len(holes):
+            return {'CANCELLED'}
+        entry = holes[self.hole_index][0]
+        parts = entry.split(',')
+        try:
+            tc = int(float(parts[4]))
+            if tc == 1:
+                self.edit_type = 'round'
+                self.edit_radius = float(parts[3])
+            elif tc == 2 and len(parts) >= 7:
+                self.edit_type = 'rrect'
+                self.edit_width = float(parts[3])
+                self.edit_height = float(parts[5])
+                self.edit_cr = float(parts[6])
+        except (ValueError, IndexError):
+            pass
+        return context.window_manager.invoke_props_dialog(self, width=300)
+
+    def draw(self, context):
+        layout = self.layout
+        layout.prop(self, 'edit_type')
+        if self.edit_type == 'round':
+            layout.prop(self, 'edit_radius')
+        else:
+            layout.prop(self, 'edit_width')
+            layout.prop(self, 'edit_height')
+            layout.prop(self, 'edit_cr')
+
+    def execute(self, context):
+        obj = context.active_object
+        holes = _parse_hole_list(obj)
+        if self.hole_index < 0 or self.hole_index >= len(holes):
+            return {'CANCELLED'}
+        old_entry = holes[self.hole_index][0]
+        old_parts = old_entry.split(',')
+        # Build new entry: keep cx,cy,cz,face_code from old; replace type-specific fields
+        if self.edit_type == 'round':
+            new_entry = f"{old_parts[0]},{old_parts[1]},{old_parts[2]},{self.edit_radius:.3f},1,{old_parts[-1]}"
+        else:
+            new_entry = f"{old_parts[0]},{old_parts[1]},{old_parts[2]},{self.edit_width:.3f},2,{self.edit_height:.3f},{self.edit_cr:.3f},{old_parts[-1]}"
+
+        # Replace entry in window_data
+        wd = obj.get('window_data', '')
+        entries = [e.strip() for e in wd.split(';') if e.strip()]
+        entries = [new_entry if e == old_entry else e for e in entries]
+        obj['window_data'] = ';'.join(entries)
+        _rebuild_shell_mesh(obj)
+        self.report({'INFO'}, "Hole updated")
+        return {'FINISHED'}
+
+
 class STEP_EXPORTER_PT_shell_holes(bpy.types.Panel):
     """Panel for managing shell holes"""
     bl_label = "Shell Holes"
@@ -1508,6 +1580,8 @@ class STEP_EXPORTER_PT_shell_holes(bpy.types.Panel):
         for i, (entry, desc) in enumerate(holes):
             row = box.row(align=True)
             row.label(text=f"[{i+1}] {desc}")
+            op = row.operator("step_exporter.edit_shell_hole", text="", icon='GREASEPENCIL')
+            op.hole_index = i
             op = row.operator("step_exporter.remove_shell_hole", text="", icon='X')
             op.hole_index = i
 

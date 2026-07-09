@@ -3243,6 +3243,7 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
 
         // Apply hole cutters from window_data (coordinates are in mm world space)
         if (window_data && window_data[0] != '\0') {
+            std::cout << "[STEP Exporter] Hole cutting: window_data='" << window_data << "'" << std::endl;
             std::string wd(window_data);
             std::vector<TopoDS_Shape> cutters;
             double hh = height / 2.0;  // half-height for z-axis centering
@@ -3322,12 +3323,33 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                 else if (parsed >= 7 && fabs(type_code - 2.0) < 1e-6) {
                     double rw = r_or_w, rh = extra1, rcr = extra2;  // w,h from extra1/extra2
                     if (rcr <= 0) rcr = 0.5;
-                    double cut_d = std::max({width, depth, height}) * 3.0;
-                    double bx = cx - rw / 2.0, by = cy - cut_d / 2.0, bz = cz - rh / 2.0;
-                    BRepPrimAPI_MakeBox bm(gp_Pnt(bx, by, bz), rw, cut_d, rh);
+                    double cut_d = thickness * 2.0;  // only through one wall
+                    // Box orientation per face_code:
+                    // 0/1 bottom/top: rrect in XY, extrude Z; fillet Z-parallel edges
+                    // 2/3 left/right:  rrect in YZ, extrude X; fillet X-parallel edges
+                    // 4/5 front/back:  rrect in XZ, extrude Y; fillet Y-parallel edges
+                    double bx, by, bz, sx, sy, sz;
+                    int edge_axis;  // 0=X, 1=Y, 2=Z for fillet edge detection
+                    if (face_code == 0 || face_code == 1) {
+                        // Bottom/Top: rrect in XY, through Z
+                        bx = cx - rw / 2.0; by = cy - rh / 2.0; bz = cz - cut_d / 2.0;
+                        sx = rw; sy = rh; sz = cut_d;
+                        edge_axis = 2;  // fillet Z-parallel edges
+                    } else if (face_code == 2 || face_code == 3) {
+                        // Left/Right: rrect in YZ, through X
+                        bx = cx - cut_d / 2.0; by = cy - rw / 2.0; bz = cz - rh / 2.0;
+                        sx = cut_d; sy = rw; sz = rh;
+                        edge_axis = 0;  // fillet X-parallel edges
+                    } else {
+                        // Front/Back: rrect in XZ, through Y
+                        bx = cx - rw / 2.0; by = cy - cut_d / 2.0; bz = cz - rh / 2.0;
+                        sx = rw; sy = cut_d; sz = rh;
+                        edge_axis = 1;  // fillet Y-parallel edges
+                    }
+                    BRepPrimAPI_MakeBox bm(gp_Pnt(bx, by, bz), sx, sy, sz);
                     if (!bm.Shape().IsNull()) {
                         TopoDS_Shape hs = bm.Shape();
-                        // Fillet Y-parallel edges
+                        // Fillet edges parallel to the axis through the wall
                         BRepFilletAPI_MakeFillet fm(TopoDS::Solid(hs));
                         int ec = 0;
                         for (TopExp_Explorer ex(hs, TopAbs_EDGE); ex.More(); ex.Next()) {
@@ -3336,14 +3358,19 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                             Handle(Geom_Curve) cv = BRep_Tool::Curve(e, f, l);
                             if (!cv.IsNull() && cv->DynamicType() == STANDARD_TYPE(Geom_Line)) {
                                 gp_Vec d(cv->Value(f), cv->Value(l));
-                                if (fabs(d.X()) < 1e-6 && fabs(d.Z()) < 1e-6) { fm.Add(rcr, e); ec++; }
+                                bool is_parallel = false;
+                                if (edge_axis == 0) is_parallel = (fabs(d.Y()) < 1e-6 && fabs(d.Z()) < 1e-6);
+                                else if (edge_axis == 1) is_parallel = (fabs(d.X()) < 1e-6 && fabs(d.Z()) < 1e-6);
+                                else is_parallel = (fabs(d.X()) < 1e-6 && fabs(d.Y()) < 1e-6);
+                                if (is_parallel) { fm.Add(rcr, e); ec++; }
                             }
                         }
-                        if (ec > 0) { fm.Build(); if (fm.IsDone()) hs = fm.Shape(); }
+                        if (ec > 0) { fm.Build(); if (fm.IsDone()) hs = fm.Shape(); else std::cout << "[STEP Exporter]   fillet FAILED" << std::endl; }
                         cutters.push_back(hs);
                         std::cout << "[STEP Exporter] Hole cutter: rounded rect "
                                   << rw << "x" << rh << " r=" << rcr
-                                  << " at (" << cx << "," << cy << "," << cz << ")" << std::endl;
+                                  << " at (" << cx << "," << cy << "," << cz << ") face=" << face_code
+                                  << " edges=" << ec << std::endl;
                     }
                 }
 

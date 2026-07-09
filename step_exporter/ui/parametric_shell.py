@@ -196,7 +196,7 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         import math
         bm_r = bmesh.new()
         hw_r, hh_r = w / 2, h / 2
-        r = max(cr, 0.01)
+        r = max(cr, 0.0001)  # min 0.1mm to avoid degenerate arcs
 
         # Build profile in XY plane (CCW, single pass, no duplicates)
         seg = 8
@@ -227,13 +227,13 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         for i in range(nv):
             j = (i + 1) % nv
             bm_r.faces.new([prof_verts[i], prof_verts[j], top_verts[j], top_verts[i]])
-        # Front face
-        bm_r.faces.new(list(prof_verts))
-        # Back face (reversed for outward normal)
-        bm_r.faces.new(list(reversed(top_verts)))
+        # Bottom cap (-Z, outward: CW winding → reversed)
+        bm_r.faces.new(list(reversed(prof_verts)))
+        # Top cap (+Z, outward: CCW winding)
+        bm_r.faces.new(list(top_verts))
 
         bm_r.normal_update()
-        cutter = self._bm_to_object(bm_r, "RRCutter")
+        cutter = STEP_EXPORTER_OT_create_parametric_shell._bm_to_object(bm_r, "RRCutter")
 
         # Determine wall direction and rotate — use shell-local cursor coords
         lx = loc.x if loc else 0.0
@@ -242,12 +242,12 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
 
         near_right = abs(px_r - shell_hw) < t * 5
         near_left = abs(px_r + shell_hw) < t * 5
-        near_front = abs(py_r - shell_hd) < t * 5
-        near_back = abs(py_r + shell_hd) < t * 5
+        near_back_wall = abs(py_r - shell_hd) < t * 5   # Y=+hd
+        near_front_wall = abs(py_r + shell_hd) < t * 5  # Y=-hd
 
         if near_right or near_left:
             cutter.rotation_euler = (0, math.pi / 2, 0)
-        elif near_front or near_back:
+        elif near_back_wall or near_front_wall:
             cutter.rotation_euler = (math.pi / 2, 0, 0)
         # else: bottom/top face, keep default XY orientation
         cutter.location = (px, py, pz)
@@ -309,7 +309,8 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         bpy.context.view_layer.update()
         bpy.ops.object.modifier_apply(modifier="Bool")
 
-    def _bm_to_object(self, bm, name):
+    @staticmethod
+    def _bm_to_object(bm, name):
         mesh = bpy.data.meshes.new(name)
         bm.to_mesh(mesh)
         bm.free()
@@ -1224,8 +1225,8 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
             wall_names = {
                 min_wall == dist_right: "Right wall (+X)",
                 min_wall == dist_left: "Left wall (-X)",
-                min_wall == dist_front: "Front wall (+Y)",
-                min_wall == dist_back: "Back wall (-Y)",
+                min_wall == dist_front: "Back wall (+Y)",
+                min_wall == dist_back: "Front wall (-Y)",
                 min_wall == dist_bottom: "Bottom face",
                 min_wall == dist_top: "Top rim (may be open)",
             }
@@ -1362,7 +1363,7 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
                 self.report({'ERROR'}, "Failed to create cutter")
                 return {'CANCELLED'}
             cutter.name = "Hole_RR"
-            entry = f"{px_r/S:.3f},{py_r/S:.3f},{pz_r/S:.3f},{self.hole_width:.3f},{self.hole_height:.3f},2,{self.hole_cr:.3f},{face_code}"
+            entry = f"{px_r/S:.3f},{py_r/S:.3f},{pz_r/S:.3f},{self.hole_width:.3f},2,{self.hole_height:.3f},{self.hole_cr:.3f},{face_code}"
 
         # Apply boolean (re-select shell: primitive_cylinder_add switched active to cutter)
         bpy.context.view_layer.objects.active = obj

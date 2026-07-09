@@ -54,6 +54,30 @@
 			"type": "shell",
 			"command": "python f:\\git\\blender2step\\_clean_temp.py",
 			"group": "none"
+		},
+		{
+			"label": "Build step_exporter Release",
+			"type": "shell",
+			"command": "cmake --build build --config Release",
+			"group": "build"
+		},
+		{
+			"label": "Build step_exporter Release",
+			"type": "shell",
+			"command": "cmake --build build --config Release",
+			"group": "build"
+		},
+		{
+			"label": "Build step_exporter Release",
+			"type": "shell",
+			"command": "cmake --build build --config Release",
+			"group": "build"
+		},
+		{
+			"label": "Build step_exporter Release",
+			"type": "shell",
+			"command": "cmake --build build --config Release",
+			"group": "build"
 		}
 	]
 }

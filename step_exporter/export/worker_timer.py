@@ -26,6 +26,10 @@ def _export_worker_timer():
                 scale = 1.0
             
             for idx, obj in enumerate(_g._export_objects):
+                # Skip wireframe-displayed objects (debug cutters, visual aids)
+                if obj.display_type == 'WIRE':
+                    log_to_file(f"[STEP Exporter] Skipping wireframe: {obj.name}")
+                    continue
                 log_to_file(f"[Python DEBUG] Processing object {idx}: '{obj.name}' (type: {obj.type})")
                 
                 obj_data = None

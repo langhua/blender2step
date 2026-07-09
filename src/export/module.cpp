@@ -3175,18 +3175,19 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
     const char* rim_shape = "rect"; double rim_top_ratio = 1.0;
     double bottom_fillet = 0.0;
     double curve_ratio = 0.5;
+    const char* window_data = "";
 
-    if (!PyArg_ParseTuple(args, "sdddd|dsdddsddssisddd",
+    if (!PyArg_ParseTuple(args, "sdddd|dsdddsddssisddds",
                           &filename, &width, &depth, &height, &thickness,
                           &corner_radius, &corner_type,
                           &pos_x, &pos_y, &pos_z,
                           &rim_type, &rim_width, &rim_height,
                           &step_schema, &unit, &enable_logging,
                           &rim_shape, &rim_top_ratio,
-                          &bottom_fillet, &curve_ratio)) {
+                          &bottom_fillet, &curve_ratio, &window_data)) {
         PyErr_SetString(PyExc_TypeError,
             "export_parametric_shell_step() expected: filename, width, depth, height, thickness"
-            "[, corner_radius, corner_type, pos_x, pos_y, pos_z, rim_type, rim_width, rim_height, step_schema, unit, enable_logging, rim_shape, rim_top_ratio, bottom_fillet, curve_ratio]");
+            "[, corner_radius, corner_type, pos_x, pos_y, pos_z, rim_type, rim_width, rim_height, step_schema, unit, enable_logging, rim_shape, rim_top_ratio, bottom_fillet, curve_ratio, window_data]");
         return NULL;
     }
 
@@ -3196,6 +3197,24 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
               << " wall=" << thickness << " corner=" << corner_type << " r=" << corner_radius
               << " bf=" << bottom_fillet << " curve=" << curve_ratio << std::endl;
     std::cout << "[STEP Exporter]   pos=(" << pos_x << "," << pos_y << "," << pos_z << ")" << std::endl;
+    if (window_data && window_data[0] != '\0')
+        std::cout << "[STEP Exporter]   window_data = \"" << window_data << "\"" << std::endl;
+
+    // Redirect stdout to log file
+    std::string logPath;
+    const char* log_filename = nullptr;
+    FILE* log_file = nullptr;
+    int saved_stdout_fd = -1;
+    if (enable_logging) {
+        logPath = std::string(filename) + ".log";
+        log_filename = logPath.c_str();
+        log_file = _fsopen(log_filename, "a", _SH_DENYNO);
+        if (log_file) {
+            saved_stdout_fd = _dup(_fileno(stdout));
+            _dup2(_fileno(log_file), _fileno(stdout));
+            setvbuf(stdout, nullptr, _IONBF, 0);
+        }
+    }
 
     try {
         TopoDS_Shape shape = create_parametric_shell_solid(width, depth, height,
@@ -3203,19 +3222,158 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                                                             rim_type, rim_width, rim_height,
                                                             rim_shape, rim_top_ratio,
                                                             bottom_fillet, curve_ratio);
-        if (shape.IsNull()) { Py_RETURN_FALSE; }
+        if (shape.IsNull()) {
+            if (saved_stdout_fd >= 0) { _dup2(saved_stdout_fd, _fileno(stdout)); if (log_file) fclose(log_file); }
+            Py_RETURN_FALSE;
+        }
 
-        // Fix if needed
+        // Fix if needed (before any operations)
         BRepCheck_Analyzer ana(shape);
         if (!ana.IsValid()) {
             shape = fix_shape_enhanced(shape, 0.001);
         }
 
-        // Translate
+        // Translate to world position BEFORE cutting holes,
+        // so hole cutters (in world coordinates) align with the shell
         if (pos_x != 0.0 || pos_y != 0.0 || pos_z != 0.0) {
             gp_Trsf trsf;
             trsf.SetTranslation(gp_Vec(pos_x, pos_y, pos_z));
             shape = BRepBuilderAPI_Transform(shape, trsf).Shape();
+        }
+
+        // Apply hole cutters from window_data (coordinates are in mm world space)
+        if (window_data && window_data[0] != '\0') {
+            std::string wd(window_data);
+            std::vector<TopoDS_Shape> cutters;
+            double hh = height / 2.0;  // half-height for z-axis centering
+
+            size_t pos = 0, next = 0;
+            while ((next = wd.find(';', pos)) != std::string::npos || pos < wd.length()) {
+                std::string entry = (next != std::string::npos) ? wd.substr(pos, next - pos) : wd.substr(pos);
+                pos = (next != std::string::npos) ? next + 1 : wd.length();
+                if (entry.empty()) continue;
+
+                // Parse: cx,cy,cz, r_or_w, type_code [, extra1, extra2, face_code]
+                // Round:  cx,cy,cz, r,       1 [, face]           → 5-6 fields
+                // Rrect:  cx,cy,cz, w,       2,    h,    cr, face → 8 fields
+                double cx, cy, cz, r_or_w, type_code, extra1 = 0.0, extra2 = 0.0;
+                double face_code = -1;
+                int parsed = sscanf_s(entry.c_str(), "%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf",
+                                      &cx, &cy, &cz, &r_or_w, &type_code, &extra1, &extra2, &face_code);
+
+                // Type 1: Circular hole
+                if (parsed >= 5 && fabs(type_code - 1.0) < 1e-6) {
+                    double hole_r = r_or_w;
+                    if (parsed >= 6) face_code = extra1;  // face is the 6th field
+                    double half_w = width / 2.0, half_d = depth / 2.0;
+                    // Cylinder length: just enough to cut through one wall (not span entire shell!)
+                    double cyl_len = thickness * 4.0;
+
+                    // Use face_code if available, otherwise fall back to distance detection
+                    gp_Ax2 ax;
+                    if (face_code >= 0) {
+                        // 0=bottom, 1=top, 2=left(X-), 3=right(X+), 4=front(Y-), 5=back(Y+)
+                        // Center cylinder ON the wall surface, extend ±cyl_len/2 perpendicular
+                        if (face_code == 0) {
+                            // Bottom: wall at z=pos_z, cylinder along Z
+                            ax = gp_Ax2(gp_Pnt(cx, cy, pos_z - cyl_len / 2.0), gp_Dir(0, 0, 1));
+                        } else if (face_code == 1) {
+                            // Top: wall at z=pos_z+height
+                            ax = gp_Ax2(gp_Pnt(cx, cy, pos_z + height - cyl_len / 2.0), gp_Dir(0, 0, 1));
+                        } else if (face_code == 2) {
+                            // Left (X-): wall at x=pos_x-half_w
+                            ax = gp_Ax2(gp_Pnt(pos_x - half_w - cyl_len / 2.0, cy, cz), gp_Dir(1, 0, 0));
+                        } else if (face_code == 3) {
+                            // Right (X+): wall at x=pos_x+half_w
+                            ax = gp_Ax2(gp_Pnt(pos_x + half_w - cyl_len / 2.0, cy, cz), gp_Dir(1, 0, 0));
+                        } else if (face_code == 4) {
+                            // Front (Y-): wall at y=pos_y-half_d
+                            ax = gp_Ax2(gp_Pnt(cx, pos_y - half_d - cyl_len / 2.0, cz), gp_Dir(0, 1, 0));
+                        } else { // face_code == 5
+                            // Back (Y+): wall at y=pos_y+half_d
+                            ax = gp_Ax2(gp_Pnt(cx, pos_y + half_d - cyl_len / 2.0, cz), gp_Dir(0, 1, 0));
+                        }
+                        std::cout << "[STEP Exporter] Hole cutter: circular r=" << hole_r
+                                  << " at (" << cx << "," << cy << "," << cz << ") face=" << (int)face_code << std::endl;
+                    } else {
+                        // Fallback: distance-based detection (for old-format window_data)
+                        double shell_bot_z = pos_z, shell_top_z = pos_z + height;
+                        double cyl_h = std::max({width, depth, height}) * 3.0;
+                        double db = fabs(cz - shell_bot_z), dt = fabs(cz - shell_top_z);
+                        double dl = fabs(cx - (pos_x - half_w)), dr = fabs(cx - (pos_x + half_w));
+                        double df = fabs(cy - (pos_y - half_d)), dk = fabs(cy - (pos_y + half_d));
+                        double min_dist = std::min({db, dt, dl, dr, df, dk});
+                        if (min_dist == db || min_dist == dt) {
+                            ax = gp_Ax2(gp_Pnt(cx, cy, cz - cyl_h / 2.0), gp_Dir(0, 0, 1));
+                        } else if (min_dist == dl || min_dist == dr) {
+                            ax = gp_Ax2(gp_Pnt(cx - cyl_h / 2.0, cy, cz), gp_Dir(1, 0, 0));
+                        } else {
+                            ax = gp_Ax2(gp_Pnt(cx, cy - cyl_h / 2.0, cz), gp_Dir(0, 1, 0));
+                        }
+                        cyl_len = cyl_h;
+                        std::cout << "[STEP Exporter] Hole cutter: circular r=" << hole_r
+                                  << " at (" << cx << "," << cy << "," << cz << ") (dist-based)" << std::endl;
+                    }
+                    BRepPrimAPI_MakeCylinder cm(ax, hole_r, cyl_len);
+                    if (!cm.Shape().IsNull()) {
+                        cutters.push_back(cm.Solid());
+                    }
+                }
+                else if (parsed >= 7 && fabs(type_code - 2.0) < 1e-6) {
+                    double rw = r_or_w, rh = extra1, rcr = extra2;  // w,h from extra1/extra2
+                    if (rcr <= 0) rcr = 0.5;
+                    double cut_d = std::max({width, depth, height}) * 3.0;
+                    double bx = cx - rw / 2.0, by = cy - cut_d / 2.0, bz = cz - rh / 2.0;
+                    BRepPrimAPI_MakeBox bm(gp_Pnt(bx, by, bz), rw, cut_d, rh);
+                    if (!bm.Shape().IsNull()) {
+                        TopoDS_Shape hs = bm.Shape();
+                        // Fillet Y-parallel edges
+                        BRepFilletAPI_MakeFillet fm(TopoDS::Solid(hs));
+                        int ec = 0;
+                        for (TopExp_Explorer ex(hs, TopAbs_EDGE); ex.More(); ex.Next()) {
+                            TopoDS_Edge e = TopoDS::Edge(ex.Current());
+                            double f, l;
+                            Handle(Geom_Curve) cv = BRep_Tool::Curve(e, f, l);
+                            if (!cv.IsNull() && cv->DynamicType() == STANDARD_TYPE(Geom_Line)) {
+                                gp_Vec d(cv->Value(f), cv->Value(l));
+                                if (fabs(d.X()) < 1e-6 && fabs(d.Z()) < 1e-6) { fm.Add(rcr, e); ec++; }
+                            }
+                        }
+                        if (ec > 0) { fm.Build(); if (fm.IsDone()) hs = fm.Shape(); }
+                        cutters.push_back(hs);
+                        std::cout << "[STEP Exporter] Hole cutter: rounded rect "
+                                  << rw << "x" << rh << " r=" << rcr
+                                  << " at (" << cx << "," << cy << "," << cz << ")" << std::endl;
+                    }
+                }
+
+                if (next == std::string::npos) break;
+            }
+
+            // Cut all holes at once
+            if (!cutters.empty()) {
+                TopoDS_Compound compound_cutters;
+                BRep_Builder().MakeCompound(compound_cutters);
+                for (const auto& c : cutters) {
+                    BRep_Builder().Add(compound_cutters, c);
+                }
+                BRepAlgoAPI_Cut cutOp(shape, compound_cutters);
+                if (cutOp.IsDone()) {
+                    shape = cutOp.Shape();
+                    std::cout << "[STEP Exporter] Applied " << cutters.size()
+                              << " hole cutter(s) to parametric shell" << std::endl;
+                } else {
+                    std::cerr << "[STEP Exporter] Warning: BRepAlgoAPI_Cut failed for holes" << std::endl;
+                }
+            }
+        }
+
+        // Restore stdout before STEP write (setup_step_writer does its own redirect)
+        if (saved_stdout_fd >= 0) {
+            _dup2(saved_stdout_fd, _fileno(stdout));
+            if (log_file) fclose(log_file);
+            saved_stdout_fd = -1;
+            log_file = nullptr;
         }
 
         // Write STEP

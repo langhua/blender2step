@@ -173,6 +173,7 @@ def _analyze_top_shell_from_mesh(obj, context, scale):
     # === 壁厚分析 ===
     # 优先从自定义属性读取（由 create_filleted_top_shell 设置）
     # 自定义属性以毫米 (mm) 存储，需 ×0.001 转换为米用于内部分析
+    bottom_region_zls = []  # initialized for all code paths
     custom_wt = obj.get('wall_thickness', 0.0)
     if custom_wt > 0:
         wall_thickness = custom_wt * 0.001  # mm → m

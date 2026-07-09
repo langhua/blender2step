@@ -14,6 +14,7 @@
 #include <ctime>
 #include <iomanip>
 #include <exception>
+#include <algorithm>
 
 // OpenCASCADE includes
 #include <STEPControl_Writer.hxx>

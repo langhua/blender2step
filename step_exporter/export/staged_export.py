@@ -814,7 +814,10 @@ def _parametric_export_staged():
                 elif obj_type == 'parametric_shell':
                     pparams = obj_params
                     bf_val = pparams.get('bottom_fillet', 0.0)
-                    log_to_file(f"[STEP Exporter] Exporting parametric shell {obj_num}/{total_objects} (C++), bf={bf_val}, pos=({pparams.get('pos_x',0):.4f},{pparams.get('pos_y',0):.4f},{pparams.get('pos_z',0):.4f})...")
+                    wd = pparams.get('window_data', '')
+                    log_to_file(f"[STEP Exporter] Exporting parametric shell {obj_num}/{total_objects} (C++), bf={bf_val}, pos=({pparams.get('pos_x',0):.4f},{pparams.get('pos_y',0):.4f},{pparams.get('pos_z',0):.4f}) holes={'yes' if wd else 'no'}...")
+                    if wd:
+                        log_to_file(f"[STEP Exporter]   window_data = \"{wd}\"")
                     success = cpp_exporter.export_parametric_shell_step(
                         temp_file,
                         pparams['width'], pparams['depth'], pparams['height'],
@@ -830,7 +833,8 @@ def _parametric_export_staged():
                         pparams.get('rim_shape', 'rect'),
                         pparams.get('rim_top_ratio', 1.0),
                         bf_val,
-                        pparams.get('curve_ratio', 0.5))
+                        pparams.get('curve_ratio', 0.5),
+                        wd)
                 
                 elif obj_type == 'regular':
                     obj = obj_params

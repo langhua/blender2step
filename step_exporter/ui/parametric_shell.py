@@ -190,8 +190,9 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         self.report({'INFO'}, f"Shell: {w:.0f}×{d:.0f}×{h:.0f}{unit_label}, wall={t:.1f}{unit_label}")
         return {'FINISHED'}
 
-    def _make_rrect_cutter(self, w, h, cr, depth, px, py, pz, shell_hw, shell_hd, t):
-        """Create a rounded rectangle cutter (extruded profile)."""
+    def _make_rrect_cutter(self, w, h, cr, depth, px, py, pz, shell_hw, shell_hd, t, loc=None):
+        """Create a rounded rectangle cutter (extruded profile).
+        loc: object world location for shell-local wall detection."""
         import math
         bm_r = bmesh.new()
         hw_r, hh_r = w / 2, h / 2
@@ -234,17 +235,22 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         bm_r.normal_update()
         cutter = self._bm_to_object(bm_r, "RRCutter")
 
-        # Determine wall direction and rotate
-        near_right = abs(px - shell_hw) < t * 1.5
-        near_left = abs(px + shell_hw) < t * 1.5
-        near_front = abs(py - shell_hd) < t * 1.5
-        near_back = abs(py + shell_hd) < t * 1.5
+        # Determine wall direction and rotate — use shell-local cursor coords
+        lx = loc.x if loc else 0.0
+        ly = loc.y if loc else 0.0
+        px_r, py_r = px - lx, py - ly
+
+        near_right = abs(px_r - shell_hw) < t * 5
+        near_left = abs(px_r + shell_hw) < t * 5
+        near_front = abs(py_r - shell_hd) < t * 5
+        near_back = abs(py_r + shell_hd) < t * 5
 
         if near_right or near_left:
             cutter.rotation_euler = (0, math.pi / 2, 0)
         elif near_front or near_back:
             cutter.rotation_euler = (math.pi / 2, 0, 0)
-        cutter.location = (px, py, pz - depth / 2)
+        # else: bottom/top face, keep default XY orientation
+        cutter.location = (px, py, pz)
         return cutter
 
     def _make_solid_box(self, w, d, h, cr):
@@ -1164,6 +1170,8 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
                ('rrect', "Rounded Rect", "Rounded rectangle through-hole")],
         default='round',
     )
+    keep_cutter: BoolProperty(name="Keep Cutter", default=False,
+        description="Keep the cutter object visible after cutting (for preview/debug)")
     hole_radius: FloatProperty(name="Radius", default=5.0, min=0.1, max=500.0)
     hole_width: FloatProperty(name="Width", default=10.0, min=0.1, max=500.0)
     hole_height: FloatProperty(name="Height", default=8.0, min=0.1, max=500.0)
@@ -1193,7 +1201,12 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
             S = 0.001 if obj.get('unit', 'mm') == 'mm' else 1.0
             ws, ds, hs = w * S, d * S, h * S
             cursor = context.scene.cursor.location
-            px, py, pz = cursor.x, cursor.y, cursor.z
+            # Shell-local coords: mesh is centered at obj.location
+            # bottom Z = loc.z - hs/2, top Z = loc.z + hs/2
+            loc = obj.location
+            px = cursor.x - loc.x
+            py = cursor.y - loc.y
+            pz = cursor.z - (loc.z - hs / 2)  # relative to shell bottom
 
             # Determine which wall / face the cursor is near
             dist_right = abs(px - ws/2)
@@ -1206,7 +1219,7 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
 
             box = layout.box()
             box.label(text="Position", icon='ORIENTATION_LOCAL')
-            box.label(text=f"Cursor: X={px*1000:.1f} Y={py*1000:.1f} Z={pz*1000:.1f} mm")
+            box.label(text=f"Cursor: X={cursor.x*1000:.1f} Y={cursor.y*1000:.1f} Z={cursor.z*1000:.1f} mm")
             # Wall identification
             wall_names = {
                 min_wall == dist_right: "Right wall (+X)",
@@ -1245,6 +1258,8 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
             layout.prop(self, 'hole_height')
             layout.prop(self, 'hole_cr')
             layout.label(text=f"  → Rounded rect {self.hole_width:.1f}×{self.hole_height:.1f}mm, cr={self.hole_cr:.1f}mm")
+        layout.separator()
+        layout.prop(self, 'keep_cutter')
 
     def execute(self, context):
         import math
@@ -1258,14 +1273,60 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
         t = obj.get('wall_thickness', 2.0)
         S = 0.001 if obj.get('unit', 'mm') == 'mm' else 1.0
 
-        # 3D cursor position in Blender units (m)
+        # 3D cursor position in Blender units (m) — world space
         cursor = context.scene.cursor.location
-        px, py, pz = cursor.x, cursor.y, cursor.z
+        loc = obj.location
+        # Shell-local cursor coords: mesh is centered at obj.location
+        # bottom Z = loc.z - h/2, top Z = loc.z + h/2
+        h = obj.get('height', 50.0) * S
+        shell_bottom_z = loc.z - h / 2
+        px_r = cursor.x - loc.x
+        py_r = cursor.y - loc.y
+        pz_r = cursor.z - shell_bottom_z  # relative to shell bottom
 
         # Hole dimensions in Blender units
         extra = t * S * 1.5
         hw, hd = w * S / 2, d * S / 2
         thickness = t * S
+
+        # Auto-clamp Z to be within the wall for reliable boolean cut
+        # Uses shell-local Z (0..h)
+        dist_walls = [abs(px_r - hw), abs(px_r + hw), abs(py_r - hd), abs(py_r + hd)]
+        dist_bottom = abs(pz_r)
+        dist_top = abs(pz_r - h)
+        min_wall = min(dist_walls)
+        if dist_bottom < min_wall or dist_top < min_wall:
+            # Bottom/top face: clamp Z to mid-wall
+            if dist_bottom < dist_top:
+                pz_r = max(0.0, min(pz_r, thickness))
+            else:
+                pz_r = max(h - thickness, min(pz_r, h))
+        else:
+            # Side wall: clamp Z within [0, h]
+            pz_r = max(0.0, min(pz_r, h))
+
+        # Convert back to world coordinates for cutter placement & window_data
+        px = px_r + loc.x
+        py = py_r + loc.y
+        pz = pz_r + shell_bottom_z
+
+        # Determine face code for STEP export — reuse the SAME detection as Z-clamp
+        # 0=bottom, 1=top, 2=left(X-), 3=right(X+), 4=front(Y-), 5=back(Y+)
+        face_code = 0
+        if dist_bottom < min_wall:
+            face_code = 0  # bottom
+        elif dist_top < min_wall:
+            face_code = 1  # top
+        else:
+            min_i = dist_walls.index(min_wall)
+            if min_i == 0:
+                face_code = 3  # right (X+)
+            elif min_i == 1:
+                face_code = 2  # left (X-)
+            elif min_i == 2:
+                face_code = 5  # back (Y+)
+            else:
+                face_code = 4  # front (Y-)
 
         bpy.context.view_layer.objects.active = obj
         if bpy.context.mode != 'OBJECT':
@@ -1278,16 +1339,17 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
                 vertices=64, radius=rh, depth=cutter_depth, location=(0, 0, 0))
             cutter = bpy.context.active_object
             cutter.name = "Hole_R"
-            # Orient to nearest wall
-            dists = [abs(px - hw), abs(px + hw), abs(py - hd), abs(py + hd)]
-            min_i = dists.index(min(dists))
-            if min_i <= 1:
-                cutter.rotation_euler = (0, math.pi / 2, 0)
-            else:
-                cutter.rotation_euler = (math.pi / 2, 0, 0)
+            # Orient based on nearest face (already detected above)
+            if not (dist_bottom < min_wall or dist_top < min_wall):
+                min_i = dist_walls.index(min_wall)
+                if min_i <= 1:
+                    cutter.rotation_euler = (0, math.pi / 2, 0)  # X-wall
+                else:
+                    cutter.rotation_euler = (math.pi / 2, 0, 0)  # Y-wall
             cutter.location = (px, py, pz)
-            # Store in window_data
-            entry = f"{px/S*1000:.3f},{py/S*1000:.3f},{pz/S*1000:.3f},{self.hole_radius:.3f},1"
+            # Store in window_data in SHELL-LOCAL coords (mm)
+            # px_r,py_r relative to obj.location; pz_r relative to shell_bottom_z
+            entry = f"{px_r/S:.3f},{py_r/S:.3f},{pz_r/S:.3f},{self.hole_radius:.3f},1,{face_code}"
         else:
             rh_w = self.hole_width * S / 2
             rh_h = self.hole_height * S / 2
@@ -1295,14 +1357,15 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
             # Build rrect cutter using the shell class's method
             cutter = STEP_EXPORTER_OT_create_parametric_shell._make_rrect_cutter(
                 None, rh_w * 2, rh_h * 2, hcr, thickness + extra * 2,
-                px, py, pz, hw, hd, thickness)
+                px, py, pz, hw, hd, thickness, loc)
             if cutter is None:
                 self.report({'ERROR'}, "Failed to create cutter")
                 return {'CANCELLED'}
             cutter.name = "Hole_RR"
-            entry = f"{px/S*1000:.3f},{py/S*1000:.3f},{pz/S*1000:.3f},{self.hole_width:.3f},{self.hole_height:.3f},2,{self.hole_cr:.3f}"
+            entry = f"{px_r/S:.3f},{py_r/S:.3f},{pz_r/S:.3f},{self.hole_width:.3f},{self.hole_height:.3f},2,{self.hole_cr:.3f},{face_code}"
 
-        # Apply boolean
+        # Apply boolean (re-select shell: primitive_cylinder_add switched active to cutter)
+        bpy.context.view_layer.objects.active = obj
         mod = obj.modifiers.new(name="HoleBool", type='BOOLEAN')
         mod.object = cutter
         mod.operation = 'DIFFERENCE'
@@ -1310,11 +1373,16 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
         cutter.hide_viewport = True
         bpy.context.view_layer.update()
         bpy.ops.object.modifier_apply(modifier="HoleBool")
-        bpy.data.objects.remove(cutter, do_unlink=True)
+        if self.keep_cutter:
+            cutter.hide_viewport = False
+            cutter.display_type = 'WIRE'
+        else:
+            bpy.data.objects.remove(cutter, do_unlink=True)
 
-        # Append to window_data
+        # Append to window_data (shell-local coords in mm)
         existing = obj.get('window_data', '')
         obj['window_data'] = (existing + ';' + entry) if existing else entry
+        obj['window_data_local'] = True  # flag: coords are shell-local, not world
 
         self.report({'INFO'}, f"Hole added at cursor position")
         return {'FINISHED'}

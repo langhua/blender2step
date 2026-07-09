@@ -10,6 +10,10 @@ def _analyze_parametric_shell_from_mesh(obj, context=None, scale=1.0):
     if obj.get('object_type', '') != 'parametric_shell':
         return None
 
+    # Shell will be exported as parametric solid, with holes cut via OCCT boolean ops
+    if obj.get('window_data', ''):
+        log_to_file(f"[STEP Exporter] Parametric shell has holes — will cut via OCCT boolean")
+
     w = obj.get('width', 100.0)
     d = obj.get('depth', 80.0)
     h = obj.get('height', 50.0)
@@ -60,6 +64,43 @@ def _analyze_parametric_shell_from_mesh(obj, context=None, scale=1.0):
         'rim_top_ratio': rim_top_ratio,
         'bottom_fillet': bf,
         'curve_ratio': obj.get('curve_ratio', 0.5) / 100.0 if obj.get('corner_type') == 'curved' else 0.5,
+        # C++ shell has bottom at z=0; Blender mesh is centered at object origin.
+        # World bottom = obj.location.z - h/2 (in Blender units). Convert to mm.
+        # pos_z should place C++ shell bottom at the same world Z as Blender.
         'pos_x': obj.location.x * scale, 'pos_y': obj.location.y * scale,
-        'pos_z': obj.location.z * scale,
+        'pos_z': (obj.location.z * scale) - (h_mm / 2.0),
+        'window_data': _convert_window_data(obj, scale, h_mm),
     }
+
+
+def _convert_window_data(obj, scale, h_mm):
+    """Convert window_data from shell-local to world coords if needed."""
+    wd = obj.get('window_data', '')
+    if not wd or not obj.get('window_data_local'):
+        return wd  # old format: already world coords, or empty
+
+    pos_x = obj.location.x * scale
+    pos_y = obj.location.y * scale
+    pos_z = (obj.location.z * scale) - (h_mm / 2.0)
+
+    entries = wd.split(';')
+    converted = []
+    for entry in entries:
+        entry = entry.strip()
+        if not entry:
+            continue
+        parts = entry.split(',')
+        if len(parts) < 3:
+            converted.append(entry)
+            continue
+        try:
+            cx_w = float(parts[0]) + pos_x
+            cy_w = float(parts[1]) + pos_y
+            cz_w = float(parts[2]) + pos_z
+            parts[0] = f"{cx_w:.3f}"
+            parts[1] = f"{cy_w:.3f}"
+            parts[2] = f"{cz_w:.3f}"
+        except ValueError:
+            pass
+        converted.append(','.join(parts))
+    return ';'.join(converted)

@@ -789,6 +789,10 @@ def _execute_analysis_and_export(operator, params):
     total_objects = len(_g._export_objects)
     for idx, obj in enumerate(_g._export_objects):
         if obj.type == 'MESH':
+            # Skip wireframe-displayed objects (debug cutters, visual aids)
+            if obj.display_type == 'WIRE':
+                log_to_file(f"[STEP Exporter] Skipping wireframe: {obj.name}")
+                continue
             log_to_file(f"[STEP Exporter] Checking: {obj.name}")
             
             # 优先检查 parametric_shell（避免被误判为圆柱）

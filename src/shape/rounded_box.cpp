@@ -990,6 +990,86 @@ TopoDS_Wire create_rounded_rect_wire(double width, double depth, double cr, doub
     return wireMaker.IsDone() ? wireMaker.Wire() : TopoDS_Wire();
 }
 
+// Create a closed BSpline wire approximating a rounded rectangle profile.
+// Single smooth curve → ThruSections produces seamless walls (no flat/arc creases).
+TopoDS_Wire create_rounded_rect_bspline_wire(double width, double depth, double cr, double z, double y_offset = 0.0)
+{
+    double hw = width / 2.0;
+    double hd = depth / 2.0;
+    double max_r = std::min(hw, hd) * 0.99;
+    if (cr > max_r) cr = max_r;
+    if (cr < 0.1) cr = 0.1;
+
+    double RS = hw, LS = -hw;
+    double TS = hd + y_offset, BS = -hd + y_offset;
+    double r = cr;
+
+    // Sample points along the rounded rectangle contour (4 flats + 4 arcs)
+    int flatPts = 16, arcPts = 8;
+    std::vector<gp_Pnt> pts;
+
+    // Right flat: top→bottom
+    for (int i = 0; i <= flatPts; i++) {
+        double y = TS - r + (2.0 * (hd - r)) * i / flatPts;
+        pts.push_back(gp_Pnt(RS, y, z));
+    }
+    // Bottom-right arc
+    for (int i = 1; i <= arcPts; i++) {
+        double a = -M_PI / 2 + (M_PI / 2) * i / arcPts;
+        pts.push_back(gp_Pnt(RS - r + r * cos(a), BS + r + r * sin(a), z));
+    }
+    // Bottom flat: right→left
+    for (int i = 1; i <= flatPts; i++) {
+        double x = RS - r - (2.0 * (hw - r)) * i / flatPts;
+        pts.push_back(gp_Pnt(x, BS, z));
+    }
+    // Bottom-left arc
+    for (int i = 1; i <= arcPts; i++) {
+        double a = 0 + (M_PI / 2) * i / arcPts;
+        pts.push_back(gp_Pnt(LS + r + r * cos(a), BS + r + r * sin(a), z));
+    }
+    // Left flat: bottom→top
+    for (int i = 1; i <= flatPts; i++) {
+        double y = BS + r + (2.0 * (hd - r)) * i / flatPts;
+        pts.push_back(gp_Pnt(LS, y, z));
+    }
+    // Top-left arc
+    for (int i = 1; i <= arcPts; i++) {
+        double a = M_PI / 2 + (M_PI / 2) * i / arcPts;
+        pts.push_back(gp_Pnt(LS + r + r * cos(a), TS - r + r * sin(a), z));
+    }
+    // Top flat: left→right
+    for (int i = 1; i <= flatPts; i++) {
+        double x = LS + r + (2.0 * (hw - r)) * i / flatPts;
+        pts.push_back(gp_Pnt(x, TS, z));
+    }
+    // Top-right arc
+    for (int i = 1; i <= arcPts; i++) {
+        double a = M_PI + (M_PI / 2) * i / arcPts;
+        pts.push_back(gp_Pnt(RS - r + r * cos(a), TS - r + r * sin(a), z));
+    }
+
+    // Create periodic BSpline interpolating the points
+    TColgp_Array1OfPnt pArray(1, (int)pts.size());
+    for (size_t i = 0; i < pts.size(); i++)
+        pArray.SetValue((int)i + 1, pts[i]);
+
+    GeomAPI_PointsToBSpline interp(pArray, 3, 8, GeomAbs_C2, 1e-6);  // cubic, C2 periodic
+    if (!interp.IsDone()) {
+        // Fallback: use the standard 8-edge wire
+        return create_rounded_rect_wire(width, depth, cr, z, y_offset);
+    }
+
+    BRepBuilderAPI_MakeEdge edgeMaker(interp.Curve());
+    if (!edgeMaker.IsDone()) {
+        return create_rounded_rect_wire(width, depth, cr, z, y_offset);
+    }
+
+    BRepBuilderAPI_MakeWire wireMaker;
+    wireMaker.Add(edgeMaker.Edge());
+    return wireMaker.IsDone() ? wireMaker.Wire() : TopoDS_Wire();
+}
+
 // Ensure shape is a solid with correct face orientation
 TopoDS_Solid ensure_solid(const TopoDS_Shape& shape)
 {

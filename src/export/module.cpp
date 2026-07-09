@@ -2722,6 +2722,7 @@ TopoDS_Shape create_parametric_shell_solid(double width, double depth, double he
                              double cr_val) -> TopoDS_Solid {
             BRepOffsetAPI_ThruSections loft(true, false, 1e-6);  // solid, smooth
             for (size_t i = 0; i < hw_arr.size(); i++) {
+                // Standard 8-edge wire for manageable STEP file size
                 TopoDS_Wire w = create_rounded_rect_wire(
                     hw_arr[i] * 2.0, hd_arr[i] * 2.0, cr_val, z_arr[i], 0.0);
                 if (w.IsNull()) return TopoDS_Solid();

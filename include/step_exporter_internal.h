@@ -72,6 +72,8 @@ TopoDS_Shape create_parametric_shell_solid(double width, double depth, double he
 TopoDS_Shape apply_bottom_fillet_to_box(const TopoDS_Shape& boxShape, double fillet_radius, double bottom_z);
 // Rounded rectangle wire helper (shared with rounded_box.cpp)
 TopoDS_Wire create_rounded_rect_wire(double width, double depth, double cr, double z, double y_offset);
+// BSpline wire: single smooth closed curve — no flat/arc creases
+TopoDS_Wire create_rounded_rect_bspline_wire(double width, double depth, double cr, double z, double y_offset);
 
 // Top shell parametric export (tapered / lofted shell with fillets and window)
 TopoDS_Shape create_top_shell_filleted_solid(double width, double depth, double outer_height,

@@ -2741,8 +2741,7 @@ TopoDS_Shape create_parametric_shell_solid(double width, double depth, double he
 
         // Inner solid: z_shift = thickness
         double iw = hw - thickness, id_ = hd - thickness;
-        double icr = std::min(cr, std::min(iw, id_) - 0.01);
-        if (icr < 0.01) icr = 0.01;
+        double icr = std::max(cr - thickness, 0.01);  // concentric with outer, constant wall thickness
         auto [iz, ihw, ihd] = buildLayers(iw, id_, icr, thickness);
         TopoDS_Solid innerSolid = makeSolid(ihw, ihd, iz, icr);
         if (innerSolid.IsNull()) return TopoDS_Shape();
@@ -2752,8 +2751,8 @@ TopoDS_Shape create_parametric_shell_solid(double width, double depth, double he
         if (!cut.IsDone()) return TopoDS_Shape();
         TopoDS_Shape result = cut.Shape();
 
-        // Merge faces for cleaner output (ConcatBSplines=false avoids merging wall faces)
-        ShapeUpgrade_UnifySameDomain unifier(result, true, true, false);
+        // Merge faces for cleaner output (ConcatBSplines=true merges adjacent wall faces)
+        ShapeUpgrade_UnifySameDomain unifier(result, true, true, true);
         unifier.Build();
         result = unifier.Shape();
 
@@ -2769,30 +2768,40 @@ TopoDS_Shape create_parametric_shell_solid(double width, double depth, double he
             double ratio = is_trapezoid ? std::max(0.0, rim_top_ratio) : 1.0;
             bool tapered = is_trapezoid && (ratio < 0.999);
 
-            // Ring dimensions at bottom (z=0) and top (z=rim_height)
+            // Ring profiles at z=0 (bottom) and z=rim_height (top).
+            // After shift to z=height-rh/2, the actual shelf edge is at midpoint z=rh/2.
+            // Linear interpolation: midpoint = (bottom + top)/2 → top = 2*mid - bottom.
             double ring_outer_bot_hw, ring_inner_bot_hw;
             double ring_outer_bot_hd, ring_inner_bot_hd;
             double ring_outer_top_hw, ring_inner_top_hw;
             double ring_outer_top_hd, ring_inner_top_hd;
 
             if (is_outside) {
-                ring_outer_bot_hw = width / 2.0 - rim_width;
+                // Outside: inner extends past inner wall by rw for clean boolean cut
+                ring_outer_bot_hw = width / 2.0 - rim_width;           // outer_wall - rw
                 ring_outer_bot_hd = depth / 2.0 - rim_width;
-                ring_inner_bot_hw = width / 2.0 - thickness;
-                ring_inner_bot_hd = depth / 2.0 - thickness;
-                ring_outer_top_hw = width / 2.0 - rim_width * ratio;
-                ring_outer_top_hd = depth / 2.0 - rim_width * ratio;
-                ring_inner_top_hw = ring_inner_bot_hw;
+                ring_inner_bot_hw = width / 2.0 - thickness - rim_width; // past inner wall
+                ring_inner_bot_hd = depth / 2.0 - thickness - rim_width;
+                // Trapezoid: shelf edge at midpoint = outer_wall - rw*ratio
+                //   top = 2*(outer_wall - rw*ratio) - (outer_wall - rw)
+                //       = outer_wall - rw*(2*ratio - 1)
+                ring_outer_top_hw = width / 2.0 - rim_width * (2*ratio - 1);
+                ring_outer_top_hd = depth / 2.0 - rim_width * (2*ratio - 1);
+                ring_inner_top_hw = ring_inner_bot_hw;  // inner stays (already past inner wall)
                 ring_inner_top_hd = ring_inner_bot_hd;
             } else {
-                ring_outer_bot_hw = width / 2.0 + rim_width;
+                // Inside: outer extends past outer wall by rw for clean boolean cut
+                ring_outer_bot_hw = width / 2.0 + rim_width;           // outer_wall + rw
                 ring_outer_bot_hd = depth / 2.0 + rim_width;
-                ring_inner_bot_hw = width / 2.0 - thickness + rim_width;
+                ring_inner_bot_hw = width / 2.0 - thickness + rim_width; // inner_wall + shelf
                 ring_inner_bot_hd = depth / 2.0 - thickness + rim_width;
-                ring_outer_top_hw = ring_outer_bot_hw;
+                // Trapezoid: shelf edge at midpoint = inner_wall + rw*ratio
+                //   top = 2*(inner_wall + rw*ratio) - (inner_wall + rw)
+                //       = inner_wall + rw*(2*ratio - 1)
+                ring_outer_top_hw = ring_outer_bot_hw;  // outer stays
                 ring_outer_top_hd = ring_outer_bot_hd;
-                ring_inner_top_hw = width / 2.0 - thickness + rim_width * ratio;
-                ring_inner_top_hd = depth / 2.0 - thickness + rim_width * ratio;
+                ring_inner_top_hw = width / 2.0 - thickness + rim_width * (2*ratio - 1);
+                ring_inner_top_hd = depth / 2.0 - thickness + rim_width * (2*ratio - 1);
             }
 
             TopoDS_Shape ring;

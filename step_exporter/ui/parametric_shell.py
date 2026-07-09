@@ -1387,3 +1387,244 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
 
         self.report({'INFO'}, f"Hole added at cursor position")
         return {'FINISHED'}
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Hole editing / management
+# ═══════════════════════════════════════════════════════════════════
+
+def _parse_hole_list(obj):
+    """Return list of (entry_string, description) for all holes."""
+    wd = obj.get('window_data', '')
+    if not wd:
+        return []
+    entries = [e.strip() for e in wd.split(';') if e.strip()]
+    result = []
+    face_names = {0: "Bottom", 1: "Top", 2: "Left", 3: "Right", 4: "Front", 5: "Back"}
+    for e in entries:
+        parts = e.split(',')
+        if len(parts) < 5:
+            result.append((e, "?"))
+            continue
+        try:
+            cx, cy, cz = float(parts[0]), float(parts[1]), float(parts[2])
+            tc = int(float(parts[4]))
+            face = int(float(parts[-1])) if len(parts) >= 8 else -1
+            fn = face_names.get(face, f"Face{face}")
+            if tc == 1:
+                r = float(parts[3])
+                desc = f"⭕ Round Ø{r*2:.1f}mm @ ({cx:.1f},{cy:.1f},{cz:.1f}) {fn}"
+            elif tc == 2 and len(parts) >= 7:
+                rw = float(parts[3]); rh = float(parts[5]); rcr = float(parts[6])
+                desc = f"▭ RRect {rw:.0f}×{rh:.0f} cr={rcr:.1f} @ {fn}"
+            else:
+                desc = f"Hole @ ({cx:.1f},{cy:.1f},{cz:.1f})"
+            result.append((e, desc))
+        except (ValueError, IndexError):
+            result.append((e, "?"))
+    return result
+
+
+class STEP_EXPORTER_OT_remove_shell_hole(Operator):
+    """Remove a hole from the parametric shell"""
+    bl_idname = "step_exporter.remove_shell_hole"
+    bl_label = "Remove Hole"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    hole_index: bpy.props.IntProperty(default=-1)
+
+    @classmethod
+    def poll(cls, context):
+        obj = context.active_object
+        return obj and obj.get('object_type') == 'parametric_shell' and obj.get('window_data', '')
+
+    def execute(self, context):
+        obj = context.active_object
+        if self.hole_index < 0:
+            return {'CANCELLED'}
+        holes = _parse_hole_list(obj)
+        if self.hole_index >= len(holes):
+            return {'CANCELLED'}
+        entry_to_remove = holes[self.hole_index][0]
+        # Remove entry from window_data
+        wd = obj.get('window_data', '')
+        entries = [e.strip() for e in wd.split(';') if e.strip()]
+        entries = [e for e in entries if e != entry_to_remove]
+        obj['window_data'] = ';'.join(entries)
+        if not entries:
+            obj['window_data_local'] = False
+
+        # Rebuild mesh: re-apply remaining holes
+        _rebuild_shell_mesh(obj)
+        self.report({'INFO'}, f"Hole removed")
+        return {'FINISHED'}
+
+
+class STEP_EXPORTER_OT_clear_shell_holes(Operator):
+    """Remove all holes from the parametric shell"""
+    bl_idname = "step_exporter.clear_shell_holes"
+    bl_label = "Clear All Holes"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        obj = context.active_object
+        return obj and obj.get('object_type') == 'parametric_shell' and obj.get('window_data', '')
+
+    def execute(self, context):
+        obj = context.active_object
+        obj['window_data'] = ''
+        obj['window_data_local'] = False
+        _rebuild_shell_mesh(obj)
+        self.report({'INFO'}, "All holes cleared")
+        return {'FINISHED'}
+
+
+class STEP_EXPORTER_PT_shell_holes(bpy.types.Panel):
+    """Panel for managing shell holes"""
+    bl_label = "Shell Holes"
+    bl_idname = "STEP_EXPORTER_PT_shell_holes"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = "STEP"
+    bl_options = {'DEFAULT_CLOSED'}
+
+    @classmethod
+    def poll(cls, context):
+        obj = context.active_object
+        return obj and obj.get('object_type') == 'parametric_shell'
+
+    def draw(self, context):
+        layout = self.layout
+        obj = context.active_object
+        holes = _parse_hole_list(obj)
+
+        if not holes:
+            layout.label(text="No holes", icon='DOT')
+            return
+
+        layout.label(text=f"{len(holes)} hole(s):")
+        box = layout.box()
+        for i, (entry, desc) in enumerate(holes):
+            row = box.row(align=True)
+            row.label(text=f"[{i+1}] {desc}")
+            op = row.operator("step_exporter.remove_shell_hole", text="", icon='X')
+            op.hole_index = i
+
+        layout.separator()
+        layout.operator("step_exporter.clear_shell_holes", text="Clear All Holes", icon='TRASH')
+
+
+def _rebuild_shell_mesh(obj):
+    """Rebuild the shell mesh from stored params and re-apply window_data holes."""
+    import bmesh, mathutils
+    w = obj.get('width', 100.0)
+    d = obj.get('depth', 80.0)
+    h = obj.get('height', 50.0)
+    t = obj.get('wall_thickness', 2.0)
+    cr = obj.get('corner_radius', 0.0)
+    corner_type = obj.get('corner_type', 'square')
+    unit = obj.get('unit', 'mm')
+    rim_type = obj.get('rim_type', 'none')
+    rim_width = obj.get('rim_width', 1.0)
+    rim_height = obj.get('rim_height', 1.0)
+    rim_shape = obj.get('rim_shape', 'rect')
+    rim_top_ratio = obj.get('rim_top_ratio', 100.0)
+    bf = obj.get('bottom_fillet', 0.0)
+    curve_ratio = obj.get('curve_ratio', 50.0)
+    wd = obj.get('window_data', '')
+    wd_local = obj.get('window_data_local', False)
+
+    # Remember selection, then create fresh shell via operator
+    obj_name = obj.name
+
+    # Use bpy.ops to create a fresh shell with stored parameters
+    bpy.ops.step_exporter.create_parametric_shell(
+        'EXEC_DEFAULT',
+        unit=unit, corner_type=corner_type,
+        width=w, depth=d, height=h, thickness=t,
+        corner_radius=cr, bottom_fillet=bf,
+        rim_type=rim_type, rim_width=rim_width, rim_height=rim_height,
+        rim_shape=rim_shape, rim_top_ratio=rim_top_ratio,
+        curve_ratio=curve_ratio, debug_keep_cutters=False)
+
+    # The new shell is now the active object
+    new_obj = bpy.context.active_object
+
+    # Swap mesh data: old object gets clean mesh, new object gets old mesh
+    old_mesh = obj.data
+    obj.data = new_obj.data
+    new_obj.data = old_mesh
+
+    # Delete the new object (now holding the old mesh)
+    bpy.data.objects.remove(new_obj, do_unlink=True)
+
+    # Restore window_data and name
+    obj['window_data'] = wd
+    obj['window_data_local'] = wd_local
+    obj.name = obj_name
+
+    # Ensure all creation params are preserved on the original object
+    for key in ('width', 'depth', 'height', 'wall_thickness', 'corner_type',
+                'corner_radius', 'object_type', 'unit', 'rim_type', 'rim_width',
+                'rim_height', 'rim_shape', 'rim_top_ratio', 'bottom_fillet', 'curve_ratio'):
+        val = obj.get(key)
+        if val is not None:
+            obj[key] = val
+
+    # Select original object
+    bpy.context.view_layer.objects.active = obj
+    obj.select_set(True)
+
+    # Re-apply holes from window_data
+    if not wd:
+        return
+    entries = [e.strip() for e in wd.split(';') if e.strip()]
+    S = 0.001 if unit == 'mm' else 1.0
+    ws, ds, hs, ts = w * S, d * S, h * S, t * S
+    hw, hd = ws / 2, ds / 2
+    thickness = ts
+
+    for entry in entries:
+        parts = entry.split(',')
+        if len(parts) < 5:
+            continue
+        try:
+            cx = float(parts[0]); cy = float(parts[1]); cz = float(parts[2])
+            tc = int(float(parts[4]))
+            face = int(float(parts[-1])) if len(parts) >= 8 else -1
+        except (ValueError, IndexError):
+            continue
+
+        if tc == 1:
+            radius = float(parts[3]) * S
+            cutter_depth = thickness * 4.0
+            bpy.ops.mesh.primitive_cylinder_add(
+                vertices=64, radius=radius, depth=cutter_depth, location=(0, 0, 0))
+            cutter = bpy.context.active_object
+            cutter.name = "Hole_R_rebuild"
+            if face in (2, 3):
+                cutter.rotation_euler = (0, math.pi / 2, 0)
+            elif face in (4, 5):
+                cutter.rotation_euler = (math.pi / 2, 0, 0)
+            cutter.location = (cx * S, cy * S, cz * S)
+        elif tc == 2 and len(parts) >= 7:
+            rw_hole = float(parts[3]) * S
+            rh_hole = float(parts[5]) * S
+            rcr_hole = float(parts[6]) * S
+            cutter_depth = thickness * 4.0
+            cutter = STEP_EXPORTER_OT_create_parametric_shell._make_rrect_cutter(
+                None, rw_hole, rh_hole, rcr_hole, cutter_depth,
+                cx * S, cy * S, cz * S, hw, hd, thickness)
+        else:
+            continue
+
+        bpy.context.view_layer.objects.active = obj
+        mod = obj.modifiers.new(name="HoleRebuild", type='BOOLEAN')
+        mod.object = cutter
+        mod.operation = 'DIFFERENCE'
+        mod.solver = 'FAST'
+        cutter.hide_viewport = True
+        bpy.context.view_layer.update()
+        bpy.ops.object.modifier_apply(modifier="HoleRebuild")
+        bpy.data.objects.remove(cutter, do_unlink=True)

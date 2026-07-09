@@ -86,6 +86,9 @@ from .ui import (
     STEP_EXPORTER_OT_create_parametric_cylinder,
     STEP_EXPORTER_OT_create_parametric_shell,
     STEP_EXPORTER_OT_add_hole_to_shell,
+    STEP_EXPORTER_OT_remove_shell_hole,
+    STEP_EXPORTER_OT_clear_shell_holes,
+    STEP_EXPORTER_PT_shell_holes,
     STEP_EXPORTER_PT_cylinder_panel, menu_func_export_enhanced,
     _generate_parametric_cylinder, _apply_edge_treatment,
     _create_holes, _apply_hole_fillet, _on_hole_param_change, _boolean_difference,
@@ -104,6 +107,9 @@ _classes = (
     STEP_EXPORTER_OT_create_parametric_cylinder,
     STEP_EXPORTER_OT_create_parametric_shell,
     STEP_EXPORTER_OT_add_hole_to_shell,
+    STEP_EXPORTER_OT_remove_shell_hole,
+    STEP_EXPORTER_OT_clear_shell_holes,
+    STEP_EXPORTER_PT_shell_holes,
     STEP_EXPORTER_PT_cylinder_panel,
 )
 

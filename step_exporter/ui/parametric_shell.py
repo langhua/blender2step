@@ -102,7 +102,7 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
                 self.bottom_fillet = 0.1
 
     def invoke(self, context, event):
-        return context.window_manager.invoke_props_dialog(self, width=320)
+        return context.window_manager.invoke_props_dialog(self, width=360)
 
     def draw(self, context):
         layout = self.layout
@@ -130,6 +130,7 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
             layout.prop(self, 'rim_shape')
             if self.rim_shape == 'trapezoid':
                 layout.prop(self, 'rim_top_ratio')
+        layout.separator()
         layout.separator()
         layout.prop(self, 'debug_keep_cutters')
 
@@ -189,7 +190,62 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         self.report({'INFO'}, f"Shell: {w:.0f}×{d:.0f}×{h:.0f}{unit_label}, wall={t:.1f}{unit_label}")
         return {'FINISHED'}
 
-    # ── Boolean shell builder ─────────────────────────────
+    def _make_rrect_cutter(self, w, h, cr, depth, px, py, pz, shell_hw, shell_hd, t):
+        """Create a rounded rectangle cutter (extruded profile)."""
+        import math
+        bm_r = bmesh.new()
+        hw_r, hh_r = w / 2, h / 2
+        r = max(cr, 0.01)
+
+        # Build profile in XY plane (CCW, single pass, no duplicates)
+        seg = 8
+        pts = []
+        def add_arc(cx, cy, a0, a1):
+            for i in range(seg):
+                a = a0 + (a1 - a0) * i / seg
+                pts.append((cx + r * math.cos(a), cy + r * math.sin(a)))
+        def add_flat(x0, y0, x1, y1):
+            pts.append((x0, y0))
+
+        # Right flat, TR arc, Top flat, TL arc, Left flat, BL arc, Bottom flat, BR arc
+        add_flat(hw_r, -hh_r + r, hw_r, hh_r - r)
+        add_arc(hw_r - r, hh_r - r, 0, math.pi / 2)
+        add_flat(hw_r - r, hh_r, -hw_r + r, hh_r)
+        add_arc(-hw_r + r, hh_r - r, math.pi / 2, math.pi)
+        add_flat(-hw_r, hh_r - r, -hw_r, -hh_r + r)
+        add_arc(-hw_r + r, -hh_r + r, math.pi, 3 * math.pi / 2)
+        add_flat(-hw_r + r, -hh_r, hw_r - r, -hh_r)
+        add_arc(hw_r - r, -hh_r + r, 3 * math.pi / 2, 2 * math.pi)
+
+        # Extrude profile along Z
+        prof_verts = [bm_r.verts.new((x, y, -depth / 2)) for x, y in pts]
+        top_verts = [bm_r.verts.new((x, y, depth / 2)) for x, y in pts]
+        bm_r.verts.ensure_lookup_table()
+        nv = len(pts)
+        # Side faces
+        for i in range(nv):
+            j = (i + 1) % nv
+            bm_r.faces.new([prof_verts[i], prof_verts[j], top_verts[j], top_verts[i]])
+        # Front face
+        bm_r.faces.new(list(prof_verts))
+        # Back face (reversed for outward normal)
+        bm_r.faces.new(list(reversed(top_verts)))
+
+        bm_r.normal_update()
+        cutter = self._bm_to_object(bm_r, "RRCutter")
+
+        # Determine wall direction and rotate
+        near_right = abs(px - shell_hw) < t * 1.5
+        near_left = abs(px + shell_hw) < t * 1.5
+        near_front = abs(py - shell_hd) < t * 1.5
+        near_back = abs(py + shell_hd) < t * 1.5
+
+        if near_right or near_left:
+            cutter.rotation_euler = (0, math.pi / 2, 0)
+        elif near_front or near_back:
+            cutter.rotation_euler = (math.pi / 2, 0, 0)
+        cutter.location = (px, py, pz - depth / 2)
+        return cutter
 
     def _make_solid_box(self, w, d, h, cr):
         """Create a solid rounded box BMesh, centered at origin."""
@@ -1091,3 +1147,174 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
     # ── Helpers ────────────────────────────────────────────
 
     # (Bottom fillet applied via Bevel modifier in execute())
+
+
+# ── Add Hole to Shell (post-creation step) ────────────────
+
+class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
+    """Add a hole/window to an existing parametric shell at the 3D cursor position."""
+    bl_idname = "step_exporter.add_hole_to_shell"
+    bl_label = "Add Hole to Shell"
+    bl_options = {'REGISTER', 'UNDO'}
+    bl_description = "Add a hole at the 3D cursor position (Shift+RMB to place)"
+
+    hole_type: EnumProperty(
+        name="Type",
+        items=[('round', "Round", "Circular through-hole"),
+               ('rrect', "Rounded Rect", "Rounded rectangle through-hole")],
+        default='round',
+    )
+    hole_radius: FloatProperty(name="Radius", default=5.0, min=0.1, max=500.0)
+    hole_width: FloatProperty(name="Width", default=10.0, min=0.1, max=500.0)
+    hole_height: FloatProperty(name="Height", default=8.0, min=0.1, max=500.0)
+    hole_cr: FloatProperty(name="Corner R", default=2.0, min=0.0, max=500.0)
+
+    @classmethod
+    def poll(cls, context):
+        obj = context.active_object
+        return obj and obj.type == 'MESH' and obj.get('object_type') == 'parametric_shell'
+
+    def invoke(self, context, event):
+        # Pre-fill from 3D cursor
+        cursor = context.scene.cursor.location
+        self.cursor_pos = (cursor.x, cursor.y, cursor.z)
+        return context.window_manager.invoke_props_dialog(self, width=340)
+
+    def draw(self, context):
+        layout = self.layout
+        obj = context.active_object
+
+        # ── Shell info ──
+        if obj and obj.get('object_type') == 'parametric_shell':
+            w = obj.get('width', 100.0)
+            d = obj.get('depth', 80.0)
+            h = obj.get('height', 50.0)
+            t = obj.get('wall_thickness', 2.0)
+            S = 0.001 if obj.get('unit', 'mm') == 'mm' else 1.0
+            ws, ds, hs = w * S, d * S, h * S
+            cursor = context.scene.cursor.location
+            px, py, pz = cursor.x, cursor.y, cursor.z
+
+            # Determine which wall / face the cursor is near
+            dist_right = abs(px - ws/2)
+            dist_left = abs(px + ws/2)
+            dist_front = abs(py - ds/2)
+            dist_back = abs(py + ds/2)
+            dist_bottom = abs(pz)
+            dist_top = abs(pz - hs)
+            min_wall = min(dist_right, dist_left, dist_front, dist_back, dist_bottom, dist_top)
+
+            box = layout.box()
+            box.label(text="Position", icon='ORIENTATION_LOCAL')
+            box.label(text=f"Cursor: X={px*1000:.1f} Y={py*1000:.1f} Z={pz*1000:.1f} mm")
+            # Wall identification
+            wall_names = {
+                min_wall == dist_right: "Right wall (+X)",
+                min_wall == dist_left: "Left wall (-X)",
+                min_wall == dist_front: "Front wall (+Y)",
+                min_wall == dist_back: "Back wall (-Y)",
+                min_wall == dist_bottom: "Bottom face",
+                min_wall == dist_top: "Top rim (may be open)",
+            }
+            wall_name = wall_names.get(True, "Unknown")
+            box.label(text=f"Nearest: {wall_name}")
+            # Distance from shell edges
+            if min_wall in (dist_right, dist_left):
+                edge_y = min(abs(py + ds/2), abs(py - ds/2)) * 1000
+                edge_z_bot = pz * 1000
+                edge_z_top = (hs - pz) * 1000
+                box.label(text=f"From Y-edge: {edge_y:.1f}mm  From bottom: {edge_z_bot:.1f}mm  From top: {edge_z_top:.1f}mm")
+                box.label(text=f"Wall: {ws*1000:.0f}×{hs*1000:.0f}mm, thickness={t:.1f}mm")
+            elif min_wall in (dist_front, dist_back):
+                edge_x = min(abs(px + ws/2), abs(px - ws/2)) * 1000
+                edge_z_bot = pz * 1000
+                edge_z_top = (hs - pz) * 1000
+                box.label(text=f"From X-edge: {edge_x:.1f}mm  From bottom: {edge_z_bot:.1f}mm  From top: {edge_z_top:.1f}mm")
+                box.label(text=f"Wall: {ds*1000:.0f}×{hs*1000:.0f}mm, thickness={t:.1f}mm")
+            else:
+                box.label(text=f"Shell: {w:.0f}×{d:.0f}×{h:.0f}mm, wall={t:.1f}mm")
+
+        # ── Hole config ──
+        layout.separator()
+        layout.prop(self, 'hole_type')
+        if self.hole_type == 'round':
+            layout.prop(self, 'hole_radius')
+            layout.label(text=f"  → Circular through-hole, Ø={self.hole_radius*2:.1f}mm")
+        else:
+            layout.prop(self, 'hole_width')
+            layout.prop(self, 'hole_height')
+            layout.prop(self, 'hole_cr')
+            layout.label(text=f"  → Rounded rect {self.hole_width:.1f}×{self.hole_height:.1f}mm, cr={self.hole_cr:.1f}mm")
+
+    def execute(self, context):
+        import math
+        obj = context.active_object
+        if not obj or obj.get('object_type') != 'parametric_shell':
+            self.report({'ERROR'}, "Select a parametric shell first")
+            return {'CANCELLED'}
+
+        w = obj.get('width', 100.0)
+        d = obj.get('depth', 80.0)
+        t = obj.get('wall_thickness', 2.0)
+        S = 0.001 if obj.get('unit', 'mm') == 'mm' else 1.0
+
+        # 3D cursor position in Blender units (m)
+        cursor = context.scene.cursor.location
+        px, py, pz = cursor.x, cursor.y, cursor.z
+
+        # Hole dimensions in Blender units
+        extra = t * S * 1.5
+        hw, hd = w * S / 2, d * S / 2
+        thickness = t * S
+
+        bpy.context.view_layer.objects.active = obj
+        if bpy.context.mode != 'OBJECT':
+            bpy.ops.object.mode_set(mode='OBJECT')
+
+        if self.hole_type == 'round':
+            rh = self.hole_radius * S
+            cutter_depth = thickness + extra * 2
+            bpy.ops.mesh.primitive_cylinder_add(
+                vertices=64, radius=rh, depth=cutter_depth, location=(0, 0, 0))
+            cutter = bpy.context.active_object
+            cutter.name = "Hole_R"
+            # Orient to nearest wall
+            dists = [abs(px - hw), abs(px + hw), abs(py - hd), abs(py + hd)]
+            min_i = dists.index(min(dists))
+            if min_i <= 1:
+                cutter.rotation_euler = (0, math.pi / 2, 0)
+            else:
+                cutter.rotation_euler = (math.pi / 2, 0, 0)
+            cutter.location = (px, py, pz)
+            # Store in window_data
+            entry = f"{px/S*1000:.3f},{py/S*1000:.3f},{pz/S*1000:.3f},{self.hole_radius:.3f},1"
+        else:
+            rh_w = self.hole_width * S / 2
+            rh_h = self.hole_height * S / 2
+            hcr = self.hole_cr * S
+            # Build rrect cutter using the shell class's method
+            cutter = STEP_EXPORTER_OT_create_parametric_shell._make_rrect_cutter(
+                None, rh_w * 2, rh_h * 2, hcr, thickness + extra * 2,
+                px, py, pz, hw, hd, thickness)
+            if cutter is None:
+                self.report({'ERROR'}, "Failed to create cutter")
+                return {'CANCELLED'}
+            cutter.name = "Hole_RR"
+            entry = f"{px/S*1000:.3f},{py/S*1000:.3f},{pz/S*1000:.3f},{self.hole_width:.3f},{self.hole_height:.3f},2,{self.hole_cr:.3f}"
+
+        # Apply boolean
+        mod = obj.modifiers.new(name="HoleBool", type='BOOLEAN')
+        mod.object = cutter
+        mod.operation = 'DIFFERENCE'
+        mod.solver = 'FAST'
+        cutter.hide_viewport = True
+        bpy.context.view_layer.update()
+        bpy.ops.object.modifier_apply(modifier="HoleBool")
+        bpy.data.objects.remove(cutter, do_unlink=True)
+
+        # Append to window_data
+        existing = obj.get('window_data', '')
+        obj['window_data'] = (existing + ';' + entry) if existing else entry
+
+        self.report({'INFO'}, f"Hole added at cursor position")
+        return {'FINISHED'}

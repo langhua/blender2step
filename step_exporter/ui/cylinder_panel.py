@@ -16,6 +16,8 @@ class STEP_EXPORTER_PT_cylinder_panel(Panel):
         layout = self.layout
         layout.operator("step_exporter.create_parametric_cylinder", text=_t("Generate Cylinder"), icon='MESH_CYLINDER')
         layout.operator("step_exporter.create_parametric_shell", text=_t("Generate Shell"), icon='MESH_CUBE')
+        layout.separator()
+        layout.operator("step_exporter.add_hole_to_shell", text=_t("Add Hole to Shell"), icon='MOD_BOOLEAN')
 
 
 # ====================== 注册与注销 ======================

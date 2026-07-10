@@ -1556,9 +1556,11 @@ class STEP_EXPORTER_PT_shell_holes(bpy.types.Panel):
     """Panel for managing shell holes"""
     bl_label = "Shell Holes"
     bl_idname = "STEP_EXPORTER_PT_shell_holes"
+    bl_parent_id = "STEP_EXPORTER_PT_main_panel"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
-    bl_category = "STEP"
+    bl_category = "STEP Export"
+    bl_order = 1
     bl_options = {'DEFAULT_CLOSED'}
 
     @classmethod

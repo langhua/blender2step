@@ -16,6 +16,7 @@
 #include <BRepAlgoAPI_Cut.hxx>
 #include <BRepAlgoAPI_Fuse.hxx>
 #include <BRepFilletAPI_MakeFillet.hxx>
+#include <BRepFilletAPI_MakeChamfer.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeWire.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
@@ -34,6 +35,9 @@
 #include <TopExp.hxx>
 #include <BRep_Tool.hxx>
 #include <BRepAdaptor_Curve.hxx>
+#include <BRepAdaptor_Surface.hxx>
+#include <BRepBndLib.hxx>
+#include <Bnd_Box.hxx>
 #include <TopExp_Explorer.hxx>
 #include <BRepCheck_Analyzer.hxx>
 #include <BRepGProp.hxx>
@@ -3215,6 +3219,8 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
             setvbuf(stdout, nullptr, _IONBF, 0);
         }
     }
+    // Use stderr for critical diagnostics (always visible, not redirected)
+    FILE* diag = enable_logging ? log_file : stdout;
 
     try {
         TopoDS_Shape shape = create_parametric_shell_solid(width, depth, height,
@@ -3246,6 +3252,8 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
             std::cout << "[STEP Exporter] Hole cutting: window_data='" << window_data << "'" << std::endl;
             std::string wd(window_data);
             std::vector<TopoDS_Shape> cutters;
+            struct HoleFilletInfo { double cx, cy, cz, r, fr; int type; double w, h; int fc; double thick; };
+            std::vector<HoleFilletInfo> holeFillets;
             double hh = height / 2.0;  // half-height for z-axis centering
 
             size_t pos = 0, next = 0;
@@ -3257,15 +3265,55 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                 // Parse: cx,cy,cz, r_or_w, type_code [, extra1, extra2, face_code]
                 // Round:  cx,cy,cz, r,       1 [, face]           → 5-6 fields
                 // Rrect:  cx,cy,cz, w,       2,    h,    cr, face → 8 fields
+                // Extended: ...fillet_r, fillet_type at fields[6],[7] (round) or [8],[9] (rrect)
                 double cx, cy, cz, r_or_w, type_code, extra1 = 0.0, extra2 = 0.0;
-                double face_code = -1;
+                double face_code = -1, hole_fr = 0.0;
+                int hole_ft = 2;  // default: both
                 int parsed = sscanf_s(entry.c_str(), "%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf",
                                       &cx, &cy, &cz, &r_or_w, &type_code, &extra1, &extra2, &face_code);
+                // For extended format (8+ fields), sscanf reads fillet_r as face_code for rrect.
+                // Manually extract the real face_code (last field), fillet_r, and fillet_type.
+                if (parsed >= 5) {
+                    // Count fields
+                    int fieldCount = 1;
+                    for (size_t i = 0; i < entry.length(); i++) { if (entry[i] == ',') fieldCount++; }
+                    if (fieldCount >= 8) {
+                        // Get last field (face_code)
+                        size_t lastComma = entry.rfind(',');
+                        if (lastComma != std::string::npos) {
+                            std::string lastField = entry.substr(lastComma + 1);
+                            face_code = atof(lastField.c_str());
+                        }
+                        // Get fillet_r field: index 5 for round, index 7 for rrect
+                        // Get fillet_type field: index 6 for round, index 8 for rrect
+                        int frIdx = (fabs(type_code - 1.0) < 1e-6) ? 5 : 7;
+                        int ftIdx = frIdx + 1;  // fillet_type is right after fillet_r
+                        int fc = 0; size_t frPos = 0, ftPos = 0;
+                        for (size_t i = 0; i < entry.length(); i++) {
+                            if (entry[i] == ',') {
+                                fc++;
+                                if (fc == frIdx) { frPos = i + 1; }
+                                if (fc == ftIdx) { ftPos = i + 1; break; }
+                            }
+                        }
+                        if (frPos > 0) {
+                            size_t frEnd = entry.find(',', frPos);
+                            hole_fr = atof(entry.substr(frPos, frEnd != std::string::npos ? frEnd - frPos : std::string::npos).c_str());
+                        }
+                        if (ftPos > 0) {
+                            size_t ftEnd = entry.find(',', ftPos);
+                            hole_ft = atoi(entry.substr(ftPos, ftEnd != std::string::npos ? ftEnd - ftPos : std::string::npos).c_str());
+                        }
+                    } else if (parsed == 6 && fabs(type_code - 1.0) < 1e-6) {
+                        // Old round format: face is 6th field
+                        face_code = extra1;
+                    }
+                }
 
                 // Type 1: Circular hole
                 if (parsed >= 5 && fabs(type_code - 1.0) < 1e-6) {
                     double hole_r = r_or_w;
-                    if (parsed >= 6) face_code = extra1;  // face is the 6th field
+                    if (parsed == 6) face_code = extra1;  // old format: face is 6th field
                     double half_w = width / 2.0, half_d = depth / 2.0;
                     // Cylinder length: just enough to cut through one wall (not span entire shell!)
                     double cyl_len = thickness * 4.0;
@@ -3318,6 +3366,9 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                     BRepPrimAPI_MakeCylinder cm(ax, hole_r, cyl_len);
                     if (!cm.Shape().IsNull()) {
                         cutters.push_back(cm.Solid());
+                        if (hole_fr > 0.0001) {
+                            holeFillets.push_back({cx, cy, cz, hole_r, hole_fr, hole_ft, 0, 0, (int)face_code, thickness});
+                        }
                     }
                 }
                 else if (parsed >= 7 && fabs(type_code - 2.0) < 1e-6) {
@@ -3367,6 +3418,9 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                         }
                         if (ec > 0) { fm.Build(); if (fm.IsDone()) hs = fm.Shape(); else std::cout << "[STEP Exporter]   fillet FAILED" << std::endl; }
                         cutters.push_back(hs);
+                        if (hole_fr > 0.0001) {
+                            holeFillets.push_back({cx, cy, cz, 0, hole_fr, hole_ft, rw, rh, (int)face_code, thickness});
+                        }
                         std::cout << "[STEP Exporter] Hole cutter: rounded rect "
                                   << rw << "x" << rh << " r=" << rcr
                                   << " at (" << cx << "," << cy << "," << cz << ") face=" << face_code
@@ -3392,6 +3446,239 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                 } else {
                     std::cerr << "[STEP Exporter] Warning: BRepAlgoAPI_Cut failed for holes" << std::endl;
                 }
+            }
+
+            // Apply hole edge fillets (after boolean cut)
+            // Extract the first solid from the shape (BRepFilletAPI_MakeFillet needs a solid)
+            TopoDS_Solid resultSolid;
+            for (TopExp_Explorer sex(shape, TopAbs_SOLID); sex.More(); sex.Next()) {
+                resultSolid = TopoDS::Solid(sex.Current());
+                break;
+            }
+            // Compute overall shape bbox for outer/inner face detection
+            Bnd_Box shapeBox;
+            BRepBndLib::Add(shape, shapeBox);
+            double sx1,sy1,sz1,sx2,sy2,sz2;
+            shapeBox.Get(sx1,sy1,sz1,sx2,sy2,sz2);
+            fprintf(stderr, "[STEP Exporter] Checking hole fillets: count=%d hasSolid=%d\n",
+                    (int)holeFillets.size(), (int)(!resultSolid.IsNull()));
+            if (!holeFillets.empty() && !resultSolid.IsNull()) {
+                int filletCount = 0;
+                TopoDS_Shape workingShape = resultSolid;
+                for (const auto& hf : holeFillets) {
+                    if (hf.fr <= 0.0001) continue;
+                    int totalWires = 0, ec = 0;
+                    double dTol = hf.thick * 0.55;
+
+                    // Phase 1: Collect and fillet OUTER edges first (always works)
+                    std::vector<TopoDS_Edge> outerEdges;
+                    if (hf.type == 0 || hf.type == 2) {
+                        for (TopExp_Explorer fe(workingShape, TopAbs_FACE); fe.More(); fe.Next()) {
+                            TopoDS_Face face = TopoDS::Face(fe.Current());
+                            Bnd_Box fb;
+                            BRepBndLib::Add(face, fb);
+                            if (fb.IsVoid()) continue;
+                            double x1,y1,z1,x2,y2,z2;
+                            fb.Get(x1,y1,z1,x2,y2,z2);
+                            bool onFace = false;
+                            if (hf.fc == 0 || hf.fc == 1) {
+                                onFace = (z1 - 3.0 <= hf.cz && hf.cz <= z2 + 3.0);
+                            } else if (hf.fc == 2 || hf.fc == 3) {
+                                onFace = (x1 - 3.0 <= hf.cx && hf.cx <= x2 + 3.0);
+                            } else {
+                                onFace = (y1 - 3.0 <= hf.cy && hf.cy <= y2 + 3.0);
+                            }
+                            if (!onFace) continue;
+                            bool isOuter = false;
+                            if (hf.fc == 0) isOuter = (fabs(z1 - sz1) < thickness * 0.6);
+                            else if (hf.fc == 1) isOuter = (fabs(z2 - sz2) < thickness * 0.6);
+                            else if (hf.fc == 2) isOuter = (fabs(x1 - sx1) < thickness * 0.6);
+                            else if (hf.fc == 3) isOuter = (fabs(x2 - sx2) < thickness * 0.6);
+                            else if (hf.fc == 4) isOuter = (fabs(y1 - sy1) < thickness * 0.6);
+                            else isOuter = (fabs(y2 - sy2) < thickness * 0.6);
+                            if (!isOuter) continue;
+                            double bestArea = 1e30;
+                            TopoDS_Wire bestWire;
+                            for (TopExp_Explorer we(face, TopAbs_WIRE); we.More(); we.Next()) {
+                                TopoDS_Wire wire = TopoDS::Wire(we.Current());
+                                Bnd_Box wb;
+                                BRepBndLib::Add(wire, wb);
+                                if (wb.IsVoid()) continue;
+                                wb.Get(x1,y1,z1,x2,y2,z2);
+                                bool contains = false;
+                                if (hf.fc == 0 || hf.fc == 1) {
+                                    contains = (hf.cx >= x1-dTol && hf.cx <= x2+dTol &&
+                                               hf.cy >= y1-dTol && hf.cy <= y2+dTol);
+                                } else if (hf.fc == 2 || hf.fc == 3) {
+                                    contains = (hf.cy >= y1-dTol && hf.cy <= y2+dTol &&
+                                               hf.cz >= z1-dTol && hf.cz <= z2+dTol);
+                                } else {
+                                    contains = (hf.cx >= x1-dTol && hf.cx <= x2+dTol &&
+                                               hf.cz >= z1-dTol && hf.cz <= z2+dTol);
+                                }
+                                if (contains) {
+                                    double area = (x2-x1)*(y2-y1);
+                                    if (area < bestArea) { bestArea = area; bestWire = wire; }
+                                }
+                            }
+                            if (!bestWire.IsNull()) {
+                                for (TopExp_Explorer ee(bestWire, TopAbs_EDGE); ee.More(); ee.Next()) {
+                                    outerEdges.push_back(TopoDS::Edge(ee.Current()));
+                                }
+                            }
+                        }
+                        if (!outerEdges.empty()) {
+                            try {
+                                BRepFilletAPI_MakeFillet fm(workingShape);
+                                int fec = 0;
+                                for (const auto& e : outerEdges) { fm.Add(hf.fr, e); fec++; }
+                                fm.Build();
+                                workingShape = fm.Shape();
+                                totalWires++; ec += fec;
+                            } catch (...) {
+                                fprintf(stderr, "[STEP Exporter] Outer fillet EXCEPTION fc=%d\n", hf.fc);
+                            }
+                        }
+                    }
+
+                    // Phase 2: Collect and fillet INNER edges on updated shape
+                    if (hf.type == 1 || hf.type == 2) {
+                        std::vector<TopoDS_Edge> innerEdges;
+                        TopoDS_Face innerFace;  // saved for chamfer fallback
+                        for (TopExp_Explorer fe(workingShape, TopAbs_FACE); fe.More(); fe.Next()) {
+                            TopoDS_Face face = TopoDS::Face(fe.Current());
+                            Bnd_Box fb;
+                            BRepBndLib::Add(face, fb);
+                            if (fb.IsVoid()) continue;
+                            double x1,y1,z1,x2,y2,z2;
+                            fb.Get(x1,y1,z1,x2,y2,z2);
+                            bool onFace = false;
+                            if (hf.fc == 0 || hf.fc == 1) {
+                                onFace = (z1 - 3.0 <= hf.cz && hf.cz <= z2 + 3.0);
+                            } else if (hf.fc == 2 || hf.fc == 3) {
+                                onFace = (x1 - 3.0 <= hf.cx && hf.cx <= x2 + 3.0);
+                            } else {
+                                onFace = (y1 - 3.0 <= hf.cy && hf.cy <= y2 + 3.0);
+                            }
+                            if (!onFace) continue;
+                            bool isOuter = false;
+                            if (hf.fc == 0) isOuter = (fabs(z1 - sz1) < thickness * 0.6);
+                            else if (hf.fc == 1) isOuter = (fabs(z2 - sz2) < thickness * 0.6);
+                            else if (hf.fc == 2) isOuter = (fabs(x1 - sx1) < thickness * 0.6);
+                            else if (hf.fc == 3) isOuter = (fabs(x2 - sx2) < thickness * 0.6);
+                            else if (hf.fc == 4) isOuter = (fabs(y1 - sy1) < thickness * 0.6);
+                            else isOuter = (fabs(y2 - sy2) < thickness * 0.6);
+                            if (isOuter) continue;
+
+                            double bestArea = 1e30;
+                            TopoDS_Wire bestWire;
+                            for (TopExp_Explorer we(face, TopAbs_WIRE); we.More(); we.Next()) {
+                                TopoDS_Wire wire = TopoDS::Wire(we.Current());
+                                Bnd_Box wb;
+                                BRepBndLib::Add(wire, wb);
+                                if (wb.IsVoid()) continue;
+                                wb.Get(x1,y1,z1,x2,y2,z2);
+                                bool contains = false;
+                                if (hf.fc == 0 || hf.fc == 1) {
+                                    contains = (hf.cx >= x1-dTol && hf.cx <= x2+dTol &&
+                                               hf.cy >= y1-dTol && hf.cy <= y2+dTol);
+                                } else if (hf.fc == 2 || hf.fc == 3) {
+                                    contains = (hf.cy >= y1-dTol && hf.cy <= y2+dTol &&
+                                               hf.cz >= z1-dTol && hf.cz <= z2+dTol);
+                                } else {
+                                    contains = (hf.cx >= x1-dTol && hf.cx <= x2+dTol &&
+                                               hf.cz >= z1-dTol && hf.cz <= z2+dTol);
+                                }
+                                if (contains) {
+                                    double area = (x2-x1)*(y2-y1);
+                                    if (area < bestArea) { bestArea = area; bestWire = wire; }
+                                }
+                            }
+                            if (!bestWire.IsNull()) {
+                                innerFace = face;
+                                for (TopExp_Explorer ee(bestWire, TopAbs_EDGE); ee.More(); ee.Next()) {
+                                    innerEdges.push_back(TopoDS::Edge(ee.Current()));
+                                }
+                            } else {
+                                // Face-sharing fallback for inner cavity face
+                                innerFace = face;
+                                TopTools_IndexedDataMapOfShapeListOfShape edgeFaceMap;
+                                TopExp::MapShapesAndAncestors(workingShape, TopAbs_EDGE, TopAbs_FACE, edgeFaceMap);
+                                TopTools_MapOfShape holeSides;
+                                for (TopExp_Explorer sf(workingShape, TopAbs_FACE); sf.More(); sf.Next()) {
+                                    TopoDS_Face sfFace = TopoDS::Face(sf.Current());
+                                    Bnd_Box sfb;
+                                    BRepBndLib::Add(sfFace, sfb);
+                                    if (sfb.IsVoid()) continue;
+                                    double sx1,sy1,sz1,sx2,sy2,sz2;
+                                    sfb.Get(sx1,sy1,sz1,sx2,sy2,sz2);
+                                    bool nearHole = false;
+                                    if (hf.fc == 0 || hf.fc == 1) {
+                                        nearHole = (hf.cx >= sx1-3 && hf.cx <= sx2+3 && hf.cy >= sy1-3 && hf.cy <= sy2+3);
+                                    } else if (hf.fc == 2 || hf.fc == 3) {
+                                        nearHole = (hf.cy >= sy1-3 && hf.cy <= sy2+3 && hf.cz >= sz1-3 && hf.cz <= sz2+3);
+                                    } else {
+                                        nearHole = (hf.cx >= sx1-3 && hf.cx <= sx2+3 && hf.cz >= sz1-3 && hf.cz <= sz2+3);
+                                    }
+                                    if (!nearHole) continue;
+                                    BRepAdaptor_Surface sSurf(sfFace);
+                                    if (sSurf.GetType() == GeomAbs_Plane) {
+                                        gp_Vec sNorm = sSurf.Plane().Axis().Direction();
+                                        int wallAxis = (hf.fc == 0 || hf.fc == 1) ? 2 : (hf.fc == 2 || hf.fc == 3) ? 0 : 1;
+                                        double sCoord = (wallAxis == 0) ? fabs(sNorm.X()) : (wallAxis == 1) ? fabs(sNorm.Y()) : fabs(sNorm.Z());
+                                        if (sCoord < 0.99) holeSides.Add(sfFace);
+                                    }
+                                }
+                                for (TopExp_Explorer ee(face, TopAbs_EDGE); ee.More(); ee.Next()) {
+                                    TopoDS_Edge e = TopoDS::Edge(ee.Current());
+                                    const auto& adjFaces = edgeFaceMap.FindFromKey(e);
+                                    for (auto it = adjFaces.begin(); it != adjFaces.end(); ++it) {
+                                        if (holeSides.Contains(*it)) { innerEdges.push_back(e); break; }
+                                    }
+                                }
+                            }
+                        }
+                        if (!innerEdges.empty()) {
+                            // Try fillet first, fall back to chamfer if fillet fails
+                            bool done = false;
+                            try {
+                                BRepFilletAPI_MakeFillet fm(workingShape);
+                                int fec = 0;
+                                for (const auto& e : innerEdges) { fm.Add(hf.fr, e); fec++; }
+                                fm.Build();
+                                workingShape = fm.Shape();
+                                totalWires++; ec += fec;
+                                done = true;
+                            } catch (...) {}
+                            if (!done) {
+                                try {
+                                    BRepFilletAPI_MakeChamfer cm(workingShape);
+                                    double cd = hf.fr * 0.5;
+                                    int fec = 0;
+                                    for (const auto& e : innerEdges) {
+                                        cm.Add(cd, cd, e, innerFace); fec++;
+                                    }
+                                    cm.Build();
+                                    workingShape = cm.Shape();
+                                    totalWires++; ec += fec;
+                                    done = true;
+                                } catch (...) {
+                                    fprintf(stderr, "[STEP Exporter] Inner fillet/chamfer EXCEPTION fc=%d\n", hf.fc);
+                                }
+                            }
+                        }
+                    }
+
+                    fprintf(stderr, "[STEP Exporter] Hole fillet: type=%d fc=%d r=%.1f w=%.1f h=%.1f"
+                            " wires=%d edges=%d\n",
+                            hf.type, hf.fc, hf.fr, hf.w, hf.h, totalWires, ec);
+                    if (ec > 0) {
+                        filletCount++;
+                    }
+                }
+                fprintf(stderr, "[STEP Exporter] Applied %d/%d hole edge fillet(s)\n",
+                        filletCount, (int)holeFillets.size());
+                if (filletCount > 0) shape = workingShape;
             }
         }
 

@@ -32,6 +32,9 @@ def _highlight_export_object(obj_params):
         pass  # 高亮失败不影响导出流程
 
 
+
+
+
 def _export_as_mesh_fallback(cpp_exporter, temp_file, cparams, data):
     """参数化导出失败时的网格回退方案。获取 Blender 对象并作为网格 BREP 导出。"""
     bl_obj = cparams.get('bl_obj') if isinstance(cparams, dict) else None

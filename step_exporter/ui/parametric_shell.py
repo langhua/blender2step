@@ -195,6 +195,19 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         """Create a rounded rectangle cutter (extruded profile).
         loc: object world location for shell-local wall detection."""
         import math
+        # Detect wall first (before building profile)
+        lx = loc.x if loc else 0.0
+        ly = loc.y if loc else 0.0
+        px_r, py_r = px - lx, py - ly
+        near_right = abs(px_r - shell_hw) < t * 5
+        near_left = abs(px_r + shell_hw) < t * 5
+        near_back_wall = abs(py_r - shell_hd) < t * 5
+        near_front_wall = abs(py_r + shell_hd) < t * 5
+        # For left/right walls: Y-rotation maps profile X→Z, Y→Y
+        # C++ expects width along Y, height along Z → swap w,h for profile
+        if near_right or near_left:
+            w, h = h, w
+
         bm_r = bmesh.new()
         hw_r, hh_r = w / 2, h / 2
         r = max(cr, 0.0001)  # min 0.1mm to avoid degenerate arcs
@@ -235,16 +248,6 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
 
         bm_r.normal_update()
         cutter = STEP_EXPORTER_OT_create_parametric_shell._bm_to_object(bm_r, "RRCutter")
-
-        # Determine wall direction and rotate — use shell-local cursor coords
-        lx = loc.x if loc else 0.0
-        ly = loc.y if loc else 0.0
-        px_r, py_r = px - lx, py - ly
-
-        near_right = abs(px_r - shell_hw) < t * 5
-        near_left = abs(px_r + shell_hw) < t * 5
-        near_back_wall = abs(py_r - shell_hd) < t * 5   # Y=+hd
-        near_front_wall = abs(py_r + shell_hd) < t * 5  # Y=-hd
 
         if near_right or near_left:
             cutter.rotation_euler = (0, math.pi / 2, 0)
@@ -1175,15 +1178,15 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
     keep_cutter: BoolProperty(name=_t("Keep Cutter"), default=False,
         description=_t("Keep the cutter object visible after cutting (for preview/debug)"))
     hole_radius: FloatProperty(name=_t("Radius"), default=5.0, min=0.1, max=500.0)
-    hole_fillet: FloatProperty(name=_t("Fillet"), default=0.0, min=0.0, max=100.0,
-        description=_t("Fillet radius for hole edge (0=sharp)"))
+    hole_fillet: FloatProperty(name=_t("Edge Fillet"), default=0.0, min=0.0, max=100.0,
+        description=_t("Fillet radius for hole edge on shell surface (0=sharp)"))
     hole_fillet_type: EnumProperty(
-        name=_t("Fillet Location"),
-        items=[('outer', _t("Outer"), _t("Fillet outer hole edge only")),
-               ('inner', _t("Inner"), _t("Fillet inner hole edge only")),
-               ('both', _t("Both"), _t("Fillet both inner and outer")),
+        name=_t("Fillet Side"),
+        items=[('0', _t("Outer"), _t("Fillet outer surface edge only")),
+               ('1', _t("Inner"), _t("Fillet inner surface edge only")),
+               ('2', _t("Both"), _t("Fillet both inner and outer edges")),
         ],
-        default='outer',
+        default='0',
     )
     hole_width: FloatProperty(name=_t("Width"), default=10.0, min=0.1, max=500.0)
     hole_height: FloatProperty(name=_t("Height"), default=8.0, min=0.1, max=500.0)
@@ -1272,7 +1275,10 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
             layout.prop(self, 'hole_width')
             layout.prop(self, 'hole_height')
             layout.prop(self, 'hole_cr')
-            layout.label(text=f"  → Rounded rect {self.hole_width:.1f}×{self.hole_height:.1f}mm, cr={self.hole_cr:.1f}mm")
+            layout.prop(self, 'hole_fillet')
+            if self.hole_fillet > 0.0001:
+                layout.prop(self, 'hole_fillet_type')
+            layout.label(text=_t("  → RRect {w:.1f}×{h:.1f}mm cr={cr:.1f}").format(w=self.hole_width, h=self.hole_height, cr=self.hole_cr))
         layout.separator()
         layout.prop(self, 'keep_cutter')
 
@@ -1379,7 +1385,10 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
                 self.report({'ERROR'}, _t("Failed to create cutter"))
                 return {'CANCELLED'}
             cutter.name = "Hole_RR"
-            entry = f"{px_r/S:.3f},{py_r/S:.3f},{pz_r/S:.3f},{self.hole_width:.3f},2,{self.hole_height:.3f},{self.hole_cr:.3f},{face_code}"
+            entry = f"{px_r/S:.3f},{py_r/S:.3f},{pz_r/S:.3f},{self.hole_width:.3f},2,{self.hole_height:.3f},{self.hole_cr:.3f},{self.hole_fillet:.3f},{self.hole_fillet_type},{face_code}"
+            _hole_fillet_info = (self.hole_fillet, self.hole_width, self.hole_height, self.hole_cr, face_code,
+                                 px, py, pz, thickness, hw, hd, h)
+            _hole_fillet_type = self.hole_fillet_type
 
         # Apply boolean (re-select shell: primitive_cylinder_add switched active to cutter)
         bpy.context.view_layer.objects.active = obj
@@ -1391,7 +1400,10 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
         bpy.context.view_layer.update()
         bpy.ops.object.modifier_apply(modifier="HoleBool")
         if _hole_fillet_info and _hole_fillet_info[0] > 0.0001:
-            _fillet_hole_edge(obj, *_hole_fillet_info, S, fillet_type=_hole_fillet_type)
+            if self.hole_type == 'round':
+                _fillet_hole_edge(obj, *_hole_fillet_info, S, fillet_type=_hole_fillet_type)
+            else:
+                _fillet_rrect_edge(obj, *_hole_fillet_info, S, fillet_type=_hole_fillet_type)
         if self.keep_cutter:
             cutter.hide_viewport = False
             cutter.display_type = 'WIRE'
@@ -1407,7 +1419,7 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
         return {'FINISHED'}
 
 
-def _fillet_hole_edge(obj, fillet_mm, hole_r_mm, face_code, px, py, pz, thickness, hw, hd, h, S=0.001, fillet_type='outer'):
+def _fillet_hole_edge(obj, fillet_mm, hole_r_mm, face_code, px, py, pz, thickness, hw, hd, h, S=0.001, fillet_type='0'):
     """Apply fillet to hole edge on shell using bpy.ops.mesh.bevel."""
     import bmesh
     loc = obj.location
@@ -1467,8 +1479,8 @@ def _fillet_hole_edge(obj, fillet_mm, hole_r_mm, face_code, px, py, pz, thicknes
             sample_cs.append(c0)
         if abs(c1 - tc) < 0.01:
             sample_cs.append(c1)
-        # Must have at least one vertex near target
-        if abs(c0 - tc) > thickness * 2 and abs(c1 - tc) > thickness * 2:
+        # Must have at least one vertex near target (0.45*thick < half wall)
+        if abs(c0 - tc) > thickness * 0.45 and abs(c1 - tc) > thickness * 0.45:
             continue
         # Distance in perpendicular plane
         if ax == 'z':
@@ -1492,6 +1504,59 @@ def _fillet_hole_edge(obj, fillet_mm, hole_r_mm, face_code, px, py, pz, thicknes
         bpy.ops.mesh.bevel(offset_type='OFFSET', offset=fr, segments=16, profile=0.5, affect='EDGES')
     else:
         print(f"[STEP Exporter]   => NO edges found! ax={ax} eps={eps:.4f}")
+    bpy.ops.object.mode_set(mode='OBJECT')
+
+
+def _fillet_rrect_edge(obj, fillet_mm, hole_w_mm, hole_h_mm, hole_cr_mm, face_code,
+                       px, py, pz, thickness, hw, hd, h, S=0.001, fillet_type='0'):
+    """Apply fillet to rrect hole edge on shell."""
+    import bmesh
+    loc = obj.location
+    px_l, py_l, pz_l = px - loc.x, py - loc.y, pz - loc.z
+    fr = fillet_mm * S
+    rw = hole_w_mm * S / 2
+    rh = hole_h_mm * S / 2
+    eps = max(thickness * 2.0, 0.002)
+    if face_code == 0:
+        ax, outer_c, inner_c = 'z', -h/2, -h/2+thickness
+    elif face_code == 1:
+        ax, outer_c, inner_c = 'z', h/2, h/2-thickness
+    elif face_code == 2:
+        ax, outer_c, inner_c = 'x', -hw, -hw+thickness
+    elif face_code == 3:
+        ax, outer_c, inner_c = 'x', hw, hw-thickness
+    elif face_code == 4:
+        ax, outer_c, inner_c = 'y', -hd, -hd+thickness
+    else:
+        ax, outer_c, inner_c = 'y', hd, hd-thickness
+    target_cs = []
+    ft = str(fillet_type)
+    if ft in ('0', '2', 'outer', 'both'): target_cs.append(outer_c)
+    if ft in ('1', '2', 'inner', 'both'): target_cs.append(inner_c)
+    bpy.context.view_layer.objects.active = obj
+    bpy.ops.object.mode_set(mode='EDIT')
+    bm = bmesh.from_edit_mesh(obj.data)
+    bm.edges.ensure_lookup_table()
+    for e in bm.edges: e.select = False
+    bm.select_flush(False)
+    count = 0
+    for edge in bm.edges:
+        v0, v1 = edge.verts[0], edge.verts[1]
+        if ax == 'z': c0, c1 = v0.co.z, v1.co.z
+        elif ax == 'x': c0, c1 = v0.co.x, v1.co.x
+        else: c0, c1 = v0.co.y, v1.co.y
+        if all(abs(c - tc) > thickness * 0.45 for tc in target_cs for c in (c0, c1)): continue
+        if ax == 'z': x0,y0,x1,y1,cx,cy = v0.co.x,v0.co.y,v1.co.x,v1.co.y,px_l,py_l
+        elif ax == 'x': x0,y0,x1,y1,cx,cy = v0.co.y,v0.co.z,v1.co.y,v1.co.z,py_l,pz_l
+        else: x0,y0,x1,y1,cx,cy = v0.co.x,v0.co.z,v1.co.x,v1.co.z,px_l,pz_l
+        mx, my = (x0+x1)/2, (y0+y1)/2
+        if (abs(abs(mx-cx)-rw)<eps and abs(my-cy)<=rw+eps) or (abs(abs(my-cy)-rh)<eps and abs(mx-cx)<=rw+eps):
+            edge.select = True
+            count += 1
+    if count > 0:
+        bmesh.update_edit_mesh(obj.data)
+        bpy.ops.mesh.bevel(offset_type='OFFSET', offset=fr, segments=16, profile=0.5, affect='EDGES')
+    print(f"[STEP Exporter] _fillet_rrect_edge: ax={ax} found={count}")
     bpy.ops.object.mode_set(mode='OBJECT')
 
 
@@ -1599,7 +1664,11 @@ class STEP_EXPORTER_OT_edit_shell_hole(Operator):
     hole_index: bpy.props.IntProperty(default=-1)
     edit_type: bpy.props.EnumProperty(name=_t("Type"), items=[('round', _t("Round"), ""), ('rrect', _t("Rounded Rect"), "")])
     edit_radius: bpy.props.FloatProperty(name=_t("Radius"), default=5.0, min=0.1, max=500.0)
-    edit_fillet: bpy.props.FloatProperty(name=_t("Fillet"), default=0.0, min=0.0, max=100.0)
+    edit_fillet: bpy.props.FloatProperty(name=_t("Edge Fillet"), default=0.0, min=0.0, max=100.0)
+    edit_fillet_type: bpy.props.EnumProperty(
+        name=_t("Fillet Side"),
+        items=[('0', _t("Outer"), ""), ('1', _t("Inner"), ""), ('2', _t("Both"), "")],
+        default='0')
     edit_width: bpy.props.FloatProperty(name=_t("Width"), default=10.0, min=0.1, max=500.0)
     edit_height: bpy.props.FloatProperty(name=_t("Height"), default=8.0, min=0.1, max=500.0)
     edit_cr: bpy.props.FloatProperty(name=_t("Corner R"), default=2.0, min=0.0, max=500.0)
@@ -1622,11 +1691,14 @@ class STEP_EXPORTER_OT_edit_shell_hole(Operator):
                 self.edit_type = 'round'
                 self.edit_radius = float(parts[3])
                 self.edit_fillet = float(parts[5]) if len(parts) >= 7 else 0.0
+                self.edit_fillet_type = parts[6] if len(parts) >= 8 else '0'
             elif tc == 2 and len(parts) >= 7:
                 self.edit_type = 'rrect'
                 self.edit_width = float(parts[3])
                 self.edit_height = float(parts[5])
                 self.edit_cr = float(parts[6])
+                self.edit_fillet = float(parts[7]) if len(parts) >= 9 else 0.0
+                self.edit_fillet_type = parts[8] if len(parts) >= 10 else '0'
         except (ValueError, IndexError):
             pass
         return context.window_manager.invoke_props_dialog(self, width=300)
@@ -1637,10 +1709,15 @@ class STEP_EXPORTER_OT_edit_shell_hole(Operator):
         if self.edit_type == 'round':
             layout.prop(self, 'edit_radius')
             layout.prop(self, 'edit_fillet')
+            if self.edit_fillet > 0.0001:
+                layout.prop(self, 'edit_fillet_type')
         else:
             layout.prop(self, 'edit_width')
             layout.prop(self, 'edit_height')
             layout.prop(self, 'edit_cr')
+            layout.prop(self, 'edit_fillet')
+            if self.edit_fillet > 0.0001:
+                layout.prop(self, 'edit_fillet_type')
 
     def execute(self, context):
         obj = context.active_object
@@ -1652,9 +1729,9 @@ class STEP_EXPORTER_OT_edit_shell_hole(Operator):
         # Build new entry: keep cx,cy,cz from old; replace type-specific fields
         old_face = old_parts[-1]
         if self.edit_type == 'round':
-            new_entry = f"{old_parts[0]},{old_parts[1]},{old_parts[2]},{self.edit_radius:.3f},1,{self.edit_fillet:.3f},{old_face}"
+            new_entry = f"{old_parts[0]},{old_parts[1]},{old_parts[2]},{self.edit_radius:.3f},1,{self.edit_fillet:.3f},{self.edit_fillet_type},{old_face}"
         else:
-            new_entry = f"{old_parts[0]},{old_parts[1]},{old_parts[2]},{self.edit_width:.3f},2,{self.edit_height:.3f},{self.edit_cr:.3f},{old_face}"
+            new_entry = f"{old_parts[0]},{old_parts[1]},{old_parts[2]},{self.edit_width:.3f},2,{self.edit_height:.3f},{self.edit_cr:.3f},{self.edit_fillet:.3f},{self.edit_fillet_type},{old_face}"
 
         # Replace entry in window_data
         wd = obj.get('window_data', '')

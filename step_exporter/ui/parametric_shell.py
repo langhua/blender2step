@@ -12,13 +12,14 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
     bl_idname = "step_exporter.create_parametric_shell"
     bl_label = _t("Parametric Shell")
     bl_options = {'REGISTER', 'UNDO'}
+    bl_description = _t("Create a parametric open-top box (shell)")
 
     # ── Unit ──
     unit: EnumProperty(
         name=_t("Unit"),
         items=[
-            ('mm', "mm", "Millimeters"),
-            ('m', "m", "Meters"),
+            ('mm', _t("mm"), _t("Millimeters")),
+            ('m', _t("m"), _t("Meters")),
         ],
         default='mm',
     )
@@ -27,9 +28,9 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
     corner_type: EnumProperty(
         name=_t("Corner"),
         items=[
-            ('square', "Square (直角)", "Sharp square corners"),
-            ('rounded', "Rounded (圆角)", "Rounded corners"),
-            ('curved', "Cosine (余弦)", "Large-radius cosine-curved corners"),
+            ('square', _t("Square"), _t("Sharp square corners")),
+            ('rounded', _t("Rounded"), _t("Rounded corners")),
+            ('curved', _t("Cosine"), _t("Large-radius cosine-curved corners")),
         ],
         default='square',
     )
@@ -37,60 +38,60 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
     # ── Dimensions ──
     width: FloatProperty(
         name=_t("Width (X)"), default=100.0, min=1.0, max=10000.0,
-        description="Width along X axis")
+        description=_t("Width along X axis"))
     depth: FloatProperty(
         name=_t("Depth (Y)"), default=80.0, min=1.0, max=10000.0,
-        description="Depth along Y axis")
+        description=_t("Depth along Y axis"))
     height: FloatProperty(
         name=_t("Height (Z)"), default=50.0, min=1.0, max=10000.0,
-        description="Height along Z axis")
+        description=_t("Height along Z axis"))
     thickness: FloatProperty(
         name=_t("Wall Thickness"), default=2.0, min=0.1, max=1000.0,
-        description="Wall thickness")
+        description=_t("Wall thickness"))
     corner_radius: FloatProperty(
         name=_t("Corner Radius"), default=5.0, min=0.1, max=1000.0,
-        description="Fillet radius for rounded corners (min 2.7mm when Cosine + Rim)")
+        description=_t("Fillet radius for rounded corners"))
     bottom_fillet: FloatProperty(
         name=_t("Bottom Fillet"), default=0.0, min=0.0, max=100.0,
-        description="Fillet radius at bottom edges (min 0.1mm when Cosine + Rim)")
+        description=_t("Fillet radius at bottom edges"))
 
     # ── Rim (壳边) ──
     rim_type: EnumProperty(
         name=_t("Rim Top Type"),
         items=[
-            ('none', "None (无)", "No rim"),
-            ('inside', "Inside (内台阶)", "Rim top shelf on the inside"),
-            ('outside', "Outside (外台阶)", "Rim top shelf on the outside"),
+            ('none', _t("None"), _t("No rim")),
+            ('inside', _t("Inside"), _t("Rim top shelf on the inside")),
+            ('outside', _t("Outside"), _t("Rim top shelf on the outside")),
         ],
         default='none',
     )
     rim_width: FloatProperty(
         name=_t("Rim Top Width"), default=1.0, min=0.1, max=1000.0,
-        description="Visible shelf width at the top edge (Rim Top)")
+        description=_t("Visible shelf width at the top edge"))
     rim_height: FloatProperty(
         name=_t("Rim Height"), default=1.0, min=0.1, max=1000.0,
-        description="Rim extrusion height")
+        description=_t("Rim extrusion height"))
     rim_shape: EnumProperty(
         name=_t("Rim Shape"),
         items=[
-            ('rect', "Rect (矩形)", "Rectangular cross-section"),
-            ('trapezoid', "Trapezoid (梯形)", "Right-trapezoid cross-section"),
+            ('rect', _t("Rect"), _t("Rectangular cross-section")),
+            ('trapezoid', _t("Trapezoid"), _t("Right-trapezoid cross-section")),
         ],
         default='rect',
     )
     rim_top_ratio: FloatProperty(
         name=_t("Top Ratio"), default=100.0, min=0.0, max=100.0, subtype='PERCENTAGE',
-        description="Top width as % of bottom width (0 = triangle)")
+        description=_t("Top width as % of bottom width (0 = triangle)"))
 
     # ── Debug ──
     debug_keep_cutters: BoolProperty(
         name=_t("Keep Cutters (Debug)"), default=False,
-        description="Keep boolean cutter objects for debugging (inner solid, rim ring)")
+        description=_t("Keep boolean cutter objects for debugging"))
 
     # ── Curved corner ──
     curve_ratio: FloatProperty(
         name=_t("Cosine Ratio"), default=50.0, min=0.0, max=100.0, subtype='PERCENTAGE',
-        description="Bottom shrink ratio for cosine walls (0=flat wall, 100=max curve)")
+        description=_t("Bottom shrink ratio for cosine walls (0=flat, 100=max curve)"))
 
     # ── Dynamic clamping for curved + rim ──
     def _clamp_cr_bf(self):
@@ -121,7 +122,7 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         # Hint: minimum values for curved + rim
         if self.corner_type == 'curved' and self.rim_type != 'none':
             hint = layout.box()
-            hint.label(text="Cosine + Rim: CR ≥ 2.7mm, BF ≥ 0.1mm", icon='INFO')
+            hint.label(text=_t("Cosine + Rim: CR ≥ 2.7mm, BF ≥ 0.1mm"), icon='INFO')
         layout.separator()
         layout.prop(self, 'rim_type')
         if self.rim_type != 'none':
@@ -187,7 +188,7 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         obj['curve_ratio'] = self.curve_ratio
 
         unit_label = "mm" if self.unit == 'mm' else "m"
-        self.report({'INFO'}, f"Shell: {w:.0f}×{d:.0f}×{h:.0f}{unit_label}, wall={t:.1f}{unit_label}")
+        self.report({'INFO'}, _t("Shell: {w:.0f}×{d:.0f}×{h:.0f}{u}, wall={t:.1f}{u}").format(w=w, d=d, h=h, t=t, u=unit_label))
         return {'FINISHED'}
 
     def _make_rrect_cutter(self, w, h, cr, depth, px, py, pz, shell_hw, shell_hd, t, loc=None):
@@ -1161,22 +1162,22 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
 class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
     """Add a hole/window to an existing parametric shell at the 3D cursor position."""
     bl_idname = "step_exporter.add_hole_to_shell"
-    bl_label = "Add Hole to Shell"
+    bl_label = _t("Add Hole to Shell")
     bl_options = {'REGISTER', 'UNDO'}
-    bl_description = "Add a hole at the 3D cursor position (Shift+RMB to place)"
+    bl_description = _t("Add a hole at the 3D cursor position (Shift+RMB to place)")
 
     hole_type: EnumProperty(
-        name="Type",
-        items=[('round', "Round", "Circular through-hole"),
-               ('rrect', "Rounded Rect", "Rounded rectangle through-hole")],
+        name=_t("Type"),
+        items=[('round', _t("Round"), _t("Circular through-hole")),
+               ('rrect', _t("Rounded Rect"), _t("Rounded rectangle through-hole"))],
         default='round',
     )
-    keep_cutter: BoolProperty(name="Keep Cutter", default=False,
-        description="Keep the cutter object visible after cutting (for preview/debug)")
-    hole_radius: FloatProperty(name="Radius", default=5.0, min=0.1, max=500.0)
-    hole_width: FloatProperty(name="Width", default=10.0, min=0.1, max=500.0)
-    hole_height: FloatProperty(name="Height", default=8.0, min=0.1, max=500.0)
-    hole_cr: FloatProperty(name="Corner R", default=2.0, min=0.0, max=500.0)
+    keep_cutter: BoolProperty(name=_t("Keep Cutter"), default=False,
+        description=_t("Keep the cutter object visible after cutting (for preview/debug)"))
+    hole_radius: FloatProperty(name=_t("Radius"), default=5.0, min=0.1, max=500.0)
+    hole_width: FloatProperty(name=_t("Width"), default=10.0, min=0.1, max=500.0)
+    hole_height: FloatProperty(name=_t("Height"), default=8.0, min=0.1, max=500.0)
+    hole_cr: FloatProperty(name=_t("Corner R"), default=2.0, min=0.0, max=500.0)
 
     @classmethod
     def poll(cls, context):
@@ -1219,41 +1220,41 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
             min_wall = min(dist_right, dist_left, dist_front, dist_back, dist_bottom, dist_top)
 
             box = layout.box()
-            box.label(text="Position", icon='ORIENTATION_LOCAL')
-            box.label(text=f"Cursor: X={cursor.x*1000:.1f} Y={cursor.y*1000:.1f} Z={cursor.z*1000:.1f} mm")
+            box.label(text=_t("Position"), icon='ORIENTATION_LOCAL')
+            box.label(text=_t("Cursor: X={x:.1f} Y={y:.1f} Z={z:.1f} mm").format(x=cursor.x*1000, y=cursor.y*1000, z=cursor.z*1000))
             # Wall identification
             wall_names = {
-                min_wall == dist_right: "Right wall (+X)",
-                min_wall == dist_left: "Left wall (-X)",
-                min_wall == dist_front: "Back wall (+Y)",
-                min_wall == dist_back: "Front wall (-Y)",
-                min_wall == dist_bottom: "Bottom face",
-                min_wall == dist_top: "Top rim (may be open)",
+                min_wall == dist_right: _t("Right wall (+X)"),
+                min_wall == dist_left: _t("Left wall (-X)"),
+                min_wall == dist_front: _t("Back wall (+Y)"),
+                min_wall == dist_back: _t("Front wall (-Y)"),
+                min_wall == dist_bottom: _t("Bottom face"),
+                min_wall == dist_top: _t("Top rim (may be open)"),
             }
-            wall_name = wall_names.get(True, "Unknown")
-            box.label(text=f"Nearest: {wall_name}")
+            wall_name = wall_names.get(True, _t("Unknown"))
+            box.label(text=_t("Nearest: {name}").format(name=wall_name))
             # Distance from shell edges
             if min_wall in (dist_right, dist_left):
                 edge_y = min(abs(py + ds/2), abs(py - ds/2)) * 1000
                 edge_z_bot = pz * 1000
                 edge_z_top = (hs - pz) * 1000
-                box.label(text=f"From Y-edge: {edge_y:.1f}mm  From bottom: {edge_z_bot:.1f}mm  From top: {edge_z_top:.1f}mm")
-                box.label(text=f"Wall: {ws*1000:.0f}×{hs*1000:.0f}mm, thickness={t:.1f}mm")
+                box.label(text=_t("From Y-edge: {ey:.1f}mm  From bottom: {eb:.1f}mm  From top: {et:.1f}mm").format(ey=edge_y, eb=edge_z_bot, et=edge_z_top))
+                box.label(text=_t("Wall: {w:.0f}×{h:.0f}mm, thickness={t:.1f}mm").format(w=ws*1000, h=hs*1000, t=t))
             elif min_wall in (dist_front, dist_back):
                 edge_x = min(abs(px + ws/2), abs(px - ws/2)) * 1000
                 edge_z_bot = pz * 1000
                 edge_z_top = (hs - pz) * 1000
-                box.label(text=f"From X-edge: {edge_x:.1f}mm  From bottom: {edge_z_bot:.1f}mm  From top: {edge_z_top:.1f}mm")
-                box.label(text=f"Wall: {ds*1000:.0f}×{hs*1000:.0f}mm, thickness={t:.1f}mm")
+                box.label(text=_t("From X-edge: {ex:.1f}mm  From bottom: {eb:.1f}mm  From top: {et:.1f}mm").format(ex=edge_x, eb=edge_z_bot, et=edge_z_top))
+                box.label(text=_t("Wall: {w:.0f}×{h:.0f}mm, thickness={t:.1f}mm").format(w=ds*1000, h=hs*1000, t=t))
             else:
-                box.label(text=f"Shell: {w:.0f}×{d:.0f}×{h:.0f}mm, wall={t:.1f}mm")
+                box.label(text=_t("Shell: {w:.0f}×{d:.0f}×{h:.0f}mm, wall={t:.1f}mm").format(w=w, d=d, h=h, t=t))
 
         # ── Hole config ──
         layout.separator()
         layout.prop(self, 'hole_type')
         if self.hole_type == 'round':
             layout.prop(self, 'hole_radius')
-            layout.label(text=f"  → Circular through-hole, Ø={self.hole_radius*2:.1f}mm")
+            layout.label(text=_t("  → Circular through-hole, Ø={d:.1f}mm").format(d=self.hole_radius*2))
         else:
             layout.prop(self, 'hole_width')
             layout.prop(self, 'hole_height')
@@ -1266,7 +1267,7 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
         import math
         obj = context.active_object
         if not obj or obj.get('object_type') != 'parametric_shell':
-            self.report({'ERROR'}, "Select a parametric shell first")
+            self.report({'ERROR'}, _t("Select a parametric shell first"))
             return {'CANCELLED'}
 
         w = obj.get('width', 100.0)
@@ -1360,7 +1361,7 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
                 None, rh_w * 2, rh_h * 2, hcr, thickness + extra * 2,
                 px, py, pz, hw, hd, thickness, loc)
             if cutter is None:
-                self.report({'ERROR'}, "Failed to create cutter")
+                self.report({'ERROR'}, _t("Failed to create cutter"))
                 return {'CANCELLED'}
             cutter.name = "Hole_RR"
             entry = f"{px_r/S:.3f},{py_r/S:.3f},{pz_r/S:.3f},{self.hole_width:.3f},2,{self.hole_height:.3f},{self.hole_cr:.3f},{face_code}"
@@ -1385,7 +1386,7 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
         obj['window_data'] = (existing + ';' + entry) if existing else entry
         obj['window_data_local'] = True  # flag: coords are shell-local, not world
 
-        self.report({'INFO'}, f"Hole added at cursor position")
+        self.report({'INFO'}, _t("Hole added at cursor position"))
         return {'FINISHED'}
 
 
@@ -1400,7 +1401,7 @@ def _parse_hole_list(obj):
         return []
     entries = [e.strip() for e in wd.split(';') if e.strip()]
     result = []
-    face_names = {0: "Bottom", 1: "Top", 2: "Left", 3: "Right", 4: "Front", 5: "Back"}
+    face_names = {0: _t("Bottom"), 1: _t("Top"), 2: _t("Left"), 3: _t("Right"), 4: _t("Front"), 5: _t("Back")}
     for e in entries:
         parts = e.split(',')
         if len(parts) < 5:
@@ -1413,12 +1414,12 @@ def _parse_hole_list(obj):
             fn = face_names.get(face, f"Face{face}")
             if tc == 1:
                 r = float(parts[3])
-                desc = f"⭕ Round Ø{r*2:.1f}mm @ ({cx:.1f},{cy:.1f},{cz:.1f}) {fn}"
+                desc = _t("Round Ø{r:.1f}mm").format(r=r*2) + f" @ ({cx:.1f},{cy:.1f},{cz:.1f}) {fn}"
             elif tc == 2 and len(parts) >= 7:
                 rw = float(parts[3]); rh = float(parts[5]); rcr = float(parts[6])
-                desc = f"▭ RRect {rw:.0f}×{rh:.0f} cr={rcr:.1f} @ {fn}"
+                desc = _t("RRect {rw:.0f}×{rh:.0f} cr={rcr:.1f}").format(rw=rw, rh=rh, rcr=rcr) + f" @ {fn}"
             else:
-                desc = f"Hole @ ({cx:.1f},{cy:.1f},{cz:.1f})"
+                desc = _t("Hole").format() + f" @ ({cx:.1f},{cy:.1f},{cz:.1f})"
             result.append((e, desc))
         except (ValueError, IndexError):
             result.append((e, "?"))
@@ -1428,7 +1429,7 @@ def _parse_hole_list(obj):
 class STEP_EXPORTER_OT_remove_shell_hole(Operator):
     """Remove a hole from the parametric shell"""
     bl_idname = "step_exporter.remove_shell_hole"
-    bl_label = "Remove Hole"
+    bl_label = _t("Remove Hole")
     bl_options = {'REGISTER', 'UNDO'}
 
     hole_index: bpy.props.IntProperty(default=-1)
@@ -1456,14 +1457,14 @@ class STEP_EXPORTER_OT_remove_shell_hole(Operator):
 
         # Rebuild mesh: re-apply remaining holes
         _rebuild_shell_mesh(obj)
-        self.report({'INFO'}, f"Hole removed")
+        self.report({'INFO'}, _t("Hole removed"))
         return {'FINISHED'}
 
 
 class STEP_EXPORTER_OT_clear_shell_holes(Operator):
     """Remove all holes from the parametric shell"""
     bl_idname = "step_exporter.clear_shell_holes"
-    bl_label = "Clear All Holes"
+    bl_label = _t("Clear All Holes")
     bl_options = {'REGISTER', 'UNDO'}
 
     @classmethod
@@ -1476,22 +1477,22 @@ class STEP_EXPORTER_OT_clear_shell_holes(Operator):
         obj['window_data'] = ''
         obj['window_data_local'] = False
         _rebuild_shell_mesh(obj)
-        self.report({'INFO'}, "All holes cleared")
+        self.report({'INFO'}, _t("All holes cleared"))
         return {'FINISHED'}
 
 
 class STEP_EXPORTER_OT_edit_shell_hole(Operator):
     """Edit a hole on the parametric shell"""
     bl_idname = "step_exporter.edit_shell_hole"
-    bl_label = "Edit Hole"
+    bl_label = _t("Edit Hole")
     bl_options = {'REGISTER', 'UNDO'}
 
     hole_index: bpy.props.IntProperty(default=-1)
-    edit_type: bpy.props.EnumProperty(name="Type", items=[('round', "Round", ""), ('rrect', "Rounded Rect", "")])
-    edit_radius: bpy.props.FloatProperty(name="Radius", default=5.0, min=0.1, max=500.0)
-    edit_width: bpy.props.FloatProperty(name="Width", default=10.0, min=0.1, max=500.0)
-    edit_height: bpy.props.FloatProperty(name="Height", default=8.0, min=0.1, max=500.0)
-    edit_cr: bpy.props.FloatProperty(name="Corner R", default=2.0, min=0.0, max=500.0)
+    edit_type: bpy.props.EnumProperty(name=_t("Type"), items=[('round', _t("Round"), ""), ('rrect', _t("Rounded Rect"), "")])
+    edit_radius: bpy.props.FloatProperty(name=_t("Radius"), default=5.0, min=0.1, max=500.0)
+    edit_width: bpy.props.FloatProperty(name=_t("Width"), default=10.0, min=0.1, max=500.0)
+    edit_height: bpy.props.FloatProperty(name=_t("Height"), default=8.0, min=0.1, max=500.0)
+    edit_cr: bpy.props.FloatProperty(name=_t("Corner R"), default=2.0, min=0.0, max=500.0)
 
     @classmethod
     def poll(cls, context):
@@ -1548,13 +1549,13 @@ class STEP_EXPORTER_OT_edit_shell_hole(Operator):
         entries = [new_entry if e == old_entry else e for e in entries]
         obj['window_data'] = ';'.join(entries)
         _rebuild_shell_mesh(obj)
-        self.report({'INFO'}, "Hole updated")
+        self.report({'INFO'}, _t("Hole updated"))
         return {'FINISHED'}
 
 
 class STEP_EXPORTER_PT_shell_holes(bpy.types.Panel):
     """Panel for managing shell holes"""
-    bl_label = "Shell Holes"
+    bl_label = _t("Shell Holes")
     bl_idname = "STEP_EXPORTER_PT_shell_holes"
     bl_parent_id = "STEP_EXPORTER_PT_main_panel"
     bl_space_type = 'VIEW_3D'
@@ -1574,10 +1575,10 @@ class STEP_EXPORTER_PT_shell_holes(bpy.types.Panel):
         holes = _parse_hole_list(obj)
 
         if not holes:
-            layout.label(text="No holes", icon='DOT')
+            layout.label(text=_t("No holes"), icon='DOT')
             return
 
-        layout.label(text=f"{len(holes)} hole(s):")
+        layout.label(text=_t("{n} hole(s)").format(n=len(holes)))
         box = layout.box()
         for i, (entry, desc) in enumerate(holes):
             row = box.row(align=True)
@@ -1588,7 +1589,7 @@ class STEP_EXPORTER_PT_shell_holes(bpy.types.Panel):
             op.hole_index = i
 
         layout.separator()
-        layout.operator("step_exporter.clear_shell_holes", text="Clear All Holes", icon='TRASH')
+        layout.operator("step_exporter.clear_shell_holes", text=_t("Clear All Holes"), icon='TRASH')
 
 
 def _rebuild_shell_mesh(obj):

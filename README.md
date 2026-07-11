@@ -5,7 +5,7 @@ Blender step exporter based on OpenCASCADE.
 
 本模块是为了在Blender中设计模型，用于模具制造。
 
-> **blender2step** is a Blender 4.2.1 addon that exports 3D models to STEP format (ISO 10303-21) using OpenCASCADE 7.8.1. It is part of a simple electronics manufacturing toolchain: design enclosures in Blender, export STEP, and send to mold factories for mass production. Built primarily with AI assistance (DeepSeek V4 Pro).
+> **blender2step** is a Blender 4.2.1 addon that exports 3D models to STEP format using OpenCASCADE 7.8.1. It is part of a simple electronics manufacturing toolchain: design enclosures in Blender, export STEP, and send to mold factories for mass production. Built primarily with AI assistance (DeepSeek V4 Pro).
 
 ## Toolchain
 

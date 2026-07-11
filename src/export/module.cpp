@@ -3318,32 +3318,32 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                     double hole_r = r_or_w;
                     if (parsed == 6) face_code = extra1;  // old format: face is 6th field
                     double half_w = width / 2.0, half_d = depth / 2.0;
-                    // Cylinder length: just enough to cut through one wall (not span entire shell!)
-                    double cyl_len = thickness * 4.0;
+                    // Cylinder starts at shell surface, extends inward (so outer end face IS at the surface)
+                    double cyl_len = thickness + 4.0;  // wall thickness + margin into cavity
 
                     // Use face_code if available, otherwise fall back to distance detection
                     gp_Ax2 ax;
                     if (face_code >= 0) {
                         // 0=bottom, 1=top, 2=left(X-), 3=right(X+), 4=front(Y-), 5=back(Y+)
-                        // Center cylinder ON the wall surface, extend ±cyl_len/2 perpendicular
+                        // Cylinder starts AT the wall surface, extends inward
                         if (face_code == 0) {
-                            // Bottom: wall at z=pos_z, cylinder along Z
-                            ax = gp_Ax2(gp_Pnt(cx, cy, pos_z - cyl_len / 2.0), gp_Dir(0, 0, 1));
+                            // Bottom: wall at z=pos_z, cylinder extends +Z inward
+                            ax = gp_Ax2(gp_Pnt(cx, cy, pos_z), gp_Dir(0, 0, 1));
                         } else if (face_code == 1) {
-                            // Top: wall at z=pos_z+height
-                            ax = gp_Ax2(gp_Pnt(cx, cy, pos_z + height - cyl_len / 2.0), gp_Dir(0, 0, 1));
+                            // Top: wall at z=pos_z+height, cylinder extends -Z inward
+                            ax = gp_Ax2(gp_Pnt(cx, cy, pos_z + height), gp_Dir(0, 0, -1));
                         } else if (face_code == 2) {
-                            // Left (X-): wall at x=pos_x-half_w
-                            ax = gp_Ax2(gp_Pnt(pos_x - half_w - cyl_len / 2.0, cy, cz), gp_Dir(1, 0, 0));
+                            // Left (X-): wall at x=pos_x-half_w, cylinder extends +X inward
+                            ax = gp_Ax2(gp_Pnt(pos_x - half_w, cy, cz), gp_Dir(1, 0, 0));
                         } else if (face_code == 3) {
-                            // Right (X+): wall at x=pos_x+half_w
-                            ax = gp_Ax2(gp_Pnt(pos_x + half_w - cyl_len / 2.0, cy, cz), gp_Dir(1, 0, 0));
+                            // Right (X+): wall at x=pos_x+half_w, cylinder extends -X inward
+                            ax = gp_Ax2(gp_Pnt(pos_x + half_w, cy, cz), gp_Dir(-1, 0, 0));
                         } else if (face_code == 4) {
-                            // Front (Y-): wall at y=pos_y-half_d
-                            ax = gp_Ax2(gp_Pnt(cx, pos_y - half_d - cyl_len / 2.0, cz), gp_Dir(0, 1, 0));
+                            // Front (Y-): wall at y=pos_y-half_d, cylinder extends +Y inward
+                            ax = gp_Ax2(gp_Pnt(cx, pos_y - half_d, cz), gp_Dir(0, 1, 0));
                         } else { // face_code == 5
-                            // Back (Y+): wall at y=pos_y+half_d
-                            ax = gp_Ax2(gp_Pnt(cx, pos_y + half_d - cyl_len / 2.0, cz), gp_Dir(0, 1, 0));
+                            // Back (Y+): wall at y=pos_y+half_d, cylinder extends -Y inward
+                            ax = gp_Ax2(gp_Pnt(cx, pos_y + half_d, cz), gp_Dir(0, -1, 0));
                         }
                         std::cout << "[STEP Exporter] Hole cutter: circular r=" << hole_r
                                   << " at (" << cx << "," << cy << "," << cz << ") face=" << (int)face_code << std::endl;
@@ -3500,7 +3500,13 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                             else if (hf.fc == 4) isOuter = (fabs(y1 - sy1) < thickness * 0.6);
                             else isOuter = (fabs(y2 - sy2) < thickness * 0.6);
                             if (!isOuter) continue;
+                            // Only process planar faces — skip cylindrical hole side walls
+                            // (cylindrical faces have ambiguous top/bottom circular wires)
+                            Handle(Geom_Surface) sf = BRep_Tool::Surface(face);
+                            if (sf.IsNull() || sf->DynamicType() != STANDARD_TYPE(Geom_Plane)) continue;
+                            fprintf(stderr, "[STEP Exporter]   outer face: fc=%d isOuter=1 bbox=(%.1f,%.1f,%.1f)-(%.1f,%.1f,%.1f)\n", hf.fc, x1,y1,z1,x2,y2,z2);
                             double bestArea = 1e30;
+                            double bestDist = 1e30;
                             TopoDS_Wire bestWire;
                             for (TopExp_Explorer we(face, TopAbs_WIRE); we.More(); we.Next()) {
                                 TopoDS_Wire wire = TopoDS::Wire(we.Current());
@@ -3520,11 +3526,28 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                                                hf.cz >= z1-dTol && hf.cz <= z2+dTol);
                                 }
                                 if (contains) {
+                                    // For outer pass, pick wire closest to the shell outer surface
+                                    // (cylindrical hole side walls have both outer & inner wires with same x,y bbox)
+                                    double distToShell = 1e30;
+                                    if (hf.fc == 0) distToShell = fabs(z1 - sz1);
+                                    else if (hf.fc == 1) distToShell = fabs(z2 - sz2);
+                                    else if (hf.fc == 2) distToShell = fabs(x1 - sx1);
+                                    else if (hf.fc == 3) distToShell = fabs(x2 - sx2);
+                                    else if (hf.fc == 4) distToShell = fabs(y1 - sy1);
+                                    else if (hf.fc == 5) distToShell = fabs(y2 - sy2);
+                                    // Prefer wire with smaller distToShell (closer to outer surface)
+                                    // Use area as primary, distToShell as tiebreaker when areas are close
                                     double area = (x2-x1)*(y2-y1);
-                                    if (area < bestArea) { bestArea = area; bestWire = wire; }
+                                    bool better = false;
+                                    if (area < bestArea * 0.9) better = true; // significantly smaller area
+                                    else if (area < bestArea * 1.1 && distToShell < bestDist) better = true; // similar area, closer to surface
+                                    if (better) { bestArea = area; bestWire = wire; bestDist = distToShell; }
                                 }
                             }
                             if (!bestWire.IsNull()) {
+                                Bnd_Box bwb; BRepBndLib::Add(bestWire, bwb);
+                                double bx1,by1,bz1,bx2,by2,bz2; bwb.Get(bx1,by1,bz1,bx2,by2,bz2);
+                                fprintf(stderr, "[STEP Exporter]   selected wire: dist=%.2f bbox=(%.1f,%.1f,%.1f)-(%.1f,%.1f,%.1f)\n", bestDist, bx1,by1,bz1,bx2,by2,bz2);
                                 for (TopExp_Explorer ee(bestWire, TopAbs_EDGE); ee.More(); ee.Next()) {
                                     outerEdges.push_back(TopoDS::Edge(ee.Current()));
                                 }
@@ -3572,6 +3595,10 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                             else if (hf.fc == 4) isOuter = (fabs(y1 - sy1) < thickness * 0.6);
                             else isOuter = (fabs(y2 - sy2) < thickness * 0.6);
                             if (isOuter) continue;
+                            // Only process planar faces
+                            Handle(Geom_Surface) sf = BRep_Tool::Surface(face);
+                            if (sf.IsNull() || sf->DynamicType() != STANDARD_TYPE(Geom_Plane)) continue;
+                            fprintf(stderr, "[STEP Exporter]   inner face: fc=%d isOuter=0 bbox=(%.1f,%.1f,%.1f)-(%.1f,%.1f,%.1f)\n", hf.fc, x1,y1,z1,x2,y2,z2);
 
                             double bestArea = 1e30;
                             TopoDS_Wire bestWire;

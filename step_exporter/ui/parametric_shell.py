@@ -1460,10 +1460,11 @@ def _fillet_hole_edge(obj, fillet_mm, hole_r_mm, face_code, px, py, pz, thicknes
     else:  # face_code == 5
         ax, outer_c, inner_c = 'y', hd, hd - thickness
 
+    ft = str(fillet_type)
     target_cs = []
-    if fillet_type in ('outer', 'both'):
+    if ft in ('0', '2', 'outer', 'both'):
         target_cs.append(outer_c)
-    if fillet_type in ('inner', 'both'):
+    if ft in ('1', '2', 'inner', 'both'):
         target_cs.append(inner_c)
 
     bpy.context.view_layer.objects.active = obj
@@ -1480,22 +1481,14 @@ def _fillet_hole_edge(obj, fillet_mm, hole_r_mm, face_code, px, py, pz, thicknes
     sample_cs = []
     for edge in bm.edges:
         v0, v1 = edge.verts[0], edge.verts[1]
-        # Quick axis check
         if ax == 'z':
             c0, c1 = v0.co.z, v1.co.z
         elif ax == 'x':
             c0, c1 = v0.co.x, v1.co.x
         else:
             c0, c1 = v0.co.y, v1.co.y
-        tc = target_cs[0]
-        # Sample near target
-        if abs(c0 - tc) < 0.01:
-            sample_cs.append(c0)
-        if abs(c1 - tc) < 0.01:
-            sample_cs.append(c1)
-        # Must have at least one vertex near target (0.45*thick < half wall)
-        if abs(c0 - tc) > thickness * 0.45 and abs(c1 - tc) > thickness * 0.45:
-            continue
+        # Must have at least one vertex near any target
+        if all(abs(c - tc) > thickness * 0.45 for tc in target_cs for c in (c0, c1)): continue
         # Distance in perpendicular plane
         if ax == 'z':
             mx, my = (v0.co.x+v1.co.x)/2, (v0.co.y+v1.co.y)/2

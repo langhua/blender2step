@@ -1179,7 +1179,7 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
         description=_t("Keep the cutter object visible after cutting (for preview/debug)"))
     hole_radius: FloatProperty(name=_t("Radius"), default=5.0, min=0.1, max=500.0)
     hole_fillet: FloatProperty(name=_t("Edge Fillet"), default=0.0, min=0.0, max=100.0,
-        description=_t("Fillet radius for hole edge on shell surface (0=sharp)"))
+        description=_t("Fillet radius for hole edge (max 0.4×wall thickness to prevent overlap)"))
     hole_fillet_type: EnumProperty(
         name=_t("Fillet Side"),
         items=[('0', _t("Outer"), _t("Fillet outer surface edge only")),
@@ -1294,6 +1294,15 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
         t = obj.get('wall_thickness', 2.0)
         S = 0.001 if obj.get('unit', 'mm') == 'mm' else 1.0
 
+        # Validate fillet radius: 0 ≤ fr ≤ 0.4 × wall thickness
+        max_fr = t * 0.4 + 0.001
+        if self.hole_fillet < 0:
+            self.report({'ERROR'}, _t("Edge Fillet must be ≥ 0"))
+            return {'CANCELLED'}
+        if self.hole_fillet > 0.0001 and self.hole_fillet > max_fr:
+            self.report({'ERROR'}, _t("Edge Fillet must be ≤ 0.4×wall thickness (%.1fmm) to prevent inner/outer overlap") % (t * 0.4))
+            return {'CANCELLED'}
+
         # 3D cursor position in Blender units (m) — world space
         cursor = context.scene.cursor.location
         loc = obj.location
@@ -1370,7 +1379,7 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
             cutter.location = (px, py, pz)
             entry = f"{px_r/S:.3f},{py_r/S:.3f},{pz_r/S:.3f},{self.hole_radius:.3f},1,{self.hole_fillet:.3f},{self.hole_fillet_type},{face_code}"
             _hole_fillet_info = (self.hole_fillet, self.hole_radius, face_code,
-                                 px, py, pz, thickness, hw, hd, h)
+                                 px, py, pz, t * S, hw, hd, h)
             _hole_fillet_type = self.hole_fillet_type
         else:
             _hole_fillet_info = None
@@ -1387,7 +1396,7 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
             cutter.name = "Hole_RR"
             entry = f"{px_r/S:.3f},{py_r/S:.3f},{pz_r/S:.3f},{self.hole_width:.3f},2,{self.hole_height:.3f},{self.hole_cr:.3f},{self.hole_fillet:.3f},{self.hole_fillet_type},{face_code}"
             _hole_fillet_info = (self.hole_fillet, self.hole_width, self.hole_height, self.hole_cr, face_code,
-                                 px, py, pz, thickness, hw, hd, h)
+                                 px, py, pz, t * S, hw, hd, h)
             _hole_fillet_type = self.hole_fillet_type
 
         # Apply boolean (re-select shell: primitive_cylinder_add switched active to cutter)
@@ -1396,9 +1405,10 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
         mod.object = cutter
         mod.operation = 'DIFFERENCE'
         mod.solver = 'FAST'
-        cutter.hide_viewport = True
         bpy.context.view_layer.update()
         bpy.ops.object.modifier_apply(modifier="HoleBool")
+        bpy.context.view_layer.update()
+        cutter.hide_viewport = True
         if _hole_fillet_info and _hole_fillet_info[0] > 0.0001:
             if self.hole_type == 'round':
                 _fillet_hole_edge(obj, *_hole_fillet_info, S, fillet_type=_hole_fillet_type)
@@ -1422,6 +1432,10 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
 def _fillet_hole_edge(obj, fillet_mm, hole_r_mm, face_code, px, py, pz, thickness, hw, hd, h, S=0.001, fillet_type='0'):
     """Apply fillet to hole edge on shell using bpy.ops.mesh.bevel."""
     import bmesh
+    # Cap radius to prevent inner/outer fillet overlap
+    max_fr = (thickness / S) * 0.4  # thickness in Blender units, convert to mm
+    if fillet_mm > max_fr + 0.001:
+        fillet_mm = max_fr
     loc = obj.location
     px_l = px - loc.x
     py_l = py - loc.y
@@ -1501,7 +1515,7 @@ def _fillet_hole_edge(obj, fillet_mm, hole_r_mm, face_code, px, py, pz, thicknes
         print(f"[STEP Exporter]   axis samples near {tc:.4f}: [{min(sample_cs):.4f},{max(sample_cs):.4f}] n={len(sample_cs)}")
     if count > 0:
         bmesh.update_edit_mesh(obj.data)
-        bpy.ops.mesh.bevel(offset_type='OFFSET', offset=fr, segments=16, profile=0.5, affect='EDGES')
+        bpy.ops.mesh.bevel(offset_type='OFFSET', offset=fr, segments=32, profile=0.5, affect='EDGES')
     else:
         print(f"[STEP Exporter]   => NO edges found! ax={ax} eps={eps:.4f}")
     bpy.ops.object.mode_set(mode='OBJECT')
@@ -1511,6 +1525,10 @@ def _fillet_rrect_edge(obj, fillet_mm, hole_w_mm, hole_h_mm, hole_cr_mm, face_co
                        px, py, pz, thickness, hw, hd, h, S=0.001, fillet_type='0'):
     """Apply fillet to rrect hole edge on shell."""
     import bmesh
+    # Cap radius to prevent inner/outer fillet overlap
+    max_fr = (thickness / S) * 0.4  # thickness is in Blender units, convert to mm
+    if fillet_mm > max_fr + 0.001:
+        fillet_mm = max_fr
     loc = obj.location
     px_l, py_l, pz_l = px - loc.x, py - loc.y, pz - loc.z
     fr = fillet_mm * S
@@ -1554,9 +1572,10 @@ def _fillet_rrect_edge(obj, fillet_mm, hole_w_mm, hole_h_mm, hole_cr_mm, face_co
             edge.select = True
             count += 1
     if count > 0:
+        bm.select_flush(True)
         bmesh.update_edit_mesh(obj.data)
-        bpy.ops.mesh.bevel(offset_type='OFFSET', offset=fr, segments=16, profile=0.5, affect='EDGES')
-    print(f"[STEP Exporter] _fillet_rrect_edge: ax={ax} found={count}")
+        bpy.ops.mesh.bevel(offset_type='OFFSET', offset=fr, segments=32, profile=0.5, affect='EDGES')
+    print(f"[STEP Exporter] _fillet_rrect_edge: ax={ax} type={ft} found={count} fr={fillet_mm:.1f}")
     bpy.ops.object.mode_set(mode='OBJECT')
 
 
@@ -1721,6 +1740,14 @@ class STEP_EXPORTER_OT_edit_shell_hole(Operator):
 
     def execute(self, context):
         obj = context.active_object
+        t = obj.get('wall_thickness', 2.0)
+        max_fr = t * 0.4 + 0.001
+        if self.edit_fillet < 0:
+            self.report({'ERROR'}, _t("Edge Fillet must be ≥ 0"))
+            return {'CANCELLED'}
+        if self.edit_fillet > 0.0001 and self.edit_fillet > max_fr:
+            self.report({'ERROR'}, _t("Edge Fillet must be ≤ 0.4×wall thickness (%.1fmm) to prevent inner/outer overlap") % (t * 0.4))
+            return {'CANCELLED'}
         holes = _parse_hole_list(obj)
         if self.hole_index < 0 or self.hole_index >= len(holes):
             return {'CANCELLED'}

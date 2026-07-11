@@ -340,7 +340,8 @@ _STRINGS = {
     "Fillet inner surface edge only": {"zh_CN": "仅内侧孔边圆角"},
     "Both": {"zh_CN": "双面"},
     "Fillet both inner and outer edges": {"zh_CN": "内外侧均圆角"},
-    "Fillet radius for hole edge on shell surface (0=sharp)": {"zh_CN": "孔口边缘圆角半径（0=直角）"},
+    "Edge Fillet must be ≥ 0": {"zh_CN": "孔口圆角必须 ≥ 0"},
+    "Edge Fillet must be ≤ 0.4×wall thickness (%.1fmm) to prevent inner/outer overlap": {"zh_CN": "孔口圆角必须 ≤ 0.4×壁厚 (%.1fmm)，防止内外侧重叠"},
     "  → RRect {w:.1f}×{h:.1f}mm cr={cr:.1f}": {"zh_CN": "  → 圆角矩形 {w:.1f}×{h:.1f}mm cr={cr:.1f}"},
     "Round Ø{r:.1f}mm fil={fr:.1f}": {"zh_CN": "圆孔 Ø{r:.1f}mm 圆角={fr:.1f}"},
     # Add Hole to Shell dialog

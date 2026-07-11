@@ -3299,6 +3299,9 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                         if (frPos > 0) {
                             size_t frEnd = entry.find(',', frPos);
                             hole_fr = atof(entry.substr(frPos, frEnd != std::string::npos ? frEnd - frPos : std::string::npos).c_str());
+                            // Cap fillet radius to prevent inner/outer overlap
+                            double max_fr = thickness * 0.4;
+                            if (hole_fr > max_fr) hole_fr = max_fr;
                         }
                         if (ftPos > 0) {
                             size_t ftEnd = entry.find(',', ftPos);

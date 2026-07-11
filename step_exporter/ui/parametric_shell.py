@@ -1489,6 +1489,9 @@ def _fillet_hole_edge(obj, fillet_mm, hole_r_mm, face_code, px, py, pz, thicknes
             c0, c1 = v0.co.y, v1.co.y
         # Must have at least one vertex near any target
         if all(abs(c - tc) > thickness * 0.45 for tc in target_cs for c in (c0, c1)): continue
+        # Skip vertical edges connecting outer and inner faces (different Z)
+        if abs(c0 - c1) > thickness * 0.3:
+            continue
         # Distance in perpendicular plane
         if ax == 'z':
             mx, my = (v0.co.x+v1.co.x)/2, (v0.co.y+v1.co.y)/2
@@ -1507,6 +1510,7 @@ def _fillet_hole_edge(obj, fillet_mm, hole_r_mm, face_code, px, py, pz, thicknes
     if sample_cs:
         print(f"[STEP Exporter]   axis samples near {tc:.4f}: [{min(sample_cs):.4f},{max(sample_cs):.4f}] n={len(sample_cs)}")
     if count > 0:
+        bm.select_flush(True)
         bmesh.update_edit_mesh(obj.data)
         bpy.ops.mesh.bevel(offset_type='OFFSET', offset=fr, segments=32, profile=0.5, affect='EDGES')
     else:
@@ -1557,6 +1561,8 @@ def _fillet_rrect_edge(obj, fillet_mm, hole_w_mm, hole_h_mm, hole_cr_mm, face_co
         elif ax == 'x': c0, c1 = v0.co.x, v1.co.x
         else: c0, c1 = v0.co.y, v1.co.y
         if all(abs(c - tc) > thickness * 0.45 for tc in target_cs for c in (c0, c1)): continue
+        # Skip vertical edges connecting outer and inner faces
+        if abs(c0 - c1) > thickness * 0.3: continue
         if ax == 'z': x0,y0,x1,y1,cx,cy = v0.co.x,v0.co.y,v1.co.x,v1.co.y,px_l,py_l
         elif ax == 'x': x0,y0,x1,y1,cx,cy = v0.co.y,v0.co.z,v1.co.y,v1.co.z,py_l,pz_l
         else: x0,y0,x1,y1,cx,cy = v0.co.x,v0.co.z,v1.co.x,v1.co.z,px_l,pz_l
@@ -1883,11 +1889,15 @@ def _rebuild_shell_mesh(obj):
         except (ValueError, IndexError):
             continue
 
+        _rebuild_fillet_info = None
+        _rebuild_fillet_type = '0'
+
         if tc == 1:
             radius = float(parts[3]) * S
             fillet_r = float(parts[5]) * S if len(parts) >= 7 else 0.0
             hole_r_mm = float(parts[3])
             fillet_mm = float(parts[5]) if len(parts) >= 7 else 0.0
+            fillet_type = parts[6] if len(parts) >= 8 else '0'
             cutter_depth = thickness * 4.0
             bpy.ops.mesh.primitive_cylinder_add(
                 vertices=64, radius=radius, depth=cutter_depth, location=(0, 0, 0))
@@ -1898,16 +1908,24 @@ def _rebuild_shell_mesh(obj):
             elif face in (4, 5):
                 cutter.rotation_euler = (math.pi / 2, 0, 0)
             cutter.location = (cx * S, cy * S, cz * S)
-            _rebuild_fillet_info = (fillet_mm, hole_r_mm, face, cx*S, cy*S, cz*S, thickness, hw, hd, h/S if unit == 'mm' else h)
+            _rebuild_fillet_info = (fillet_mm, hole_r_mm, face, cx*S, cy*S, cz*S, thickness, hw, hd, h * S)
+            _rebuild_fillet_type = fillet_type
         elif tc == 2 and len(parts) >= 7:
-            _rebuild_fillet_info = None
             rw_hole = float(parts[3]) * S
             rh_hole = float(parts[5]) * S
             rcr_hole = float(parts[6]) * S
+            hole_w_mm = float(parts[3])
+            hole_h_mm = float(parts[5])
+            hole_cr_mm = float(parts[6])
+            fillet_mm = float(parts[7]) if len(parts) >= 9 else 0.0
+            fillet_type = parts[8] if len(parts) >= 10 else '0'
             cutter_depth = thickness * 4.0
             cutter = STEP_EXPORTER_OT_create_parametric_shell._make_rrect_cutter(
                 None, rw_hole, rh_hole, rcr_hole, cutter_depth,
                 cx * S, cy * S, cz * S, hw, hd, thickness)
+            _rebuild_fillet_info = (fillet_mm, hole_w_mm, hole_h_mm, hole_cr_mm, face,
+                                    cx*S, cy*S, cz*S, thickness, hw, hd, h * S)
+            _rebuild_fillet_type = fillet_type
         else:
             continue
 
@@ -1920,5 +1938,8 @@ def _rebuild_shell_mesh(obj):
         bpy.context.view_layer.update()
         bpy.ops.object.modifier_apply(modifier="HoleRebuild")
         if _rebuild_fillet_info and _rebuild_fillet_info[0] > 0.0001:
-            _fillet_hole_edge(obj, *_rebuild_fillet_info)
+            if tc == 1:
+                _fillet_hole_edge(obj, *_rebuild_fillet_info, fillet_type=_rebuild_fillet_type)
+            else:
+                _fillet_rrect_edge(obj, *_rebuild_fillet_info, fillet_type=_rebuild_fillet_type)
         bpy.data.objects.remove(cutter, do_unlink=True)

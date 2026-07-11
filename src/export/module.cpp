@@ -3503,7 +3503,10 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                             // Only process planar faces — skip cylindrical hole side walls
                             // (cylindrical faces have ambiguous top/bottom circular wires)
                             Handle(Geom_Surface) sf = BRep_Tool::Surface(face);
-                            if (sf.IsNull() || sf->DynamicType() != STANDARD_TYPE(Geom_Plane)) continue;
+                            if (sf.IsNull() || sf->DynamicType() != STANDARD_TYPE(Geom_Plane)) {
+                                fprintf(stderr, "[STEP Exporter]   SKIP non-planar face: fc=%d bbox=(%.1f,%.1f,%.1f)-(%.1f,%.1f,%.1f)\n", hf.fc, x1,y1,z1,x2,y2,z2);
+                                continue;
+                            }
                             fprintf(stderr, "[STEP Exporter]   outer face: fc=%d isOuter=1 bbox=(%.1f,%.1f,%.1f)-(%.1f,%.1f,%.1f)\n", hf.fc, x1,y1,z1,x2,y2,z2);
                             double bestArea = 1e30;
                             double bestDist = 1e30;

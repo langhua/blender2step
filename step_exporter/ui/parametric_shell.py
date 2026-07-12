@@ -682,7 +682,7 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         hw_outer, hd_outer = w / 2.0, d / 2.0
         hh = h / 2.0
         total_inset = min(hw_outer, hd_outer) * curve_ratio * 0.5
-        seg = max(24, int(cr / min(w, d) * 48))
+        seg = max(24, int(cr / min(w, d) * 64))  # more segments for cleaner boolean cuts
         side_segs = seg * 2
         num_pts = 8 * seg
         
@@ -1399,7 +1399,7 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
                                  px, py, pz, t * S, hw, hd, h)
             _hole_fillet_type = self.hole_fillet_type
 
-        # Apply boolean (re-select shell: primitive_cylinder_add switched active to cutter)
+        # Apply boolean
         bpy.context.view_layer.objects.active = obj
         mod = obj.modifiers.new(name="HoleBool", type='BOOLEAN')
         mod.object = cutter
@@ -1408,8 +1408,15 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
         bpy.context.view_layer.update()
         bpy.ops.object.modifier_apply(modifier="HoleBool")
         bpy.context.view_layer.update()
+        # Merge near-duplicate verts
+        import bmesh as _bm_cl
+        _bmc = _bm_cl.new(); _bmc.from_mesh(obj.data)
+        _bm_cl.ops.remove_doubles(_bmc, verts=_bmc.verts, dist=0.00005)
+        _bmc.to_mesh(obj.data); _bmc.free()
         cutter.hide_viewport = True
-        if _hole_fillet_info and _hole_fillet_info[0] > 0.0001:
+        # Skip viewport fillet for cosine-curved walls (Blender can't bevel on curved surfaces)
+        # Fillet params preserved in window_data → STEP export via OCCT handles it correctly
+        if _hole_fillet_info and _hole_fillet_info[0] > 0.0001 and obj.get('corner_type') != 'curved':
             if self.hole_type == 'round':
                 _fillet_hole_edge(obj, *_hole_fillet_info, S, fillet_type=_hole_fillet_type)
             else:
@@ -1433,17 +1440,14 @@ def _fillet_hole_edge(obj, fillet_mm, hole_r_mm, face_code, px, py, pz, thicknes
     """Apply fillet to hole edge on shell using bpy.ops.mesh.bevel."""
     import bmesh
     # Cap radius to prevent inner/outer fillet overlap
-    max_fr = (thickness / S) * 0.4  # thickness in Blender units, convert to mm
+    max_fr = (thickness / S) * 0.4
     if fillet_mm > max_fr + 0.001:
         fillet_mm = max_fr
     loc = obj.location
-    px_l = px - loc.x
-    py_l = py - loc.y
-    pz_l = pz - loc.z
-    fr = fillet_mm * S
-    hr = hole_r_mm * S
-    eps = max(thickness * 2.0, 0.002)  # wider tolerance for side walls
-    dist_tol = max(eps * 2, hr * 0.5)  # wider tolerance
+    px_l = px - loc.x; py_l = py - loc.y; pz_l = pz - loc.z
+    fr = fillet_mm * S; hr = hole_r_mm * S
+    eps = max(thickness * 2.0, 0.002)
+    dist_tol = max(eps * 2, hr * 0.5)
 
     # Determine check axis and target coordinates per face
     # face 0=bottom(Z), 1=top(Z), 2=left(X-), 3=right(X+), 4=front(Y-), 5=back(Y+)
@@ -1934,10 +1938,15 @@ def _rebuild_shell_mesh(obj):
         mod.object = cutter
         mod.operation = 'DIFFERENCE'
         mod.solver = 'FAST'
+        mod.use_self = True
         cutter.hide_viewport = True
         bpy.context.view_layer.update()
         bpy.ops.object.modifier_apply(modifier="HoleRebuild")
-        if _rebuild_fillet_info and _rebuild_fillet_info[0] > 0.0001:
+        import bmesh as _bm_cl2
+        _bmc2 = _bm_cl2.new(); _bmc2.from_mesh(obj.data)
+        _bm_cl2.ops.remove_doubles(_bmc2, verts=_bmc2.verts, dist=0.00005)
+        _bmc2.to_mesh(obj.data); _bmc2.free()
+        if _rebuild_fillet_info and _rebuild_fillet_info[0] > 0.0001 and obj.get('corner_type') != 'curved':
             if tc == 1:
                 _fillet_hole_edge(obj, *_rebuild_fillet_info, fillet_type=_rebuild_fillet_type)
             else:

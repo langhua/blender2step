@@ -2660,7 +2660,7 @@ TopoDS_Shape create_parametric_shell_solid(double width, double depth, double he
                                             double bottom_fillet,
                                             double curve_ratio) {
     bool rounded = (corner_type && (strcmp(corner_type, "rounded") == 0) && corner_radius > 0.001);
-    bool curved = (corner_type && (strcmp(corner_type, "curved") == 0) && corner_radius > 0.001);
+    bool curved = (corner_type && strcmp(corner_type, "curved") == 0 && corner_radius > 0.001);
     double cr = (rounded || curved) ? std::min(corner_radius, std::min(width/2.0, depth/2.0)) : 0.0;
     bool has_rim = (rim_type && strcmp(rim_type, "none") != 0 && rim_width > 0.001 && rim_height > 0.001);
     bool is_trapezoid = false;
@@ -3318,32 +3318,27 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                     double hole_r = r_or_w;
                     if (parsed == 6) face_code = extra1;  // old format: face is 6th field
                     double half_w = width / 2.0, half_d = depth / 2.0;
-                    // Cylinder starts at shell surface, extends inward (so outer end face IS at the surface)
-                    double cyl_len = thickness + 4.0;  // wall thickness + margin into cavity
+                    // Cylinder centered on wall — add extra margin for cosine-curved surfaces
+                    double curve_inset = std::min(half_w, half_d) * curve_ratio * 0.5;  // max wall bulge from curve
+                    double cyl_len = thickness * 4.0 + curve_inset * 2.0;  // extra margin on both sides of wall
 
                     // Use face_code if available, otherwise fall back to distance detection
                     gp_Ax2 ax;
                     if (face_code >= 0) {
                         // 0=bottom, 1=top, 2=left(X-), 3=right(X+), 4=front(Y-), 5=back(Y+)
-                        // Cylinder starts AT the wall surface, extends inward
+                        // Cylinder centered on wall surface, extends ±cyl_len/2
                         if (face_code == 0) {
-                            // Bottom: wall at z=pos_z, cylinder extends +Z inward
-                            ax = gp_Ax2(gp_Pnt(cx, cy, pos_z), gp_Dir(0, 0, 1));
+                            ax = gp_Ax2(gp_Pnt(cx, cy, pos_z - cyl_len / 2.0), gp_Dir(0, 0, 1));
                         } else if (face_code == 1) {
-                            // Top: wall at z=pos_z+height, cylinder extends -Z inward
-                            ax = gp_Ax2(gp_Pnt(cx, cy, pos_z + height), gp_Dir(0, 0, -1));
+                            ax = gp_Ax2(gp_Pnt(cx, cy, pos_z + height - cyl_len / 2.0), gp_Dir(0, 0, 1));
                         } else if (face_code == 2) {
-                            // Left (X-): wall at x=pos_x-half_w, cylinder extends +X inward
-                            ax = gp_Ax2(gp_Pnt(pos_x - half_w, cy, cz), gp_Dir(1, 0, 0));
+                            ax = gp_Ax2(gp_Pnt(pos_x - half_w - cyl_len / 2.0, cy, cz), gp_Dir(1, 0, 0));
                         } else if (face_code == 3) {
-                            // Right (X+): wall at x=pos_x+half_w, cylinder extends -X inward
-                            ax = gp_Ax2(gp_Pnt(pos_x + half_w, cy, cz), gp_Dir(-1, 0, 0));
+                            ax = gp_Ax2(gp_Pnt(pos_x + half_w - cyl_len / 2.0, cy, cz), gp_Dir(1, 0, 0));
                         } else if (face_code == 4) {
-                            // Front (Y-): wall at y=pos_y-half_d, cylinder extends +Y inward
-                            ax = gp_Ax2(gp_Pnt(cx, pos_y - half_d, cz), gp_Dir(0, 1, 0));
+                            ax = gp_Ax2(gp_Pnt(cx, pos_y - half_d - cyl_len / 2.0, cz), gp_Dir(0, 1, 0));
                         } else { // face_code == 5
-                            // Back (Y+): wall at y=pos_y+half_d, cylinder extends -Y inward
-                            ax = gp_Ax2(gp_Pnt(cx, pos_y + half_d, cz), gp_Dir(0, -1, 0));
+                            ax = gp_Ax2(gp_Pnt(cx, pos_y + half_d - cyl_len / 2.0, cz), gp_Dir(0, 1, 0));
                         }
                         std::cout << "[STEP Exporter] Hole cutter: circular r=" << hole_r
                                   << " at (" << cx << "," << cy << "," << cz << ") face=" << (int)face_code << std::endl;

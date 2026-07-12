@@ -237,8 +237,12 @@ Cylinder Gallery has 192 cylinders, the first 8 are original, the others are der
 
 Here is a gif shows how the cylinder gallery is generated:
 
+<details>
+<summary>▶ 点击播放演示</summary>
 
 <img src="./docs/images/create_cylinder_gallery.gif" width="900">
+
+</details>
 
 ### Cone Gallery
 

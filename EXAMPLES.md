@@ -7,22 +7,37 @@ blender2step 内置参数化圆柱体生成器，支持标准圆柱、锥度圆�
 
 ### Cylinder Gallery（标准圆柱）
 
+<details>
+<summary>▶ 点击播放演示</summary>
+
 标准圆柱、锥度圆柱、倒角圆柱、圆角圆柱、通孔圆柱等变体，
 通过 `step_exporter/examples/create_cylinder_gallery.py` 脚本自动生成。
 
 ![Cylinder Gallery](./docs/images/create_cylinder_gallery.gif)
 
+</details>
+
 ### Cone Gallery（锥形圆柱）
+
+<details>
+<summary>▶ 点击播放演示</summary>
 
 锥形圆柱体变体：标准锥、倒锥、台阶孔锥等，通过 `step_exporter/examples/create_cone_gallery.py` 生成。
 
 ![Cone Gallery](./docs/images/create_cone_gallery.gif)
 
+</details>
+
 ### Inverted Cone Gallery（倒锥圆柱）
+
+<details>
+<summary>▶ 点击播放演示</summary>
 
 倒锥形圆柱体变体，通过 `step_exporter/examples/create_cone_gallery_inverted.py` 生成。
 
 ![Inverted Cone Gallery](./docs/images/create_inv_cone_gallery.gif)
+
+</details>
 
 ---
 
@@ -46,6 +61,39 @@ blender2step 内置参数化圆柱体生成器，支持标准圆柱、锥度圆�
 同样在 Autodesk Fusion 360 中兼容打开。
 
 ![STEP in Fusion 360](./docs/images/step_exporter_test_fusion.png)
+
+---
+
+## FreeCAD Gallery 验证
+
+以下为三个 Gallery 导出的 STEP 文件在 FreeCAD 中的验证截图。
+
+### Cylinder Gallery in FreeCAD
+
+<details>
+<summary>▶ 点击播放演示</summary>
+
+![FreeCAD Cylinder Gallery](./docs/images/freecad_cylinder_gallery.gif)
+
+</details>
+
+### Cone Gallery in FreeCAD
+
+<details>
+<summary>▶ 点击播放演示</summary>
+
+![FreeCAD Cone Gallery](./docs/images/freecad_cone_gallery.gif)
+
+</details>
+
+### Inverted Cone Gallery in FreeCAD
+
+<details>
+<summary>▶ 点击播放演示</summary>
+
+![FreeCAD Inverted Cone Gallery](./docs/images/freecad_inv_cone_gallery.gif)
+
+</details>
 
 ---
 

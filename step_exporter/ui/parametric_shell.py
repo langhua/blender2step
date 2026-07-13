@@ -1479,24 +1479,34 @@ def _apply_fillet_torus_union(obj, hole_r_mm, fillet_mm, face_code, px, py, pz, 
                 vals.append(v.co[ax])
         return max(vals) if (vals and sign > 0) else (min(vals) if vals else None)
     
-    sur_top = _sample_at(z_top)
-    sur_bot = _sample_at(z_bot)
+    # Sample 4 Z-levels for robustness
+    dz_step = (z_top - z_bot) / 3.0
+    sample_zs = [z_bot, z_bot + dz_step, z_top - dz_step, z_top]
+    samples = []  # (z, surface_value)
+    for sz in sample_zs:
+        sv = _sample_at(sz)
+        if sv is not None:
+            samples.append((sz, sv))
+            # Debug sphere
+            wz = sz + obj.location.z
+            name = f"Surf{len(samples)}"
+            if face_code in (4,5):
+                bpy.ops.mesh.primitive_uv_sphere_add(radius=0.00035, location=(px, sv + obj.location.y, wz))
+            elif face_code in (2,3):
+                bpy.ops.mesh.primitive_uv_sphere_add(radius=0.00035, location=(sv + obj.location.x, py, wz))
+            bpy.context.active_object.name = name; bpy.context.active_object.display_type = 'WIRE'
     _bmv.free()
     
-    # Debug spheres
-    sur_ok = (sur_top is not None and sur_bot is not None)
-    if sur_ok:
-        for z_val, sur_val, name in [(z_top, sur_top, "SurfTop"), (z_bot, sur_bot, "SurfBot")]:
-            wz = z_val + obj.location.z
-            if face_code in (4,5):
-                bpy.ops.mesh.primitive_uv_sphere_add(radius=0.0004, location=(px, sur_val + obj.location.y, wz))
-            elif face_code in (2,3):
-                bpy.ops.mesh.primitive_uv_sphere_add(radius=0.0004, location=(sur_val + obj.location.x, py, wz))
-            bpy.context.active_object.name = name; bpy.context.active_object.display_type = 'WIRE'
-    
-    if sur_ok and abs(z_top - z_bot) > 0.00001:
-        dinset_dz = -(sur_top - sur_bot) / (z_top - z_bot) * sign
+    # Use best 2 samples (largest Z-span) for slope; fallback to analytical if < 2 samples
+    if len(samples) >= 2:
+        samples.sort(key=lambda x: x[0])
+        # Use first and last sample for max Z-span
+        z1, s1 = samples[0]
+        z2, s2 = samples[-1]
+        dinset_dz = -(s2 - s1) / (z2 - z1) * sign if abs(z2 - z1) > 0.00001 else 0.0
+        sur_ok = True
     else:
+        sur_ok = False
         total_inset_m = total_inset * S
         def _inset(z):
             tf = (hh - z) / (2.0 * hh) if hh > 0.0001 else 0.5
@@ -1571,9 +1581,10 @@ def _apply_fillet_torus_union(obj, hole_r_mm, fillet_mm, face_code, px, py, pz, 
     else:                 ox = world_thick
     
     # Outer position: from sampled surface if available
-    if sur_ok:
-        slope = (sur_top - sur_bot) / (z_top - z_bot)
-        sur_mid = sur_top + slope * (mesh_z - z_top)
+    if sur_ok and len(samples) >= 2:
+        z1, s1 = samples[0]; z2, s2 = samples[-1]
+        slope = (s2 - s1) / (z2 - z1)
+        sur_mid = s1 + slope * (mesh_z - z1)
         if face_code in (4, 5):
             outer_pos = (px, sur_mid + obj.location.y, pz)
         elif face_code in (2, 3):
@@ -1589,46 +1600,98 @@ def _apply_fillet_torus_union(obj, hole_r_mm, fillet_mm, face_code, px, py, pz, 
     else:
         euler_inner = (euler_rot[0], euler_rot[1] + math.pi, euler_rot[2])
     
-    # --- Step 1: Straight through hole (radius hr) ---
+    # --- Step 1: Recess cut (cylinder hr+fr, depth fr) for fillet ring to sit in ---
+    # --- Create fillet ring as standalone object (no Boolean) ---
+    def _make_ring(pos, euler, name):
+        bm = _bm_qt.new()
+        vv = []
+        for i in range(seg_a + 1):
+            th = 2.0 * math.pi * i / seg_a; ct = math.cos(th); st = math.sin(th)
+            ring = []
+            for j in range(seg_p + 1):
+                ph = math.pi / 2.0 + (math.pi / 2.0) * j / seg_p
+                rc = (hr + fr) + fr * math.cos(ph)
+                zc = -fr + fr * math.sin(ph) - 0.00002
+                ring.append(bm.verts.new((rc * ct, rc * st, zc)))
+            vv.append(ring)
+        bm.verts.ensure_lookup_table()
+        for i in range(seg_a):
+            for j in range(seg_p):
+                bm.faces.new([vv[i][j], vv[i+1][j], vv[i+1][j+1], vv[i][j+1]])
+        msh = bpy.data.meshes.new(name + "_M")
+        bm.to_mesh(msh); bm.free()
+        robj = bpy.data.objects.new(name, msh)
+        bpy.context.collection.objects.link(robj)
+        robj.matrix_world = _Mtx.Translation(pos) @ _Eul(euler, 'XYZ').to_matrix().to_4x4()
+        robj.hide_viewport = False; robj.display_type = 'WIRE'
+        return robj
+    
+    # --- Step 1: Shallow recess (depth=fr) using EXACT solver ---
+    if fillet_type in ('0', '2'):
+        ring = _make_ring(outer_pos, euler_rot, "FilletOuter")
+        ring_max_r2 = 0.0
+        for v in ring.data.vertices:
+            co = ring.matrix_world @ v.co
+            dx = co.x - outer_pos[0]; dy = co.y - outer_pos[1]
+            r2 = dx*dx + dy*dy
+            if r2 > ring_max_r2: ring_max_r2 = r2
+        tilt_angle = abs(euler_rot[0]) - math.pi/2.0 if face_code in (4,5) else (abs(euler_rot[1]) - math.pi/2.0 if face_code in (2,3) else 0.0)
+        hole_r = math.sqrt(ring_max_r2) * abs(math.cos(tilt_angle))
+        bpy.data.objects.remove(ring, do_unlink=True)
+    else:
+        hole_r = hr + fr
+    
+    # Recess cylinder: depth=fr, at outer surface, offset into wall
+    from mathutils import Vector as _Vec
+    bpy.ops.mesh.primitive_cylinder_add(vertices=64, radius=hole_r, depth=fr)
+    rc = bpy.context.active_object; rc.name = "Recess"
+    rc.matrix_world = _Mtx.Translation(outer_pos) @ _Eul(euler_rot, 'XYZ').to_matrix().to_4x4() @ _Mtx.Translation((0,0,-fr/2+fr*0.3))
+    
+    bpy.context.view_layer.objects.active = obj
+    mod = obj.modifiers.new(name="Recess", type='BOOLEAN')
+    mod.object = rc; mod.operation = 'DIFFERENCE'; mod.solver = 'EXACT'
+    mod.use_self = True
+    bpy.context.view_layer.update()
+    bpy.ops.object.modifier_apply(modifier="Recess")
+    bpy.data.objects.remove(rc, do_unlink=True)
+    print(f"[STEP Exporter] Recess OK, hole_r={hole_r*1000:.2f}mm")
+    
+    # --- Step 2: FilletOuter ring + UNION ---
+    if fillet_type in ('0', '2'):
+        ring = _make_ring(outer_pos, euler_rot, "FilletOuter")
+        bpy.context.view_layer.objects.active = obj
+        obj.select_set(True)
+        ring.select_set(True)
+        bpy.ops.object.join()
+        bpy.ops.object.mode_set(mode='EDIT')
+        bpy.ops.mesh.select_all(action='SELECT')
+        bpy.ops.mesh.intersect_boolean(operation='UNION', solver='EXACT')
+        bpy.ops.mesh.select_all(action='DESELECT')
+        bpy.ops.object.mode_set(mode='OBJECT')
+        print(f"[STEP Exporter] FilletOuter union")
+    
+    # --- Step 3: Through hole (radius hr) ---
     hole_len = thickness * 10.0
     hole_center = (px + ox/2, py + oy/2, pz + oz/2)
-    bpy.ops.mesh.primitive_cylinder_add(vertices=64, radius=hr + 0.00002, depth=hole_len)
-    hole_cutter = bpy.context.active_object
-    hole_cutter.name = "ThruHole"
-    if face_code == 4:    hole_euler = (math.pi/2, 0.0, 0.0)
-    elif face_code == 5:  hole_euler = (-math.pi/2, 0.0, 0.0)
-    elif face_code == 0:  hole_euler = (0.0, 0.0, 0.0)
-    elif face_code == 1:  hole_euler = (math.pi, 0.0, 0.0)
-    elif face_code == 2:  hole_euler = (0.0, -math.pi/2, 0.0)
-    else:                 hole_euler = (0.0, math.pi/2, 0.0)
-    hole_cutter.matrix_world = _Mtx.Translation(hole_center) @ _Eul(hole_euler, 'XYZ').to_matrix().to_4x4()
+    bpy.ops.mesh.primitive_cylinder_add(vertices=64, radius=hr, depth=hole_len, location=hole_center)
+    hc = bpy.context.active_object; hc.name = "ThruHole"
+    if face_code == 4:    he = (math.pi/2, 0.0, 0.0)
+    elif face_code == 5:  he = (-math.pi/2, 0.0, 0.0)
+    elif face_code == 0:  he = (0.0, 0.0, 0.0)
+    elif face_code == 1:  he = (math.pi, 0.0, 0.0)
+    elif face_code == 2:  he = (0.0, -math.pi/2, 0.0)
+    else:                 he = (0.0, math.pi/2, 0.0)
+    hc.rotation_euler = he
+    bpy.context.view_layer.update()
     bpy.context.view_layer.objects.active = obj
     mod = obj.modifiers.new(name="ThruHole", type='BOOLEAN')
-    mod.object = hole_cutter; mod.operation = 'DIFFERENCE'; mod.solver = 'FAST'
-    mod.use_hole_tolerant = True
+    mod.object = hc; mod.operation = 'DIFFERENCE'; mod.solver = 'EXACT'
+    mod.use_self = True
     bpy.context.view_layer.update()
-    try:
-        bpy.ops.object.modifier_apply(modifier="ThruHole")
-    except:
-        print("[STEP Exporter] ThruHole Boolean failed!")
-        hole_cutter.hide_viewport = False; hole_cutter.display_type = 'WIRE'
-        return
-    import bmesh as _bm_th
-    _bmt = _bm_th.new(); _bmt.from_mesh(obj.data)
-    _bm_th.ops.remove_doubles(_bmt, verts=_bmt.verts, dist=0.00005)
-    _bmt.to_mesh(obj.data); _bmt.free()
-    bpy.context.view_layer.objects.active = hole_cutter
-    bpy.ops.object.delete(use_global=False)
+    bpy.ops.object.modifier_apply(modifier="ThruHole")
+    bpy.data.objects.remove(hc, do_unlink=True)
     
-    # --- Step 2: Fillet rings Boolean UNION ---
-    if fillet_type in ('0', '2'):
-        _build_and_union(outer_pos, euler_rot, "FilletOuter")
-        print(f"[STEP Exporter] Outer fillet: r={ring_r_val*1000:.1f}/{ring_r2_val*1000:.1f}mm, euler=X{euler_rot[0]*180/math.pi:.1f}°")
-    if fillet_type in ('1', '2'):
-        _build_and_union(inner_pos, euler_inner, "FilletInner")
-        print(f"[STEP Exporter] Inner fillet: r={ring_r_val*1000:.1f}/{ring_r2_val*1000:.1f}mm, euler=X{euler_inner[0]*180/math.pi:.1f}°")
-    
-    print(f"[STEP Exporter] Fillet done (type={fillet_type})")
+    print(f"[STEP Exporter] Done (type={fillet_type})")
 
 def _fillet_hole_edge(obj, fillet_mm, hole_r_mm, face_code, px, py, pz, thickness, hw, hd, h, S=0.001, fillet_type='0'):
     """Apply fillet to hole edge on shell using bpy.ops.mesh.bevel."""

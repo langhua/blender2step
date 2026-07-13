@@ -1399,37 +1399,36 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
                                  px, py, pz, t * S, hw, hd, h)
             _hole_fillet_type = self.hole_fillet_type
 
-        # Apply boolean
-        bpy.context.view_layer.objects.active = obj
-        mod = obj.modifiers.new(name="HoleBool", type='BOOLEAN')
-        mod.object = cutter
-        mod.operation = 'DIFFERENCE'
-        mod.solver = 'EXACT'  # EXACT needed for curved surfaces
-        bpy.context.view_layer.update()
-        bpy.ops.object.modifier_apply(modifier="HoleBool")
-        bpy.context.view_layer.update()
-        # Merge near-duplicate verts
-        import bmesh as _bm_cl
-        _bmc = _bm_cl.new(); _bmc.from_mesh(obj.data)
-        _bm_cl.ops.remove_doubles(_bmc, verts=_bmc.verts, dist=0.00005)
-        _bmc.to_mesh(obj.data); _bmc.free()
-        cutter.hide_viewport = True
-        # Skip viewport fillet for cosine-curved walls (Blender can't bevel on curved surfaces)
-        # Fillet params preserved in window_data → STEP export via OCCT handles it correctly
-        # For cosine-curved walls: use torus union approach
-        if _hole_fillet_info and _hole_fillet_info[0] > 0.0001:
-            if obj.get('corner_type') == 'curved' and self.hole_type == 'round':
-                _apply_fillet_torus_union(obj, self.hole_radius, self.hole_fillet,
-                    face_code, px, py, pz, t * S, hw, hd, h, S, fillet_type=_hole_fillet_type)
-            elif self.hole_type == 'round':
-                _fillet_hole_edge(obj, *_hole_fillet_info, S, fillet_type=_hole_fillet_type)
-            else:
-                _fillet_rrect_edge(obj, *_hole_fillet_info, S, fillet_type=_hole_fillet_type)
-        if self.keep_cutter:
-            cutter.hide_viewport = False
-            cutter.display_type = 'WIRE'
-        else:
+        # For cosine-curved: fillet function handles all cuts (cone + ring + hole)
+        if obj.get('corner_type') == 'curved' and self.hole_type == 'round' and _hole_fillet_info and _hole_fillet_info[0] > 0.0001:
             bpy.data.objects.remove(cutter, do_unlink=True)
+            _apply_fillet_torus_union(obj, self.hole_radius, self.hole_fillet,
+                face_code, px, py, pz, t * S, hw, hd, h, S, fillet_type=_hole_fillet_type)
+        else:
+            # Apply boolean through hole
+            bpy.context.view_layer.objects.active = obj
+            mod = obj.modifiers.new(name="HoleBool", type='BOOLEAN')
+            mod.object = cutter
+            mod.operation = 'DIFFERENCE'
+            mod.solver = 'EXACT'
+            bpy.context.view_layer.update()
+            bpy.ops.object.modifier_apply(modifier="HoleBool")
+            bpy.context.view_layer.update()
+            import bmesh as _bm_cl
+            _bmc = _bm_cl.new(); _bmc.from_mesh(obj.data)
+            _bm_cl.ops.remove_doubles(_bmc, verts=_bmc.verts, dist=0.00005)
+            _bmc.to_mesh(obj.data); _bmc.free()
+            cutter.hide_viewport = True
+            if _hole_fillet_info and _hole_fillet_info[0] > 0.0001:
+                if self.hole_type == 'round':
+                    _fillet_hole_edge(obj, *_hole_fillet_info, S, fillet_type=_hole_fillet_type)
+                else:
+                    _fillet_rrect_edge(obj, *_hole_fillet_info, S, fillet_type=_hole_fillet_type)
+            if self.keep_cutter:
+                cutter.hide_viewport = False
+                cutter.display_type = 'WIRE'
+            else:
+                bpy.data.objects.remove(cutter, do_unlink=True)
 
         # Append to window_data (shell-local coords in mm)
         existing = obj.get('window_data', '')
@@ -1455,43 +1454,55 @@ def _apply_fillet_torus_union(obj, hole_r_mm, fillet_mm, face_code, px, py, pz, 
     total_inset = min(hw_outer, hd_outer) * curve_r * 0.5
     hh = h_total / 2.0  # half height in Blender units
     
-    # --- Sample mesh vertices to find surface slope at hole ---
+    # --- Try vertex sampling for angle, fallback to analytical ---
     import bmesh as _bm_v
     _bmv = _bm_v.new(); _bmv.from_mesh(obj.data)
     _bmv.verts.ensure_lookup_table()
     mesh_z = pz - obj.location.z
     z_top = mesh_z + hr + fr
     z_bot = mesh_z - hr - fr
-    # Determine axis and sign for outer surface on this face
-    if face_code == 5:    ax, sign = 1, 1.0   # back: max Y
-    elif face_code == 4:  ax, sign = 1, -1.0  # front: min Y
-    elif face_code == 3:  ax, sign = 0, 1.0   # right: max X
-    elif face_code == 2:  ax, sign = 0, -1.0  # left: min X
-    elif face_code == 1:  ax, sign = 2, 1.0   # top: max Z
-    else:                 ax, sign = 2, -1.0  # bottom: min Z
-    def _find_surface(z_target):
+    if face_code == 5:    ax, sign = 1, 1.0
+    elif face_code == 4:  ax, sign = 1, -1.0
+    elif face_code == 3:  ax, sign = 0, 1.0
+    elif face_code == 2:  ax, sign = 0, -1.0
+    elif face_code == 1:  ax, sign = 2, 1.0
+    else:                 ax, sign = 2, -1.0
+    
+    def _sample_at(z_target):
         best_dz = 1e9
         for v in _bmv.verts:
             dz = abs(v.co.z - z_target)
-            if dz < best_dz:
-                best_dz = dz
-        sur_vals = []
+            if dz < best_dz: best_dz = dz
+        vals = []
         for v in _bmv.verts:
             if abs(abs(v.co.z - z_target) - best_dz) < 0.0001:
-                sur_vals.append(v.co[ax])
-        return max(sur_vals) if (sur_vals and sign > 0) else (min(sur_vals) if sur_vals else None)
-    sur_top = _find_surface(z_top)
-    sur_bot = _find_surface(z_bot)
+                vals.append(v.co[ax])
+        return max(vals) if (vals and sign > 0) else (min(vals) if vals else None)
+    
+    sur_top = _sample_at(z_top)
+    sur_bot = _sample_at(z_bot)
     _bmv.free()
-    if sur_top is not None and sur_bot is not None and abs(z_top - z_bot) > 0.00001:
-        slope = (sur_top - sur_bot) / (z_top - z_bot)
-        dinset_dz = -slope * sign
+    
+    # Debug spheres
+    sur_ok = (sur_top is not None and sur_bot is not None)
+    if sur_ok:
+        for z_val, sur_val, name in [(z_top, sur_top, "SurfTop"), (z_bot, sur_bot, "SurfBot")]:
+            wz = z_val + obj.location.z
+            if face_code in (4,5):
+                bpy.ops.mesh.primitive_uv_sphere_add(radius=0.0004, location=(px, sur_val + obj.location.y, wz))
+            elif face_code in (2,3):
+                bpy.ops.mesh.primitive_uv_sphere_add(radius=0.0004, location=(sur_val + obj.location.x, py, wz))
+            bpy.context.active_object.name = name; bpy.context.active_object.display_type = 'WIRE'
+    
+    if sur_ok and abs(z_top - z_bot) > 0.00001:
+        dinset_dz = -(sur_top - sur_bot) / (z_top - z_bot) * sign
     else:
         total_inset_m = total_inset * S
         def _inset(z):
             tf = (hh - z) / (2.0 * hh) if hh > 0.0001 else 0.5
             return total_inset_m * (1.0 - math.cos(math.pi / 2.0 * max(0.0, min(1.0, tf))))
         dinset_dz = (_inset(z_top) - _inset(z_bot)) / (z_top - z_bot) if abs(z_top - z_bot) > 0.00001 else 0.0
+    print(f"[STEP Exporter] dinset_dz={dinset_dz:.4f}")
     # Compute euler_rot from dinset_dz
     if face_code in (4, 5, 0, 1):
         if face_code == 4: euler_rot = (math.atan2(1.0, dinset_dz), 0.0, 0.0)
@@ -1540,29 +1551,83 @@ def _apply_fillet_torus_union(obj, hole_r_mm, fillet_mm, face_code, px, py, pz, 
         robj.hide_viewport = False; robj.display_type = 'WIRE'
         return robj
     
-    # (px,py,pz) is on the INNER surface (cursor click position).
-    # Straight holes are horizontal → inner & outer ring centers on same horizontal line.
-    # Offset outer ring outward by thickness along world axis (pure Y for Y-faces, etc.)
-    ox = oy = oz = 0.0
-    if face_code == 4:    oy = -thickness   # front: outward -Y
-    elif face_code == 5:  oy = thickness    # back: outward +Y
-    elif face_code == 0:  oz = -thickness   # bottom: outward -Z
-    elif face_code == 1:  oz = thickness    # top: outward +Z
-    elif face_code == 2:  ox = -thickness   # left: outward -X
-    else:                 ox = thickness    # right: outward +X
+    # --- Step 1: Compute positions ---
+    # Compute wall offset along world axis, accounting for cosine surface tilt.
+    if face_code in (4, 5):
+        tilt = abs(euler_rot[0]) - math.pi/2.0 if face_code == 5 else euler_rot[0] - math.pi/2.0
+        world_thick = thickness * math.cos(tilt)
+    elif face_code in (2, 3):
+        tilt = abs(euler_rot[1]) - math.pi/2.0
+        world_thick = thickness * math.cos(tilt)
+    else:
+        world_thick = thickness
     
-    # Inner ring: flip 180° around primary axis
+    ox = oy = oz = 0.0
+    if face_code == 4:    oy = -world_thick
+    elif face_code == 5:  oy = world_thick
+    elif face_code == 0:  oz = -world_thick
+    elif face_code == 1:  oz = world_thick
+    elif face_code == 2:  ox = -world_thick
+    else:                 ox = world_thick
+    
+    # Outer position: from sampled surface if available
+    if sur_ok:
+        slope = (sur_top - sur_bot) / (z_top - z_bot)
+        sur_mid = sur_top + slope * (mesh_z - z_top)
+        if face_code in (4, 5):
+            outer_pos = (px, sur_mid + obj.location.y, pz)
+        elif face_code in (2, 3):
+            outer_pos = (sur_mid + obj.location.x, py, pz)
+        else:
+            outer_pos = (px, py, sur_mid + obj.location.z)
+    else:
+        outer_pos = (px + ox, py + oy, pz + oz)
+    inner_pos = (px, py, pz)
+    
     if face_code in (4, 5, 0, 1):
         euler_inner = (euler_rot[0] + math.pi, euler_rot[1], euler_rot[2])
     else:
         euler_inner = (euler_rot[0], euler_rot[1] + math.pi, euler_rot[2])
     
+    # --- Step 1: Straight through hole (radius hr) ---
+    hole_len = thickness * 10.0
+    hole_center = (px + ox/2, py + oy/2, pz + oz/2)
+    bpy.ops.mesh.primitive_cylinder_add(vertices=64, radius=hr + 0.00002, depth=hole_len)
+    hole_cutter = bpy.context.active_object
+    hole_cutter.name = "ThruHole"
+    if face_code == 4:    hole_euler = (math.pi/2, 0.0, 0.0)
+    elif face_code == 5:  hole_euler = (-math.pi/2, 0.0, 0.0)
+    elif face_code == 0:  hole_euler = (0.0, 0.0, 0.0)
+    elif face_code == 1:  hole_euler = (math.pi, 0.0, 0.0)
+    elif face_code == 2:  hole_euler = (0.0, -math.pi/2, 0.0)
+    else:                 hole_euler = (0.0, math.pi/2, 0.0)
+    hole_cutter.matrix_world = _Mtx.Translation(hole_center) @ _Eul(hole_euler, 'XYZ').to_matrix().to_4x4()
+    bpy.context.view_layer.objects.active = obj
+    mod = obj.modifiers.new(name="ThruHole", type='BOOLEAN')
+    mod.object = hole_cutter; mod.operation = 'DIFFERENCE'; mod.solver = 'FAST'
+    mod.use_hole_tolerant = True
+    bpy.context.view_layer.update()
+    try:
+        bpy.ops.object.modifier_apply(modifier="ThruHole")
+    except:
+        print("[STEP Exporter] ThruHole Boolean failed!")
+        hole_cutter.hide_viewport = False; hole_cutter.display_type = 'WIRE'
+        return
+    import bmesh as _bm_th
+    _bmt = _bm_th.new(); _bmt.from_mesh(obj.data)
+    _bm_th.ops.remove_doubles(_bmt, verts=_bmt.verts, dist=0.00005)
+    _bmt.to_mesh(obj.data); _bmt.free()
+    bpy.context.view_layer.objects.active = hole_cutter
+    bpy.ops.object.delete(use_global=False)
+    
+    # --- Step 2: Fillet rings Boolean UNION ---
     if fillet_type in ('0', '2'):
-        _build_and_union((px + ox, py + oy, pz + oz), euler_rot, "FilletOuter")
+        _build_and_union(outer_pos, euler_rot, "FilletOuter")
         print(f"[STEP Exporter] Outer fillet: r={ring_r_val*1000:.1f}/{ring_r2_val*1000:.1f}mm, euler=X{euler_rot[0]*180/math.pi:.1f}°")
     if fillet_type in ('1', '2'):
-        _build_and_union((px, py, pz), euler_inner, "FilletInner")
+        _build_and_union(inner_pos, euler_inner, "FilletInner")
         print(f"[STEP Exporter] Inner fillet: r={ring_r_val*1000:.1f}/{ring_r2_val*1000:.1f}mm, euler=X{euler_inner[0]*180/math.pi:.1f}°")
+    
     print(f"[STEP Exporter] Fillet done (type={fillet_type})")
 
 def _fillet_hole_edge(obj, fillet_mm, hole_r_mm, face_code, px, py, pz, thickness, hw, hd, h, S=0.001, fillet_type='0'):

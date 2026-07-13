@@ -1647,7 +1647,7 @@ def _apply_fillet_torus_union(obj, hole_r_mm, fillet_mm, face_code, px, py, pz, 
     bpy.ops.object.modifier_apply(modifier="ThruHole")
     bpy.data.objects.remove(hc, do_unlink=True)
     
-    # --- Step 1: Shallow recess (depth=fr) using EXACT solver ---
+    # --- Step 1: Outer recess + ring (only if type=0 or 2) ---
     if fillet_type in ('0', '2'):
         ring = _make_ring(outer_pos, euler_rot, "FilletOuter")
         ring_max_r2 = 0.0
@@ -1659,26 +1659,22 @@ def _apply_fillet_torus_union(obj, hole_r_mm, fillet_mm, face_code, px, py, pz, 
         tilt_angle = abs(euler_rot[0]) - math.pi/2.0 if face_code in (4,5) else (abs(euler_rot[1]) - math.pi/2.0 if face_code in (2,3) else 0.0)
         hole_r = math.sqrt(ring_max_r2) * abs(math.cos(tilt_angle))
         bpy.data.objects.remove(ring, do_unlink=True)
-    else:
-        hole_r = hr + fr
-    
-    # Recess cylinder: depth=fr, at outer surface, offset into wall
-    from mathutils import Vector as _Vec
-    bpy.ops.mesh.primitive_cylinder_add(vertices=64, radius=hole_r, depth=fr)
-    rc = bpy.context.active_object; rc.name = "Recess"
-    rc.matrix_world = _Mtx.Translation(outer_pos) @ _Eul(euler_rot, 'XYZ').to_matrix().to_4x4() @ _Mtx.Translation((0,0,-fr/2+fr*0.3))
-    
-    bpy.context.view_layer.objects.active = obj
-    mod = obj.modifiers.new(name="Recess", type='BOOLEAN')
-    mod.object = rc; mod.operation = 'DIFFERENCE'; mod.solver = 'EXACT'
-    mod.use_self = True
-    bpy.context.view_layer.update()
-    bpy.ops.object.modifier_apply(modifier="Recess")
-    bpy.data.objects.remove(rc, do_unlink=True)
-    print(f"[STEP Exporter] Recess OK, hole_r={hole_r*1000:.2f}mm")
-    
-    # --- Step 2: FilletOuter ring + UNION ---
-    if fillet_type in ('0', '2'):
+        
+        # Recess cylinder
+        from mathutils import Vector as _Vec
+        bpy.ops.mesh.primitive_cylinder_add(vertices=64, radius=hole_r, depth=fr)
+        rc = bpy.context.active_object; rc.name = "Recess"
+        rc.matrix_world = _Mtx.Translation(outer_pos) @ _Eul(euler_rot, 'XYZ').to_matrix().to_4x4() @ _Mtx.Translation((0,0,-fr/2+fr*0.3))
+        bpy.context.view_layer.objects.active = obj
+        mod = obj.modifiers.new(name="Recess", type='BOOLEAN')
+        mod.object = rc; mod.operation = 'DIFFERENCE'; mod.solver = 'EXACT'
+        mod.use_self = True
+        bpy.context.view_layer.update()
+        bpy.ops.object.modifier_apply(modifier="Recess")
+        bpy.data.objects.remove(rc, do_unlink=True)
+        print(f"[STEP Exporter] Recess OK, hole_r={hole_r*1000:.2f}mm")
+        
+        # Ring UNION
         ring = _make_ring(outer_pos, euler_rot, "FilletOuter")
         bpy.context.view_layer.objects.active = obj
         obj.select_set(True)
@@ -1691,6 +1687,44 @@ def _apply_fillet_torus_union(obj, hole_r_mm, fillet_mm, face_code, px, py, pz, 
         bpy.ops.object.mode_set(mode='OBJECT')
         print(f"[STEP Exporter] FilletOuter union")
     
+    # --- Step 3: Inner fillet (same strategy) ---
+    if fillet_type in ('1', '2'):
+        # Sample ring for inner recess size
+        ring = _make_ring(inner_pos, euler_inner, "FilletInner_Ring")
+        ring_max_r2 = 0.0
+        for v in ring.data.vertices:
+            co = ring.matrix_world @ v.co
+            dx = co.x - inner_pos[0]; dy = co.y - inner_pos[1]
+            r2 = dx*dx + dy*dy
+            if r2 > ring_max_r2: ring_max_r2 = r2
+        tilt_angle = abs(euler_inner[0]) - math.pi/2.0 if face_code in (4,5) else (abs(euler_inner[1]) - math.pi/2.0 if face_code in (2,3) else 0.0)
+        inner_hole_r = math.sqrt(ring_max_r2) * abs(math.cos(tilt_angle))
+        bpy.data.objects.remove(ring, do_unlink=True)
+        
+        # Inner recess
+        bpy.ops.mesh.primitive_cylinder_add(vertices=64, radius=inner_hole_r, depth=fr)
+        rc = bpy.context.active_object; rc.name = "RecessInner"
+        rc.matrix_world = _Mtx.Translation(inner_pos) @ _Eul(euler_inner, 'XYZ').to_matrix().to_4x4() @ _Mtx.Translation((0,0,-fr/2+fr*0.3))
+        bpy.context.view_layer.objects.active = obj
+        mod = obj.modifiers.new(name="RecessInner", type='BOOLEAN')
+        mod.object = rc; mod.operation = 'DIFFERENCE'; mod.solver = 'EXACT'
+        mod.use_self = True
+        bpy.context.view_layer.update()
+        bpy.ops.object.modifier_apply(modifier="RecessInner")
+        bpy.data.objects.remove(rc, do_unlink=True)
+        
+        # Inner ring UNION
+        ring = _make_ring(inner_pos, euler_inner, "FilletInner")
+        bpy.context.view_layer.objects.active = obj
+        obj.select_set(True)
+        ring.select_set(True)
+        bpy.ops.object.join()
+        bpy.ops.object.mode_set(mode='EDIT')
+        bpy.ops.mesh.select_all(action='SELECT')
+        bpy.ops.mesh.intersect_boolean(operation='UNION', solver='EXACT')
+        bpy.ops.mesh.select_all(action='DESELECT')
+        bpy.ops.object.mode_set(mode='OBJECT')
+        print(f"[STEP Exporter] FilletInner union")
     
     print(f"[STEP Exporter] Done (type={fillet_type})")
 

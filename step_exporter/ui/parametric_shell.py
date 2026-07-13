@@ -1626,6 +1626,27 @@ def _apply_fillet_torus_union(obj, hole_r_mm, fillet_mm, face_code, px, py, pz, 
         robj.hide_viewport = False; robj.display_type = 'WIRE'
         return robj
     
+    # --- Step 0: Through hole first (clean geometry) ---
+    hole_len = thickness * 10.0
+    hole_center = (px + ox/2, py + oy/2, pz + oz/2)
+    bpy.ops.mesh.primitive_cylinder_add(vertices=64, radius=hr, depth=hole_len, location=hole_center)
+    hc = bpy.context.active_object; hc.name = "ThruHole"
+    if face_code == 4:    he = (math.pi/2, 0.0, 0.0)
+    elif face_code == 5:  he = (-math.pi/2, 0.0, 0.0)
+    elif face_code == 0:  he = (0.0, 0.0, 0.0)
+    elif face_code == 1:  he = (math.pi, 0.0, 0.0)
+    elif face_code == 2:  he = (0.0, -math.pi/2, 0.0)
+    else:                 he = (0.0, math.pi/2, 0.0)
+    hc.rotation_euler = he
+    bpy.context.view_layer.update()
+    bpy.context.view_layer.objects.active = obj
+    mod = obj.modifiers.new(name="ThruHole", type='BOOLEAN')
+    mod.object = hc; mod.operation = 'DIFFERENCE'; mod.solver = 'EXACT'
+    mod.use_self = True
+    bpy.context.view_layer.update()
+    bpy.ops.object.modifier_apply(modifier="ThruHole")
+    bpy.data.objects.remove(hc, do_unlink=True)
+    
     # --- Step 1: Shallow recess (depth=fr) using EXACT solver ---
     if fillet_type in ('0', '2'):
         ring = _make_ring(outer_pos, euler_rot, "FilletOuter")
@@ -1670,26 +1691,6 @@ def _apply_fillet_torus_union(obj, hole_r_mm, fillet_mm, face_code, px, py, pz, 
         bpy.ops.object.mode_set(mode='OBJECT')
         print(f"[STEP Exporter] FilletOuter union")
     
-    # --- Step 3: Through hole (radius hr) ---
-    hole_len = thickness * 10.0
-    hole_center = (px + ox/2, py + oy/2, pz + oz/2)
-    bpy.ops.mesh.primitive_cylinder_add(vertices=64, radius=hr, depth=hole_len, location=hole_center)
-    hc = bpy.context.active_object; hc.name = "ThruHole"
-    if face_code == 4:    he = (math.pi/2, 0.0, 0.0)
-    elif face_code == 5:  he = (-math.pi/2, 0.0, 0.0)
-    elif face_code == 0:  he = (0.0, 0.0, 0.0)
-    elif face_code == 1:  he = (math.pi, 0.0, 0.0)
-    elif face_code == 2:  he = (0.0, -math.pi/2, 0.0)
-    else:                 he = (0.0, math.pi/2, 0.0)
-    hc.rotation_euler = he
-    bpy.context.view_layer.update()
-    bpy.context.view_layer.objects.active = obj
-    mod = obj.modifiers.new(name="ThruHole", type='BOOLEAN')
-    mod.object = hc; mod.operation = 'DIFFERENCE'; mod.solver = 'EXACT'
-    mod.use_self = True
-    bpy.context.view_layer.update()
-    bpy.ops.object.modifier_apply(modifier="ThruHole")
-    bpy.data.objects.remove(hc, do_unlink=True)
     
     print(f"[STEP Exporter] Done (type={fillet_type})")
 

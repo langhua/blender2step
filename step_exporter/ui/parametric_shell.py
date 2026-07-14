@@ -1423,7 +1423,7 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
             set_operator(self)
             start_progress(context, "Adding fillet...")
             wm = context.window_manager
-            self._timer = wm.event_timer_add(0.01, window=context.window)
+            self._timer = wm.event_timer_add(0.2, window=context.window)
             wm.modal_handler_add(self)
             return {'RUNNING_MODAL'}
         else:
@@ -1463,62 +1463,65 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
     def modal(self, context, event):
         if event.type != 'TIMER':
             return {'PASS_THROUGH'}
-        
-        obj = bpy.data.objects.get(self._fillet_obj_name)
-        if not obj:
-            self._cleanup_modal(context)
-            return {'CANCELLED'}
-        
-        stage = self._fillet_stage
-        if stage == 0:
-            update_progress(5, "Sampling surface...")
-            self._fillet_result = _fillet_stage_0(obj, self._fillet_radius, self._fillet_fr,
+        if getattr(self, '_busy', False):
+            return {'PASS_THROUGH'}
+        self._busy = True
+        try:
+            obj = bpy.data.objects.get(self._fillet_obj_name)
+            if not obj:
+                self._cleanup_modal(context)
+                return {'CANCELLED'}
+            
+            stage = self._fillet_stage
+            if stage == 0:
+                update_progress(5, "Sampling surface...")
+                self._fillet_result = _fillet_stage_0(obj, self._fillet_radius, self._fillet_fr,
                 self._fillet_face, self._fillet_px, self._fillet_py, self._fillet_pz,
                 self._fillet_thickness, self._fillet_hw, self._fillet_hd, self._fillet_h,
                 self._fillet_S, self._fillet_type)
-            self._fillet_stage = 1
-        elif stage == 1:
-            update_progress(20, "Through hole...")
-            _fillet_stage_1(obj, self._fillet_result, self._fillet_face,
-                self._fillet_px, self._fillet_py, self._fillet_pz, self._fillet_thickness)
-            self._fillet_stage = 2
-        elif stage == 2:
-            if self._fillet_type in ('0', '2'):
-                update_progress(35, "Outer recess...")
-                _fillet_stage_2(obj, self._fillet_result, self._fillet_face,
-                    self._fillet_type)
-            self._fillet_stage = 3
-        elif stage == 3:
-            if self._fillet_type in ('0', '2'):
-                update_progress(55, "Outer ring union...")
-                _fillet_stage_3(obj, self._fillet_result, self._fillet_face)
-            self._fillet_stage = 4
-        elif stage == 4:
-            if self._fillet_type in ('1', '2'):
-                update_progress(70, "Inner recess...")
-                _fillet_stage_4(obj, self._fillet_result, self._fillet_face,
-                    self._fillet_px, self._fillet_py, self._fillet_pz, self._fillet_type)
-            self._fillet_stage = 5
-        elif stage == 5:
-            if self._fillet_type in ('1', '2'):
-                update_progress(90, "Inner ring union...")
-                _fillet_stage_5(obj, self._fillet_result, self._fillet_face)
-            self._fillet_stage = 6
-        elif stage == 6:
-            update_progress(100, "Done")
-            # Save window_data
-            existing = obj.get('window_data', '')
-            obj['window_data'] = (existing + ';' + self._fillet_entry) if existing else self._fillet_entry
-            obj['window_data_local'] = True
-            self.report({'INFO'}, _t("Hole added at cursor position"))
-            self._cleanup_modal(context)
-            return {'FINISHED'}
-        
-        # Force 3D view redraw
-        for area in context.screen.areas:
-            if area.type == 'VIEW_3D':
-                area.tag_redraw()
-        return {'PASS_THROUGH'}
+                self._fillet_stage = 1
+            elif stage == 1:
+                update_progress(20, "Through hole...")
+                _fillet_stage_1(obj, self._fillet_result, self._fillet_face,
+                    self._fillet_px, self._fillet_py, self._fillet_pz, self._fillet_thickness)
+                self._fillet_stage = 2
+            elif stage == 2:
+                if self._fillet_type in ('0', '2'):
+                    update_progress(35, "Outer recess...")
+                    _fillet_stage_2(obj, self._fillet_result, self._fillet_face,
+                        self._fillet_type)
+                self._fillet_stage = 3
+            elif stage == 3:
+                if self._fillet_type in ('0', '2'):
+                    update_progress(55, "Outer ring union...")
+                    _fillet_stage_3(obj, self._fillet_result, self._fillet_face)
+                self._fillet_stage = 4
+            elif stage == 4:
+                if self._fillet_type in ('1', '2'):
+                    update_progress(70, "Inner recess...")
+                    _fillet_stage_4(obj, self._fillet_result, self._fillet_face,
+                        self._fillet_px, self._fillet_py, self._fillet_pz, self._fillet_type)
+                self._fillet_stage = 5
+            elif stage == 5:
+                if self._fillet_type in ('1', '2'):
+                    update_progress(90, "Inner ring union...")
+                    _fillet_stage_5(obj, self._fillet_result, self._fillet_face)
+                self._fillet_stage = 6
+            elif stage == 6:
+                update_progress(100, "Done")
+                existing = obj.get('window_data', '')
+                obj['window_data'] = (existing + ';' + self._fillet_entry) if existing else self._fillet_entry
+                obj['window_data_local'] = True
+                self.report({'INFO'}, _t("Hole added at cursor position"))
+                self._cleanup_modal(context)
+                return {'FINISHED'}
+            
+            for area in context.screen.areas:
+                if area.type == 'VIEW_3D':
+                    area.tag_redraw()
+            return {'PASS_THROUGH'}
+        finally:
+            self._busy = False
     
     def _cleanup_modal(self, context):
         if self._timer:
@@ -1539,41 +1542,49 @@ def _fillet_stage_0(obj, hole_r_mm, fillet_mm, face_code, px, py, pz, thickness,
     hd_outer = hd / S
     total_inset = min(hw_outer, hd_outer) * curve_r * 0.5
     hh = h_total / 2.0
-    _bmv = _bm_v.new(); _bmv.from_mesh(obj.data)
-    _bmv.verts.ensure_lookup_table()
     mesh_z = pz - obj.location.z
     z_top = mesh_z + hr + fr
     z_bot = mesh_z - hr - fr
+    # --- Compute surface positions analytically (100% reliable, no vertex sampling) ---
+    total_inset_m = total_inset * S
+    def _inset(z_local):
+        tf = (hh - z_local) / (2.0 * hh) if hh > 0.0001 else 0.5
+        tf = max(0.0, min(1.0, tf))
+        return total_inset_m * (1.0 - math.cos(math.pi / 2.0 * tf))
+    
     if face_code == 5:    ax, sign = 1, 1.0
     elif face_code == 4:  ax, sign = 1, -1.0
     elif face_code == 3:  ax, sign = 0, 1.0
     elif face_code == 2:  ax, sign = 0, -1.0
     elif face_code == 1:  ax, sign = 2, 1.0
     else:                 ax, sign = 2, -1.0
-    def _sample_at(z_target):
-        best_dz = 1e9
-        for v in _bmv.verts:
-            dz = abs(v.co.z - z_target)
-            if dz < best_dz: best_dz = dz
-        vals = []
-        for v in _bmv.verts:
-            if abs(abs(v.co.z - z_target) - best_dz) < 0.0001:
-                vals.append(v.co[ax])
-        return max(vals) if (vals and sign > 0) else (min(vals) if vals else None)
+    
     dz_step = (z_top - z_bot) / 3.0
     sample_zs = [z_bot, z_bot + dz_step, z_top - dz_step, z_top]
     samples = []
+    # Use hw/hd (meters) and S for unit conversion
+    hw_m = hw  # already in meters (half-width)
+    hd_m = hd  # already in meters (half-depth)
     for sz in sample_zs:
-        sv = _sample_at(sz)
-        if sv is not None:
-            samples.append((sz, sv))
-            wz = sz + obj.location.z
-            if face_code in (4,5):
-                bpy.ops.mesh.primitive_uv_sphere_add(radius=0.00035, location=(px, sv + obj.location.y, wz))
-            elif face_code in (2,3):
-                bpy.ops.mesh.primitive_uv_sphere_add(radius=0.00035, location=(sv + obj.location.x, py, wz))
-            bpy.context.active_object.display_type = 'WIRE'
-    _bmv.free()
+        inset = _inset(sz)  # meters
+        if face_code in (4, 5):
+            sur_y = hd_m - inset * (hd_m / hw_m if hw_m > 0 else 1.0)  # meters
+            if face_code == 4: sur_y = -sur_y
+            sv = sur_y
+        elif face_code in (2, 3):
+            sur_x = hw_m - inset  # meters
+            if face_code == 2: sur_x = -sur_x
+            sv = sur_x
+        else:
+            sv = mesh_z
+        samples.append((sz, sv))
+        wz = sz + obj.location.z
+        if face_code in (4,5):
+            bpy.ops.mesh.primitive_uv_sphere_add(radius=0.00035, location=(px, sv + obj.location.y, wz))
+        elif face_code in (2,3):
+            bpy.ops.mesh.primitive_uv_sphere_add(radius=0.00035, location=(sv + obj.location.x, py, wz))
+        bpy.context.active_object.display_type = 'WIRE'
+    
     if len(samples) >= 2:
         samples.sort(key=lambda x: x[0])
         z1, s1 = samples[0]; z2, s2 = samples[-1]
@@ -1581,11 +1592,8 @@ def _fillet_stage_0(obj, hole_r_mm, fillet_mm, face_code, px, py, pz, thickness,
         sur_ok = True
     else:
         sur_ok = False
-        total_inset_m = total_inset * S
-        def _inset(z):
-            tf = (hh - z) / (2.0 * hh) if hh > 0.0001 else 0.5
-            return total_inset_m * (1.0 - math.cos(math.pi / 2.0 * max(0.0, min(1.0, tf))))
-        dinset_dz = (_inset(z_top) - _inset(z_bot)) / (z_top - z_bot) if abs(z_top - z_bot) > 0.00001 else 0.0
+        dinset_dz = 0.0
+    print(f"[STEP DEBUG] dinset_dz={dinset_dz:.4f} sur_ok={sur_ok}")
     if face_code in (4, 5, 0, 1):
         if face_code == 4: euler_rot = (math.atan2(1.0, dinset_dz), 0.0, 0.0)
         elif face_code == 5: euler_rot = (math.atan2(-1.0, dinset_dz), 0.0, 0.0)
@@ -1712,19 +1720,16 @@ def _fillet_stage_2(obj, result, face_code, fillet_type):
     print(f"[STEP Exporter] Recess OK, hole_r={hole_r*1000:.2f}mm")
 
 def _fillet_stage_3(obj, result, face_code):
-    """Stage 3: Outer ring join + UNION."""
+    """Stage 3: Outer ring UNION via Boolean modifier."""
     fr = result['fr']; hr = result['hr']
     outer_pos = result['outer_pos']; euler_rot = result['euler_rot']
     ring = _make_ring_shared(outer_pos, euler_rot, "FilletOuter", hr, fr)
     bpy.context.view_layer.objects.active = obj
-    obj.select_set(True)
-    ring.select_set(True)
-    bpy.ops.object.join()
-    bpy.ops.object.mode_set(mode='EDIT')
-    bpy.ops.mesh.select_all(action='SELECT')
-    bpy.ops.mesh.intersect_boolean(operation='UNION', solver='EXACT')
-    bpy.ops.mesh.select_all(action='DESELECT')
-    bpy.ops.object.mode_set(mode='OBJECT')
+    mod = obj.modifiers.new(name="RingUnOuter", type='BOOLEAN')
+    mod.object = ring; mod.operation = 'UNION'; mod.solver = 'FAST'
+    bpy.context.view_layer.update()
+    bpy.ops.object.modifier_apply(modifier="RingUnOuter")
+    bpy.data.objects.remove(ring, do_unlink=True)
     print(f"[STEP Exporter] FilletOuter union")
 
 def _fillet_stage_4(obj, result, face_code, px, py, pz, fillet_type):
@@ -1756,19 +1761,16 @@ def _fillet_stage_4(obj, result, face_code, px, py, pz, fillet_type):
     bpy.data.objects.remove(rc, do_unlink=True)
 
 def _fillet_stage_5(obj, result, face_code):
-    """Stage 5: Inner ring join + UNION."""
+    """Stage 5: Inner ring UNION via Boolean modifier."""
     fr = result['fr']; hr = result['hr']
     inner_pos = result['inner_pos']; euler_inner = result['euler_inner']
     ring = _make_ring_shared(inner_pos, euler_inner, "FilletInner", hr, fr)
     bpy.context.view_layer.objects.active = obj
-    obj.select_set(True)
-    ring.select_set(True)
-    bpy.ops.object.join()
-    bpy.ops.object.mode_set(mode='EDIT')
-    bpy.ops.mesh.select_all(action='SELECT')
-    bpy.ops.mesh.intersect_boolean(operation='UNION', solver='EXACT')
-    bpy.ops.mesh.select_all(action='DESELECT')
-    bpy.ops.object.mode_set(mode='OBJECT')
+    mod = obj.modifiers.new(name="RingUnInner", type='BOOLEAN')
+    mod.object = ring; mod.operation = 'UNION'; mod.solver = 'FAST'
+    bpy.context.view_layer.update()
+    bpy.ops.object.modifier_apply(modifier="RingUnInner")
+    bpy.data.objects.remove(ring, do_unlink=True)
     print(f"[STEP Exporter] FilletInner union")
 
 def _apply_fillet_torus_union(obj, hole_r_mm, fillet_mm, face_code, px, py, pz, thickness, hw, hd, h_total, S, fillet_type='0', wm=None):
@@ -2005,32 +2007,38 @@ class STEP_EXPORTER_OT_remove_shell_hole(Operator):
         set_operator(self)
         start_progress(context, "Removing hole...")
         wm = context.window_manager
-        self._timer = wm.event_timer_add(0.01, window=context.window)
+        self._timer = wm.event_timer_add(0.2, window=context.window)
         wm.modal_handler_add(self)
         return {'RUNNING_MODAL'}
 
     def modal(self, context, event):
         if event.type != 'TIMER':
             return {'PASS_THROUGH'}
-        obj = bpy.data.objects.get(self._rb_obj_name)
-        if not obj:
-            self._rb_cleanup(context)
-            return {'CANCELLED'}
-        idx = self._rb_stage
-        entries = self._rb_entries
-        if idx < len(entries):
-            update_progress(int((idx+1)/max(len(entries),1)*100), f"Hole {idx+1}/{len(entries)}...")
-            _rebuild_stage_hole(obj, entries[idx])
-            self._rb_stage = idx + 1
-        else:
-            update_progress(100, "Done")
-            self.report({'INFO'}, _t("Hole removed"))
-            self._rb_cleanup(context)
-            return {'FINISHED'}
-        for area in context.screen.areas:
-            if area.type == 'VIEW_3D':
-                area.tag_redraw()
-        return {'PASS_THROUGH'}
+        if getattr(self, '_busy', False):
+            return {'PASS_THROUGH'}
+        self._busy = True
+        try:
+            obj = bpy.data.objects.get(self._rb_obj_name)
+            if not obj:
+                self._rb_cleanup(context)
+                return {'CANCELLED'}
+            idx = self._rb_stage
+            entries = self._rb_entries
+            if idx < len(entries):
+                update_progress(int((idx+1)/max(len(entries),1)*100), f"Hole {idx+1}/{len(entries)}...")
+                _rebuild_stage_hole(obj, entries[idx])
+                self._rb_stage = idx + 1
+            else:
+                update_progress(100, "Done")
+                self.report({'INFO'}, _t("Hole removed"))
+                self._rb_cleanup(context)
+                return {'FINISHED'}
+            for area in context.screen.areas:
+                if area.type == 'VIEW_3D':
+                    area.tag_redraw()
+            return {'PASS_THROUGH'}
+        finally:
+            self._busy = False
 
     def _rb_cleanup(self, context):
         if self._timer:
@@ -2166,32 +2174,38 @@ class STEP_EXPORTER_OT_edit_shell_hole(Operator):
         set_operator(self)
         start_progress(context, "Updating hole...")
         wm = context.window_manager
-        self._timer = wm.event_timer_add(0.01, window=context.window)
+        self._timer = wm.event_timer_add(0.2, window=context.window)
         wm.modal_handler_add(self)
         return {'RUNNING_MODAL'}
 
     def modal(self, context, event):
         if event.type != 'TIMER':
             return {'PASS_THROUGH'}
-        obj = bpy.data.objects.get(self._rb_obj_name)
-        if not obj:
-            self._rb_cleanup(context)
-            return {'CANCELLED'}
-        idx = self._rb_stage
-        entries = self._rb_entries
-        if idx < len(entries):
-            update_progress(int((idx+1)/max(len(entries),1)*100), f"Hole {idx+1}/{len(entries)}...")
-            _rebuild_stage_hole(obj, entries[idx])
-            self._rb_stage = idx + 1
-        else:
-            update_progress(100, "Done")
-            self.report({'INFO'}, _t("Hole updated"))
-            self._rb_cleanup(context)
-            return {'FINISHED'}
-        for area in context.screen.areas:
-            if area.type == 'VIEW_3D':
-                area.tag_redraw()
-        return {'PASS_THROUGH'}
+        if getattr(self, '_busy', False):
+            return {'PASS_THROUGH'}
+        self._busy = True
+        try:
+            obj = bpy.data.objects.get(self._rb_obj_name)
+            if not obj:
+                self._rb_cleanup(context)
+                return {'CANCELLED'}
+            idx = self._rb_stage
+            entries = self._rb_entries
+            if idx < len(entries):
+                update_progress(int((idx+1)/max(len(entries),1)*100), f"Hole {idx+1}/{len(entries)}...")
+                _rebuild_stage_hole(obj, entries[idx])
+                self._rb_stage = idx + 1
+            else:
+                update_progress(100, "Done")
+                self.report({'INFO'}, _t("Hole updated"))
+                self._rb_cleanup(context)
+                return {'FINISHED'}
+            for area in context.screen.areas:
+                if area.type == 'VIEW_3D':
+                    area.tag_redraw()
+            return {'PASS_THROUGH'}
+        finally:
+            self._busy = False
 
     def _rb_cleanup(self, context):
         if self._timer:

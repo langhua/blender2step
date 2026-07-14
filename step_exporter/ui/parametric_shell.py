@@ -1672,7 +1672,7 @@ def _make_ring_shared(pos, euler, name, hr, fr):
     """Create quarter-torus ring mesh object (shared by staged functions)."""
     import bmesh as _bm_qt, math
     from mathutils import Matrix as _Mtx, Euler as _Eul
-    seg_a, seg_p = 32, 8
+    seg_a, seg_p = 24, 6  # reduced from 32x8 for performance
     bm = _bm_qt.new()
     vv = []
     for i in range(seg_a + 1):
@@ -1912,7 +1912,7 @@ def _apply_bottom_inner_ring(obj, hole_r_mm, fillet_mm, pos, S):
     bpy.data.objects.remove(rc, do_unlink=True)
     
     # Step 2: Ring union
-    seg_a, seg_p = 32, 8
+    seg_a, seg_p = 24, 6  # reduced for performance
     bm = _bm_qt.new()
     vv = []
     for i in range(seg_a + 1):

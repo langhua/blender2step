@@ -1996,11 +1996,12 @@ class STEP_EXPORTER_OT_remove_shell_hole(Operator):
         obj['window_data'] = ';'.join(entries)
         if not entries:
             obj['window_data_local'] = False
-        # Start modal rebuild
+        # Rebuild shell in execute() where obj refs are stable
+        _rebuild_stage_create(obj)
+        # Start modal for hole processing
         self._rb_obj_name = obj.name
         self._rb_entries = entries
-        self._rb_stage = -1
-        self._rb_idx = 0
+        self._rb_stage = 0
         set_operator(self)
         start_progress(context, "Removing hole...")
         wm = context.window_manager
@@ -2015,14 +2016,9 @@ class STEP_EXPORTER_OT_remove_shell_hole(Operator):
         if not obj:
             self._rb_cleanup(context)
             return {'CANCELLED'}
-        stage = self._rb_stage
+        idx = self._rb_stage
         entries = self._rb_entries
-        if stage == -1:
-            update_progress(0, "Rebuilding shell...")
-            _rebuild_stage_create(obj)
-            self._rb_stage = 0
-        elif stage < len(entries):
-            idx = stage
+        if idx < len(entries):
             update_progress(int((idx+1)/max(len(entries),1)*100), f"Hole {idx+1}/{len(entries)}...")
             _rebuild_stage_hole(obj, entries[idx])
             self._rb_stage = idx + 1
@@ -2059,44 +2055,15 @@ class STEP_EXPORTER_OT_clear_shell_holes(Operator):
         obj = context.active_object
         obj['window_data'] = ''
         obj['window_data_local'] = False
-        self._rb_obj_name = obj.name
-        self._rb_entries = []
-        self._rb_stage = -1
-        self._rb_idx = 0
+        # Rebuild shell in execute() where obj refs are stable
         set_operator(self)
         start_progress(context, "Clearing holes...")
-        wm = context.window_manager
-        self._timer = wm.event_timer_add(0.01, window=context.window)
-        wm.modal_handler_add(self)
-        return {'RUNNING_MODAL'}
-
-    def modal(self, context, event):
-        if event.type != 'TIMER':
-            return {'PASS_THROUGH'}
-        obj = bpy.data.objects.get(self._rb_obj_name)
-        if not obj:
-            self._rb_cleanup(context)
-            return {'CANCELLED'}
-        if self._rb_stage == -1:
-            update_progress(50, "Rebuilding shell...")
-            _rebuild_stage_create(obj)
-            self._rb_stage = 0
-        else:
-            update_progress(100, "Done")
-            self.report({'INFO'}, _t("All holes cleared"))
-            self._rb_cleanup(context)
-            return {'FINISHED'}
-        for area in context.screen.areas:
-            if area.type == 'VIEW_3D':
-                area.tag_redraw()
-        return {'PASS_THROUGH'}
-
-    def _rb_cleanup(self, context):
-        if self._timer:
-            context.window_manager.event_timer_remove(self._timer)
-            self._timer = None
+        _rebuild_stage_create(obj)
+        update_progress(100, "Done")
         end_progress(context)
         clear_operator()
+        self.report({'INFO'}, _t("All holes cleared"))
+        return {'FINISHED'}
 
 
 class STEP_EXPORTER_OT_edit_shell_hole(Operator):
@@ -2190,11 +2157,12 @@ class STEP_EXPORTER_OT_edit_shell_hole(Operator):
         entries = [e.strip() for e in wd.split(';') if e.strip()]
         entries = [new_entry if e == old_entry else e for e in entries]
         obj['window_data'] = ';'.join(entries)
-        # Start modal rebuild
+        # Rebuild shell in execute() where obj refs are stable
+        _rebuild_stage_create(obj)
+        # Start modal for hole processing
         self._rb_obj_name = obj.name
         self._rb_entries = entries
-        self._rb_stage = -1
-        self._rb_idx = 0
+        self._rb_stage = 0
         set_operator(self)
         start_progress(context, "Updating hole...")
         wm = context.window_manager
@@ -2209,14 +2177,9 @@ class STEP_EXPORTER_OT_edit_shell_hole(Operator):
         if not obj:
             self._rb_cleanup(context)
             return {'CANCELLED'}
-        stage = self._rb_stage
+        idx = self._rb_stage
         entries = self._rb_entries
-        if stage == -1:
-            update_progress(0, "Rebuilding shell...")
-            _rebuild_stage_create(obj)
-            self._rb_stage = 0
-        elif stage < len(entries):
-            idx = stage
+        if idx < len(entries):
             update_progress(int((idx+1)/max(len(entries),1)*100), f"Hole {idx+1}/{len(entries)}...")
             _rebuild_stage_hole(obj, entries[idx])
             self._rb_stage = idx + 1
@@ -2281,12 +2244,12 @@ def _rebuild_stage_create(obj):
     """Stage: Create fresh shell mesh and swap data."""
     w = obj.get('width', 100.0)
     d = obj.get('depth', 80.0)
-    h = obj.get('height', 50.0)
+    h_val = obj.get('height', 50.0)
     t = obj.get('wall_thickness', 2.0)
     cr = obj.get('corner_radius', 0.0)
     corner_type = obj.get('corner_type', 'square')
     unit = obj.get('unit', 'mm')
-    rim_type = obj.get('rim_type', 'none')
+    rim_type_str = obj.get('rim_type', 'none')
     rim_width = obj.get('rim_width', 1.0)
     rim_height = obj.get('rim_height', 1.0)
     rim_shape = obj.get('rim_shape', 'rect')
@@ -2296,25 +2259,40 @@ def _rebuild_stage_create(obj):
     wd = obj.get('window_data', '')
     wd_local = obj.get('window_data_local', False)
     obj_name = obj.name
+    # Mark original object — bpy.ops will invalidate the Python reference
+    obj['_rb_marker'] = 1
 
     bpy.ops.step_exporter.create_parametric_shell(
         'EXEC_DEFAULT',
         unit=unit, corner_type=corner_type,
-        width=w, depth=d, height=h, thickness=t,
+        width=w, depth=d, height=h_val, thickness=t,
         corner_radius=cr, bottom_fillet=bf,
-        rim_type=rim_type, rim_width=rim_width, rim_height=rim_height,
+        rim_type=rim_type_str, rim_width=rim_width, rim_height=rim_height,
         rim_shape=rim_shape, rim_top_ratio=rim_top_ratio,
         curve_ratio=curve_ratio, debug_keep_cutters=False)
 
-    new_obj = bpy.context.active_object
+    # Re-find original object by marker (Python ref was invalidated by bpy.ops)
+    obj = None
+    new_obj = None
+    for o in bpy.data.objects:
+        if o.get('_rb_marker'):
+            obj = o
+        elif o.name.startswith('ParamShell') and o.get('object_type') == 'parametric_shell':
+            if o != obj:  # not the original one
+                new_obj = o
+    if not obj or not new_obj:
+        return
+
+    new_mesh = new_obj.data
     old_mesh = obj.data
-    obj.data = new_obj.data
+    obj.data = new_mesh
     new_obj.data = old_mesh
     bpy.data.objects.remove(new_obj, do_unlink=True)
 
     obj['window_data'] = wd
     obj['window_data_local'] = wd_local
     obj.name = obj_name
+    del obj['_rb_marker']
 
     for key in ('width', 'depth', 'height', 'wall_thickness', 'corner_type',
                 'corner_radius', 'object_type', 'unit', 'rim_type', 'rim_width',
@@ -2358,6 +2336,12 @@ def _rebuild_stage_hole(obj, entry):
         hole_r_mm = float(parts[3])
         fillet_mm = float(parts[5]) if len(parts) >= 7 else 0.0
         fillet_type = parts[6] if len(parts) >= 8 else '0'
+        # Curved shell with fillet: use torus union (handles hole + fillet together)
+        if obj.get('corner_type') == 'curved' and fillet_mm > 0.0001:
+            _apply_fillet_torus_union(obj, hole_r_mm, fillet_mm, face,
+                cx * S, cy * S, cz * S, thickness, hw, hd, h * S, S,
+                fillet_type=fillet_type)
+            return
         cutter_depth = thickness * 4.0
         bpy.ops.mesh.primitive_cylinder_add(
             vertices=64, radius=radius, depth=cutter_depth, location=(0, 0, 0))

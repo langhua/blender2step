@@ -1914,7 +1914,16 @@ def _do_simple_stage1(obj, fillet_info, fillet_type, S, h, t, px, py, face_code,
             outer_ring_pos = (px, py, outer_z + obj.location.z)
             _apply_bottom_outer_ring(obj, hole_radius, hole_fillet, outer_ring_pos, S)
         if str(fillet_type) in ('1', '2'):
-            inner_ring_pos = (px, py, inner_z + obj.location.z)
+            # Offset ring slightly inward if hole is near bottom fillet edge
+            ipx, ipy = px, py
+            margin = (hole_radius + hole_fillet) * S + 0.001  # ring outer radius + 1mm
+            bw = obj.get('width', 100) * S / 2
+            bd = obj.get('depth', 80) * S / 2
+            if abs(ipx) > bw - margin - 0.0001:
+                ipx = ipx * (1.0 - 0.002)  # nudge 0.2% inward
+            if abs(ipy) > bd - margin - 0.0001:
+                ipy = ipy * (1.0 - 0.002)
+            inner_ring_pos = (ipx, ipy, inner_z + obj.location.z)
             _apply_bottom_inner_ring(obj, hole_radius, hole_fillet, inner_ring_pos, S)
         return
     else:

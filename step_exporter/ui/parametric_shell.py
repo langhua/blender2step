@@ -1466,8 +1466,8 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
                 stage = self._simple_stage
                 if stage == 0:
                     update_progress(30, "Cutting hole...")
-                    _do_simple_stage0(obj, self._simple_cutter)
-                    self._simple_stage = 1
+                    ok = _do_simple_stage0(obj, self._simple_cutter)
+                    self._simple_stage = 1 if ok else 2  # skip fillet if cut failed
                 elif stage == 1:
                     update_progress(70, "Fillet...")
                     _do_simple_stage1(obj, self._simple_fillet_info, self._simple_fillet_type,
@@ -1480,10 +1480,6 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
                     existing = obj.get('window_data', '')
                     obj['window_data'] = (existing + ';' + self._simple_entry) if existing else self._simple_entry
                     obj['window_data_local'] = True
-                    # Clean up cutter
-                    cutter = self._simple_cutter
-                    if cutter:
-                        bpy.data.objects.remove(cutter, do_unlink=True)
                     self.report({'INFO'}, _t("Hole added at cursor position"))
                     self._cleanup_modal(context)
                     return {'FINISHED'}
@@ -1841,41 +1837,86 @@ def _apply_fillet_torus_union(obj, hole_r_mm, fillet_mm, face_code, px, py, pz, 
         _fillet_stage_5(obj, result, face_code)
     print(f"[STEP Exporter] Done (type={fillet_type})")
 
-def _do_simple_stage0(obj, cutter):
-    """Stage 0 for simple hole: apply through-hole boolean with fallback."""
+def _direct_cut_hole(obj, cutter):
+    """Cut hole using Boolean modifier with retry. Returns True on success."""
     bpy.context.view_layer.objects.active = obj
-    vcount_before = len(obj.data.vertices)
-    mod = obj.modifiers.new(name="HoleBool", type='BOOLEAN')
-    mod.object = cutter
-    mod.operation = 'DIFFERENCE'
-    mod.solver = 'EXACT'
+    bpy.ops.object.mode_set(mode='EDIT')
+    bpy.ops.mesh.select_all(action='SELECT')
+    bpy.ops.mesh.quads_convert_to_tris(quad_method='BEAUTY', ngon_method='BEAUTY')
+    # Merge coplanar tris to keep mesh complexity low
+    bpy.ops.mesh.select_all(action='SELECT')
+    bpy.ops.mesh.dissolve_limited(angle_limit=0.02)
+    bpy.ops.object.mode_set(mode='OBJECT')
     bpy.context.view_layer.update()
-    bpy.ops.object.modifier_apply(modifier="HoleBool")
-    if len(obj.data.vertices) == vcount_before:
-        print(f"[STEP Exporter] HoleBool EXACT failed, retrying with FAST...")
-        mod2 = obj.modifiers.new(name="HoleBool2", type='BOOLEAN')
-        mod2.object = cutter; mod2.operation = 'DIFFERENCE'; mod2.solver = 'FAST'
+    
+    vbefore = len(obj.data.vertices)
+    for solv in ('FAST', 'EXACT'):
+        for m in list(obj.modifiers):
+            obj.modifiers.remove(m)
+        mod = obj.modifiers.new(name="DirectCut", type='BOOLEAN')
+        mod.object = cutter; mod.operation = 'DIFFERENCE'; mod.solver = solv
+        mod.use_self = (solv == 'EXACT')
+        if hasattr(mod, 'use_hole_tolerant'):
+            mod.use_hole_tolerant = True
         bpy.context.view_layer.update()
-        bpy.ops.object.modifier_apply(modifier="HoleBool2")
+        try:
+            bpy.ops.object.modifier_apply(modifier="DirectCut")
+        except:
+            continue
+        if len(obj.data.vertices) != vbefore and len(obj.data.vertices) >= 8:
+            bpy.data.objects.remove(cutter, do_unlink=True)
+            import bmesh as _bmc
+            _bm = _bmc.new(); _bm.from_mesh(obj.data)
+            _bmc.ops.remove_doubles(_bm, verts=_bm.verts, dist=0.00005)
+            _bm.to_mesh(obj.data); _bm.free()
+            return True
+    # Boolean failed — use bmesh fallback
+    print(f"[STEP Exporter] Boolean failed, using bmesh circle cut...")
+    bpy.data.objects.remove(cutter, do_unlink=True)
+    _bmesh_cut_circle(obj, cutter.location, cutter.dimensions.x / 2)
+    return True
+
+def _bmesh_cut_circle(obj, pos, radius):
+    """Fallback: cut hole via curve circle + join + intersect_boolean."""
+    bpy.ops.curve.primitive_bezier_circle_add(radius=radius, location=pos)
+    curve = bpy.context.active_object
+    bpy.ops.object.convert(target='MESH')
+    bpy.context.view_layer.objects.active = obj
+    obj.select_set(True)
+    curve.select_set(True)
+    bpy.ops.object.join()
+    bpy.ops.object.mode_set(mode='EDIT')
+    bpy.ops.mesh.select_all(action='SELECT')
+    bpy.ops.mesh.intersect_boolean(operation='DIFFERENCE', solver='FAST')
+    bpy.ops.mesh.select_all(action='DESELECT')
+    bpy.ops.object.mode_set(mode='OBJECT')
+    import bmesh as _bmc
+    _bm = _bmc.new(); _bm.from_mesh(obj.data)
+    _bmc.ops.remove_doubles(_bm, verts=_bm.verts, dist=0.00005)
+    _bm.to_mesh(obj.data); _bm.free()
+
+def _do_simple_stage0(obj, cutter):
+    """Stage 0: cut hole. Returns True if successful."""
+    cutter.hide_viewport = False
     bpy.context.view_layer.update()
-    import bmesh as _bm_cl
-    _bmc = _bm_cl.new(); _bmc.from_mesh(obj.data)
-    _bm_cl.ops.remove_doubles(_bmc, verts=_bmc.verts, dist=0.00005)
-    _bmc.to_mesh(obj.data); _bmc.free()
-    cutter.hide_viewport = True
+    return _direct_cut_hole(obj, cutter)
 
 def _do_simple_stage1(obj, fillet_info, fillet_type, S, h, t, px, py, face_code, hole_radius, hole_fillet):
     """Stage 1 for simple hole: apply fillet if needed."""
     import math
     if not fillet_info or fillet_info[0] <= 0.0001:
         return
-    # Bottom face inner fillet on curved shell: torus ring
-    if obj.get('corner_type') == 'curved' and face_code == 0 and str(fillet_type) in ('1', '2'):
+    # Bottom face fillet on curved shell: torus ring for both outer and inner
+    if obj.get('corner_type') == 'curved' and face_code == 0 and str(fillet_type) in ('0', '1', '2'):
+        outer_z = -h / 2
         inner_z = -h / 2 + t * S
-        inner_ring_pos = (px, py, inner_z + obj.location.z)
-        _apply_bottom_inner_ring(obj, hole_radius, hole_fillet, inner_ring_pos, S)
-        if str(fillet_type) == '2':
-            _fillet_hole_edge(obj, *fillet_info, S, fillet_type='0')
+        if str(fillet_type) in ('0', '2'):
+            outer_ring_pos = (px, py, outer_z + obj.location.z)
+            _apply_bottom_outer_ring(obj, hole_radius, hole_fillet, outer_ring_pos, S)
+        if str(fillet_type) in ('1', '2'):
+            inner_ring_pos = (px, py, inner_z + obj.location.z)
+            _apply_bottom_inner_ring(obj, hole_radius, hole_fillet, inner_ring_pos, S)
+        return
     else:
         if fillet_info and len(fillet_info) >= 4 and int(fillet_info[2]) in (0,1,2,3,4,5):
             _fillet_hole_edge(obj, *fillet_info, S, fillet_type=fillet_type)
@@ -1890,29 +1931,35 @@ def _force_redraw(context):
     except:
         pass
 
-def _apply_bottom_inner_ring(obj, hole_r_mm, fillet_mm, pos, S):
-    """Inner fillet on bottom face: recess cut + torus ring UNION."""
+def _apply_bottom_outer_ring(obj, hole_r_mm, fillet_mm, pos, S):
+    """Outer fillet on bottom face: recess cut + torus ring via Boolean modifier."""
     import math, bmesh as _bm_qt
     from mathutils import Matrix as _Mtx, Euler as _Eul
     hr = hole_r_mm * S
     fr = fillet_mm * S
     
-    # Step 1: Recess cut (extend slightly above inner surface for clean overlap)
-    ring_r = hr + fr + 0.0001
-    bpy.ops.mesh.primitive_cylinder_add(vertices=32, radius=ring_r, depth=fr * 2)
-    rc = bpy.context.active_object; rc.name = "BtRecess"
-    rc.location = (pos[0], pos[1], pos[2] + fr * 0.3)  # center slightly above surface
+    # Step 1: Recess cut (snug fit for ring)
+    ring_r = hr + fr + 0.0002  # 0.2mm clearance
+    bpy.ops.mesh.primitive_cylinder_add(vertices=32, radius=ring_r, depth=fr * 1.5)
+    rc = bpy.context.active_object; rc.name = "BtRecessO"
+    rc.location = (pos[0], pos[1], pos[2] - fr * 0.25)  # slightly below, extends into wall
     bpy.context.view_layer.update()
-    bpy.context.view_layer.objects.active = obj
-    mod = obj.modifiers.new(name="BtRecessCut", type='BOOLEAN')
-    mod.object = rc; mod.operation = 'DIFFERENCE'; mod.solver = 'EXACT'
-    mod.use_self = True
-    bpy.context.view_layer.update()
-    bpy.ops.object.modifier_apply(modifier="BtRecessCut")
+    for solv in ('FAST', 'EXACT'):
+        bpy.context.view_layer.objects.active = obj
+        mod = obj.modifiers.new(name="BtRecessCutO", type='BOOLEAN')
+        mod.object = rc; mod.operation = 'DIFFERENCE'; mod.solver = solv
+        mod.use_self = (solv == 'EXACT')
+        bpy.context.view_layer.update()
+        try:
+            bpy.ops.object.modifier_apply(modifier="BtRecessCutO")
+            if len(obj.data.vertices) >= 8:
+                break
+        except:
+            continue
     bpy.data.objects.remove(rc, do_unlink=True)
     
-    # Step 2: Ring union
-    seg_a, seg_p = 24, 6  # reduced for performance
+    # Step 2: Ring via Boolean modifier (flipped for outer surface, extends into wall +Z)
+    seg_a, seg_p = 24, 6
     bm = _bm_qt.new()
     vv = []
     for i in range(seg_a + 1):
@@ -1920,7 +1967,72 @@ def _apply_bottom_inner_ring(obj, hole_r_mm, fillet_mm, pos, S):
         ring = []
         for j in range(seg_p + 1):
             ph = math.pi / 2.0 + (math.pi / 2.0) * j / seg_p
-            rc_val = ring_r + fr * math.cos(ph)
+            rc_val = (ring_r - fr * 0.05) + fr * 1.05 * math.cos(ph)
+            zc = -fr + fr * math.sin(ph) - 0.00002
+            ring.append(bm.verts.new((rc_val * ct, rc_val * st, zc)))
+        vv.append(ring)
+    bm.verts.ensure_lookup_table()
+    for i in range(seg_a):
+        for j in range(seg_p):
+            bm.faces.new([vv[i][j], vv[i+1][j], vv[i+1][j+1], vv[i][j+1]])
+    msh = bpy.data.meshes.new("BtOuterRing_M")
+    bm.to_mesh(msh); bm.free()
+    ring_obj = bpy.data.objects.new("BtOuterRing", msh)
+    bpy.context.collection.objects.link(ring_obj)
+    ring_obj.matrix_world = _Mtx.Translation(pos) @ _Eul((math.pi, 0, 0), 'XYZ').to_matrix().to_4x4()
+    bpy.context.view_layer.update()
+    bpy.context.view_layer.objects.active = obj
+    mod = obj.modifiers.new(name="BtRingUOuter", type='BOOLEAN')
+    mod.object = ring_obj; mod.operation = 'UNION'; mod.solver = 'FAST'
+    bpy.context.view_layer.update()
+    bpy.ops.object.modifier_apply(modifier="BtRingUOuter")
+    bpy.data.objects.remove(ring_obj, do_unlink=True)
+    print(f"[STEP Exporter] Bottom outer ring union")
+
+def _apply_bottom_inner_ring(obj, hole_r_mm, fillet_mm, pos, S):
+    """Inner fillet on bottom face: recess cut + torus ring via Boolean modifier."""
+    import math, bmesh as _bm_qt
+    from mathutils import Matrix as _Mtx, Euler as _Eul
+    hr = hole_r_mm * S
+    fr = fillet_mm * S
+    
+def _apply_bottom_inner_ring(obj, hole_r_mm, fillet_mm, pos, S):
+    """Inner fillet on bottom face: recess cut + torus ring via Boolean modifier."""
+    import math, bmesh as _bm_qt
+    from mathutils import Matrix as _Mtx, Euler as _Eul
+    hr = hole_r_mm * S
+    fr = fillet_mm * S
+    
+    # Step 1: Recess cut (snug fit for ring)
+    ring_r = hr + fr + 0.0002  # 0.2mm clearance
+    bpy.ops.mesh.primitive_cylinder_add(vertices=32, radius=ring_r, depth=fr * 1.5)
+    rc = bpy.context.active_object; rc.name = "BtRecess"
+    rc.location = (pos[0], pos[1], pos[2] + fr * 0.25)
+    bpy.context.view_layer.update()
+    for solv in ('FAST', 'EXACT'):
+        bpy.context.view_layer.objects.active = obj
+        mod = obj.modifiers.new(name="BtRecessCut", type='BOOLEAN')
+        mod.object = rc; mod.operation = 'DIFFERENCE'; mod.solver = solv
+        mod.use_self = (solv == 'EXACT')
+        bpy.context.view_layer.update()
+        try:
+            bpy.ops.object.modifier_apply(modifier="BtRecessCut")
+            if len(obj.data.vertices) >= 8:
+                break
+        except:
+            continue
+    bpy.data.objects.remove(rc, do_unlink=True)
+    
+    # Step 2: Ring via Boolean modifier (more stable than intersect_boolean)
+    seg_a, seg_p = 24, 6
+    bm = _bm_qt.new()
+    vv = []
+    for i in range(seg_a + 1):
+        th = 2.0 * math.pi * i / seg_a; ct = math.cos(th); st = math.sin(th)
+        ring = []
+        for j in range(seg_p + 1):
+            ph = math.pi / 2.0 + (math.pi / 2.0) * j / seg_p
+            rc_val = (ring_r - fr * 0.05) + fr * 1.05 * math.cos(ph)
             zc = -fr + fr * math.sin(ph) - 0.00002
             ring.append(bm.verts.new((rc_val * ct, rc_val * st, zc)))
         vv.append(ring)
@@ -1935,17 +2047,11 @@ def _apply_bottom_inner_ring(obj, hole_r_mm, fillet_mm, pos, S):
     ring_obj.matrix_world = _Mtx.Translation(pos) @ _Eul((0,0,0), 'XYZ').to_matrix().to_4x4()
     bpy.context.view_layer.update()
     bpy.context.view_layer.objects.active = obj
-    obj.select_set(True)
-    ring_obj.select_set(True)
-    bpy.ops.object.join()
-    bpy.ops.object.mode_set(mode='EDIT')
-    bpy.ops.mesh.select_all(action='SELECT')
-    bpy.ops.mesh.intersect_boolean(operation='UNION', solver='FAST')
-    bpy.ops.mesh.select_all(action='SELECT')
-    bpy.ops.mesh.remove_doubles(threshold=0.0001)
-    bpy.ops.mesh.delete_loose()
-    bpy.ops.mesh.select_all(action='DESELECT')
-    bpy.ops.object.mode_set(mode='OBJECT')
+    mod = obj.modifiers.new(name="BtRingUnion", type='BOOLEAN')
+    mod.object = ring_obj; mod.operation = 'UNION'; mod.solver = 'FAST'
+    bpy.context.view_layer.update()
+    bpy.ops.object.modifier_apply(modifier="BtRingUnion")
+    bpy.data.objects.remove(ring_obj, do_unlink=True)
     print(f"[STEP Exporter] Bottom inner ring union")
 
 def _fillet_hole_edge(obj, fillet_mm, hole_r_mm, face_code, px, py, pz, thickness, hw, hd, h, S=0.001, fillet_type='0'):
@@ -2514,11 +2620,28 @@ def _rebuild_stage_hole(obj, entry):
         hole_r_mm = float(parts[3])
         fillet_mm = float(parts[5]) if len(parts) >= 7 else 0.0
         fillet_type = parts[6] if len(parts) >= 8 else '0'
-        # Curved shell with fillet: use torus union (handles hole + fillet together)
         if obj.get('corner_type') == 'curved' and fillet_mm > 0.0001:
-            _apply_fillet_torus_union(obj, hole_r_mm, fillet_mm, face,
-                cx * S, cy * S, cz * S, thickness, hw, hd, h * S, S,
-                fillet_type=fillet_type)
+            if face in (2, 3, 4, 5):  # side walls: torus union
+                _apply_fillet_torus_union(obj, hole_r_mm, fillet_mm, face,
+                    cx * S, cy * S, cz * S, thickness, hw, hd, h * S, S,
+                    fillet_type=fillet_type)
+                return
+            # Bottom/top face: use consistent approach with new hole creation
+            cutter_depth = thickness * 4.0
+            bpy.ops.mesh.primitive_cylinder_add(
+                vertices=32, radius=radius, depth=cutter_depth, location=(cx * S, cy * S, cz * S))
+            cutter = bpy.context.active_object; cutter.name = "Hole_R_rebuild"
+            _direct_cut_hole(obj, cutter)
+            # Apply fillets via ring functions
+            outer_z = -h * S / 2
+            inner_z = -h * S / 2 + thickness
+            px, py, pz = cx * S, cy * S, cz * S
+            if str(fillet_type) in ('0', '2'):
+                _apply_bottom_outer_ring(obj, hole_r_mm, fillet_mm,
+                    (px, py, outer_z + obj.location.z), S)
+            if str(fillet_type) in ('1', '2'):
+                _apply_bottom_inner_ring(obj, hole_r_mm, fillet_mm,
+                    (px, py, inner_z + obj.location.z), S)
             return
         cutter_depth = thickness * 4.0
         bpy.ops.mesh.primitive_cylinder_add(

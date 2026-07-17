@@ -1286,7 +1286,24 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
 
     def execute(self, context):
         import math
+        cursor = context.scene.cursor.location
+        
+        # Find the closest visible parametric shell to the 3D cursor
         obj = context.active_object
+        best_dist = float('inf')
+        best_obj = None
+        for o in bpy.data.objects:
+            if o.get('object_type') != 'parametric_shell':
+                continue
+            if o.hide_viewport or o.hide_get():
+                continue
+            d = (o.location - cursor).length
+            if d < best_dist:
+                best_dist = d
+                best_obj = o
+        if best_obj:
+            obj = best_obj
+        
         if not obj or obj.get('object_type') != 'parametric_shell':
             self.report({'ERROR'}, _t("Select a parametric shell first"))
             return {'CANCELLED'}
@@ -1305,8 +1322,6 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
             self.report({'ERROR'}, _t("Edge Fillet must be ≤ 0.4×wall thickness (%.1fmm) to prevent inner/outer overlap") % (t * 0.4))
             return {'CANCELLED'}
 
-        # 3D cursor position in Blender units (m) — world space
-        cursor = context.scene.cursor.location
         loc = obj.location
         # Shell-local cursor coords: mesh is centered at obj.location
         # bottom Z = loc.z - h/2, top Z = loc.z + h/2

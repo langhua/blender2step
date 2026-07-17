@@ -1704,8 +1704,9 @@ def _keep_or_remove(obj, cutter_obj, keep_cutters):
     elif cutter_obj:
         bpy.data.objects.remove(cutter_obj, do_unlink=True)
 
-def _make_ring_shared(pos, euler, name, hr, fr):
-    """Create quarter-torus ring mesh object (shared by staged functions)."""
+def _make_ring_shared(pos, euler, name, hr, fr, tilt_scale=None):
+    """Create quarter-torus ring mesh object.
+    tilt_scale: (sx,sy,sz) to stretch ring so projection is circular on tilted surface."""
     import bmesh as _bm_qt, math
     from mathutils import Matrix as _Mtx, Euler as _Eul
     seg_a, seg_p = 24, 6  # reduced from 32x8 for performance
@@ -1716,7 +1717,7 @@ def _make_ring_shared(pos, euler, name, hr, fr):
         ring = []
         for j in range(seg_p + 1):
             ph = math.pi / 2.0 + (math.pi / 2.0) * j / seg_p
-            rc = (hr + fr) + fr * math.cos(ph)
+            rc = (hr + fr) + fr * 1.02 * math.cos(ph)
             zc = -fr + fr * math.sin(ph) - 0.00002
             ring.append(bm.verts.new((rc * ct, rc * st, zc)))
         vv.append(ring)
@@ -1729,8 +1730,30 @@ def _make_ring_shared(pos, euler, name, hr, fr):
     robj = bpy.data.objects.new(name, msh)
     bpy.context.collection.objects.link(robj)
     robj.matrix_world = _Mtx.Translation(pos) @ _Eul(euler, 'XYZ').to_matrix().to_4x4()
+    if tilt_scale:
+        sx, sy, sz = tilt_scale
+        robj.matrix_world = robj.matrix_world @ _Mtx.Diagonal((sx, sy, sz, 1.0)).to_4x4()
     robj.hide_viewport = False; robj.display_type = 'WIRE'
     return robj
+
+def _tilt_scale(result):
+    """Return (sx,sy,sz) to make ring/recess projection circular, or None if flat."""
+    import math
+    fc = result['face_code']
+    euler_rot = result['euler_rot']
+    if fc in (4, 5):
+        tilt = abs(abs(euler_rot[0]) - math.pi / 2)
+    elif fc in (2, 3):
+        tilt = abs(abs(euler_rot[1]) - math.pi / 2)
+    else:
+        return None
+    if tilt < 0.002:
+        return None
+    s = 1.0 / math.cos(tilt)
+    if fc in (4, 5):
+        return (1.0, s, 1.0)  # stretch Y for front/back walls
+    else:
+        return (s, 1.0, 1.0)  # stretch X for left/right walls
 
 def _fillet_stage_1(obj, result, face_code, px, py, pz, thickness):
     """Stage 1: Through hole."""
@@ -1775,7 +1798,7 @@ def _fillet_stage_2(obj, result, face_code, fillet_type):
     from mathutils import Matrix as _Mtx, Euler as _Eul
     fr = result['fr']; hr = result['hr']
     outer_pos = result['outer_pos']; euler_rot = result['euler_rot']
-    ring = _make_ring_shared(outer_pos, euler_rot, "FilletOuter_Measure", hr, fr)
+    ring = _make_ring_shared(outer_pos, euler_rot, "FilletOuter_Measure", hr, fr, tilt_scale=_tilt_scale(result))
     bpy.context.view_layer.update()  # ensure matrix_world is computed
     ring_max_r2 = 0.0
     for v in ring.data.vertices:
@@ -1797,6 +1820,9 @@ def _fillet_stage_2(obj, result, face_code, fillet_type):
     bpy.ops.mesh.primitive_cylinder_add(vertices=32, radius=hole_r, depth=fr)
     rc = bpy.context.active_object; rc.name = "RecessOuter"
     rc.matrix_world = _Mtx.Translation(outer_pos) @ _Eul(euler_rot, 'XYZ').to_matrix().to_4x4() @ _Mtx.Translation((0,0,-fr/2+fr*0.3))
+    ts = _tilt_scale(result)
+    if ts:
+        rc.matrix_world = rc.matrix_world @ _Mtx.Diagonal((*ts, 1.0)).to_4x4()
     bpy.context.view_layer.update()  # ensure matrix_world takes effect
     bpy.context.view_layer.objects.active = obj
     mod = obj.modifiers.new(name="Recess", type='BOOLEAN')
@@ -1807,37 +1833,25 @@ def _fillet_stage_2(obj, result, face_code, fillet_type):
     print(f"[STEP Exporter] Recess OK, hole_r={hole_r*1000:.2f}mm")
 
 def _fillet_stage_3(obj, result, face_code):
-    """Stage 3: Outer ring via Boolean modifier UNION (faces 4,5) or intersect_boolean (faces 2,3)."""
+    """Stage 3: Outer ring via Boolean modifier UNION."""
     fr = result['fr']; hr = result['hr']
     outer_pos = result['outer_pos']; euler_rot = result['euler_rot']
-    ring = _make_ring_shared(outer_pos, euler_rot, "FilletOuter", hr, fr)
+    ring = _make_ring_shared(outer_pos, euler_rot, "FilletOuter", hr, fr, tilt_scale=_tilt_scale(result))
     bpy.context.view_layer.update()
     for m in list(obj.modifiers):
         obj.modifiers.remove(m)
     bpy.context.view_layer.objects.active = obj
-    
-    if face_code in (2, 3):
-        # Safe modifier approach for left/right walls
-        v_before = len(obj.data.vertices)
-        mod = obj.modifiers.new(name="FilletOuterUnion", type='BOOLEAN')
-        mod.object = ring; mod.operation = 'UNION'; mod.solver = 'FAST'
-        bpy.context.view_layer.update()
-        try:
-            bpy.ops.object.modifier_apply(modifier="FilletOuterUnion")
-        except:
-            pass
-        v_after = len(obj.data.vertices)
-        if v_after < v_before * 0.5:
-            print(f"[STEP Exporter] Outer ring aborted (v={v_before}→{v_after})")
-        else:
-            _keep_or_remove(obj, ring, obj.get('debug_keep_cutters'))
-            print(f"[STEP Exporter] Outer ring OK (v={v_before}→{v_after})")
-    else:
-        mod = obj.modifiers.new(name="FilletOuterUnion", type='BOOLEAN')
-        mod.object = ring; mod.operation = 'UNION'; mod.solver = 'FAST'
-        bpy.context.view_layer.update()
+    v_before = len(obj.data.vertices)
+    mod = obj.modifiers.new(name="FilletOuterUnion", type='BOOLEAN')
+    mod.object = ring; mod.operation = 'UNION'; mod.solver = 'FAST'
+    bpy.context.view_layer.update()
+    try:
         bpy.ops.object.modifier_apply(modifier="FilletOuterUnion")
-        _keep_or_remove(obj, ring, obj.get('debug_keep_cutters'))
+    except Exception as e:
+        print(f"[STEP Exporter] Outer ring crash: {e}")
+    v_after = len(obj.data.vertices)
+    _keep_or_remove(obj, ring, obj.get('debug_keep_cutters'))
+    print(f"[STEP Exporter] Outer ring v={v_before}→{v_after}")
 
 def _fillet_stage_4(obj, result, face_code, px, py, pz, fillet_type):
     """Stage 4: Inner recess cut."""
@@ -1846,7 +1860,7 @@ def _fillet_stage_4(obj, result, face_code, px, py, pz, fillet_type):
     from mathutils import Matrix as _Mtx, Euler as _Eul
     fr = result['fr']; hr = result['hr']
     inner_pos = result['inner_pos']; euler_inner = result['euler_inner']
-    ring = _make_ring_shared(inner_pos, euler_inner, "FilletInner_Ring", hr, fr)
+    ring = _make_ring_shared(inner_pos, euler_inner, "FilletInner_Ring", hr, fr, tilt_scale=_tilt_scale(result))
     bpy.context.view_layer.update()
     ring_max_r2 = 0.0
     for v in ring.data.vertices:
@@ -1867,6 +1881,9 @@ def _fillet_stage_4(obj, result, face_code, px, py, pz, fillet_type):
     bpy.ops.mesh.primitive_cylinder_add(vertices=32, radius=inner_hole_r, depth=fr)
     rc = bpy.context.active_object; rc.name = "RecessInner"
     rc.matrix_world = _Mtx.Translation(inner_pos) @ _Eul(euler_inner, 'XYZ').to_matrix().to_4x4() @ _Mtx.Translation((0,0,-fr/2+fr*0.3))
+    ts = _tilt_scale(result)
+    if ts:
+        rc.matrix_world = rc.matrix_world @ _Mtx.Diagonal((*ts, 1.0)).to_4x4()
     bpy.context.view_layer.update()
     bpy.context.view_layer.objects.active = obj
     mod = obj.modifiers.new(name="RecessInner", type='BOOLEAN')
@@ -1876,24 +1893,54 @@ def _fillet_stage_4(obj, result, face_code, px, py, pz, fillet_type):
     _keep_or_remove(obj, rc, obj.get('debug_keep_cutters'))
 
 def _fillet_stage_5(obj, result, face_code):
-    """Stage 5: Inner ring via Boolean modifier UNION (faces 4,5) or intersect_boolean (faces 2,3)."""
+    """Stage 5: Inner ring — try FAST boolean, fallback to join+weld+normals."""
+    import math
     fr = result['fr']; hr = result['hr']
     inner_pos = result['inner_pos']; euler_inner = result['euler_inner']
-    ring = _make_ring_shared(inner_pos, euler_inner, "FilletInner", hr, fr)
+    ring = _make_ring_shared(inner_pos, euler_inner, "FilletInner", hr, fr, tilt_scale=_tilt_scale(result))
     bpy.context.view_layer.update()
+    # Offset ring 0.01mm inward for better overlap
+    ox, oy, oz = result['ox'], result['oy'], result['oz']
+    inward_len = math.sqrt(ox*ox + oy*oy + oz*oz)
+    if inward_len > 0.000001:
+        ring.location.x += ox / inward_len * 0.00001
+        ring.location.y += oy / inward_len * 0.00001
+        ring.location.z += oz / inward_len * 0.00001
     for m in list(obj.modifiers):
         obj.modifiers.remove(m)
     bpy.context.view_layer.objects.active = obj
-    
-    if face_code in (2, 3):
-        # Inner ring fails on left/right walls — skip
-        _keep_or_remove(obj, ring, False)
-    else:
-        mod = obj.modifiers.new(name="FilletInnerUnion", type='BOOLEAN')
-        mod.object = ring; mod.operation = 'UNION'; mod.solver = 'FAST'
-        bpy.context.view_layer.update()
+    backup = obj.data.copy()
+    v_before = len(obj.data.vertices)
+    # Try FAST boolean first
+    mod = obj.modifiers.new(name="FilletInnerUnion", type='BOOLEAN')
+    mod.object = ring; mod.operation = 'UNION'; mod.solver = 'FAST'
+    bpy.context.view_layer.update()
+    try:
         bpy.ops.object.modifier_apply(modifier="FilletInnerUnion")
+    except Exception as e:
+        print(f"[STEP Exporter] Inner ring crash: {e}")
+        obj.data = backup
+    v_after = len(obj.data.vertices)
+    if v_after < v_before * 0.5:
+        print(f"[STEP Exporter] Inner ring FAST failed, join+weld...")
+        obj.data = backup
+        for m in list(obj.modifiers):
+            obj.modifiers.remove(m)
+        bpy.context.view_layer.objects.active = obj
+        ring.select_set(True)
+        obj.select_set(True)
+        bpy.ops.object.join()
+        bpy.ops.object.mode_set(mode='EDIT')
+        bpy.ops.mesh.select_all(action='SELECT')
+        bpy.ops.mesh.remove_doubles(threshold=0.0001)
+        bpy.ops.mesh.normals_make_consistent(inside=False)
+        bpy.ops.mesh.delete_loose()
+        bpy.ops.object.mode_set(mode='OBJECT')
+        v_after = len(obj.data.vertices)
+        print(f"[STEP Exporter] Inner ring joined+welded, v={v_before}→{v_after}")
+    else:
         _keep_or_remove(obj, ring, obj.get('debug_keep_cutters'))
+    print(f"[STEP Exporter] Inner ring v={v_before}→{len(obj.data.vertices)}")
 
 def _apply_fillet_torus_union(obj, hole_r_mm, fillet_mm, face_code, px, py, pz, thickness, hw, hd, h_total, S, fillet_type='0', wm=None):
     """Apply fillet via quarter-torus Boolean UNION (legacy sync version, unused for modal)."""

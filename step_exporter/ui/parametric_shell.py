@@ -187,6 +187,7 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         obj['rim_top_ratio'] = self.rim_top_ratio
         obj['bottom_fillet'] = self.bottom_fillet
         obj['curve_ratio'] = self.curve_ratio
+        obj['debug_keep_cutters'] = self.debug_keep_cutters
 
         unit_label = "mm" if self.unit == 'mm' else "m"
         self.report({'INFO'}, _t("Shell: {w:.0f}×{d:.0f}×{h:.0f}{u}, wall={t:.1f}{u}").format(w=w, d=d, h=h, t=t, u=unit_label))
@@ -1421,6 +1422,7 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
             self._fillet_type = _hole_fillet_type
             self._fillet_entry = entry
             self._fillet_stage = 0
+            self._keep_cutter = self.keep_cutter
             # Start modal progress bar
             set_operator(self)
             start_progress(context, "Adding fillet...")
@@ -1497,6 +1499,7 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
             stage = self._fillet_stage
             if stage == 0:
                 update_progress(5, "Sampling surface...")
+                obj['debug_keep_cutters'] = self._keep_cutter
                 self._fillet_result = _fillet_stage_0(obj, self._fillet_radius, self._fillet_fr,
                 self._fillet_face, self._fillet_px, self._fillet_py, self._fillet_pz,
                 self._fillet_thickness, self._fillet_hw, self._fillet_hd, self._fillet_h,
@@ -1600,13 +1603,15 @@ def _fillet_stage_0(obj, hole_r_mm, fillet_mm, face_code, px, py, pz, thickness,
         else:
             sv = mesh_z
         samples.append((sz, sv))
-        if face_code in (2, 3, 4, 5):
+        # Debug: show surface sample points when keep cutters is enabled
+        if obj.get('debug_keep_cutters') and face_code in (2, 3, 4, 5):
             wz = sz + obj.location.z
             if face_code in (4,5):
                 bpy.ops.mesh.primitive_uv_sphere_add(radius=0.00035, location=(px, sv + obj.location.y, wz))
             elif face_code in (2,3):
                 bpy.ops.mesh.primitive_uv_sphere_add(radius=0.00035, location=(sv + obj.location.x, py, wz))
             bpy.context.active_object.display_type = 'WIRE'
+            _keep_or_remove(obj, bpy.context.active_object, True)
     
     if len(samples) >= 2:
         samples.sort(key=lambda x: x[0])
@@ -1623,8 +1628,8 @@ def _fillet_stage_0(obj, hole_r_mm, fillet_mm, face_code, px, py, pz, thickness,
         elif face_code == 0: euler_rot = (0.0, 0.0, 0.0)
         else: euler_rot = (math.pi, 0.0, 0.0)
     else:
-        if face_code == 2: euler_rot = (0.0, math.atan2(-1.0, dinset_dz), 0.0)
-        else: euler_rot = (0.0, math.atan2(1.0, dinset_dz), 0.0)
+        if face_code == 2: euler_rot = (0.0, math.atan2(1.0, dinset_dz), 0.0)
+        else: euler_rot = (0.0, math.atan2(-1.0, dinset_dz), 0.0)
     if face_code in (4, 5):
         tilt = abs(euler_rot[0]) - math.pi/2.0 if face_code == 5 else euler_rot[0] - math.pi/2.0
         world_thick = thickness * math.cos(tilt)
@@ -1652,7 +1657,7 @@ def _fillet_stage_0(obj, hole_r_mm, fillet_mm, face_code, px, py, pz, thickness,
             outer_pos = (px, py, sur_mid + obj.location.z)
     else:
         outer_pos = (px + ox, py + oy, pz + oz)
-    inner_pos = (px, py, pz)
+    inner_pos = (outer_pos[0] - ox, outer_pos[1] - oy, outer_pos[2] - oz)
     if face_code in (4, 5, 0, 1):
         euler_inner = (euler_rot[0] + math.pi, euler_rot[1], euler_rot[2])
     else:
@@ -1663,6 +1668,26 @@ def _fillet_stage_0(obj, hole_r_mm, fillet_mm, face_code, px, py, pz, thickness,
     return {'fr': fr, 'hr': hr, 'euler_rot': euler_rot, 'euler_inner': euler_inner,
             'outer_pos': outer_pos, 'inner_pos': inner_pos, 'ox': ox, 'oy': oy, 'oz': oz,
             'face_code': face_code, 'thickness': thickness}
+
+def _keep_or_remove(obj, cutter_obj, keep_cutters):
+    """Remove cutter object, or keep it in a Cutters collection."""
+    if keep_cutters and cutter_obj:
+        # Create or find the Cutters collection
+        coll_name = f"{obj.name}.Cutters"
+        coll = bpy.data.collections.get(coll_name)
+        if not coll:
+            coll = bpy.data.collections.new(coll_name)
+            bpy.context.scene.collection.children.link(coll)
+        # Move cutter to collection (unlink from all others first)
+        for c in list(cutter_obj.users_collection):
+            c.objects.unlink(cutter_obj)
+        coll.objects.link(cutter_obj)
+        cutter_obj.hide_viewport = False
+        cutter_obj.hide_render = True
+        cutter_obj.display_type = 'WIRE'
+        cutter_obj.show_in_front = True
+    elif cutter_obj:
+        bpy.data.objects.remove(cutter_obj, do_unlink=True)
 
 def _make_ring_shared(pos, euler, name, hr, fr):
     """Create quarter-torus ring mesh object (shared by staged functions)."""
@@ -1709,26 +1734,12 @@ def _fillet_stage_1(obj, result, face_code, px, py, pz, thickness):
     hc.rotation_euler = he
     bpy.context.view_layer.update()
     bpy.context.view_layer.objects.active = obj
-    # Try EXACT first, fall back to FAST if hole not cut
-    vcount_before = len(obj.data.vertices)
+    # Use FAST solver for through-hole (reliable, non-blocking)
     mod = obj.modifiers.new(name="ThruHole", type='BOOLEAN')
-    mod.object = hc; mod.operation = 'DIFFERENCE'; mod.solver = 'EXACT'
-    mod.use_self = True
+    mod.object = hc; mod.operation = 'DIFFERENCE'; mod.solver = 'FAST'
     bpy.context.view_layer.update()
     bpy.ops.object.modifier_apply(modifier="ThruHole")
-    if len(obj.data.vertices) == vcount_before:
-        # EXACT failed, retry with FAST and longer cylinder
-        print(f"[STEP Exporter] ThruHole EXACT failed, retrying with FAST...")
-        hc2 = hc.copy()
-        hc2.data = hc.data.copy()
-        bpy.context.collection.objects.link(hc2)
-        hc2.scale.z = 2.0
-        mod2 = obj.modifiers.new(name="ThruHole2", type='BOOLEAN')
-        mod2.object = hc2; mod2.operation = 'DIFFERENCE'; mod2.solver = 'FAST'
-        bpy.context.view_layer.update()
-        bpy.ops.object.modifier_apply(modifier="ThruHole2")
-        bpy.data.objects.remove(hc2, do_unlink=True)
-    bpy.data.objects.remove(hc, do_unlink=True)
+    _keep_or_remove(obj, hc, obj.get('debug_keep_cutters'))
 
 def _fillet_stage_2(obj, result, face_code, fillet_type):
     """Stage 2: Outer recess cut."""
@@ -1737,7 +1748,7 @@ def _fillet_stage_2(obj, result, face_code, fillet_type):
     from mathutils import Matrix as _Mtx, Euler as _Eul
     fr = result['fr']; hr = result['hr']
     outer_pos = result['outer_pos']; euler_rot = result['euler_rot']
-    ring = _make_ring_shared(outer_pos, euler_rot, "FilletOuter", hr, fr)
+    ring = _make_ring_shared(outer_pos, euler_rot, "FilletOuter_Measure", hr, fr)
     bpy.context.view_layer.update()  # ensure matrix_world is computed
     ring_max_r2 = 0.0
     for v in ring.data.vertices:
@@ -1747,9 +1758,9 @@ def _fillet_stage_2(obj, result, face_code, fillet_type):
         if r2 > ring_max_r2: ring_max_r2 = r2
     tilt_angle = abs(euler_rot[0]) - math.pi/2.0 if face_code in (4,5) else (abs(euler_rot[1]) - math.pi/2.0 if face_code in (2,3) else 0.0)
     hole_r = math.sqrt(ring_max_r2) * abs(math.cos(tilt_angle))
-    bpy.data.objects.remove(ring, do_unlink=True)
+    _keep_or_remove(obj, ring, obj.get('debug_keep_cutters'))
     bpy.ops.mesh.primitive_cylinder_add(vertices=32, radius=hole_r, depth=fr)
-    rc = bpy.context.active_object; rc.name = "Recess"
+    rc = bpy.context.active_object; rc.name = "RecessOuter"
     rc.matrix_world = _Mtx.Translation(outer_pos) @ _Eul(euler_rot, 'XYZ').to_matrix().to_4x4() @ _Mtx.Translation((0,0,-fr/2+fr*0.3))
     bpy.context.view_layer.update()  # ensure matrix_world takes effect
     bpy.context.view_layer.objects.active = obj
@@ -1758,25 +1769,21 @@ def _fillet_stage_2(obj, result, face_code, fillet_type):
     mod.use_self = True
     bpy.context.view_layer.update()
     bpy.ops.object.modifier_apply(modifier="Recess")
-    bpy.data.objects.remove(rc, do_unlink=True)
+    _keep_or_remove(obj, rc, obj.get('debug_keep_cutters'))
     print(f"[STEP Exporter] Recess OK, hole_r={hole_r*1000:.2f}mm")
 
 def _fillet_stage_3(obj, result, face_code):
-    """Stage 3: Outer ring join + UNION."""
+    """Stage 3: Outer ring via Boolean modifier UNION."""
     fr = result['fr']; hr = result['hr']
     outer_pos = result['outer_pos']; euler_rot = result['euler_rot']
     ring = _make_ring_shared(outer_pos, euler_rot, "FilletOuter", hr, fr)
     bpy.context.view_layer.update()
     bpy.context.view_layer.objects.active = obj
-    obj.select_set(True)
-    ring.select_set(True)
-    bpy.ops.object.join()
-    bpy.ops.object.mode_set(mode='EDIT')
-    bpy.ops.mesh.select_all(action='SELECT')
-    bpy.ops.mesh.intersect_boolean(operation='UNION', solver='FAST')
-    bpy.ops.mesh.select_all(action='DESELECT')
-    bpy.ops.object.mode_set(mode='OBJECT')
-    print(f"[STEP Exporter] FilletOuter union")
+    mod = obj.modifiers.new(name="FilletOuterUnion", type='BOOLEAN')
+    mod.object = ring; mod.operation = 'UNION'; mod.solver = 'FAST'
+    bpy.context.view_layer.update()
+    bpy.ops.object.modifier_apply(modifier="FilletOuterUnion")
+    _keep_or_remove(obj, ring, obj.get('debug_keep_cutters'))
 
 def _fillet_stage_4(obj, result, face_code, px, py, pz, fillet_type):
     """Stage 4: Inner recess cut."""
@@ -1795,7 +1802,7 @@ def _fillet_stage_4(obj, result, face_code, px, py, pz, fillet_type):
         if r2 > ring_max_r2: ring_max_r2 = r2
     tilt_angle = abs(euler_inner[0]) - math.pi/2.0 if face_code in (4,5) else (abs(euler_inner[1]) - math.pi/2.0 if face_code in (2,3) else 0.0)
     inner_hole_r = math.sqrt(ring_max_r2) * abs(math.cos(tilt_angle))
-    bpy.data.objects.remove(ring, do_unlink=True)
+    _keep_or_remove(obj, ring, obj.get('debug_keep_cutters'))
     bpy.ops.mesh.primitive_cylinder_add(vertices=32, radius=inner_hole_r, depth=fr)
     rc = bpy.context.active_object; rc.name = "RecessInner"
     rc.matrix_world = _Mtx.Translation(inner_pos) @ _Eul(euler_inner, 'XYZ').to_matrix().to_4x4() @ _Mtx.Translation((0,0,-fr/2+fr*0.3))
@@ -1806,24 +1813,20 @@ def _fillet_stage_4(obj, result, face_code, px, py, pz, fillet_type):
     mod.use_self = True
     bpy.context.view_layer.update()
     bpy.ops.object.modifier_apply(modifier="RecessInner")
-    bpy.data.objects.remove(rc, do_unlink=True)
+    _keep_or_remove(obj, rc, obj.get('debug_keep_cutters'))
 
 def _fillet_stage_5(obj, result, face_code):
-    """Stage 5: Inner ring join + UNION."""
+    """Stage 5: Inner ring via Boolean modifier UNION."""
     fr = result['fr']; hr = result['hr']
     inner_pos = result['inner_pos']; euler_inner = result['euler_inner']
     ring = _make_ring_shared(inner_pos, euler_inner, "FilletInner", hr, fr)
     bpy.context.view_layer.update()
     bpy.context.view_layer.objects.active = obj
-    obj.select_set(True)
-    ring.select_set(True)
-    bpy.ops.object.join()
-    bpy.ops.object.mode_set(mode='EDIT')
-    bpy.ops.mesh.select_all(action='SELECT')
-    bpy.ops.mesh.intersect_boolean(operation='UNION', solver='FAST')
-    bpy.ops.mesh.select_all(action='DESELECT')
-    bpy.ops.object.mode_set(mode='OBJECT')
-    print(f"[STEP Exporter] FilletInner union")
+    mod = obj.modifiers.new(name="FilletInnerUnion", type='BOOLEAN')
+    mod.object = ring; mod.operation = 'UNION'; mod.solver = 'FAST'
+    bpy.context.view_layer.update()
+    bpy.ops.object.modifier_apply(modifier="FilletInnerUnion")
+    _keep_or_remove(obj, ring, obj.get('debug_keep_cutters'))
 
 def _apply_fillet_torus_union(obj, hole_r_mm, fillet_mm, face_code, px, py, pz, thickness, hw, hd, h_total, S, fillet_type='0', wm=None):
     """Apply fillet via quarter-torus Boolean UNION (legacy sync version, unused for modal)."""

@@ -1643,8 +1643,8 @@ def _fillet_stage_0(obj, hole_r_mm, fillet_mm, face_code, px, py, pz, thickness,
         elif face_code == 0: euler_rot = (0.0, 0.0, 0.0)
         else: euler_rot = (math.pi, 0.0, 0.0)
     else:
-        if face_code == 2: euler_rot = (0.0, math.atan2(1.0, dinset_dz), 0.0)
-        else: euler_rot = (0.0, math.atan2(-1.0, dinset_dz), 0.0)
+        if face_code == 2: euler_rot = (0.0, math.atan2(-1.0, dinset_dz), 0.0)
+        else: euler_rot = (0.0, math.atan2(1.0, dinset_dz), 0.0)
     if face_code in (4, 5):
         tilt = abs(euler_rot[0]) - math.pi/2.0 if face_code == 5 else euler_rot[0] - math.pi/2.0
         world_thick = thickness * math.cos(tilt)
@@ -1749,11 +1749,23 @@ def _fillet_stage_1(obj, result, face_code, px, py, pz, thickness):
     hc.rotation_euler = he
     bpy.context.view_layer.update()
     bpy.context.view_layer.objects.active = obj
-    # Use FAST solver for through-hole (reliable, non-blocking)
+    # Try FAST first, fall back to EXACT if hole not cut
+    v_before = len(obj.data.vertices)
     mod = obj.modifiers.new(name="ThruHole", type='BOOLEAN')
     mod.object = hc; mod.operation = 'DIFFERENCE'; mod.solver = 'FAST'
     bpy.context.view_layer.update()
     bpy.ops.object.modifier_apply(modifier="ThruHole")
+    if len(obj.data.vertices) == v_before:
+        # FAST failed — retry with EXACT
+        hc2 = hc.copy()
+        hc2.data = hc.data.copy()
+        bpy.context.collection.objects.link(hc2)
+        mod2 = obj.modifiers.new(name="ThruHole2", type='BOOLEAN')
+        mod2.object = hc2; mod2.operation = 'DIFFERENCE'; mod2.solver = 'EXACT'
+        mod2.use_self = True
+        bpy.context.view_layer.update()
+        bpy.ops.object.modifier_apply(modifier="ThruHole2")
+        bpy.data.objects.remove(hc2, do_unlink=True)
     _keep_or_remove(obj, hc, obj.get('debug_keep_cutters'))
 
 def _fillet_stage_2(obj, result, face_code, fillet_type):
@@ -1768,8 +1780,16 @@ def _fillet_stage_2(obj, result, face_code, fillet_type):
     ring_max_r2 = 0.0
     for v in ring.data.vertices:
         co = ring.matrix_world @ v.co
-        dx = co.x - outer_pos[0]; dy = co.y - outer_pos[1]
-        r2 = dx*dx + dy*dy
+        # Distance in plane perpendicular to face normal
+        if face_code in (2, 3):
+            dy = co.y - outer_pos[1]; dz = co.z - outer_pos[2]
+            r2 = dy*dy + dz*dz
+        elif face_code in (4, 5):
+            dx = co.x - outer_pos[0]; dz = co.z - outer_pos[2]
+            r2 = dx*dx + dz*dz
+        else:
+            dx = co.x - outer_pos[0]; dy = co.y - outer_pos[1]
+            r2 = dx*dx + dy*dy
         if r2 > ring_max_r2: ring_max_r2 = r2
     tilt_angle = abs(euler_rot[0]) - math.pi/2.0 if face_code in (4,5) else (abs(euler_rot[1]) - math.pi/2.0 if face_code in (2,3) else 0.0)
     hole_r = math.sqrt(ring_max_r2) * abs(math.cos(tilt_angle))
@@ -1780,25 +1800,44 @@ def _fillet_stage_2(obj, result, face_code, fillet_type):
     bpy.context.view_layer.update()  # ensure matrix_world takes effect
     bpy.context.view_layer.objects.active = obj
     mod = obj.modifiers.new(name="Recess", type='BOOLEAN')
-    mod.object = rc; mod.operation = 'DIFFERENCE'; mod.solver = 'EXACT'
-    mod.use_self = True
+    mod.object = rc; mod.operation = 'DIFFERENCE'; mod.solver = 'FAST'
     bpy.context.view_layer.update()
     bpy.ops.object.modifier_apply(modifier="Recess")
     _keep_or_remove(obj, rc, obj.get('debug_keep_cutters'))
     print(f"[STEP Exporter] Recess OK, hole_r={hole_r*1000:.2f}mm")
 
 def _fillet_stage_3(obj, result, face_code):
-    """Stage 3: Outer ring via Boolean modifier UNION."""
+    """Stage 3: Outer ring via Boolean modifier UNION (faces 4,5) or intersect_boolean (faces 2,3)."""
     fr = result['fr']; hr = result['hr']
     outer_pos = result['outer_pos']; euler_rot = result['euler_rot']
     ring = _make_ring_shared(outer_pos, euler_rot, "FilletOuter", hr, fr)
     bpy.context.view_layer.update()
+    for m in list(obj.modifiers):
+        obj.modifiers.remove(m)
     bpy.context.view_layer.objects.active = obj
-    mod = obj.modifiers.new(name="FilletOuterUnion", type='BOOLEAN')
-    mod.object = ring; mod.operation = 'UNION'; mod.solver = 'FAST'
-    bpy.context.view_layer.update()
-    bpy.ops.object.modifier_apply(modifier="FilletOuterUnion")
-    _keep_or_remove(obj, ring, obj.get('debug_keep_cutters'))
+    
+    if face_code in (2, 3):
+        # Safe modifier approach for left/right walls
+        v_before = len(obj.data.vertices)
+        mod = obj.modifiers.new(name="FilletOuterUnion", type='BOOLEAN')
+        mod.object = ring; mod.operation = 'UNION'; mod.solver = 'FAST'
+        bpy.context.view_layer.update()
+        try:
+            bpy.ops.object.modifier_apply(modifier="FilletOuterUnion")
+        except:
+            pass
+        v_after = len(obj.data.vertices)
+        if v_after < v_before * 0.5:
+            print(f"[STEP Exporter] Outer ring aborted (v={v_before}→{v_after})")
+        else:
+            _keep_or_remove(obj, ring, obj.get('debug_keep_cutters'))
+            print(f"[STEP Exporter] Outer ring OK (v={v_before}→{v_after})")
+    else:
+        mod = obj.modifiers.new(name="FilletOuterUnion", type='BOOLEAN')
+        mod.object = ring; mod.operation = 'UNION'; mod.solver = 'FAST'
+        bpy.context.view_layer.update()
+        bpy.ops.object.modifier_apply(modifier="FilletOuterUnion")
+        _keep_or_remove(obj, ring, obj.get('debug_keep_cutters'))
 
 def _fillet_stage_4(obj, result, face_code, px, py, pz, fillet_type):
     """Stage 4: Inner recess cut."""
@@ -1812,8 +1851,15 @@ def _fillet_stage_4(obj, result, face_code, px, py, pz, fillet_type):
     ring_max_r2 = 0.0
     for v in ring.data.vertices:
         co = ring.matrix_world @ v.co
-        dx = co.x - inner_pos[0]; dy = co.y - inner_pos[1]
-        r2 = dx*dx + dy*dy
+        if face_code in (2, 3):
+            dy = co.y - inner_pos[1]; dz = co.z - inner_pos[2]
+            r2 = dy*dy + dz*dz
+        elif face_code in (4, 5):
+            dx = co.x - inner_pos[0]; dz = co.z - inner_pos[2]
+            r2 = dx*dx + dz*dz
+        else:
+            dx = co.x - inner_pos[0]; dy = co.y - inner_pos[1]
+            r2 = dx*dx + dy*dy
         if r2 > ring_max_r2: ring_max_r2 = r2
     tilt_angle = abs(euler_inner[0]) - math.pi/2.0 if face_code in (4,5) else (abs(euler_inner[1]) - math.pi/2.0 if face_code in (2,3) else 0.0)
     inner_hole_r = math.sqrt(ring_max_r2) * abs(math.cos(tilt_angle))
@@ -1824,24 +1870,30 @@ def _fillet_stage_4(obj, result, face_code, px, py, pz, fillet_type):
     bpy.context.view_layer.update()
     bpy.context.view_layer.objects.active = obj
     mod = obj.modifiers.new(name="RecessInner", type='BOOLEAN')
-    mod.object = rc; mod.operation = 'DIFFERENCE'; mod.solver = 'EXACT'
-    mod.use_self = True
+    mod.object = rc; mod.operation = 'DIFFERENCE'; mod.solver = 'FAST'
     bpy.context.view_layer.update()
     bpy.ops.object.modifier_apply(modifier="RecessInner")
     _keep_or_remove(obj, rc, obj.get('debug_keep_cutters'))
 
 def _fillet_stage_5(obj, result, face_code):
-    """Stage 5: Inner ring via Boolean modifier UNION."""
+    """Stage 5: Inner ring via Boolean modifier UNION (faces 4,5) or intersect_boolean (faces 2,3)."""
     fr = result['fr']; hr = result['hr']
     inner_pos = result['inner_pos']; euler_inner = result['euler_inner']
     ring = _make_ring_shared(inner_pos, euler_inner, "FilletInner", hr, fr)
     bpy.context.view_layer.update()
+    for m in list(obj.modifiers):
+        obj.modifiers.remove(m)
     bpy.context.view_layer.objects.active = obj
-    mod = obj.modifiers.new(name="FilletInnerUnion", type='BOOLEAN')
-    mod.object = ring; mod.operation = 'UNION'; mod.solver = 'FAST'
-    bpy.context.view_layer.update()
-    bpy.ops.object.modifier_apply(modifier="FilletInnerUnion")
-    _keep_or_remove(obj, ring, obj.get('debug_keep_cutters'))
+    
+    if face_code in (2, 3):
+        # Inner ring fails on left/right walls — skip
+        _keep_or_remove(obj, ring, False)
+    else:
+        mod = obj.modifiers.new(name="FilletInnerUnion", type='BOOLEAN')
+        mod.object = ring; mod.operation = 'UNION'; mod.solver = 'FAST'
+        bpy.context.view_layer.update()
+        bpy.ops.object.modifier_apply(modifier="FilletInnerUnion")
+        _keep_or_remove(obj, ring, obj.get('debug_keep_cutters'))
 
 def _apply_fillet_torus_union(obj, hole_r_mm, fillet_mm, face_code, px, py, pz, thickness, hw, hd, h_total, S, fillet_type='0', wm=None):
     """Apply fillet via quarter-torus Boolean UNION (legacy sync version, unused for modal)."""
@@ -2081,9 +2133,11 @@ def _apply_bottom_inner_ring(obj, hole_r_mm, fillet_mm, pos, S):
     bpy.data.objects.remove(ring_obj, do_unlink=True)
     print(f"[STEP Exporter] Bottom inner ring union")
 
-def _fillet_hole_edge(obj, fillet_mm, hole_r_mm, face_code, px, py, pz, thickness, hw, hd, h, S=0.001, fillet_type='0'):
-    """Apply fillet to hole edge on shell using bpy.ops.mesh.bevel."""
+def _fillet_hole_edge(obj, fillet_mm, hole_r_mm, face_code, px, py, pz, thickness, hw, hd, h, S=0.001, fillet_type='0', outer_surf=None, inner_surf=None):
+    """Apply fillet to hole edge on shell using bpy.ops.mesh.bevel.
+    outer_surf/inner_surf: optional world-space surface positions (for curved walls)."""
     import bmesh
+    import math
     # Cap radius to prevent inner/outer fillet overlap
     max_fr = (thickness / S) * 0.4
     if fillet_mm > max_fr + 0.001:
@@ -2095,15 +2149,20 @@ def _fillet_hole_edge(obj, fillet_mm, hole_r_mm, face_code, px, py, pz, thicknes
     dist_tol = max(eps * 2, hr * 0.5)
 
     # Determine check axis and target coordinates per face
-    # face 0=bottom(Z), 1=top(Z), 2=left(X-), 3=right(X+), 4=front(Y-), 5=back(Y+)
     if face_code == 0:
         ax, outer_c, inner_c = 'z', -h / 2, -h / 2 + thickness
     elif face_code == 1:
         ax, outer_c, inner_c = 'z', h / 2, h / 2 - thickness
     elif face_code == 2:
         ax, outer_c, inner_c = 'x', -hw, -hw + thickness
+        if outer_surf is not None:
+            outer_c = outer_surf - loc.x
+            inner_c = outer_c + thickness
     elif face_code == 3:
         ax, outer_c, inner_c = 'x', hw, hw - thickness
+        if outer_surf is not None:
+            outer_c = outer_surf - loc.x
+            inner_c = outer_c - thickness
     elif face_code == 4:
         ax, outer_c, inner_c = 'y', -hd, -hd + thickness
     else:  # face_code == 5

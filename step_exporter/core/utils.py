@@ -81,34 +81,40 @@ def _strip_wireframe_chain(entities):
     
     for root_id, shape_rep_keyword in geometry_roots:
         # Step 2: Find shape representation that references this root
+        # Try specific keywords first, then fall back to any SHAPE_REPRESENTATION
         shape_rep_id = None
-        for eid, text in entities:
-            if shape_rep_keyword in text and root_id in entity_refs.get(eid, set()):
-                shape_rep_id = eid
+        for keyword in [shape_rep_keyword, 'SHAPE_REPRESENTATION']:
+            if shape_rep_id:
                 break
+            for eid, text in entities:
+                if keyword in text and root_id in entity_refs.get(eid, set()):
+                    shape_rep_id = eid
+                    break
         
         if shape_rep_id is None:
+            log_to_file(f"[MERGE DEBUG] No shape_rep found for root #{root_id} type={shape_rep_keyword}")
             continue
         
         # Step 3: Find SHAPE_DEFINITION_REPRESENTATION that references shape_rep_id
         sdr_id = None
-        pds_id = None
         for eid, text in entities:
             if 'SHAPE_DEFINITION_REPRESENTATION' in text and shape_rep_id in entity_refs.get(eid, set()):
                 sdr_id = eid
-                refs = entity_refs[eid] - {shape_rep_id}
-                if refs:
-                    pds_id = min(refs)
                 break
         
         if sdr_id is None:
-            continue
+            # No SDR found — still keep the geometry chain (BFS from shape_rep and root)
+            log_to_file(f"[MERGE DEBUG] No SDR for root #{root_id}, BFS from shape_rep #{shape_rep_id}")
         
-        # BFS from this geometry chain
+        # BFS from this geometry chain — always include root_id
         visited = set()
-        queue = deque([sdr_id, shape_rep_id])
-        if pds_id:
-            queue.append(pds_id)
+        queue = deque([root_id, shape_rep_id])
+        if sdr_id:
+            queue.append(sdr_id)
+            # Also include PRODUCT_DEFINITION_SHAPE referenced by SDR
+            for ref in entity_refs.get(sdr_id, set()):
+                if ref != shape_rep_id and ref in entity_map:
+                    queue.append(ref)
         
         while queue:
             eid = queue.popleft()

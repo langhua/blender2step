@@ -3467,7 +3467,9 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                 TopExp::MapShapesAndAncestors(resultSolid, TopAbs_EDGE, TopAbs_FACE, edgeFaceMap);
 
                 // Collect edges to fillet: edges at hole centers with at least one non-planar face
+                // Also filter by fillet_type: 0=outer only, 1=inner only, 2=both
                 std::vector<TopoDS_Edge> edgesToFillet;
+                int totalNearEdges = 0, filteredOut = 0;
                 for (int i = 1; i <= edgeFaceMap.Extent(); i++) {
                     const TopoDS_Edge& edge = TopoDS::Edge(edgeFaceMap.FindKey(i));
                     const TopTools_ListOfShape& faces = edgeFaceMap.FindFromIndex(i);
@@ -3487,12 +3489,28 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                         else if (hf.fc == 2 || hf.fc == 3) dist = sqrt((ecy-hf.cy)*(ecy-hf.cy)+(ecz-hf.cz)*(ecz-hf.cz));
                         else dist = sqrt((ecx-hf.cx)*(ecx-hf.cx)+(ecz-hf.cz)*(ecz-hf.cz));
                         if (dist < hf.r * 0.6) {
-                            edgesToFillet.push_back(edge);
+                            totalNearEdges++;
+                            // Filter by fillet_type: check if edge is on outer or inner side
+                            bool isOuter = false;
+                            double edgeCoord = 0, holeCoord = 0;
+                            if (hf.fc == 0 || hf.fc == 1) { edgeCoord = ecz; holeCoord = hf.cz; }
+                            else if (hf.fc == 2 || hf.fc == 3) { edgeCoord = ecx; holeCoord = hf.cx; }
+                            else { edgeCoord = ecy; holeCoord = hf.cy; }
+                            // Outer edge is at same coord as hole center; inner edge is offset by ~thickness
+                            isOuter = (fabs(edgeCoord - holeCoord) < hf.thick * 0.6);
+                            bool isInner = !isOuter && (fabs(edgeCoord - holeCoord) < hf.thick * 1.5);
+
+                            if (hf.type == 2 || (hf.type == 0 && isOuter) || (hf.type == 1 && isInner)) {
+                                edgesToFillet.push_back(edge);
+                            } else {
+                                filteredOut++;
+                            }
                             break;
                         }
                     }
                 }
-                std::cout << "[STEP Exporter] Found " << edgesToFillet.size() << " hole edges from cut" << std::endl;
+                std::cout << "[STEP Exporter] Found " << edgesToFillet.size() << " hole edges from cut"
+                          << " (totalNear=" << totalNearEdges << " filteredOut=" << filteredOut << ")" << std::endl;
 
                 // Supplement: use BRepAlgoAPI_Section for edges missing from boolean cut
                 // (OCCT boolean cut may not produce edges on NURBS faces, e.g. curved top face)
@@ -3514,7 +3532,7 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                     BRepAlgoAPI_Section sec(resultSolid, cyl);
                     sec.Build();
                     if (sec.IsDone()) {
-                        int added = 0;
+                        int added = 0, secFilteredOut = 0;
                         for (TopExp_Explorer ex(sec.Shape(), TopAbs_EDGE); ex.More(); ex.Next()) {
                             const TopoDS_Edge& e = TopoDS::Edge(ex.Current());
                             Bnd_Box eb; BRepBndLib::Add(e, eb);
@@ -3525,6 +3543,19 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                             else if (hf.fc == 2 || hf.fc == 3) dist = sqrt((ecy-hf.cy)*(ecy-hf.cy)+(ecz-hf.cz)*(ecz-hf.cz));
                             else dist = sqrt((ecx-hf.cx)*(ecx-hf.cx)+(ecz-hf.cz)*(ecz-hf.cz));
                             if (dist < hf.r * 0.6) {
+                                // Filter by fillet_type
+                                bool isOuter = false;
+                                double edgeCoord = 0, holeCoord = 0;
+                                if (hf.fc == 0 || hf.fc == 1) { edgeCoord = ecz; holeCoord = hf.cz; }
+                                else if (hf.fc == 2 || hf.fc == 3) { edgeCoord = ecx; holeCoord = hf.cx; }
+                                else { edgeCoord = ecy; holeCoord = hf.cy; }
+                                isOuter = (fabs(edgeCoord - holeCoord) < hf.thick * 0.6);
+                                bool isInner = !isOuter && (fabs(edgeCoord - holeCoord) < hf.thick * 1.5);
+                                if (hf.type != 2 && !(hf.type == 0 && isOuter) && !(hf.type == 1 && isInner)) {
+                                    secFilteredOut++;
+                                    continue;
+                                }
+
                                 // Avoid duplicates: compare edge endpoints
                                 bool dup = false;
                                 TopoDS_Vertex nv1, nv2;
@@ -3541,7 +3572,7 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                                 if (!dup) { edgesToFillet.push_back(e); added++; }
                             }
                         }
-                        if (added > 0) std::cout << "[STEP Exporter] Section found " << added << " extra edges for hole at (" << hf.cx << "," << hf.cy << "," << hf.cz << ")" << std::endl;
+                        if (added > 0) std::cout << "[STEP Exporter] Section found " << added << " extra edges for hole at (" << hf.cx << "," << hf.cy << "," << hf.cz << ") ft=" << hf.type << " (filteredOut=" << secFilteredOut << ")" << std::endl;
                     }
                 }
                 std::cout << "[STEP Exporter] Total hole edges to fillet: " << edgesToFillet.size() << std::endl;

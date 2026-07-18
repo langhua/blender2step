@@ -1701,31 +1701,43 @@ def _keep_or_remove(obj, cutter_obj, keep_cutters):
         bpy.data.objects.remove(cutter_obj, do_unlink=True)
 
 def _make_ring_shared(pos, euler, name, hr, fr, tilt_scale=None):
-    """Create quarter-torus ring mesh object.
-    tilt_scale: (sx,sy,sz) to stretch ring so projection is circular on tilted surface."""
+    """Create CLOSED quarter-torus ring (solid volume for better boolean)."""
     import bmesh as _bm_qt, math
     from mathutils import Matrix as _Mtx, Euler as _Eul
-    seg_a, seg_p = 24, 6  # reduced from 32x8 for performance
+    seg_a, seg_p = 32, 8  # more segments for smoother ring
+    overlap = 1.05  # 5% overlap for better boolean intersection
     bm = _bm_qt.new()
     vv = []
+    # Build quarter-torus vertices (φ from π/2 to π)
     for i in range(seg_a + 1):
         th = 2.0 * math.pi * i / seg_a; ct = math.cos(th); st = math.sin(th)
         ring = []
         for j in range(seg_p + 1):
             ph = math.pi / 2.0 + (math.pi / 2.0) * j / seg_p
-            rc = (hr + fr) + fr * 1.02 * math.cos(ph)
-            zc = -fr + fr * math.sin(ph) - 0.00002
+            rc = (hr + fr) + fr * overlap * math.cos(ph)
+            zc = -fr + fr * math.sin(ph)
             ring.append(bm.verts.new((rc * ct, rc * st, zc)))
         vv.append(ring)
     bm.verts.ensure_lookup_table()
+    # Torus outer surface faces
     for i in range(seg_a):
         for j in range(seg_p):
             bm.faces.new([vv[i][j], vv[i+1][j], vv[i+1][j+1], vv[i][j+1]])
+    # Cap at z=0 (outer edge) — annular ring
+    top_ring = [vv[i][0] for i in range(seg_a)]
+    bm.faces.new(top_ring)
+    # Inner cylinder wall at innermost torus edge
+    inner_ring = [vv[i][seg_p] for i in range(seg_a)]
+    bm.faces.new(inner_ring)
+    # Fix normals for consistent orientation
+    _bm_qt.ops.recalc_face_normals(bm, faces=bm.faces[:])
     msh = bpy.data.meshes.new(name + "_M")
     bm.to_mesh(msh); bm.free()
     robj = bpy.data.objects.new(name, msh)
     bpy.context.collection.objects.link(robj)
-    robj.matrix_world = _Mtx.Translation(pos) @ _Eul(euler, 'XYZ').to_matrix().to_4x4()
+    # Slight inward offset (0.005mm) for better overlap
+    offset_pos = (pos[0] + 0.000005, pos[1] + 0.000005, pos[2] + 0.000005)
+    robj.matrix_world = _Mtx.Translation(offset_pos) @ _Eul(euler, 'XYZ').to_matrix().to_4x4()
     if tilt_scale:
         sx, sy, sz = tilt_scale
         robj.matrix_world = robj.matrix_world @ _Mtx.Diagonal((sx, sy, sz, 1.0)).to_4x4()
@@ -1781,12 +1793,14 @@ def _fillet_stage_1(obj, result, face_code, px, py, pz, thickness):
     print(f"[STEP Exporter] ThruHole EXACT v={v_before}→{v_after}")
 
 def _fillet_stage_bevel(obj, result):
-    """Stage 2: Bevel only through-hole edges via weight map + proximity."""
+    """Stage 2: Bevel outer through-hole edges only."""
     import math, bmesh as _bm
     from mathutils import Vector as _Vec
     fr = result.get('fr', 0.001)
     inner_pos = result.get('inner_pos')
+    outer_pos = result.get('outer_pos')
     hr = result.get('hr', 0.005)
+    face_code = result.get('face_code', 2)
     if fr < 0.0001 or inner_pos is None:
         return
     for m in list(obj.modifiers):
@@ -1798,9 +1812,10 @@ def _fillet_stage_bevel(obj, result):
     me = obj.data
     bm = _bm.from_edit_mesh(me)
     bm.edges.ensure_lookup_table()
-    local_center = obj.matrix_world.inverted() @ _Vec(inner_pos)
+    local_inner = obj.matrix_world.inverted() @ _Vec(inner_pos)
+    local_outer = obj.matrix_world.inverted() @ _Vec(outer_pos)
 
-    # Find through-hole boundary edges: sharp angle + near hole center
+    # Select outer boundary edges: sharp angle + near hole + outer side
     sel = 0
     for e in bm.edges:
         if len(e.link_faces) != 2:
@@ -1809,23 +1824,37 @@ def _fillet_stage_bevel(obj, result):
             angle = e.link_faces[0].normal.angle(e.link_faces[1].normal)
         except ValueError:
             continue
-        if angle < math.radians(45):
+        if angle < math.radians(30):
             continue
-        # Proximity: edge midpoint within 2x hole radius from center
         v1, v2 = e.verts[0].co, e.verts[1].co
         mid = (v1 + v2) / 2
-        dy = mid.y - local_center.y
-        dz = mid.z - local_center.z
-        if math.sqrt(dy*dy + dz*dz) < hr * 1.2:
-            e.select = True
-            sel += 1
+        dy = mid.y - local_inner.y
+        dz = mid.z - local_inner.z
+        # Must be near hole radius OR recess radius
+        dist = math.sqrt(dy*dy + dz*dz)
+        near_hole = abs(dist - hr) < fr * 1.0
+        near_recess = abs(dist - (hr + fr)) < fr * 0.9
+        if not (near_hole or near_recess):
+            continue
+        # Must be on outer side of wall (closer to outer_pos than inner_pos)
+        if face_code in (2, 3):
+            if abs(mid.x - local_outer.x) > abs(mid.x - local_inner.x):
+                continue
+        elif face_code in (4, 5):
+            if abs(mid.y - local_outer.y) > abs(mid.y - local_inner.y):
+                continue
+        else:
+            if abs(mid.z - local_outer.z) > abs(mid.z - local_inner.z):
+                continue
+        e.select = True
+        sel += 1
 
     _bm.update_edit_mesh(me)
     if sel > 0:
         bpy.ops.mesh.select_mode(type='EDGE')
         bpy.ops.transform.edge_bevelweight(value=1.0)
     bpy.ops.object.mode_set(mode='OBJECT')
-    print(f"[STEP Exporter] Bevel {sel} hole edges marked")
+    print(f"[STEP Exporter] Bevel {sel} outer edges marked")
 
     v_before = len(obj.data.vertices)
     mod = obj.modifiers.new(name="FilletBevel", type='BEVEL')
@@ -1879,7 +1908,8 @@ def _fillet_stage_2(obj, result, face_code, fillet_type):
     print(f"[STEP Exporter] Recess OK, hole_r={hole_r*1000:.2f}mm")
 
 def _fillet_stage_3(obj, result, face_code):
-    """Stage 3: Outer ring — EXACT boolean UNION."""
+    """Stage 3: Outer ring — try EXACT UNION, fallback to join+weld."""
+    import math
     fr = result['fr']; hr = result['hr']
     outer_pos = result['outer_pos']; euler_rot = result['euler_rot']
     ring = _make_ring_shared(outer_pos, euler_rot, "FilletOuter", hr, fr, tilt_scale=_tilt_scale(result))
@@ -1887,15 +1917,35 @@ def _fillet_stage_3(obj, result, face_code):
     for m in list(obj.modifiers):
         obj.modifiers.remove(m)
     bpy.context.view_layer.objects.active = obj
+    backup = obj.data.copy()
     v_before = len(obj.data.vertices)
+    # Try EXACT UNION first
     mod = obj.modifiers.new(name="FilletOuter", type='BOOLEAN')
-    mod.operation = 'UNION'
-    mod.object = ring
-    mod.solver = 'EXACT'
+    mod.operation = 'UNION'; mod.object = ring; mod.solver = 'EXACT'
     bpy.context.view_layer.update()
-    bpy.ops.object.modifier_apply(modifier=mod.name)
+    try:
+        bpy.ops.object.modifier_apply(modifier=mod.name)
+    except Exception:
+        obj.data = backup
     v_after = len(obj.data.vertices)
-    bpy.data.objects.remove(ring, do_unlink=True)
+    if v_after >= v_before + 200:
+        # EXACT worked — clean up ring
+        bpy.data.objects.remove(ring, do_unlink=True)
+    else:
+        # EXACT failed — fallback to join+weld
+        print(f"[STEP Exporter] Outer ring EXACT weak, join+weld...")
+        obj.data = backup
+        for m in list(obj.modifiers):
+            obj.modifiers.remove(m)
+        bpy.context.view_layer.objects.active = obj
+        ring.select_set(True); obj.select_set(True)
+        bpy.ops.object.join()
+        bpy.ops.object.mode_set(mode='EDIT')
+        bpy.ops.mesh.select_all(action='SELECT')
+        bpy.ops.mesh.remove_doubles(threshold=0.000005)
+        bpy.ops.mesh.delete_loose()
+        bpy.ops.object.mode_set(mode='OBJECT')
+        v_after = len(obj.data.vertices)
     print(f"[STEP Exporter] Outer ring v={v_before}→{v_after}")
 
 def _fillet_stage_4(obj, result, face_code, px, py, pz, fillet_type):

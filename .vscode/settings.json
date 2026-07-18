@@ -31,6 +31,7 @@
     },
     "terminal.integrated.env.osx": {
         "NODE_OPTIONS": "--max-old-space-size=4096"
-    }
+    },
+    "github.copilot.chat.languageContext.typescript.includeDocumentation": true
 
 }

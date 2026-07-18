@@ -1,34 +1,43 @@
 # Hole Edge Fillet Type Filter
 
 ## Overview
-When fillet_type is specified in window_data, edges are filtered based on their position:
-- `ft=0` → outer edges only (same coordinate as hole center)
-- `ft=1` → inner edges only (offset by ~thickness from hole center)
-- `ft=2` → both outer and inner edges
+When fillet_type is specified in window_data, edges are filtered:
+- `ft=0` → outer edges only
+- `ft=1` → inner edges only
+- `ft=2` → both
 
 ## Implementation (module.cpp)
-Two places apply the filter:
 
-### 1. Cut-edge collection loop (~line 3490)
-After proximity check (`dist < hf.r * 0.6`), checks edge position:
-```cpp
-isOuter = (fabs(edgeCoord - holeCoord) < hf.thick * 0.6);
-isInner = !isOuter && (fabs(edgeCoord - holeCoord) < hf.thick * 1.5);
-if (hf.type == 2 || (hf.type == 0 && isOuter) || (hf.type == 1 && isInner))
-    edgesToFillet.push_back(edge);
-```
+### 1. Edge collection (~line 3470)
+Iterates ALL edges of resultSolid (not just non-Planar-adjacent). For each edge:
+- **Proximity check**: distance to hole center in face plane + orthogonal side check (prevents cross-face matching)
+- **Outer/Inner classification**: compares edgeCoord to KNOWN shell face positions, NOT hole center:
+  - fc=0: outerC=pos_z, innerC=pos_z+thickness
+  - fc=1: outerC=pos_z+height, innerC=pos_z+height-thickness
+  - fc=2: outerC=pos_x-halfW, innerC=pos_x-halfW+thickness
+  - fc=3: outerC=pos_x+halfW, innerC=pos_x+halfW-thickness
+  - fc=4: outerC=pos_y-halfD, innerC=pos_y-halfD+thickness
+  - fc=5: outerC=pos_y+halfD, innerC=pos_y+halfD-thickness
+- isOuter = (fabs(edgeCoord - outerC) < thickness * 0.6)
+- isInner = (fabs(edgeCoord - innerC) < thickness * 0.6)
 
-### 2. Section supplement loop (~line 3540)
-Same filter logic, with additional dedup check after filtering.
+### 2. Section supplement (~line 3540)
+Same filter with wider proximity threshold (r*1.2 vs r*0.6).
 
-## Edge Classification
-For each face code, edgeCoord is compared to holeCoord:
-- fc=0/1 (Z faces): compare ecz vs hf.cz
-- fc=2/3 (X faces): compare ecx vs hf.cx
-- fc=4/5 (Y faces): compare ecy vs hf.cy
+### 3. Synthetic outer edge creation (~line 3690)
+For ft=0/2 holes where no outer edge exists in resultSolid:
+- Creates a gp_Circ at the outer face position, matching hole center + radius
+- Uses BRepBuilderAPI_MakeEdge(circ) to create synthetic edge
+- Adds to edgesToFillet; OCCT accepts it for fillet computation
 
-Outer edge = edge at same coordinate as hole center (hole is placed on outer face)
-Inner edge = edge offset by ~thickness from hole center
+## Why synthetic edges are needed
+Boolean cut (BRepAlgoAPI_Cut with cylinder) does NOT produce edges at outer faces of curved-corner side walls. Bottom face (flat) edges ARE produced. Synthetic edges fill this gap.
 
-## Known Limitation
-Edges on NURBS/corner faces that pass proximity but are far from both outer and inner faces (isOuter=0, isInner=0) are excluded. These are corner artifacts, not genuine hole edges.
+## Orthogonal proximity check
+Prevents right-face edges from matching left-face holes (and vice versa):
+- fc=0: skip if ecz > pos_z + thickness + r*0.5
+- fc=1: skip if ecz < pos_z + height - thickness - r*0.5
+- fc=2: skip if ecx > pos_x + r*0.5
+- fc=3: skip if ecx < pos_x - r*0.5
+- fc=4: skip if ecy > pos_y + r*0.5
+- fc=5: skip if ecy < pos_y - r*0.5

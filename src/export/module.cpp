@@ -23,6 +23,7 @@
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_Sewing.hxx>
 #include <Geom_Circle.hxx>
+#include <Geom_CylindricalSurface.hxx>
 #include <Geom_Line.hxx>
 #include <Geom_TrimmedCurve.hxx>
 #include <gp_Pnt.hxx>
@@ -3433,6 +3434,9 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                 if (next == std::string::npos) break;
             }
 
+            // Save pre-cut shape for face replacement supplement
+            TopoDS_Shape shapePreCut = shape;
+
             // Cut holes one at a time
             if (!cutters.empty()) {
                 for (size_t ci = 0; ci < cutters.size(); ci++) {
@@ -3614,12 +3618,14 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                 }
                 std::cout << "[STEP Exporter] Total hole edges to fillet: " << edgesToFillet.size() << std::endl;
 
-                // Final supplement: search ALL edges at outer face positions for missing hole edges
+                // Final supplement: find hole edges from cylindrical surfaces in cut result.
                 if (!holeFillets.empty()) {
                     double hW = width / 2.0, hD = depth / 2.0;
-                    for (const auto& hf : holeFillets) {
-                        if (hf.type == 1) continue;  // inner only, no outer edge needed
-                        // Compute outer face position for this face
+                    struct HoleOuter { int idx; double outerC; int fc; };
+                    std::vector<HoleOuter> needed;
+                    for (size_t hi = 0; hi < holeFillets.size(); hi++) {
+                        const auto& hf = holeFillets[hi];
+                        if (hf.type == 1) continue;
                         double outerC = 0;
                         if (hf.fc == 0) outerC = pos_z;
                         else if (hf.fc == 1) outerC = pos_z + height;
@@ -3627,30 +3633,48 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                         else if (hf.fc == 3) outerC = pos_x + hW;
                         else if (hf.fc == 4) outerC = pos_y - hD;
                         else outerC = pos_y + hD;
-                        // Check if outer edge already exists
                         bool hasOuter = false;
                         for (const auto& e : edgesToFillet) {
                             Bnd_Box eb; BRepBndLib::Add(e, eb);
                             double ex1,ey1,ez1,ex2,ey2,ez2; eb.Get(ex1,ey1,ez1,ex2,ey2,ez2);
-                            double ec = (hf.fc<2) ? (ez1+ez2)/2.0 : ((hf.fc<4) ? (ex1+ex2)/2.0 : (ey1+ey2)/2.0);
-                            if (fabs(ec - outerC) < thickness * 0.6) { hasOuter = true; break; }
+                            double ecMin = (hf.fc<2) ? ez1 : ((hf.fc<4) ? ex1 : ey1);
+                            double ecMax = (hf.fc<2) ? ez2 : ((hf.fc<4) ? ex2 : ey2);
+                            if (fabs(ecMin - outerC) < 2.0 || fabs(ecMax - outerC) < 2.0)
+                                { hasOuter = true; break; }
                         }
-                        if (hasOuter) continue;
-                        // Create synthetic circular edge at outer face position
-                        gp_Pnt center;
-                        gp_Dir normal;
-                        if (hf.fc == 0) { center = gp_Pnt(hf.cx, hf.cy, outerC); normal = gp_Dir(0,0,1); }
-                        else if (hf.fc == 1) { center = gp_Pnt(hf.cx, hf.cy, outerC); normal = gp_Dir(0,0,-1); }
-                        else if (hf.fc == 2) { center = gp_Pnt(outerC, hf.cy, hf.cz); normal = gp_Dir(1,0,0); }
-                        else if (hf.fc == 3) { center = gp_Pnt(outerC, hf.cy, hf.cz); normal = gp_Dir(-1,0,0); }
-                        else if (hf.fc == 4) { center = gp_Pnt(hf.cx, outerC, hf.cz); normal = gp_Dir(0,1,0); }
-                        else { center = gp_Pnt(hf.cx, outerC, hf.cz); normal = gp_Dir(0,-1,0); }
-                        gp_Ax2 circAx(center, normal);
-                        gp_Circ circ(circAx, hf.r);
-                        TopoDS_Edge synthEdge = BRepBuilderAPI_MakeEdge(circ);
-                        if (!synthEdge.IsNull()) {
-                            edgesToFillet.push_back(synthEdge);
-                            std::cout << "[STEP Exporter] Synthetic outer edge created for hole fc=" << hf.fc << " at outerC=" << outerC << std::endl;
+                        if (!hasOuter) needed.push_back({(int)hi, outerC, hf.fc});
+                    }
+                    for (const auto& nd : needed) {
+                        const auto& hf = holeFillets[nd.idx];
+                        for (TopExp_Explorer fex(resultSolid, TopAbs_FACE); fex.More(); fex.Next()) {
+                            TopoDS_Face f = TopoDS::Face(fex.Current());
+                            Handle(Geom_Surface) surf = BRep_Tool::Surface(f);
+                            if (surf.IsNull()) continue;
+                            if (!surf->IsKind(STANDARD_TYPE(Geom_CylindricalSurface))) continue;
+                            Handle(Geom_CylindricalSurface) cylSurf = Handle(Geom_CylindricalSurface)::DownCast(surf);
+                            if (fabs(cylSurf->Radius() - hf.r) > 0.2) continue;
+                            gp_Pnt axLoc = cylSurf->Axis().Location();
+                            double axDist = 0;
+                            if (nd.fc < 2) axDist = sqrt(pow(axLoc.X()-hf.cx,2)+pow(axLoc.Y()-hf.cy,2));
+                            else if (nd.fc < 4) axDist = sqrt(pow(axLoc.Y()-hf.cy,2)+pow(axLoc.Z()-hf.cz,2));
+                            else axDist = sqrt(pow(axLoc.X()-hf.cx,2)+pow(axLoc.Z()-hf.cz,2));
+                            if (axDist > hf.r * 0.3) continue;
+                            // Pick the edge closest to outerC
+                            TopoDS_Edge bestE; double bestD = 1e9;
+                            for (TopExp_Explorer eex(f, TopAbs_EDGE); eex.More(); eex.Next()) {
+                                const TopoDS_Edge& e = TopoDS::Edge(eex.Current());
+                                Bnd_Box eb; BRepBndLib::Add(e, eb);
+                                double ex1,ey1,ez1,ex2,ey2,ez2; eb.Get(ex1,ey1,ez1,ex2,ey2,ez2);
+                                double ecMin = (nd.fc<2) ? ez1 : ((nd.fc<4) ? ex1 : ey1);
+                                double ecMax = (nd.fc<2) ? ez2 : ((nd.fc<4) ? ex2 : ey2);
+                                double d = std::min(fabs(ecMin - nd.outerC), fabs(ecMax - nd.outerC));
+                                if (d < bestD) { bestD = d; bestE = e; }
+                            }
+                            if (!bestE.IsNull() && bestD < thickness * 2.0) {
+                                edgesToFillet.push_back(bestE);
+                                std::cout << "[STEP Exporter] Cyl edge fc=" << nd.fc << " distToOuter=" << bestD << std::endl;
+                            }
+                            break;
                         }
                     }
                 }

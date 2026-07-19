@@ -3468,66 +3468,154 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
             }
             if (!holeFillets.empty() && !resultSolid.IsNull()) {
                 TopTools_IndexedDataMapOfShapeListOfShape edgeFaceMap;
-                // Collect edges to fillet: iterate ALL edges, match by proximity to hole
-                // and outer/inner face position
+                TopExp::MapShapesAndAncestors(resultSolid, TopAbs_EDGE, TopAbs_FACE, edgeFaceMap);
+                // Collect edges to fillet.
+                // For PLANAR faces (fc=0/1): keep all edges near hole (clean circular edges from cut)
+                // For NURBS side faces (fc=2-5): pick only the SINGLE best edge per hole —
+                //   the one whose midpoint is closest to the inner/outer ideal position.
+                //   Boolean cut on NURBS produces fragmented edges that OCCT fillet can't handle.
                 std::vector<TopoDS_Edge> edgesToFillet;
                 int totalNearEdges = 0, filteredOut = 0;
                 double halfW = width / 2.0, halfD = depth / 2.0;
+
+                // Per-hole best-edge tracking for NURBS side faces
+                struct BestEdge {
+                    TopoDS_Edge innerEdge; double innerBest = 1e9;
+                    TopoDS_Edge outerEdge; double outerBest = 1e9;
+                    double innerIdealX=0, innerIdealY=0, innerIdealZ=0;
+                    double outerIdealX=0, outerIdealY=0, outerIdealZ=0;
+                };
+                std::vector<BestEdge> bestPerHole(holeFillets.size());
+
+                // Precompute ideal points for each side-wall hole
+                for (size_t hi = 0; hi < holeFillets.size(); hi++) {
+                    const auto& hf = holeFillets[hi];
+                    if (hf.fc == 2) {
+                        bestPerHole[hi].innerIdealX = pos_x - halfW + thickness;
+                        bestPerHole[hi].innerIdealY = hf.cy;
+                        bestPerHole[hi].innerIdealZ = hf.cz;
+                        bestPerHole[hi].outerIdealX = pos_x - halfW;
+                        bestPerHole[hi].outerIdealY = hf.cy;
+                        bestPerHole[hi].outerIdealZ = hf.cz;
+                    } else if (hf.fc == 3) {
+                        bestPerHole[hi].innerIdealX = pos_x + halfW - thickness;
+                        bestPerHole[hi].innerIdealY = hf.cy;
+                        bestPerHole[hi].innerIdealZ = hf.cz;
+                        bestPerHole[hi].outerIdealX = pos_x + halfW;
+                        bestPerHole[hi].outerIdealY = hf.cy;
+                        bestPerHole[hi].outerIdealZ = hf.cz;
+                    } else if (hf.fc == 4) {
+                        bestPerHole[hi].innerIdealX = hf.cx;
+                        bestPerHole[hi].innerIdealY = pos_y - halfD + thickness;
+                        bestPerHole[hi].innerIdealZ = hf.cz;
+                        bestPerHole[hi].outerIdealX = hf.cx;
+                        bestPerHole[hi].outerIdealY = pos_y - halfD;
+                        bestPerHole[hi].outerIdealZ = hf.cz;
+                    } else if (hf.fc == 5) {
+                        bestPerHole[hi].innerIdealX = hf.cx;
+                        bestPerHole[hi].innerIdealY = pos_y + halfD - thickness;
+                        bestPerHole[hi].innerIdealZ = hf.cz;
+                        bestPerHole[hi].outerIdealX = hf.cx;
+                        bestPerHole[hi].outerIdealY = pos_y + halfD;
+                        bestPerHole[hi].outerIdealZ = hf.cz;
+                    }
+                }
+
                 for (TopExp_Explorer ex(resultSolid, TopAbs_EDGE); ex.More(); ex.Next()) {
                     const TopoDS_Edge& edge = TopoDS::Edge(ex.Current());
                     Bnd_Box eb; BRepBndLib::Add(edge, eb);
                     double ex1,ey1,ez1,ex2,ey2,ez2; eb.Get(ex1,ey1,ez1,ex2,ey2,ez2);
                     double ecx = (ex1+ex2)/2.0, ecy = (ey1+ey2)/2.0, ecz = (ez1+ez2)/2.0;
-                    for (const auto& hf : holeFillets) {
+                    for (size_t hi = 0; hi < holeFillets.size(); hi++) {
+                        const auto& hf = holeFillets[hi];
                         double dist = 0;
                         if (hf.fc == 0 || hf.fc == 1) {
                             dist = sqrt((ecx-hf.cx)*(ecx-hf.cx)+(ecy-hf.cy)*(ecy-hf.cy));
-                            // Ensure edge is on correct Z face (not opposite side)
                             if (hf.fc == 0 && ecz > pos_z + thickness + hf.r * 0.5) continue;
                             if (hf.fc == 1 && ecz < pos_z + height - thickness - hf.r * 0.5) continue;
                         }
                         else if (hf.fc == 2 || hf.fc == 3) {
                             dist = sqrt((ecy-hf.cy)*(ecy-hf.cy)+(ecz-hf.cz)*(ecz-hf.cz));
-                            // Ensure edge is on correct X face
-                            if (hf.fc == 2 && ecx > pos_x + hf.r * 0.5) continue;
-                            if (hf.fc == 3 && ecx < pos_x - hf.r * 0.5) continue;
+                            // Strict face-side: left face edges must be on negative X side, right on positive X
+                            if (hf.fc == 2 && ecx > pos_x) continue;
+                            if (hf.fc == 3 && ecx < pos_x) continue;
                         }
                         else {
                             dist = sqrt((ecx-hf.cx)*(ecx-hf.cx)+(ecz-hf.cz)*(ecz-hf.cz));
-                            // Ensure edge is on correct Y face
-                            if (hf.fc == 4 && ecy > pos_y + hf.r * 0.5) continue;
-                            if (hf.fc == 5 && ecy < pos_y - hf.r * 0.5) continue;
+                            // Strict face-side: front face edges must be on negative Y side, back on positive Y
+                            if (hf.fc == 4 && ecy > pos_y) continue;
+                            if (hf.fc == 5 && ecy < pos_y) continue;
                         }
                         if (dist < hf.r * 0.6) {
                             totalNearEdges++;
-                            // Filter by fillet_type: check if edge is on outer or inner face
-                            // Compare to shell face positions, NOT hole center
-                            double edgeCoord = 0, outerCoord = 0, innerCoord = 0;
-                            if (hf.fc == 0) {
-                                edgeCoord = ecz; outerCoord = pos_z; innerCoord = pos_z + thickness;
-                            } else if (hf.fc == 1) {
-                                edgeCoord = ecz; outerCoord = pos_z + height; innerCoord = pos_z + height - thickness;
-                            } else if (hf.fc == 2) {
-                                edgeCoord = ecx; outerCoord = pos_x - halfW; innerCoord = pos_x - halfW + thickness;
-                            } else if (hf.fc == 3) {
-                                edgeCoord = ecx; outerCoord = pos_x + halfW; innerCoord = pos_x + halfW - thickness;
-                            } else if (hf.fc == 4) {
-                                edgeCoord = ecy; outerCoord = pos_y - halfD; innerCoord = pos_y - halfD + thickness;
-                            } else { // fc == 5
-                                edgeCoord = ecy; outerCoord = pos_y + halfD; innerCoord = pos_y + halfD - thickness;
-                            }
-                            bool isOuter = (fabs(edgeCoord - outerCoord) < thickness * 0.6);
-                            bool isInner = (fabs(edgeCoord - innerCoord) < thickness * 0.6);
+                            bool isInner = false;
+                            if (hf.fc == 0)
+                                isInner = (ecz > pos_z + thickness * 0.5);
+                            else if (hf.fc == 1)
+                                isInner = (ecz < pos_z + height - thickness * 0.5);
+                            else if (hf.fc == 2)
+                                isInner = (ecx > pos_x - halfW + thickness * 0.5);
+                            else if (hf.fc == 3)
+                                isInner = (ecx < pos_x + halfW - thickness * 0.5);
+                            else if (hf.fc == 4)
+                                isInner = (ecy > pos_y - halfD + thickness * 0.5);
+                            else // fc == 5
+                                isInner = (ecy < pos_y + halfD - thickness * 0.5);
 
-                            if (hf.type == 2 || (hf.type == 0 && isOuter) || (hf.type == 1 && isInner)) {
-                                edgesToFillet.push_back(edge);
+                            if (hf.fc >= 2) {
+                                // NURBS side faces: track best edge per hole
+                                auto& be = bestPerHole[hi];
+                                double idealDist;
+                                if (isInner) {
+                                    idealDist = sqrt((ecx-be.innerIdealX)*(ecx-be.innerIdealX)
+                                                    +(ecy-be.innerIdealY)*(ecy-be.innerIdealY)
+                                                    +(ecz-be.innerIdealZ)*(ecz-be.innerIdealZ));
+                                    if (idealDist < be.innerBest) {
+                                        be.innerBest = idealDist;
+                                        be.innerEdge = edge;
+                                    }
+                                } else {
+                                    idealDist = sqrt((ecx-be.outerIdealX)*(ecx-be.outerIdealX)
+                                                    +(ecy-be.outerIdealY)*(ecy-be.outerIdealY)
+                                                    +(ecz-be.outerIdealZ)*(ecz-be.outerIdealZ));
+                                    if (idealDist < be.outerBest) {
+                                        be.outerBest = idealDist;
+                                        be.outerEdge = edge;
+                                    }
+                                }
                             } else {
-                                filteredOut++;
+                                // Planar faces (fc=0/1): collect all edges directly
+                                bool isOuter = !isInner;
+                                if (hf.type == 2 || (hf.type == 0 && isOuter) || (hf.type == 1 && isInner)) {
+                                    edgesToFillet.push_back(edge);
+                                } else {
+                                    filteredOut++;
+                                }
                             }
                             break;
                         }
                     }
                 }
+
+                // Add best edges from NURBS side faces
+                for (size_t hi = 0; hi < holeFillets.size(); hi++) {
+                    const auto& hf = holeFillets[hi];
+                    if (hf.fc < 2) continue; // planar, already handled
+                    auto& be = bestPerHole[hi];
+                    bool needInner = (hf.type == 1 || hf.type == 2);
+                    bool needOuter = (hf.type == 0 || hf.type == 2);
+                    if (needInner && be.innerBest < 1e8) {
+                        edgesToFillet.push_back(be.innerEdge);
+                    } else if (needInner) {
+                        filteredOut++; // inner edge not found
+                    }
+                    if (needOuter && be.outerBest < 1e8) {
+                        edgesToFillet.push_back(be.outerEdge);
+                    } else if (needOuter) {
+                        filteredOut++; // outer edge not found
+                    }
+                }
+
                 std::cout << "[STEP Exporter] Found " << edgesToFillet.size() << " hole edges from cut"
                           << " (totalNear=" << totalNearEdges << " filteredOut=" << filteredOut << ")" << std::endl;
 
@@ -3565,33 +3653,31 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                             }
                             else if (hf.fc == 2 || hf.fc == 3) {
                                 dist = sqrt((ecy-hf.cy)*(ecy-hf.cy)+(ecz-hf.cz)*(ecz-hf.cz));
-                                if (hf.fc == 2 && ecx > pos_x + hf.r * 0.5) continue;
-                                if (hf.fc == 3 && ecx < pos_x - hf.r * 0.5) continue;
+                                if (hf.fc == 2 && ecx > pos_x) continue;
+                                if (hf.fc == 3 && ecx < pos_x) continue;
                             }
                             else {
                                 dist = sqrt((ecx-hf.cx)*(ecx-hf.cx)+(ecz-hf.cz)*(ecz-hf.cz));
-                                if (hf.fc == 4 && ecy > pos_y + hf.r * 0.5) continue;
-                                if (hf.fc == 5 && ecy < pos_y - hf.r * 0.5) continue;
+                                if (hf.fc == 4 && ecy > pos_y) continue;
+                                if (hf.fc == 5 && ecy < pos_y) continue;
                             }
                             if (dist < hf.r * 1.2) {  // wider: section cylinder is r*1.01
-                                // Filter by fillet_type: check if edge is on outer or inner face
-                                double halfW = width / 2.0, halfD = depth / 2.0;
-                                double edgeCoord = 0, outerCoord = 0, innerCoord = 0;
-                                if (hf.fc == 0) {
-                                    edgeCoord = ecz; outerCoord = pos_z; innerCoord = pos_z + thickness;
-                                } else if (hf.fc == 1) {
-                                    edgeCoord = ecz; outerCoord = pos_z + height; innerCoord = pos_z + height - thickness;
-                                } else if (hf.fc == 2) {
-                                    edgeCoord = ecx; outerCoord = pos_x - halfW; innerCoord = pos_x - halfW + thickness;
-                                } else if (hf.fc == 3) {
-                                    edgeCoord = ecx; outerCoord = pos_x + halfW; innerCoord = pos_x + halfW - thickness;
-                                } else if (hf.fc == 4) {
-                                    edgeCoord = ecy; outerCoord = pos_y - halfD; innerCoord = pos_y - halfD + thickness;
-                                } else { // fc == 5
-                                    edgeCoord = ecy; outerCoord = pos_y + halfD; innerCoord = pos_y + halfD - thickness;
-                                }
-                                bool isOuter = (fabs(edgeCoord - outerCoord) < thickness * 0.6);
-                                bool isInner = (fabs(edgeCoord - innerCoord) < thickness * 0.6);
+                                // Classify: edge is inner if midpoint is on cavity side of wall midpoint
+                                // Wall midpoint = halfway between inner & outer (e.g., Z=1 for fc=0)
+                                bool isInner = false;
+                                if (hf.fc == 0)
+                                    isInner = (ecz > pos_z + thickness * 0.5);
+                                else if (hf.fc == 1)
+                                    isInner = (ecz < pos_z + height - thickness * 0.5);
+                                else if (hf.fc == 2)
+                                    isInner = (ecx > pos_x - halfW + thickness * 0.5);
+                                else if (hf.fc == 3)
+                                    isInner = (ecx < pos_x + halfW - thickness * 0.5);
+                                else if (hf.fc == 4)
+                                    isInner = (ecy > pos_y - halfD + thickness * 0.5);
+                                else // fc == 5
+                                    isInner = (ecy < pos_y + halfD - thickness * 0.5);
+                                bool isOuter = !isInner;
                                 if (hf.type != 2 && !(hf.type == 0 && isOuter) && !(hf.type == 1 && isInner)) {
                                     secFilteredOut++;
                                     continue;
@@ -3621,28 +3707,31 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                 // Final supplement: find hole edges from cylindrical surfaces in cut result.
                 if (!holeFillets.empty()) {
                     double hW = width / 2.0, hD = depth / 2.0;
-                    struct HoleOuter { int idx; double outerC; int fc; };
-                    std::vector<HoleOuter> needed;
+                    struct HoleNeed { int idx; double targetC; int fc; };
+                    std::vector<HoleNeed> needed;
                     for (size_t hi = 0; hi < holeFillets.size(); hi++) {
                         const auto& hf = holeFillets[hi];
-                        if (hf.type == 1) continue;
-                        double outerC = 0;
-                        if (hf.fc == 0) outerC = pos_z;
-                        else if (hf.fc == 1) outerC = pos_z + height;
-                        else if (hf.fc == 2) outerC = pos_x - hW;
-                        else if (hf.fc == 3) outerC = pos_x + hW;
-                        else if (hf.fc == 4) outerC = pos_y - hD;
-                        else outerC = pos_y + hD;
-                        bool hasOuter = false;
+                        double outerC = 0, innerC = 0;
+                        if (hf.fc == 0) { outerC = pos_z; innerC = pos_z + thickness; }
+                        else if (hf.fc == 1) { outerC = pos_z + height; innerC = pos_z + height - thickness; }
+                        else if (hf.fc == 2) { outerC = pos_x - hW; innerC = pos_x - hW + thickness; }
+                        else if (hf.fc == 3) { outerC = pos_x + hW; innerC = pos_x + hW - thickness; }
+                        else if (hf.fc == 4) { outerC = pos_y - hD; innerC = pos_y - hD + thickness; }
+                        else { outerC = pos_y + hD; innerC = pos_y + hD - thickness; }
+                        
+                        bool hasOuter = false, hasInner = false;
                         for (const auto& e : edgesToFillet) {
                             Bnd_Box eb; BRepBndLib::Add(e, eb);
                             double ex1,ey1,ez1,ex2,ey2,ez2; eb.Get(ex1,ey1,ez1,ex2,ey2,ez2);
                             double ecMin = (hf.fc<2) ? ez1 : ((hf.fc<4) ? ex1 : ey1);
                             double ecMax = (hf.fc<2) ? ez2 : ((hf.fc<4) ? ex2 : ey2);
                             if (fabs(ecMin - outerC) < 2.0 || fabs(ecMax - outerC) < 2.0)
-                                { hasOuter = true; break; }
+                                hasOuter = true;
+                            if (fabs(ecMin - innerC) < 2.0 || fabs(ecMax - innerC) < 2.0)
+                                hasInner = true;
                         }
-                        if (!hasOuter) needed.push_back({(int)hi, outerC, hf.fc});
+                        if (hf.type != 1 && !hasOuter) needed.push_back({(int)hi, outerC, hf.fc});
+                        if (hf.type != 0 && !hasInner) needed.push_back({(int)hi, innerC, hf.fc});
                     }
                     for (const auto& nd : needed) {
                         const auto& hf = holeFillets[nd.idx];
@@ -3667,12 +3756,12 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                                 double ex1,ey1,ez1,ex2,ey2,ez2; eb.Get(ex1,ey1,ez1,ex2,ey2,ez2);
                                 double ecMin = (nd.fc<2) ? ez1 : ((nd.fc<4) ? ex1 : ey1);
                                 double ecMax = (nd.fc<2) ? ez2 : ((nd.fc<4) ? ex2 : ey2);
-                                double d = std::min(fabs(ecMin - nd.outerC), fabs(ecMax - nd.outerC));
+                                double d = std::min(fabs(ecMin - nd.targetC), fabs(ecMax - nd.targetC));
                                 if (d < bestD) { bestD = d; bestE = e; }
                             }
                             if (!bestE.IsNull() && bestD < thickness * 2.0) {
                                 edgesToFillet.push_back(bestE);
-                                std::cout << "[STEP Exporter] Cyl edge fc=" << nd.fc << " distToOuter=" << bestD << std::endl;
+                                std::cout << "[STEP Exporter] Cyl edge fc=" << nd.fc << " dist=" << bestD << std::endl;
                             }
                             break;
                         }
@@ -3681,16 +3770,65 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                 std::cout << "[STEP Exporter] Total hole edges to fillet: " << edgesToFillet.size() << std::endl;
 
                 if (!edgesToFillet.empty()) {
-                    double filletR = holeFillets[0].fr;
-                    BRepFilletAPI_MakeFillet fm(resultSolid);
-                    for (const auto& e : edgesToFillet) fm.Add(filletR, e);
-                    fm.Build();
-                    if (fm.IsDone()) {
-                        shape = fm.Shape();
-                        std::cout << "[STEP Exporter] Fillet OK: " << edgesToFillet.size()
-                                  << " edges r=" << filletR << std::endl;
-                    } else {
-                        std::cout << "[STEP Exporter] Fillet build FAILED" << std::endl;
+                    // Per-hole fillet: apply each hole's own fillet radius to its edges.
+                    // Group edges by hole (using proximity to hole center).
+                    // For NURBS side faces (fc>=2), skip section/cylinder edges — 
+                    // they are spline curves that OCCT fillet can't handle.
+                    // Use only the best edge per hole from boolean cut.
+                    
+                    // Build a map from hole index to edges
+                    std::vector<std::vector<TopoDS_Edge>> holeEdges(holeFillets.size());
+                    for (const auto& e : edgesToFillet) {
+                        Bnd_Box eb; BRepBndLib::Add(e, eb);
+                        double ex1,ey1,ez1,ex2,ey2,ez2; eb.Get(ex1,ey1,ez1,ex2,ey2,ez2);
+                        double ecx = (ex1+ex2)/2.0, ecy = (ey1+ey2)/2.0, ecz = (ez1+ez2)/2.0;
+                        double bestD = 1e9; int bestHi = -1;
+                        for (size_t hi = 0; hi < holeFillets.size(); hi++) {
+                            const auto& hf = holeFillets[hi];
+                            // Face-side check: edge must be on the correct side of the shell
+                            // to prevent cross-assignment (e.g., left-face edge → right hole)
+                            if (hf.fc == 2 && ecx > pos_x) continue;      // left face: edge must be on negative X side
+                            if (hf.fc == 3 && ecx < pos_x) continue;      // right face: edge must be on positive X side
+                            if (hf.fc == 4 && ecy > pos_y) continue;      // front face: edge must be on negative Y side
+                            if (hf.fc == 5 && ecy < pos_y) continue;      // back face: edge must be on positive Y side
+                            double d = 0;
+                            if (hf.fc <= 1) d = sqrt((ecx-hf.cx)*(ecx-hf.cx)+(ecy-hf.cy)*(ecy-hf.cy));
+                            else if (hf.fc <= 3) d = sqrt((ecy-hf.cy)*(ecy-hf.cy)+(ecz-hf.cz)*(ecz-hf.cz));
+                            else d = sqrt((ecx-hf.cx)*(ecx-hf.cx)+(ecz-hf.cz)*(ecz-hf.cz));
+                            if (d < bestD) { bestD = d; bestHi = (int)hi; }
+                        }
+                        if (bestHi >= 0 && bestD < holeFillets[bestHi].r * 2.0)
+                            holeEdges[bestHi].push_back(e);
+                    }
+
+                    // Apply fillets per hole with correct radius.
+                    TopoDS_Shape filletedShape = resultSolid;
+                    bool anyFilletOK = false;
+                    for (size_t hi = 0; hi < holeFillets.size(); hi++) {
+                        if (holeEdges[hi].empty()) continue;
+                        double fr = holeFillets[hi].fr;
+                        BRepFilletAPI_MakeFillet fm(filletedShape);
+                        std::cout << "[STEP Exporter] Hole " << hi << " (fc=" << (int)holeFillets[hi].fc
+                                  << " r=" << holeFillets[hi].r << " fr=" << fr
+                                  << "): " << holeEdges[hi].size() << " edges" << std::endl;
+                        for (const auto& e : holeEdges[hi]) {
+                            Bnd_Box eb2; BRepBndLib::Add(e, eb2);
+                            double ex1,ey1,ez1,ex2,ey2,ez2;
+                            eb2.Get(ex1,ey1,ez1,ex2,ey2,ez2);
+                            std::cout << "  edge mid=(" << (ex1+ex2)/2.0 << "," << (ey1+ey2)/2.0 << "," << (ez1+ez2)/2.0 << ")" << std::endl;
+                            fm.Add(fr, e);
+                        }
+                        fm.Build();
+                        if (fm.IsDone()) {
+                            filletedShape = fm.Shape();
+                            anyFilletOK = true;
+                            std::cout << "[STEP Exporter]   Fillet OK" << std::endl;
+                        } else {
+                            std::cout << "[STEP Exporter]   Fillet FAILED (fm.IsDone=false)" << std::endl;
+                        }
+                    }
+                    if (anyFilletOK) {
+                        shape = filletedShape;
                     }
                 }
             }

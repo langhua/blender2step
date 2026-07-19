@@ -158,14 +158,28 @@ def _export_bottom_shells_sync(filepath, shells, step_schema, step_unit, enable_
                 except:
                     pass
         finally:
-            # 清理临时文件及其日志
+            # Merge C++ log into Python log before cleanup
             for tf in temp_files:
-                for ext in ('', '.log'):
+                for ext in ('.log',):
                     try:
-                        if os.path.exists(tf + ext):
-                            os.remove(tf + ext)
+                        cpp_log = tf + ext
+                        if os.path.exists(cpp_log):
+                            with open(cpp_log, 'r', encoding='utf-8', errors='replace') as f:
+                                cpp_content = f.read()
+                            if cpp_content.strip():
+                                log_to_file(f"\n--- C++ log from {os.path.basename(tf)} ---")
+                                for line in cpp_content.split('\n'):
+                                    if line.strip():
+                                        log_to_file(f"[CPP] {line.strip()}")
+                            os.remove(cpp_log)
                     except:
                         pass
+            for tf in temp_files:
+                try:
+                    if os.path.exists(tf):
+                        os.remove(tf)
+                except:
+                    pass
     elif all_success and total_shells == 1:
         try:
             os.replace(temp_files[0], filepath)
@@ -173,12 +187,25 @@ def _export_bottom_shells_sync(filepath, shells, step_schema, step_unit, enable_
             import shutil
             shutil.copy2(temp_files[0], filepath)
         finally:
-            for ext in ('', '.log'):
-                try:
-                    if os.path.exists(temp_files[0] + ext):
-                        os.remove(temp_files[0] + ext)
-                except:
-                    pass
+            # Merge C++ log into Python log before cleanup
+            try:
+                cpp_log = temp_files[0] + '.log'
+                if os.path.exists(cpp_log):
+                    with open(cpp_log, 'r', encoding='utf-8', errors='replace') as f:
+                        cpp_content = f.read()
+                    if cpp_content.strip():
+                        log_to_file(f"\n--- C++ log from {os.path.basename(temp_files[0])} ---")
+                        for line in cpp_content.split('\n'):
+                            if line.strip():
+                                log_to_file(f"[CPP] {line.strip()}")
+                    os.remove(cpp_log)
+            except:
+                pass
+            try:
+                if os.path.exists(temp_files[0]):
+                    os.remove(temp_files[0])
+            except:
+                pass
     else:
         log_to_file(f"[STEP Exporter] Some shells failed to export, no output written")
     

@@ -198,3 +198,64 @@ Profile 偏移使用 `max(value, EPS)` 避免零/负尺寸。
 ## 8. 模型尺寸优先级
 
 当 Blender mesh 与 OpenCASCADE 模型尺寸不一致时，**以 OpenCASCADE 模型尺寸为准**，确保 STEP 文件精确可用于模具制造。
+
+---
+
+## 9. 通孔圆角（Hole Fillet）设计规则
+
+### 9.1 内外侧判定（Wall-Midpoint Classification）
+
+侧壁通孔边缘的内/外侧分类使用**壁面中点法**：
+
+```cpp
+isInner = (ecx > pos_x - halfW + thickness * 0.5);  // 左壁, X > -49 即内侧
+isInner = (ecy < pos_y + halfD - thickness * 0.5);  // 后壁, Y < 39 即内侧
+```
+
+壁面中点 = 内外侧面之间的中点（如厚度=2，则距外侧面 1mm）。
+
+### 9.2 交叉分配防护（Cross-Assignment Guard）
+
+边缘必须位于对应孔的半壳侧（以 origin 中心线分界）：
+
+```cpp
+if (hf.fc == 2 && ecx > pos_x) continue;   // 左孔: 边缘 X 必须 < 0
+if (hf.fc == 3 && ecx < pos_x) continue;   // 右孔: 边缘 X 必须 > 0
+if (hf.fc == 4 && ecy > pos_y) continue;   // 前孔: 边缘 Y 必须 < 0
+if (hf.fc == 5 && ecy < pos_y) continue;   // 后孔: 边缘 Y 必须 > 0
+```
+
+### 9.3 corner_type 字符串精确匹配
+
+```cpp
+bool curved = strcmp(corner_type, "curved") == 0;  // 必须带 'd'
+```
+
+`'curve'`（无 'd'）被当作 `'square'` 处理。
+
+### 9.4 NURBS 面圆角限制（OCCT 7.8.1 硬限制）
+
+`corner_type='curved'` 的余弦 loft 侧壁面为 NURBS/B-spline 曲面。OCCT 的 `BRepFilletAPI_MakeFillet` 在此类面上的行为：
+
+| fillet_type | NURBS 面结果 | 说明 |
+|-------------|-------------|------|
+| `0`（仅外侧） | ✅ 可用 | OCCT 可正常创建外侧圆角 |
+| `1`（仅内侧） | ⚠️ 不可靠 | 边缘选择正确，但 OCCT 圆角方向不可控；结果可能不符合预期 |
+| `2`（双侧） | ✅ 可用 | OCCT 可正常创建双侧圆角 |
+
+**根本原因**：OCCT 不支持 NURBS 边缘的圆角方向控制。`BRepFilletAPI_MakeFillet::Add(radius, edge)` 没有面方向参数，`Add(edge, f1, f2, radius)` API 不存在（7.8.1）。
+
+`fc=0/1`（底面/顶面，解析 PLANE）始终产生标准 TOROIDAL_SURFACE，完全可用。
+
+#### 已尝试的方案（均失败）
+
+| # | 尝试 | 代码 | 结果 |
+|---|------|------|------|
+| 1 | 交换内外侧边缘选择 | type=1 时选外侧 edge | OCCT 报错 `"There are no suitable edges for chamfer or fillet"` — NURBS 外层边缘不可 fillet |
+| 2 | 指定相邻面控制方向 | `Add(edge, face1, face2, radius)` | 编译错误 — OCCT 7.8.1 无此 4 参数重载 |
+| 3 | 圆柱面引用 | `Add(edge, cylFace)` | 编译错误 — `Add(TopoDS_Edge, TopoDS_Face)` 不存在 |
+| 4 | 反转 NURBS 面法向 | `BRepTools::Reverse(face)` | 未实施 — 会破坏壳体几何完整性，风险过高 |
+| 5 | 手动构建 torus 融合 | `BRepPrimAPI_MakeTorus` + `BRepAlgoAPI_Fuse` | 未实施 — 需精确匹配 NURBS 曲面，极难实现 |
+| 6 | 在切割圆柱上加圆角环 | 修改 hole cutter 几何 | 未实施 — 影响所有切割逻辑，改动范围过大 |
+
+### 9.5 corner_type 字符串精确匹配

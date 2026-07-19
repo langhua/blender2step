@@ -3467,6 +3467,19 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                 }
             }
             if (!holeFillets.empty() && !resultSolid.IsNull()) {
+                // Helper: effective radius for proximity checks.
+                // Circular holes: r = hole radius; Rrect holes: r = max(half-width, half-height)
+                auto getEffR = [](const HoleFilletInfo& hf) -> double {
+                    // Effective radius for proximity checks.
+                    // Circular holes: r is the radius; edges sit at distance ≈0 from center
+                    //   (complete circles), so r * 0.6 works as a proximity threshold.
+                    // Rrect holes: edges sit at distance max(w/2, h/2) from center
+                    //   (midpoints of straight side edges). The callers multiply by 0.6,
+                    //   so we need effR * 0.6 >= max(w/2, h/2) → effR >= max(w, h) / 1.2.
+                    if (hf.r > 0.001) return hf.r;
+                    return std::max(hf.w, hf.h) / 1.2;
+                };
+
                 TopTools_IndexedDataMapOfShapeListOfShape edgeFaceMap;
                 TopExp::MapShapesAndAncestors(resultSolid, TopAbs_EDGE, TopAbs_FACE, edgeFaceMap);
                 // Collect edges to fillet.
@@ -3476,6 +3489,8 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                 //   Boolean cut on NURBS produces fragmented edges that OCCT fillet can't handle.
                 std::vector<TopoDS_Edge> edgesToFillet;
                 int totalNearEdges = 0, filteredOut = 0;
+                // Debug: per-face inner/outer counters
+                int faceInnerCnt[6] = {0}, faceOuterCnt[6] = {0}, faceNearCnt[6] = {0};
                 double halfW = width / 2.0, halfD = depth / 2.0;
 
                 for (TopExp_Explorer ex(resultSolid, TopAbs_EDGE); ex.More(); ex.Next()) {
@@ -3488,8 +3503,9 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                         double dist = 0;
                         if (hf.fc == 0 || hf.fc == 1) {
                             dist = sqrt((ecx-hf.cx)*(ecx-hf.cx)+(ecy-hf.cy)*(ecy-hf.cy));
-                            if (hf.fc == 0 && ecz > pos_z + thickness + hf.r * 0.5) continue;
-                            if (hf.fc == 1 && ecz < pos_z + height - thickness - hf.r * 0.5) continue;
+                            double effR = getEffR(hf);
+                            if (hf.fc == 0 && ecz > pos_z + thickness + effR * 0.5) continue;
+                            if (hf.fc == 1 && ecz < pos_z + height - thickness - effR * 0.5) continue;
                         }
                         else if (hf.fc == 2 || hf.fc == 3) {
                             dist = sqrt((ecy-hf.cy)*(ecy-hf.cy)+(ecz-hf.cz)*(ecz-hf.cz));
@@ -3503,7 +3519,8 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                             if (hf.fc == 4 && ecy > pos_y) continue;
                             if (hf.fc == 5 && ecy < pos_y) continue;
                         }
-                        if (dist < hf.r * 0.6) {
+                        double effR_prox = getEffR(hf);
+                        if (dist < effR_prox * 0.6) {
                             totalNearEdges++;
                             bool isInner = false;
                             if (hf.fc == 0)
@@ -3516,12 +3533,19 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                                 isInner = (ecx < pos_x + halfW - thickness * 0.5);
                             else if (hf.fc == 4)
                                 isInner = (ecy > pos_y - halfD + thickness * 0.5);
-                            else // fc == 5
+                            else
                                 isInner = (ecy < pos_y + halfD - thickness * 0.5);
 
-                            // Collect all edges (planar or NURBS) — same logic for all face types now
+                            // Collect edges based on type and inner/outer classification
                             bool isOuter = !isInner;
-                            if (hf.type == 2 || (hf.type == 0 && isOuter) || (hf.type == 1 && isInner)) {
+                            bool acceptEdge = (hf.type == 2 || (hf.type == 0 && isOuter) || (hf.type == 1 && isInner));
+                            // Debug: count inner/outer per face
+                            int fcIdx = (int)hf.fc;
+                            if (fcIdx >= 0 && fcIdx < 6) {
+                                faceNearCnt[fcIdx]++;
+                                if (isInner) faceInnerCnt[fcIdx]++; else faceOuterCnt[fcIdx]++;
+                            }
+                            if (acceptEdge) {
                                 edgesToFillet.push_back(edge);
                             } else {
                                 filteredOut++;
@@ -3533,13 +3557,23 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
 
                 std::cout << "[STEP Exporter] Found " << edgesToFillet.size() << " hole edges from cut"
                           << " (totalNear=" << totalNearEdges << " filteredOut=" << filteredOut << ")" << std::endl;
+                // Debug: per-face breakdown
+                for (int fi = 0; fi < 6; fi++) {
+                    if (faceNearCnt[fi] > 0) {
+                        std::cout << "[STEP Exporter]   fc=" << fi << " near=" << faceNearCnt[fi]
+                                  << " inner=" << faceInnerCnt[fi] << " outer=" << faceOuterCnt[fi] << std::endl;
+                    }
+                }
 
                 // Supplement: use BRepAlgoAPI_Section for edges missing from boolean cut
                 // (OCCT boolean cut may not produce edges on NURBS faces, e.g. curved top face)
                 double curve_inset_sec = std::min(width/2.0, depth/2.0) * curve_ratio * 0.5;
                 double sec_cyl_len = thickness * 4.0 + curve_inset_sec * 2.0 + 10.0;
                 for (const auto& hf : holeFillets) {
-                    // Build a slightly-larger cylinder aligned to hole axis
+                    TopoDS_Shape secShape;
+                    double proxDist;
+                    if (hf.r > 0.001) {
+                    // Round hole: section cylinder
                     gp_Ax2 ax;
                     if (hf.fc == 0 || hf.fc == 1) {
                         ax = gp_Ax2(gp_Pnt(hf.cx, hf.cy, hf.cz - sec_cyl_len/2.0), gp_Dir(0,0,1));
@@ -3549,9 +3583,31 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                         ax = gp_Ax2(gp_Pnt(hf.cx, hf.cy - sec_cyl_len/2.0, hf.cz), gp_Dir(0,1,0));
                     }
                     BRepPrimAPI_MakeCylinder cm(ax, hf.r * 1.01, sec_cyl_len);
-                    TopoDS_Shape cyl = cm.Shape();
+                    secShape = cm.Shape();
+                    proxDist = hf.r * 1.2;
+                    } else {
+                    // Rrect hole: section box slightly larger than rrect in face plane,
+                    // extending through wall in axis direction.
+                    double rw = hf.w, rh = hf.h;
+                    double sm = thickness + 3.0;
+                    double bx, by, bz, bsx, bsy, bsz;
+                    if (hf.fc == 0 || hf.fc == 1) {
+                        bx = hf.cx - rw * 0.525; by = hf.cy - rh * 0.525;
+                        bz = hf.cz - sm; bsx = rw * 1.05; bsy = rh * 1.05; bsz = sm * 2;
+                    } else if (hf.fc == 2 || hf.fc == 3) {
+                        bx = hf.cx - sm; by = hf.cy - rw * 0.525;
+                        bz = hf.cz - rh * 0.525; bsx = sm * 2; bsy = rw * 1.05; bsz = rh * 1.05;
+                    } else {
+                        bx = hf.cx - rw * 0.525; by = hf.cy - sm;
+                        bz = hf.cz - rh * 0.525; bsx = rw * 1.05; bsy = sm * 2; bsz = rh * 1.05;
+                    }
+                    BRepPrimAPI_MakeBox bm(gp_Pnt(bx, by, bz), bsx, bsy, bsz);
+                    if (bm.Shape().IsNull()) continue;
+                    secShape = bm.Shape();
+                    proxDist = std::max(rw, rh) * 0.6;
+                    }
 
-                    BRepAlgoAPI_Section sec(resultSolid, cyl);
+                    BRepAlgoAPI_Section sec(resultSolid, secShape);
                     sec.Build();
                     if (sec.IsDone()) {
                         int added = 0, secFilteredOut = 0;
@@ -3563,8 +3619,6 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                             double dist = 0;
                             if (hf.fc == 0 || hf.fc == 1) {
                                 dist = sqrt((ecx-hf.cx)*(ecx-hf.cx)+(ecy-hf.cy)*(ecy-hf.cy));
-                                if (hf.fc == 0 && ecz > pos_z + thickness + hf.r * 0.5) continue;
-                                if (hf.fc == 1 && ecz < pos_z + height - thickness - hf.r * 0.5) continue;
                             }
                             else if (hf.fc == 2 || hf.fc == 3) {
                                 dist = sqrt((ecy-hf.cy)*(ecy-hf.cy)+(ecz-hf.cz)*(ecz-hf.cz));
@@ -3576,9 +3630,7 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                                 if (hf.fc == 4 && ecy > pos_y) continue;
                                 if (hf.fc == 5 && ecy < pos_y) continue;
                             }
-                            if (dist < hf.r * 1.2) {  // wider: section cylinder is r*1.01
-                                // Classify: edge is inner if midpoint is on cavity side of wall midpoint
-                                // Wall midpoint = halfway between inner & outer (e.g., Z=1 for fc=0)
+                            if (dist < proxDist) {
                                 bool isInner = false;
                                 if (hf.fc == 0)
                                     isInner = (ecz > pos_z + thickness * 0.5);
@@ -3590,15 +3642,13 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                                     isInner = (ecx < pos_x + halfW - thickness * 0.5);
                                 else if (hf.fc == 4)
                                     isInner = (ecy > pos_y - halfD + thickness * 0.5);
-                                else // fc == 5
+                                else
                                     isInner = (ecy < pos_y + halfD - thickness * 0.5);
                                 bool isOuter = !isInner;
                                 if (hf.type != 2 && !(hf.type == 0 && isOuter) && !(hf.type == 1 && isInner)) {
                                     secFilteredOut++;
                                     continue;
                                 }
-
-                                // Avoid duplicates: compare edge endpoints
                                 bool dup = false;
                                 TopoDS_Vertex nv1, nv2;
                                 TopExp::Vertices(e, nv1, nv2);
@@ -3614,7 +3664,10 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                                 if (!dup) { edgesToFillet.push_back(e); added++; }
                             }
                         }
-                        if (added > 0) std::cout << "[STEP Exporter] Section found " << added << " extra edges for hole at (" << hf.cx << "," << hf.cy << "," << hf.cz << ") ft=" << hf.type << " (filteredOut=" << secFilteredOut << ")" << std::endl;
+                        if (added > 0) {
+                            const char* tag = (hf.r > 0.001) ? "Section" : "RrectSection";
+                            std::cout << "[STEP Exporter] " << tag << " found " << added << " extra edges for hole at (" << hf.cx << "," << hf.cy << "," << hf.cz << ") ft=" << hf.type << " (filteredOut=" << secFilteredOut << ")" << std::endl;
+                        }
                     }
                 }
                 std::cout << "[STEP Exporter] Total hole edges to fillet: " << edgesToFillet.size() << std::endl;
@@ -3709,7 +3762,7 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                             else d = sqrt((ecx-hf.cx)*(ecx-hf.cx)+(ecz-hf.cz)*(ecz-hf.cz));
                             if (d < bestD) { bestD = d; bestHi = (int)hi; }
                         }
-                        if (bestHi >= 0 && bestD < holeFillets[bestHi].r * 2.0)
+                        if (bestHi >= 0 && bestD < getEffR(holeFillets[bestHi]) * 2.0)
                             holeEdges[bestHi].push_back(e);
                     }
 

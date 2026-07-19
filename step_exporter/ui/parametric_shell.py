@@ -1529,7 +1529,8 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
                                          self._simple_px, self._simple_py, fi[7],
                                          self._simple_face_code,
                                          fi[9], fi[10], fi[8], self._simple_S,
-                                         keep=getattr(self, '_simple_keep_cutter', False))
+                                         keep=getattr(self, '_simple_keep_cutter', False),
+                                         fillet_type=self._simple_fillet_type)
                     self._simple_stage = 2
                 elif stage == 1:
                     update_progress(70, "Fillet...")
@@ -2141,7 +2142,7 @@ def _do_simple_stage0(obj, cutter, keep=False):
     return ok
 
 def _add_rrect_step_ring(obj, hole_w_mm, hole_h_mm, hole_cr_mm, fillet_mm,
-                          px, py, pz, face_code, hw, hd, thickness, S=0.001, keep=False):
+                          px, py, pz, face_code, hw, hd, thickness, S=0.001, keep=False, fillet_type='0'):
     """Add a recess groove at the outer face — same approach as _fillet_stage_2.
     Uses Boolean DIFFERENCE with an enlarged rrect cutter as the recess shape."""
     import math
@@ -2203,35 +2204,57 @@ def _add_rrect_step_ring(obj, hole_w_mm, hole_h_mm, hole_cr_mm, fillet_mm,
             outer_pos = (px, sur_mid + loc.y, pz)
         elif face_code in (2, 3):
             outer_pos = (sur_mid + loc.x, py, pz)
-    print(f"[STEP DEBUG] rrect face={face_code} euler=({math.degrees(euler_rot[0]):.1f},{math.degrees(euler_rot[1]):.1f})deg outer_pos=({outer_pos[0]*1000:.1f},{outer_pos[1]*1000:.1f},{outer_pos[2]*1000:.1f})mm")
+    # Compute inner pos and tilt (same as _fillet_stage_0)
+    if face_code in (4, 5):
+        tilt = abs(euler_rot[0]) - math.pi/2 if face_code==5 else euler_rot[0] - math.pi/2
+        world_thick = thickness * math.cos(tilt)
+        ox, oy, oz = 0, (-world_thick if face_code==4 else world_thick), 0
+    elif face_code in (2, 3):
+        tilt = abs(euler_rot[1]) - math.pi/2
+        world_thick = thickness * math.cos(tilt)
+        ox, oy, oz = (-world_thick if face_code==2 else world_thick), 0, 0
+    else:
+        world_thick, ox, oy, oz = thickness, 0, 0, 0
+    inner_pos = (outer_pos[0] - ox, outer_pos[1] - oy, outer_pos[2] - oz)
+    if face_code in (4, 5, 0, 1):
+        euler_inner = (euler_rot[0] + math.pi, euler_rot[1], euler_rot[2])
+    else:
+        euler_inner = (euler_rot[0], euler_rot[1] + math.pi, euler_rot[2])
+    print(f"[STEP DEBUG] rrect face={face_code} euler=({math.degrees(euler_rot[0]):.1f},{math.degrees(euler_rot[1]):.1f})deg outer_pos=({outer_pos[0]*1000:.1f},{outer_pos[1]*1000:.1f},{outer_pos[2]*1000:.1f})mm inner_pos=({inner_pos[0]*1000:.1f},{inner_pos[1]*1000:.1f},{inner_pos[2]*1000:.1f})mm")
     # --- End surface tilt ---
     
-    # Build recess cutter (enlarged rrect)
     cutter_cls = STEP_EXPORTER_OT_create_parametric_shell
-    recess = cutter_cls._make_rrect_cutter(
-        None, recess_w * S, recess_h * S, recess_cr * S, recess_depth,
-        px, py, pz, hw, hd, thickness, loc)
-    if recess is None:
-        return
+    # Build target list: outer only for type='0', inner only for type='1', both for type='2'
+    targets = []
+    if fillet_type in ('0', '2', 'outer', 'both'):
+        targets.append((outer_pos, euler_rot, "Outer"))
+    if fillet_type in ('1', '2', 'inner', 'both'):
+        targets.append((inner_pos, euler_inner, "Inner"))
     
-    # Position and rotate like round hole recess: local offset along tilted cutter axis
-    recess.matrix_world = _Mtx.Translation(outer_pos) @ _Eul(euler_rot, 'XYZ').to_matrix().to_4x4() @ _Mtx.Translation((0, 0, -fr/2 + fr*0.3))
-    bpy.context.view_layer.update()
-    
-    # Boolean DIFFERENCE: cut recess into shell
-    bpy.context.view_layer.objects.active = obj
-    mod = obj.modifiers.new(name="RRecess", type='BOOLEAN')
-    mod.object = recess; mod.operation = 'DIFFERENCE'
-    bpy.ops.object.modifier_apply(modifier=mod.name)
-    _keep_or_remove(obj, recess, keep)
+    for pos, erot, label in targets:
+        recess = cutter_cls._make_rrect_cutter(
+            None, recess_w * S, recess_h * S, recess_cr * S, recess_depth,
+            px, py, pz, hw, hd, thickness, loc)
+        if recess is None:
+            continue
+        recess.matrix_world = _Mtx.Translation(pos) @ _Eul(erot, 'XYZ').to_matrix().to_4x4() @ _Mtx.Translation((0, 0, -fr/2 + fr*0.3))
+        bpy.context.view_layer.update()
+        bpy.context.view_layer.objects.active = obj
+        mod = obj.modifiers.new(name=f"RRecess{label}", type='BOOLEAN')
+        mod.object = recess; mod.operation = 'DIFFERENCE'
+        bpy.ops.object.modifier_apply(modifier=mod.name)
+        _keep_or_remove(obj, recess, keep)
 
 def _do_simple_stage1(obj, fillet_info, fillet_type, S, h, t, px, py, face_code, hole_radius, hole_fillet):
     """Stage 1 for simple hole: apply fillet if needed."""
     import math
     if not fillet_info or fillet_info[0] <= 0.0001:
         return
-    # Bottom face fillet on curved shell: torus ring for both outer and inner
+    # Bottom face fillet on curved shell: torus ring for round, recess for rrect
     if obj.get('corner_type') == 'curved' and face_code == 0 and str(fillet_type) in ('0', '1', '2'):
+        if len(fillet_info) >= 11:
+            _fillet_rrect_edge(obj, *fillet_info, S, fillet_type=fillet_type)
+            return
         outer_z = -h / 2
         inner_z = -h / 2 + t * S
         if str(fillet_type) in ('0', '2'):
@@ -2576,6 +2599,8 @@ def _fillet_rrect_edge(obj, fillet_mm, hole_w_mm, hole_h_mm, hole_cr_mm, face_co
             elif ax == 'x': c0, c1 = v0.co.x, v1.co.x
             else: c0, c1 = v0.co.y, v1.co.y
             if all(abs(c - tc[0]) > thickness * 3.0 for tc in target_cs for c in (c0, c1)): continue
+            # Must match a SPECIFIC target (not just any), to distinguish outer from inner
+            if not any(abs(c - tc[0]) < thickness * 0.5 for tc in target_cs for c in (c0, c1)): continue
             if abs(c0 - c1) > thickness * 0.3: continue
             if ax == 'z': x0,y0,x1,y1,cx,cy = v0.co.x,v0.co.y,v1.co.x,v1.co.y,px_l,py_l
             elif ax == 'x': x0,y0,x1,y1,cx,cy = v0.co.y,v0.co.z,v1.co.y,v1.co.z,py_l,pz_l

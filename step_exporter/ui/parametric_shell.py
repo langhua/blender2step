@@ -1488,6 +1488,7 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
             self._simple_px = px
             self._simple_py = py
             self._simple_stage = 0
+            self._simple_keep_cutter = self.keep_cutter
             set_operator(self)
             start_progress(context, "Adding hole...")
             wm = context.window_manager
@@ -1511,8 +1512,25 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
                 stage = self._simple_stage
                 if stage == 0:
                     update_progress(30, "Cutting hole...")
-                    ok = _do_simple_stage0(obj, self._simple_cutter)
-                    self._simple_stage = 1 if ok else 2  # skip fillet if cut failed
+                    ok = _do_simple_stage0(obj, self._simple_cutter,
+                                           keep=getattr(self, '_simple_keep_cutter', False))
+                    # rrect on curved: use ring step instead of bevel (NURBS unreliable)
+                    is_rrect_curved = (getattr(self, 'hole_type', '') == 'rrect'
+                                       and obj.get('corner_type') == 'curved'
+                                       and self._simple_face_code in (2, 3, 4, 5)
+                                       and self._simple_fillet_info
+                                       and self._simple_fillet_info[0] > 0.0001)
+                    self._simple_stage = 1.5 if (is_rrect_curved and ok) else (2 if not ok else 1)
+                elif stage == 1.5:
+                    # rrect ring step for curved side walls
+                    update_progress(70, "Step ring...")
+                    fi = self._simple_fillet_info
+                    _add_rrect_step_ring(obj, fi[1], fi[2], fi[3], fi[0],
+                                         self._simple_px, self._simple_py, fi[7],
+                                         self._simple_face_code,
+                                         fi[9], fi[10], fi[8], self._simple_S,
+                                         keep=getattr(self, '_simple_keep_cutter', False))
+                    self._simple_stage = 2
                 elif stage == 1:
                     update_progress(70, "Fillet...")
                     _do_simple_stage1(obj, self._simple_fillet_info, self._simple_fillet_type,
@@ -1932,7 +1950,7 @@ def _fillet_stage_2(obj, result, face_code, fillet_type):
     mod.object = rc; mod.operation = 'DIFFERENCE'; mod.solver = 'EXACT'
     bpy.context.view_layer.update()
     bpy.ops.object.modifier_apply(modifier="Recess")
-    bpy.data.objects.remove(rc, do_unlink=True)
+    _keep_or_remove(obj, rc, obj.get('debug_keep_cutters'))
     print(f"[STEP Exporter] Recess OK, hole_r={hole_r*1000:.2f}mm")
 
 def _fillet_stage_3(obj, result, face_code):
@@ -2105,11 +2123,107 @@ def _bmesh_cut_circle(obj, pos, radius):
     _bmc.ops.remove_doubles(_bm, verts=_bm.verts, dist=0.00005)
     _bm.to_mesh(obj.data); _bm.free()
 
-def _do_simple_stage0(obj, cutter):
-    """Stage 0: cut hole. Returns True if successful."""
+def _do_simple_stage0(obj, cutter, keep=False):
+    """Stage 0: cut hole. Returns True if successful. If keep=True, saves cutter copy."""
     cutter.hide_viewport = False
     bpy.context.view_layer.update()
-    return _direct_cut_hole(obj, cutter)
+    # _direct_cut_hole always deletes the cutter. If user wants to keep it, duplicate first.
+    cutter_copy = None
+    if keep and cutter:
+        mesh_copy = cutter.data.copy()
+        cutter_copy = bpy.data.objects.new(cutter.name + "_copy", mesh_copy)
+        cutter_copy.location = cutter.location
+        cutter_copy.rotation_euler = cutter.rotation_euler
+        bpy.context.collection.objects.link(cutter_copy)
+    ok = _direct_cut_hole(obj, cutter)
+    if cutter_copy:
+        _keep_or_remove(obj, cutter_copy, True)
+    return ok
+
+def _add_rrect_step_ring(obj, hole_w_mm, hole_h_mm, hole_cr_mm, fillet_mm,
+                          px, py, pz, face_code, hw, hd, thickness, S=0.001, keep=False):
+    """Add a recess groove at the outer face — same approach as _fillet_stage_2.
+    Uses Boolean DIFFERENCE with an enlarged rrect cutter as the recess shape."""
+    import math
+    from mathutils import Matrix as _Mtx, Euler as _Eul
+    fr = fillet_mm * S
+    recess_w = hole_w_mm + fillet_mm * 2
+    recess_h = hole_h_mm + fillet_mm * 2
+    recess_cr = hole_cr_mm + fillet_mm
+    recess_depth = fr
+    loc = obj.location
+    
+    # --- Compute surface tilt (same as _fillet_stage_0) ---
+    curve_r = obj.get('curve_ratio', 50.0) / 100.0
+    hw_outer = hw / S; hd_outer = hd / S
+    total_inset = min(hw_outer, hd_outer) * curve_r * 0.5
+    hh = (obj.get('height', 50) * S) / 2.0
+    mesh_z = pz - loc.z
+    total_inset_m = total_inset * S
+    def _inset(z_local):
+        tf = (hh - z_local) / (2.0 * hh) if hh > 0.0001 else 0.5
+        tf = max(0.0, min(1.0, tf))
+        return total_inset_m * (1.0 - math.cos(math.pi / 2.0 * tf))
+    half_extent = max(recess_w, recess_h) * S * 0.5
+    z_top = mesh_z + half_extent
+    z_bot = mesh_z - half_extent
+    dz_step = (z_top - z_bot) / 3.0
+    sample_zs = [z_bot, z_bot + dz_step, z_top - dz_step, z_top]
+    samples = []
+    if face_code in (5, 4): sign_n = 1.0 if face_code==5 else -1.0
+    else: sign_n = 1.0 if face_code==3 else -1.0
+    hw_m, hd_m = hw, hd
+    for sz in sample_zs:
+        inset_val = _inset(sz)
+        if face_code in (4, 5):
+            sur_y = hd_m - inset_val * (hd_m / hw_m if hw_m > 0 else 1.0)
+            sv = sur_y if face_code==5 else -sur_y
+        elif face_code in (2, 3):
+            sur_x = hw_m - inset_val
+            sv = sur_x if face_code==3 else -sur_x
+        else:
+            sv = mesh_z
+        samples.append((sz, sv))
+    euler_rot = (0, 0, 0)
+    outer_pos = (px, py, pz)
+    if len(samples) >= 2:
+        samples.sort(key=lambda x: x[0])
+        z1, s1 = samples[0]; z2, s2 = samples[-1]
+        dinset_dz = -(s2 - s1) / (z2 - z1) * sign_n if abs(z2 - z1) > 0.00001 else 0.0
+        if face_code in (4, 5):
+            # fc=4: atan2(1, dinset_dz), fc=5: atan2(-1, dinset_dz)
+            euler_rot = (math.atan2(-sign_n, dinset_dz), 0, 0)
+        else:
+            # fc=2: atan2(-1, dinset_dz), fc=3: atan2(1, dinset_dz)
+            euler_rot = (0, math.atan2(sign_n, dinset_dz), 0)
+        # Compute surface position at hole center (same as _fillet_stage_0)
+        slope = (s2 - s1) / (z2 - z1)
+        sur_mid = s1 + slope * (mesh_z - z1)
+        if face_code in (4, 5):
+            outer_pos = (px, sur_mid + loc.y, pz)
+        elif face_code in (2, 3):
+            outer_pos = (sur_mid + loc.x, py, pz)
+    print(f"[STEP DEBUG] rrect face={face_code} euler=({math.degrees(euler_rot[0]):.1f},{math.degrees(euler_rot[1]):.1f})deg outer_pos=({outer_pos[0]*1000:.1f},{outer_pos[1]*1000:.1f},{outer_pos[2]*1000:.1f})mm")
+    # --- End surface tilt ---
+    
+    # Build recess cutter (enlarged rrect)
+    cutter_cls = STEP_EXPORTER_OT_create_parametric_shell
+    recess = cutter_cls._make_rrect_cutter(
+        None, recess_w * S, recess_h * S, recess_cr * S, recess_depth,
+        px, py, pz, hw, hd, thickness, loc)
+    if recess is None:
+        return
+    
+    # Position and rotate like round hole recess: local offset along tilted cutter axis
+    recess.matrix_world = _Mtx.Translation(outer_pos) @ _Eul(euler_rot, 'XYZ').to_matrix().to_4x4() @ _Mtx.Translation((0, 0, -fr/2 + fr*0.3))
+    bpy.context.view_layer.update()
+    
+    # Boolean DIFFERENCE: cut recess into shell
+    bpy.context.view_layer.objects.active = obj
+    mod = obj.modifiers.new(name="RRecess", type='BOOLEAN')
+    mod.object = recess; mod.operation = 'DIFFERENCE'
+    bpy.ops.object.modifier_apply(modifier=mod.name)
+    _keep_or_remove(obj, recess, keep)
 
 def _do_simple_stage1(obj, fillet_info, fillet_type, S, h, t, px, py, face_code, hole_radius, hole_fillet):
     """Stage 1 for simple hole: apply fillet if needed."""
@@ -2137,8 +2251,13 @@ def _do_simple_stage1(obj, fillet_info, fillet_type, S, h, t, px, py, face_code,
             _apply_bottom_inner_ring(obj, hole_radius, hole_fillet, inner_ring_pos, S)
         return
     else:
-        if fillet_info and len(fillet_info) >= 4 and int(fillet_info[2]) in (0,1,2,3,4,5):
-            _fillet_hole_edge(obj, *fillet_info, S, fillet_type=fillet_type)
+        if fillet_info and len(fillet_info) >= 4:
+            fc = int(fillet_info[4]) if len(fillet_info) >= 6 else int(fillet_info[2])
+            if fc in (0,1,2,3,4,5):
+                if len(fillet_info) >= 11:  # rrect: 11 elements
+                    _fillet_rrect_edge(obj, *fillet_info, S, fillet_type=fillet_type)
+                else:
+                    _fillet_hole_edge(obj, *fillet_info, S, fillet_type=fillet_type)
 
 def _force_redraw(context):
     """Force 3D view redraw so progress overlay is visible during sync ops."""
@@ -2336,7 +2455,7 @@ def _fillet_hole_edge(obj, fillet_mm, hole_r_mm, face_code, px, py, pz, thicknes
         else:
             c0, c1 = v0.co.y, v1.co.y
         # Must have at least one vertex near any target
-        if all(abs(c - tc) > thickness * 0.45 for tc in target_cs for c in (c0, c1)): continue
+        if all(abs(c - tc) > thickness * 3.0 for tc in target_cs for c in (c0, c1)): continue
         # Skip vertical edges connecting outer and inner faces (different Z)
         if abs(c0 - c1) > thickness * 0.3:
             continue
@@ -2369,10 +2488,11 @@ def _fillet_hole_edge(obj, fillet_mm, hole_r_mm, face_code, px, py, pz, thicknes
 
 def _fillet_rrect_edge(obj, fillet_mm, hole_w_mm, hole_h_mm, hole_cr_mm, face_code,
                        px, py, pz, thickness, hw, hd, h, S=0.001, fillet_type='0'):
-    """Apply fillet to rrect hole edge on shell."""
-    import bmesh
+    """Apply fillet to rrect hole edge on shell.
+    On curved (NURBS) faces, uses ring union instead of bevel to avoid broken geometry."""
+    import bmesh, math
     # Cap radius to prevent inner/outer fillet overlap
-    max_fr = (thickness / S) * 0.4  # thickness is in Blender units, convert to mm
+    max_fr = (thickness / S) * 0.4
     if fillet_mm > max_fr + 0.001:
         fillet_mm = max_fr
     loc = obj.location
@@ -2395,36 +2515,81 @@ def _fillet_rrect_edge(obj, fillet_mm, hole_w_mm, hole_h_mm, hole_cr_mm, face_co
         ax, outer_c, inner_c = 'y', hd, hd-thickness
     target_cs = []
     ft = str(fillet_type)
-    if ft in ('0', '2', 'outer', 'both'): target_cs.append(outer_c)
-    if ft in ('1', '2', 'inner', 'both'): target_cs.append(inner_c)
-    bpy.context.view_layer.objects.active = obj
-    bpy.ops.object.mode_set(mode='EDIT')
-    bm = bmesh.from_edit_mesh(obj.data)
-    bm.edges.ensure_lookup_table()
-    for e in bm.edges: e.select = False
-    bm.select_flush(False)
-    count = 0
-    for edge in bm.edges:
-        v0, v1 = edge.verts[0], edge.verts[1]
-        if ax == 'z': c0, c1 = v0.co.z, v1.co.z
-        elif ax == 'x': c0, c1 = v0.co.x, v1.co.x
-        else: c0, c1 = v0.co.y, v1.co.y
-        if all(abs(c - tc) > thickness * 0.45 for tc in target_cs for c in (c0, c1)): continue
-        # Skip vertical edges connecting outer and inner faces
-        if abs(c0 - c1) > thickness * 0.3: continue
-        if ax == 'z': x0,y0,x1,y1,cx,cy = v0.co.x,v0.co.y,v1.co.x,v1.co.y,px_l,py_l
-        elif ax == 'x': x0,y0,x1,y1,cx,cy = v0.co.y,v0.co.z,v1.co.y,v1.co.z,py_l,pz_l
-        else: x0,y0,x1,y1,cx,cy = v0.co.x,v0.co.z,v1.co.x,v1.co.z,px_l,pz_l
-        mx, my = (x0+x1)/2, (y0+y1)/2
-        if (abs(abs(mx-cx)-rw)<eps and abs(my-cy)<=rw+eps) or (abs(abs(my-cy)-rh)<eps and abs(mx-cx)<=rw+eps):
-            edge.select = True
-            count += 1
-    if count > 0:
-        bm.select_flush(True)
-        bmesh.update_edit_mesh(obj.data)
-        bpy.ops.mesh.bevel(offset_type='OFFSET', offset=fr, segments=32, profile=0.5, affect='EDGES')
-    print(f"[STEP Exporter] _fillet_rrect_edge: ax={ax} type={ft} found={count} fr={fillet_mm:.1f}")
-    bpy.ops.object.mode_set(mode='OBJECT')
+    if ft in ('0', '2', 'outer', 'both'): target_cs.append((outer_c, 'outer'))
+    if ft in ('1', '2', 'inner', 'both'): target_cs.append((inner_c, 'inner'))
+    
+    is_curved = (obj.get('corner_type') == 'curved' and face_code in (2, 3, 4, 5))
+    
+    if is_curved:
+        # Curved NURBS face: ring union (like round holes), not bevel
+        cutter_cls = STEP_EXPORTER_OT_create_parametric_shell
+        for tc, side in target_cs:
+            ring_w = hole_w_mm + fillet_mm * 2
+            ring_h = hole_h_mm + fillet_mm * 2
+            ring_cr = hole_cr_mm + fillet_mm
+            ring_depth = fr * 3
+            outer = cutter_cls._make_rrect_cutter(
+                None, ring_w * S, ring_h * S, ring_cr * S, ring_depth,
+                px, py, pz, hw, hd, thickness, loc)
+            inner = cutter_cls._make_rrect_cutter(
+                None, hole_w_mm * S, hole_h_mm * S, hole_cr_mm * S, ring_depth * 1.1,
+                px, py, pz, hw, hd, thickness, loc)
+            if outer is None or inner is None:
+                continue
+            outer.location = (px, py, pz)
+            inner.location = (px, py, pz)
+            mod = outer.modifiers.new(name="RCut", type='BOOLEAN')
+            mod.object = inner; mod.operation = 'DIFFERENCE'
+            bpy.context.view_layer.objects.active = outer
+            bpy.ops.object.modifier_apply(modifier=mod.name)
+            bpy.data.objects.remove(inner, do_unlink=True)
+            if side == 'outer':
+                if ax == 'x': outer.location.x += -fr if tc < 0 else fr
+                elif ax == 'y': outer.location.y += -fr if tc < 0 else fr
+                else: outer.location.z += -fr if tc < 0 else fr
+            else:
+                if ax == 'x': outer.location.x += fr if tc < 0 else -fr
+                elif ax == 'y': outer.location.y += fr if tc < 0 else -fr
+                else: outer.location.z += fr if tc < 0 else -fr
+            if face_code == 2: outer.rotation_euler = (0, math.pi/2, 0)
+            elif face_code == 3: outer.rotation_euler = (0, -math.pi/2, 0)
+            elif face_code == 4: outer.rotation_euler = (-math.pi/2, 0, 0)
+            elif face_code == 5: outer.rotation_euler = (math.pi/2, 0, 0)
+            mod2 = obj.modifiers.new(name="FRing", type='BOOLEAN')
+            mod2.object = outer; mod2.operation = 'UNION'
+            bpy.context.view_layer.objects.active = obj
+            bpy.ops.object.modifier_apply(modifier=mod2.name)
+            bpy.data.objects.remove(outer, do_unlink=True)
+        print(f"[STEP Exporter] _fillet_rrect_edge: ring ax={ax} type={ft} fr={fillet_mm:.1f}")
+    else:
+        # Flat faces: bevel
+        bpy.context.view_layer.objects.active = obj
+        bpy.ops.object.mode_set(mode='EDIT')
+        bm = bmesh.from_edit_mesh(obj.data)
+        bm.edges.ensure_lookup_table()
+        for e in bm.edges: e.select = False
+        bm.select_flush(False)
+        count = 0
+        for edge in bm.edges:
+            v0, v1 = edge.verts[0], edge.verts[1]
+            if ax == 'z': c0, c1 = v0.co.z, v1.co.z
+            elif ax == 'x': c0, c1 = v0.co.x, v1.co.x
+            else: c0, c1 = v0.co.y, v1.co.y
+            if all(abs(c - tc[0]) > thickness * 3.0 for tc in target_cs for c in (c0, c1)): continue
+            if abs(c0 - c1) > thickness * 0.3: continue
+            if ax == 'z': x0,y0,x1,y1,cx,cy = v0.co.x,v0.co.y,v1.co.x,v1.co.y,px_l,py_l
+            elif ax == 'x': x0,y0,x1,y1,cx,cy = v0.co.y,v0.co.z,v1.co.y,v1.co.z,py_l,pz_l
+            else: x0,y0,x1,y1,cx,cy = v0.co.x,v0.co.z,v1.co.x,v1.co.z,px_l,pz_l
+            mx, my = (x0+x1)/2, (y0+y1)/2
+            if (abs(abs(mx-cx)-rw)<eps and abs(my-cy)<=rw+eps) or (abs(abs(my-cy)-rh)<eps and abs(mx-cx)<=rw+eps):
+                edge.select = True
+                count += 1
+        if count > 0:
+            bm.select_flush(True)
+            bmesh.update_edit_mesh(obj.data)
+            bpy.ops.mesh.bevel(offset_type='OFFSET', offset=fr, segments=32, profile=0.5, affect='EDGES')
+        print(f"[STEP Exporter] _fillet_rrect_edge: bevel ax={ax} type={ft} found={count} fr={fillet_mm:.1f}")
+        bpy.ops.object.mode_set(mode='OBJECT')
 
 
 # ═══════════════════════════════════════════════════════════════════

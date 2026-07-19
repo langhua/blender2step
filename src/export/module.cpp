@@ -3563,24 +3563,37 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                                 isInner = (ecy < pos_y + halfD - thickness * 0.5);
 
                             if (hf.fc >= 2) {
-                                // NURBS side faces: track best edge per hole
-                                auto& be = bestPerHole[hi];
-                                double idealDist;
-                                if (isInner) {
-                                    idealDist = sqrt((ecx-be.innerIdealX)*(ecx-be.innerIdealX)
-                                                    +(ecy-be.innerIdealY)*(ecy-be.innerIdealY)
-                                                    +(ecz-be.innerIdealZ)*(ecz-be.innerIdealZ));
-                                    if (idealDist < be.innerBest) {
-                                        be.innerBest = idealDist;
-                                        be.innerEdge = edge;
+                                // NURBS side faces
+                                if (hf.type == 2) {
+                                    // Type 2 (Both): collect all inner+outer edges directly,
+                                    // same as planar faces. Single "best" edge is often a
+                                    // spline fragment that OCCT can't fillet on NURBS.
+                                    bool isOuter = !isInner;
+                                    if (hf.type == 2 || (hf.type == 0 && isOuter) || (hf.type == 1 && isInner)) {
+                                        edgesToFillet.push_back(edge);
+                                    } else {
+                                        filteredOut++;
                                     }
                                 } else {
-                                    idealDist = sqrt((ecx-be.outerIdealX)*(ecx-be.outerIdealX)
-                                                    +(ecy-be.outerIdealY)*(ecy-be.outerIdealY)
-                                                    +(ecz-be.outerIdealZ)*(ecz-be.outerIdealZ));
-                                    if (idealDist < be.outerBest) {
-                                        be.outerBest = idealDist;
-                                        be.outerEdge = edge;
+                                    // Type 0 or 1 on NURBS: track best edge per hole
+                                    auto& be = bestPerHole[hi];
+                                    double idealDist;
+                                    if (isInner) {
+                                        idealDist = sqrt((ecx-be.innerIdealX)*(ecx-be.innerIdealX)
+                                                        +(ecy-be.innerIdealY)*(ecy-be.innerIdealY)
+                                                        +(ecz-be.innerIdealZ)*(ecz-be.innerIdealZ));
+                                        if (idealDist < be.innerBest) {
+                                            be.innerBest = idealDist;
+                                            be.innerEdge = edge;
+                                        }
+                                    } else {
+                                        idealDist = sqrt((ecx-be.outerIdealX)*(ecx-be.outerIdealX)
+                                                        +(ecy-be.outerIdealY)*(ecy-be.outerIdealY)
+                                                        +(ecz-be.outerIdealZ)*(ecz-be.outerIdealZ));
+                                        if (idealDist < be.outerBest) {
+                                            be.outerBest = idealDist;
+                                            be.outerEdge = edge;
+                                        }
                                     }
                                 }
                             } else {
@@ -3597,13 +3610,14 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                     }
                 }
 
-                // Add best edges from NURBS side faces
+                // Add best edges from NURBS side faces (only for type 0/1; type 2 already pushed above)
                 for (size_t hi = 0; hi < holeFillets.size(); hi++) {
                     const auto& hf = holeFillets[hi];
                     if (hf.fc < 2) continue; // planar, already handled
+                    if (hf.type == 2) continue; // type 2: edges already pushed directly above
                     auto& be = bestPerHole[hi];
-                    bool needInner = (hf.type == 1 || hf.type == 2);
-                    bool needOuter = (hf.type == 0 || hf.type == 2);
+                    bool needInner = (hf.type == 1);
+                    bool needOuter = (hf.type == 0);
                     if (needInner && be.innerBest < 1e8) {
                         edgesToFillet.push_back(be.innerEdge);
                     } else if (needInner) {
@@ -3810,14 +3824,30 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                         BRepFilletAPI_MakeFillet fm(filletedShape);
                         std::cout << "[STEP Exporter] Hole " << hi << " (fc=" << (int)holeFillets[hi].fc
                                   << " r=" << holeFillets[hi].r << " fr=" << fr
-                                  << "): " << holeEdges[hi].size() << " edges" << std::endl;
+                                  << " type=" << (int)holeFillets[hi].type
+                                  << "): " << holeEdges[hi].size() << " edges";
+                        int innerCnt = 0, outerCnt = 0;
                         for (const auto& e : holeEdges[hi]) {
                             Bnd_Box eb2; BRepBndLib::Add(e, eb2);
                             double ex1,ey1,ez1,ex2,ey2,ez2;
                             eb2.Get(ex1,ey1,ez1,ex2,ey2,ez2);
-                            std::cout << "  edge mid=(" << (ex1+ex2)/2.0 << "," << (ey1+ey2)/2.0 << "," << (ez1+ez2)/2.0 << ")" << std::endl;
+                            double midCoord = 0;
+                            int fc = holeFillets[hi].fc;
+                            if (fc <= 1) midCoord = (ez1+ez2)/2.0;
+                            else if (fc <= 3) midCoord = (ex1+ex2)/2.0;
+                            else midCoord = (ey1+ey2)/2.0;
+                            bool isInnerEdge = false;
+                            if (fc == 0) isInnerEdge = (midCoord > pos_z + thickness * 0.5);
+                            else if (fc == 1) isInnerEdge = (midCoord < pos_z + height - thickness * 0.5);
+                            else if (fc == 2) isInnerEdge = (midCoord > pos_x - halfW + thickness * 0.5);
+                            else if (fc == 3) isInnerEdge = (midCoord < pos_x + halfW - thickness * 0.5);
+                            else if (fc == 4) isInnerEdge = (midCoord > pos_y - halfD + thickness * 0.5);
+                            else isInnerEdge = (midCoord < pos_y + halfD - thickness * 0.5);
+                            if (isInnerEdge) innerCnt++; else outerCnt++;
+                            std::cout << "\n  edge mid=(" << (ex1+ex2)/2.0 << "," << (ey1+ey2)/2.0 << "," << (ez1+ez2)/2.0 << ")" << (isInnerEdge ? " INNER" : " OUTER");
                             fm.Add(fr, e);
                         }
+                        std::cout << "\n  → inner=" << innerCnt << " outer=" << outerCnt << std::endl;
                         fm.Build();
                         if (fm.IsDone()) {
                             filletedShape = fm.Shape();

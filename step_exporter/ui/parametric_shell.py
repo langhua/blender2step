@@ -8,6 +8,24 @@ from ..core.profile_utils import make_profile, add_fillet_rings
 from ..export.progress_report import start_progress, update_progress, end_progress, set_operator, clear_operator
 
 
+def _get_active_shell_corner_type():
+    """Find the closest visible parametric shell and return its corner_type."""
+    import bpy
+    best_dist = float('inf')
+    best_type = 'square'
+    cursor = bpy.context.scene.cursor.location
+    for o in bpy.data.objects:
+        if o.get('object_type') != 'parametric_shell':
+            continue
+        if o.hide_viewport or o.hide_get():
+            continue
+        d = (o.location - cursor).length
+        if d < best_dist:
+            best_dist = d
+            best_type = o.get('corner_type', 'square')
+    return best_type
+
+
 class STEP_EXPORTER_OT_create_parametric_shell(Operator):
     """创建参数化外壳（无盖盒子）"""
     bl_idname = "step_exporter.create_parametric_shell"
@@ -1271,7 +1289,15 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
             layout.prop(self, 'hole_radius')
             layout.prop(self, 'hole_fillet')
             if self.hole_fillet > 0.0001:
+                # Check if parent shell has curved corners (NURBS faces)
+                corner_type = _get_active_shell_corner_type()
+                if corner_type == 'curved' and self.hole_fillet_type == '1':
+                    # Inner-only is unreliable on NURBS faces (OCCT 7.8.1 limitation)
+                    # Reset to outer if currently inner
+                    self.hole_fillet_type = '0'
                 layout.prop(self, 'hole_fillet_type')
+                if corner_type == 'curved':
+                    layout.label(text=_t("  ⚠ Inner fillet not reliable on curved shells (OCCT limitation)"), icon='ERROR')
             layout.label(text=_t("  → Circular through-hole, Ø={d:.1f}mm").format(d=self.hole_radius*2))
         else:
             layout.prop(self, 'hole_width')
@@ -1279,7 +1305,12 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
             layout.prop(self, 'hole_cr')
             layout.prop(self, 'hole_fillet')
             if self.hole_fillet > 0.0001:
+                corner_type = _get_active_shell_corner_type()
+                if corner_type == 'curved' and self.hole_fillet_type == '1':
+                    self.hole_fillet_type = '0'
                 layout.prop(self, 'hole_fillet_type')
+                if corner_type == 'curved':
+                    layout.label(text=_t("  ⚠ Inner fillet not reliable on curved shells (OCCT limitation)"), icon='ERROR')
             layout.label(text=_t("  → RRect {w:.1f}×{h:.1f}mm cr={cr:.1f}").format(w=self.hole_width, h=self.hole_height, cr=self.hole_cr))
         layout.separator()
         layout.prop(self, 'keep_cutter')

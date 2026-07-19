@@ -1289,15 +1289,12 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
             layout.prop(self, 'hole_radius')
             layout.prop(self, 'hole_fillet')
             if self.hole_fillet > 0.0001:
-                # Check if parent shell has curved corners (NURBS faces)
                 corner_type = _get_active_shell_corner_type()
                 if corner_type == 'curved' and self.hole_fillet_type == '1':
-                    # Inner-only is unreliable on NURBS faces (OCCT 7.8.1 limitation)
-                    # Reset to outer if currently inner
                     self.hole_fillet_type = '0'
                 layout.prop(self, 'hole_fillet_type')
                 if corner_type == 'curved':
-                    layout.label(text=_t("  ⚠ Inner fillet not reliable on curved shells (OCCT limitation)"), icon='ERROR')
+                    layout.label(text=_t("  ⚠ Inner fillet unsupported on curved shells (OCCT limitation)"), icon='ERROR')
             layout.label(text=_t("  → Circular through-hole, Ø={d:.1f}mm").format(d=self.hole_radius*2))
         else:
             layout.prop(self, 'hole_width')
@@ -1310,7 +1307,7 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
                     self.hole_fillet_type = '0'
                 layout.prop(self, 'hole_fillet_type')
                 if corner_type == 'curved':
-                    layout.label(text=_t("  ⚠ Inner fillet not reliable on curved shells (OCCT limitation)"), icon='ERROR')
+                    layout.label(text=_t("  ⚠ Inner fillet unsupported on curved shells (OCCT limitation)"), icon='ERROR')
             layout.label(text=_t("  → RRect {w:.1f}×{h:.1f}mm cr={cr:.1f}").format(w=self.hole_width, h=self.hole_height, cr=self.hole_cr))
         layout.separator()
         layout.prop(self, 'keep_cutter')

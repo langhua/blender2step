@@ -3478,49 +3478,6 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                 int totalNearEdges = 0, filteredOut = 0;
                 double halfW = width / 2.0, halfD = depth / 2.0;
 
-                // Per-hole best-edge tracking for NURBS side faces
-                struct BestEdge {
-                    TopoDS_Edge innerEdge; double innerBest = 1e9;
-                    TopoDS_Edge outerEdge; double outerBest = 1e9;
-                    double innerIdealX=0, innerIdealY=0, innerIdealZ=0;
-                    double outerIdealX=0, outerIdealY=0, outerIdealZ=0;
-                };
-                std::vector<BestEdge> bestPerHole(holeFillets.size());
-
-                // Precompute ideal points for each side-wall hole
-                for (size_t hi = 0; hi < holeFillets.size(); hi++) {
-                    const auto& hf = holeFillets[hi];
-                    if (hf.fc == 2) {
-                        bestPerHole[hi].innerIdealX = pos_x - halfW + thickness;
-                        bestPerHole[hi].innerIdealY = hf.cy;
-                        bestPerHole[hi].innerIdealZ = hf.cz;
-                        bestPerHole[hi].outerIdealX = pos_x - halfW;
-                        bestPerHole[hi].outerIdealY = hf.cy;
-                        bestPerHole[hi].outerIdealZ = hf.cz;
-                    } else if (hf.fc == 3) {
-                        bestPerHole[hi].innerIdealX = pos_x + halfW - thickness;
-                        bestPerHole[hi].innerIdealY = hf.cy;
-                        bestPerHole[hi].innerIdealZ = hf.cz;
-                        bestPerHole[hi].outerIdealX = pos_x + halfW;
-                        bestPerHole[hi].outerIdealY = hf.cy;
-                        bestPerHole[hi].outerIdealZ = hf.cz;
-                    } else if (hf.fc == 4) {
-                        bestPerHole[hi].innerIdealX = hf.cx;
-                        bestPerHole[hi].innerIdealY = pos_y - halfD + thickness;
-                        bestPerHole[hi].innerIdealZ = hf.cz;
-                        bestPerHole[hi].outerIdealX = hf.cx;
-                        bestPerHole[hi].outerIdealY = pos_y - halfD;
-                        bestPerHole[hi].outerIdealZ = hf.cz;
-                    } else if (hf.fc == 5) {
-                        bestPerHole[hi].innerIdealX = hf.cx;
-                        bestPerHole[hi].innerIdealY = pos_y + halfD - thickness;
-                        bestPerHole[hi].innerIdealZ = hf.cz;
-                        bestPerHole[hi].outerIdealX = hf.cx;
-                        bestPerHole[hi].outerIdealY = pos_y + halfD;
-                        bestPerHole[hi].outerIdealZ = hf.cz;
-                    }
-                }
-
                 for (TopExp_Explorer ex(resultSolid, TopAbs_EDGE); ex.More(); ex.Next()) {
                     const TopoDS_Edge& edge = TopoDS::Edge(ex.Current());
                     Bnd_Box eb; BRepBndLib::Add(edge, eb);
@@ -3562,71 +3519,15 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                             else // fc == 5
                                 isInner = (ecy < pos_y + halfD - thickness * 0.5);
 
-                            if (hf.fc >= 2) {
-                                // NURBS side faces
-                                if (hf.type == 2) {
-                                    // Type 2 (Both): collect all inner+outer edges directly,
-                                    // same as planar faces. Single "best" edge is often a
-                                    // spline fragment that OCCT can't fillet on NURBS.
-                                    bool isOuter = !isInner;
-                                    if (hf.type == 2 || (hf.type == 0 && isOuter) || (hf.type == 1 && isInner)) {
-                                        edgesToFillet.push_back(edge);
-                                    } else {
-                                        filteredOut++;
-                                    }
-                                } else {
-                                    // Type 0 or 1 on NURBS: track best edge per hole
-                                    auto& be = bestPerHole[hi];
-                                    double idealDist;
-                                    if (isInner) {
-                                        idealDist = sqrt((ecx-be.innerIdealX)*(ecx-be.innerIdealX)
-                                                        +(ecy-be.innerIdealY)*(ecy-be.innerIdealY)
-                                                        +(ecz-be.innerIdealZ)*(ecz-be.innerIdealZ));
-                                        if (idealDist < be.innerBest) {
-                                            be.innerBest = idealDist;
-                                            be.innerEdge = edge;
-                                        }
-                                    } else {
-                                        idealDist = sqrt((ecx-be.outerIdealX)*(ecx-be.outerIdealX)
-                                                        +(ecy-be.outerIdealY)*(ecy-be.outerIdealY)
-                                                        +(ecz-be.outerIdealZ)*(ecz-be.outerIdealZ));
-                                        if (idealDist < be.outerBest) {
-                                            be.outerBest = idealDist;
-                                            be.outerEdge = edge;
-                                        }
-                                    }
-                                }
+                            // Collect all edges (planar or NURBS) — same logic for all face types now
+                            bool isOuter = !isInner;
+                            if (hf.type == 2 || (hf.type == 0 && isOuter) || (hf.type == 1 && isInner)) {
+                                edgesToFillet.push_back(edge);
                             } else {
-                                // Planar faces (fc=0/1): collect all edges directly
-                                bool isOuter = !isInner;
-                                if (hf.type == 2 || (hf.type == 0 && isOuter) || (hf.type == 1 && isInner)) {
-                                    edgesToFillet.push_back(edge);
-                                } else {
-                                    filteredOut++;
-                                }
+                                filteredOut++;
                             }
                             break;
                         }
-                    }
-                }
-
-                // Add best edges from NURBS side faces (only for type 0/1; type 2 already pushed above)
-                for (size_t hi = 0; hi < holeFillets.size(); hi++) {
-                    const auto& hf = holeFillets[hi];
-                    if (hf.fc < 2) continue; // planar, already handled
-                    if (hf.type == 2) continue; // type 2: edges already pushed directly above
-                    auto& be = bestPerHole[hi];
-                    bool needInner = (hf.type == 1);
-                    bool needOuter = (hf.type == 0);
-                    if (needInner && be.innerBest < 1e8) {
-                        edgesToFillet.push_back(be.innerEdge);
-                    } else if (needInner) {
-                        filteredOut++; // inner edge not found
-                    }
-                    if (needOuter && be.outerBest < 1e8) {
-                        edgesToFillet.push_back(be.outerEdge);
-                    } else if (needOuter) {
-                        filteredOut++; // outer edge not found
                     }
                 }
 
@@ -3786,9 +3687,6 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                 if (!edgesToFillet.empty()) {
                     // Per-hole fillet: apply each hole's own fillet radius to its edges.
                     // Group edges by hole (using proximity to hole center).
-                    // For NURBS side faces (fc>=2), skip section/cylinder edges — 
-                    // they are spline curves that OCCT fillet can't handle.
-                    // Use only the best edge per hole from boolean cut.
                     
                     // Build a map from hole index to edges
                     std::vector<std::vector<TopoDS_Edge>> holeEdges(holeFillets.size());

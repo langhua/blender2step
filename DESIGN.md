@@ -240,12 +240,12 @@ bool curved = strcmp(corner_type, "curved") == 0;  // 必须带 'd'
 | fillet_type | NURBS 面结果 | 说明 |
 |-------------|-------------|------|
 | `0`（仅外侧） | ✅ 可用 | OCCT 可正常创建外侧圆角 |
-| `1`（仅内侧） | ⚠️ 不可靠 | 边缘选择正确，但 OCCT 圆角方向不可控；结果可能不符合预期 |
-| `2`（双侧） | ✅ 可用 | OCCT 可正常创建双侧圆角 |
+| `1`（仅内侧） | ❌ 不可用 | OCCT 方向失控，实际产生双侧圆角（等同于 type=2）。Blender UI 已禁止在 curved shell 上选择此选项 |
+| `2`（双侧） | ✅ 可用 | 同时推入内外侧边缘，OCCT 有足够几何上下文正确创建双侧圆角 |
 
-**根本原因**：OCCT 不支持 NURBS 边缘的圆角方向控制。`BRepFilletAPI_MakeFillet::Add(radius, edge)` 没有面方向参数，`Add(edge, f1, f2, radius)` API 不存在（7.8.1）。
+**根本原因**：OCCT 不支持 NURBS 边缘的圆角方向控制。`BRepFilletAPI_MakeFillet::Add(radius, edge)` 没有面方向参数，`Add(edge, f1, f2, radius)` API 不存在（7.8.1）。当仅推入内侧边缘时，OCCT 无法判断圆角方向，默认为双侧。
 
-`fc=0/1`（底面/顶面，解析 PLANE）始终产生标准 TOROIDAL_SURFACE，完全可用。
+`fc=0/1`（底面/顶面，解析 PLANE）始终产生标准 TOROIDAL_SURFACE，三种类型均完全可用。
 
 #### 已尝试的方案（均失败）
 
@@ -257,5 +257,6 @@ bool curved = strcmp(corner_type, "curved") == 0;  // 必须带 'd'
 | 4 | 反转 NURBS 面法向 | `BRepTools::Reverse(face)` | 未实施 — 会破坏壳体几何完整性，风险过高 |
 | 5 | 手动构建 torus 融合 | `BRepPrimAPI_MakeTorus` + `BRepAlgoAPI_Fuse` | 未实施 — 需精确匹配 NURBS 曲面，极难实现 |
 | 6 | 在切割圆柱上加圆角环 | 修改 hole cutter 几何 | 未实施 — 影响所有切割逻辑，改动范围过大 |
+| 7 | 收集所有边缘替代单一最佳边缘 | 推入全部内侧边缘片段（代替仅 1 条最佳边缘） | OCCT 仍方向失控，实际产生双侧圆角 |
 
 ### 9.5 corner_type 字符串精确匹配

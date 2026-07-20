@@ -111,6 +111,9 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
     curve_ratio: FloatProperty(
         name=_t("Cosine Ratio"), default=50.0, min=0.0, max=100.0, subtype='PERCENTAGE',
         description=_t("Bottom shrink ratio for cosine walls (0=flat, 100=max curve)"))
+    eccentric_y: FloatProperty(
+        name=_t("Eccentric Y"), default=0.0, min=-100.0, max=100.0, subtype='PERCENTAGE',
+        description=_t("Y eccentricity for cosine walls (0=symmetric, +/-=shift curve center in Y)"))
 
     # ── Dynamic clamping for curved + rim ──
     def _clamp_cr_bf(self):
@@ -137,6 +140,7 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
             layout.prop(self, 'corner_radius')
         if self.corner_type == 'curved':
             layout.prop(self, 'curve_ratio')
+            layout.prop(self, 'eccentric_y')
         layout.prop(self, 'bottom_fillet')
         # Hint: minimum values for curved + rim
         if self.corner_type == 'curved' and self.rim_type != 'none':
@@ -179,6 +183,7 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
                                            self.rim_top_ratio / 100.0, bfs,
                                            self.corner_type,
                                            self.curve_ratio / 100.0,
+                                           self.eccentric_y / 100.0,
                                            self.debug_keep_cutters)
         else:
             total_h = hs + rhs if rw > 0 and self.rim_type != 'none' and self.rim_shape == 'rect' else hs
@@ -205,6 +210,7 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         obj['rim_top_ratio'] = self.rim_top_ratio
         obj['bottom_fillet'] = self.bottom_fillet
         obj['curve_ratio'] = self.curve_ratio
+        obj['eccentric_y'] = self.eccentric_y
         obj['debug_keep_cutters'] = self.debug_keep_cutters
 
         unit_label = "mm" if self.unit == 'mm' else "m"
@@ -528,13 +534,13 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
     # ── Direct shell with bottom fillet (manual construction) ──
 
     def _build_shell_direct(self, w, d, h, t, cr, rw, rh, rim_type, rim_shape, top_ratio, bf,
-                            corner_type='rounded', curve_ratio=0.5, keep_cutters=False):
+                            corner_type='rounded', curve_ratio=0.5, eccentric_y=0.0, keep_cutters=False):
         """Build shell with bottom fillet via shared profile_utils.
         When corner_type='curved', uses cosine-curved walls (smaller bottom)."""
         import math
         
         if corner_type == 'curved' and cr > 0.0001:
-            return self._build_curved_shell(w, d, h, t, cr, rw, rh, rim_type, rim_shape, top_ratio, bf, curve_ratio, keep_cutters)
+            return self._build_curved_shell(w, d, h, t, cr, rw, rh, rim_type, rim_shape, top_ratio, bf, curve_ratio, eccentric_y, keep_cutters)
         
         print(f"[Direct] rounded/square path, bf={bf*1000:.1f}mm")
         hw, hd = w / 2.0, d / 2.0
@@ -695,13 +701,15 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
 
     # ── Curved-corner shell (cosine walls, smaller bottom) ──
 
-    def _build_curved_shell(self, w, d, h, t, cr, rw, rh, rim_type, rim_shape, top_ratio, bf, curve_ratio, keep_cutters=False):
-        """Build shell with cosine walls + bottom fillet via edge bridging."""
+    def _build_curved_shell(self, w, d, h, t, cr, rw, rh, rim_type, rim_shape, top_ratio, bf, curve_ratio, eccentric_y=0.0, keep_cutters=False):
+        """Build shell with cosine walls + bottom fillet via edge bridging.
+        eccentric_y: Y asymmetry (0=symmetric, +/-1 shifts curve center)."""
         import math
         
         hw_outer, hd_outer = w / 2.0, d / 2.0
         hh = h / 2.0
         total_inset = min(hw_outer, hd_outer) * curve_ratio * 0.5
+        ecc_y = eccentric_y  # -1..+1, maps to -total_inset..+total_inset Y shift
         seg = max(24, int(cr / min(w, d) * 64))  # more segments for cleaner boolean cuts
         side_segs = seg * 2
         num_pts = 8 * seg
@@ -770,7 +778,8 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
                 hd -= (hd_outer / hw_outer * offset) if hw_outer > 0 else 0
                 # Keep corner radius constant; only wall position changes
             pts = _profile(hw, hd, r, seg)
-            outer_layers.append([bm.verts.new((x, y, z_val)) for x, y in pts])
+            y_off = inset * ecc_y  # Y eccentricity proportional to curve inset
+            outer_layers.append([bm.verts.new((x, y + y_off, z_val)) for x, y in pts])
         
         _connect_layers(outer_layers, reversed_winding=True)
         bm.faces.new(list(reversed(outer_layers[-1])))  # bottom face (DOWN normal)
@@ -800,7 +809,8 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
                 hw -= offset
                 hd -= (inner_wall_hd / inner_wall_hw * offset) if inner_wall_hw > 0 else 0
             pts = _profile(hw, hd, r, seg)
-            inner_layers.append([bm.verts.new((x, y, z_val)) for x, y in pts])
+            y_off = inset * ecc_y  # Y eccentricity proportional to curve inset
+            inner_layers.append([bm.verts.new((x, y + y_off, z_val)) for x, y in pts])
         
         _connect_layers(inner_layers, reversed_winding=False)
         bm.faces.new(list(reversed(inner_layers[-1])))  # inner bottom face (DOWN normal)
@@ -3104,6 +3114,7 @@ def _rebuild_stage_create(obj):
     rim_top_ratio = obj.get('rim_top_ratio', 100.0)
     bf = obj.get('bottom_fillet', 0.0)
     curve_ratio = obj.get('curve_ratio', 50.0)
+    eccentric_y = obj.get('eccentric_y', 0.0)
     wd = obj.get('window_data', '')
     wd_local = obj.get('window_data_local', False)
     obj_name = obj.name
@@ -3144,7 +3155,7 @@ def _rebuild_stage_create(obj):
 
     for key in ('width', 'depth', 'height', 'wall_thickness', 'corner_type',
                 'corner_radius', 'object_type', 'unit', 'rim_type', 'rim_width',
-                'rim_height', 'rim_shape', 'rim_top_ratio', 'bottom_fillet', 'curve_ratio'):
+                'rim_height', 'rim_shape', 'rim_top_ratio', 'bottom_fillet', 'curve_ratio', 'eccentric_y'):
         val = obj.get(key)
         if val is not None:
             obj[key] = val

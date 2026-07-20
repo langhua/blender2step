@@ -864,6 +864,7 @@ def _parametric_export_staged():
                         pparams.get('rim_top_ratio', 1.0),
                         bf_val,
                         pparams.get('curve_ratio', 0.5),
+                        pparams.get('eccentric_y', 0.0),
                         wd)
                 
                 elif obj_type == 'regular':

@@ -2660,7 +2660,8 @@ TopoDS_Shape create_parametric_shell_solid(double width, double depth, double he
                                             const char* rim_shape,
                                             double rim_top_ratio,
                                             double bottom_fillet,
-                                            double curve_ratio) {
+                                            double curve_ratio,
+                                            double eccentric_y) {
     bool rounded = (corner_type && (strcmp(corner_type, "rounded") == 0) && corner_radius > 0.001);
     bool curved = (corner_type && strcmp(corner_type, "curved") == 0 && corner_radius > 0.001);
     double cr = (rounded || curved) ? std::min(corner_radius, std::min(width/2.0, depth/2.0)) : 0.0;
@@ -2687,7 +2688,7 @@ TopoDS_Shape create_parametric_shell_solid(double width, double depth, double he
         // Build layers bottom→top: fillet zone then cosine wall
         auto buildLayers = [&](double base_hw, double base_hd, double base_cr,
                                 double z_shift) {
-            std::vector<double> zs, hws, hds;
+            std::vector<double> zs, hws, hds, yos;
 
             // 1. Bottom fillet zone: z from -hh+z_shift to -hh+z_shift+bf
             if (bf > 0.001) {
@@ -2702,6 +2703,7 @@ TopoDS_Shape create_parametric_shell_solid(double width, double depth, double he
                     zs.push_back(z);
                     hws.push_back(base_hw - cos_inset - offset);
                     hds.push_back(base_hd - cos_inset - offset);
+                    yos.push_back((cos_inset + offset) * eccentric_y);
                 }
             }
 
@@ -2717,20 +2719,22 @@ TopoDS_Shape create_parametric_shell_solid(double width, double depth, double he
                 zs.push_back(z);
                 hws.push_back(base_hw - inset);
                 hds.push_back(base_hd - inset);
+                yos.push_back(inset * eccentric_y);
             }
-            return std::make_tuple(zs, hws, hds);
+            return std::make_tuple(zs, hws, hds, yos);
         };
 
         // Helper: create closed solid via ThruSections (solid mode, smooth)
         auto makeSolid = [&](const std::vector<double>& hw_arr,
                              const std::vector<double>& hd_arr,
                              const std::vector<double>& z_arr,
+                             const std::vector<double>& yo_arr,
                              double cr_val) -> TopoDS_Solid {
             BRepOffsetAPI_ThruSections loft(true, false, 1e-6);  // solid, smooth
             for (size_t i = 0; i < hw_arr.size(); i++) {
                 // Standard 8-edge wire for manageable STEP file size
                 TopoDS_Wire w = create_rounded_rect_wire(
-                    hw_arr[i] * 2.0, hd_arr[i] * 2.0, cr_val, z_arr[i], 0.0);
+                    hw_arr[i] * 2.0, hd_arr[i] * 2.0, cr_val, z_arr[i], yo_arr[i]);
                 if (w.IsNull()) return TopoDS_Solid();
                 loft.AddWire(w);
             }
@@ -2742,15 +2746,15 @@ TopoDS_Shape create_parametric_shell_solid(double width, double depth, double he
         };
 
         // Outer solid (z_shift = 0)
-        auto [oz, ohw, ohd] = buildLayers(hw, hd, cr, 0.0);
-        TopoDS_Solid outerSolid = makeSolid(ohw, ohd, oz, cr);
+        auto [oz, ohw, ohd, oyo] = buildLayers(hw, hd, cr, 0.0);
+        TopoDS_Solid outerSolid = makeSolid(ohw, ohd, oz, oyo, cr);
         if (outerSolid.IsNull()) return TopoDS_Shape();
 
         // Inner solid: z_shift = thickness
         double iw = hw - thickness, id_ = hd - thickness;
         double icr = std::max(cr - thickness, 0.01);  // concentric with outer, constant wall thickness
-        auto [iz, ihw, ihd] = buildLayers(iw, id_, icr, thickness);
-        TopoDS_Solid innerSolid = makeSolid(ihw, ihd, iz, icr);
+        auto [iz, ihw, ihd, iyo] = buildLayers(iw, id_, icr, thickness);
+        TopoDS_Solid innerSolid = makeSolid(ihw, ihd, iz, iyo, icr);
         if (innerSolid.IsNull()) return TopoDS_Shape();
 
         // Boolean: outer - inner → shell
@@ -3181,19 +3185,20 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
     const char* rim_shape = "rect"; double rim_top_ratio = 1.0;
     double bottom_fillet = 0.0;
     double curve_ratio = 0.5;
+    double eccentric_y = 0.0;
     const char* window_data = "";
 
-    if (!PyArg_ParseTuple(args, "sdddd|dsdddsddssisddds",
+    if (!PyArg_ParseTuple(args, "sdddd|dsdddsddssisdddds",
                           &filename, &width, &depth, &height, &thickness,
                           &corner_radius, &corner_type,
                           &pos_x, &pos_y, &pos_z,
                           &rim_type, &rim_width, &rim_height,
                           &step_schema, &unit, &enable_logging,
                           &rim_shape, &rim_top_ratio,
-                          &bottom_fillet, &curve_ratio, &window_data)) {
+                          &bottom_fillet, &curve_ratio, &eccentric_y, &window_data)) {
         PyErr_SetString(PyExc_TypeError,
             "export_parametric_shell_step() expected: filename, width, depth, height, thickness"
-            "[, corner_radius, corner_type, pos_x, pos_y, pos_z, rim_type, rim_width, rim_height, step_schema, unit, enable_logging, rim_shape, rim_top_ratio, bottom_fillet, curve_ratio, window_data]");
+            "[, corner_radius, corner_type, pos_x, pos_y, pos_z, rim_type, rim_width, rim_height, step_schema, unit, enable_logging, rim_shape, rim_top_ratio, bottom_fillet, curve_ratio, eccentric_y, window_data]");
         return NULL;
     }
 
@@ -3201,7 +3206,7 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
     std::cout << "[STEP Exporter] Exporting parametric shell to: " << filename << " [CODE:v20260718b]" << std::endl;
     std::cout << "[STEP Exporter]   dims: " << width << "x" << depth << "x" << height
               << " wall=" << thickness << " corner=" << corner_type << " r=" << corner_radius
-              << " bf=" << bottom_fillet << " curve=" << curve_ratio << std::endl;
+              << " bf=" << bottom_fillet << " curve=" << curve_ratio << " ecc_y=" << eccentric_y << std::endl;
     std::cout << "[STEP Exporter]   pos=(" << pos_x << "," << pos_y << "," << pos_z << ")" << std::endl;
     if (window_data && window_data[0] != '\0')
         std::cout << "[STEP Exporter]   window_data = \"" << window_data << "\"" << std::endl;
@@ -3231,7 +3236,7 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                                                             thickness, corner_type, corner_radius,
                                                             rim_type, rim_width, rim_height,
                                                             rim_shape, rim_top_ratio,
-                                                            bottom_fillet, curve_ratio);
+                                                            bottom_fillet, curve_ratio, eccentric_y);
         if (shape.IsNull()) {
             if (saved_stdout_fd >= 0) { _dup2(saved_stdout_fd, _fileno(stdout)); if (log_file) fclose(log_file); }
             Py_RETURN_FALSE;

@@ -3543,8 +3543,9 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                             // wall — cannot reliably classify inner vs outer. Accept all.
                             bool isOuter = !isInner;
                             bool acceptEdge;
-                            if (hf.r < 0.001 && hf.fc >= 2)
-                                acceptEdge = true;  // rrect side face: accept all
+                            bool isCurved = (corner_type && strcmp(corner_type, "curved") == 0);
+                            if (hf.r < 0.001 && hf.fc >= 2 && isCurved)
+                                acceptEdge = true;  // rrect curved side face: accept all (OCCT NURBS limitation)
                             else
                                 acceptEdge = (hf.type == 2 || (hf.type == 0 && isOuter) || (hf.type == 1 && isInner));
                             // Debug: count inner/outer per face

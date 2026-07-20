@@ -1302,12 +1302,15 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
             layout.prop(self, 'hole_cr')
             layout.prop(self, 'hole_fillet')
             if self.hole_fillet > 0.0001:
-                # Rrect through-holes on NURBS curved shell side faces
-                # cannot distinguish inner/outer edges (OCCT limitation).
-                # Force both-sides fillet; the inner fillet is hidden inside
-                # the shell cavity and invisible from outside.
-                self.hole_fillet_type = '2'
-                layout.label(text=_t("  ℹ RRect fillet is always Both-sides (OCCT limitation, inner hidden inside wall)"), icon='INFO')
+                # Only force both-sides for NURBS curved shell side faces
+                # (OCCT cannot distinguish inner/outer on curved NURBS).
+                obj = context.active_object
+                is_curved = obj and obj.get('corner_type') == 'curved'
+                if is_curved:
+                    self.hole_fillet_type = '2'
+                    layout.label(text=_t("  ℹ RRect fillet forced Both-sides (curved NURBS OCCT limitation)"), icon='INFO')
+                else:
+                    layout.prop(self, 'hole_fillet_type')
             layout.label(text=_t("  → RRect {w:.1f}×{h:.1f}mm cr={cr:.1f}").format(w=self.hole_width, h=self.hole_height, cr=self.hole_cr))
         layout.separator()
         layout.prop(self, 'keep_cutter')
@@ -1443,6 +1446,7 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
             _hole_fillet_info = (self.hole_fillet, self.hole_width, self.hole_height, self.hole_cr, face_code,
                                  px, py, pz, t * S, hw, hd, h)
             _hole_fillet_type = self.hole_fillet_type
+            print(f"[DEBUG] RRect hole: fillet_type={_hole_fillet_type} corner_type={obj.get('corner_type')} face_code={face_code}")
 
         # For cosine-curved side walls: fillet via staged modal for progress bar
         if (obj.get('corner_type') == 'curved' and self.hole_type == 'round'
@@ -2253,6 +2257,7 @@ def _do_simple_stage1(obj, fillet_info, fillet_type, S, h, t, px, py, face_code,
     # Bottom face fillet on curved shell: torus ring for round, recess for rrect
     if obj.get('corner_type') == 'curved' and face_code == 0 and str(fillet_type) in ('0', '1', '2'):
         if len(fillet_info) >= 11:
+            print(f"[DEBUG] _do_simple_stage1 rrect curved bottom: fillet_type={fillet_type}")
             # Rrect bottom face: outer first (2+3), then inner (4+5)
             keep = obj.get('debug_keep_cutters', False)
             if str(fillet_type) in ('0', '2'):
@@ -2291,6 +2296,7 @@ def _do_simple_stage1(obj, fillet_info, fillet_type, S, h, t, px, py, face_code,
             fc = int(fillet_info[4]) if len(fillet_info) >= 6 else int(fillet_info[2])
             if fc in (0,1,2,3,4,5):
                 if len(fillet_info) >= 11:  # rrect: 11 elements
+                    print(f"[DEBUG] _do_simple_stage1 rrect flat/side: fillet_type={fillet_type} fc={fc}")
                     _fillet_rrect_edge(obj, *fillet_info, S, fillet_type=fillet_type)
                 else:
                     _fillet_hole_edge(obj, *fillet_info, S, fillet_type=fillet_type)
@@ -2617,7 +2623,7 @@ def _fillet_hole_edge(obj, fillet_mm, hole_r_mm, face_code, px, py, pz, thicknes
         else:
             c0, c1 = v0.co.y, v1.co.y
         # Must have at least one vertex near any target
-        if all(abs(c - tc) > thickness * 3.0 for tc in target_cs for c in (c0, c1)): continue
+        if all(abs(c - tc) > thickness * 0.5 for tc in target_cs for c in (c0, c1)): continue
         # Skip vertical edges connecting outer and inner faces (different Z)
         if abs(c0 - c1) > thickness * 0.3:
             continue
@@ -2653,6 +2659,7 @@ def _fillet_rrect_edge(obj, fillet_mm, hole_w_mm, hole_h_mm, hole_cr_mm, face_co
     """Apply fillet to rrect hole edge on shell.
     On curved (NURBS) faces, uses ring union instead of bevel to avoid broken geometry."""
     import bmesh, math
+    print(f"[DEBUG] _fillet_rrect_edge: fillet_type={fillet_type} face_code={face_code} is_curved_shell={obj.get('corner_type')=='curved'}")
     # Cap radius to prevent inner/outer fillet overlap
     max_fr = (thickness / S) * 0.4
     if fillet_mm > max_fr + 0.001:

@@ -2253,7 +2253,22 @@ def _do_simple_stage1(obj, fillet_info, fillet_type, S, h, t, px, py, face_code,
     # Bottom face fillet on curved shell: torus ring for round, recess for rrect
     if obj.get('corner_type') == 'curved' and face_code == 0 and str(fillet_type) in ('0', '1', '2'):
         if len(fillet_info) >= 11:
-            _fillet_rrect_edge(obj, *fillet_info, S, fillet_type=fillet_type)
+            # Rrect bottom face: step-by-step (2=recess, 3=ring union, 4=recess, 5=ring union)
+            if str(fillet_type) in ('0', '2'):
+                outer_z = -h/2  # original bottom face (matches torus ring, no bf offset)
+                keep = obj.get('debug_keep_cutters', False)
+                # Step 2+3: outer recess cut + ring union
+                _apply_bottom_rrect_recess(obj, fillet_info[1], fillet_info[2], fillet_info[3],
+                    fillet_info[0], (px, py, outer_z + obj.location.z), S, is_outer=True, keep_cutters=keep)
+                _apply_bottom_rrect_ring(obj, fillet_info[1], fillet_info[2], fillet_info[3],
+                    fillet_info[0], (px, py, outer_z + obj.location.z), S, is_outer=True, union=True, keep_cutters=keep)
+            if str(fillet_type) in ('1', '2'):
+                inner_z = -h/2 + t * S  # inner bottom face (matches torus ring)
+                # Step 4+5: inner recess cut + ring union
+                _apply_bottom_rrect_recess(obj, fillet_info[1], fillet_info[2], fillet_info[3],
+                    fillet_info[0], (px, py, inner_z + obj.location.z), S, is_outer=False, keep_cutters=keep)
+                _apply_bottom_rrect_ring(obj, fillet_info[1], fillet_info[2], fillet_info[3],
+                    fillet_info[0], (px, py, inner_z + obj.location.z), S, is_outer=False, union=True, keep_cutters=keep)
             return
         outer_z = -h / 2
         inner_z = -h / 2 + t * S
@@ -2291,6 +2306,131 @@ def _force_redraw(context):
         bpy.ops.wm.redraw_timer(type='DRAW', iterations=1)
     except:
         pass
+
+def _apply_bottom_rrect_recess(obj, hole_w_mm, hole_h_mm, hole_cr_mm, fillet_mm, pos, S, is_outer=True, keep_cutters=False):
+    """Step 2/4: Recess cut for rrect fillet ring (mirrors torus cylinder recess)."""
+    import math
+    cls = STEP_EXPORTER_OT_create_parametric_shell
+    rw = hole_w_mm * S / 2; rh = hole_h_mm * S / 2
+    cr = max(hole_cr_mm * S, 0.0001); fr = fillet_mm * S
+    ring_rw = rw + fr; ring_rh = rh + fr; ring_cr = cr + fr
+    bw = obj.get('width', 100) * S / 2; bd = obj.get('depth', 80) * S / 2
+    t_val = obj.get('wall_thickness', 2.0) * S
+
+    recess_depth = fr * 1.5
+    rc = cls._make_rrect_cutter(None, ring_rw*2, ring_rh*2, ring_cr, recess_depth,
+                                pos[0], pos[1], pos[2], bw, bd, t_val, obj.location)
+    if rc is None: return
+    rc.name = "BtRRecRecess" + ("O" if is_outer else "I")
+    rc.location = (pos[0], pos[1], pos[2] + fr*0.25 if is_outer else pos[2] - fr*0.25)
+    bpy.context.view_layer.update()
+    for solv in ('FAST', 'EXACT'):
+        bpy.context.view_layer.objects.active = obj
+        mod = obj.modifiers.new(name="BtRRecCut" + ("O" if is_outer else "I"), type='BOOLEAN')
+        mod.object = rc; mod.operation = 'DIFFERENCE'; mod.solver = solv
+        mod.use_self = (solv == 'EXACT')
+        bpy.context.view_layer.update()
+        try:
+            bpy.ops.object.modifier_apply(modifier=mod.name)
+            if len(obj.data.vertices) >= 8: break
+        except: continue
+    if keep_cutters:
+        _keep_or_remove(obj, rc, True)
+    else:
+        bpy.data.objects.remove(rc, do_unlink=True)
+    print(f"[STEP Exporter] Rrect {'outer' if is_outer else 'inner'} recess cut done")
+    print(f"[STEP Exporter] Rrect {'outer' if is_outer else 'inner'} recess cut done")
+
+def _apply_bottom_rrect_ring(obj, hole_w_mm, hole_h_mm, hole_cr_mm, fillet_mm, pos, S, is_outer=True, union=True, keep_cutters=False):
+    """Step 3/5: Build rrect fillet ring. If union=True, boolean UNION with shell."""
+    import math, bmesh as _bm_qt
+    rw = hole_w_mm * S / 2; rh = hole_h_mm * S / 2
+    cr = max(hole_cr_mm * S, 0.0001); fr = fillet_mm * S
+    ring_rw = rw + fr; ring_rh = rh + fr; ring_cr = cr + fr
+
+    # Build perimeter EXACTLY matching _make_rrect_cutter profile (CCW, seg=8, 1 pt/flat)
+    peri = []  # (x, y, nx, ny)
+    hw_r, hh_r = ring_rw, ring_rh  # same naming as cutter
+    r = ring_cr
+    def _arc_pts(cx, cy, a0, a1, inv):
+        for i in range(8):
+            a = a0 + (a1 - a0) * i / 8
+            peri.append((cx + r * math.cos(a), cy + r * math.sin(a),
+                         -math.cos(a) if inv else math.cos(a),
+                         -math.sin(a) if inv else math.sin(a)))
+    def _flat_pt(x0, y0, x1, y1, nx, ny):
+        peri.append((x0, y0, nx, ny))
+    # Right flat→TR arc→Top flat→TL arc→Left flat→BL arc→Bottom flat→BR arc (CCW)
+    _flat_pt(hw_r, -hh_r + r, hw_r, hh_r - r, -1.0, 0.0)
+    _arc_pts(hw_r - r, hh_r - r, 0, math.pi/2, True)
+    _flat_pt(hw_r - r, hh_r, -hw_r + r, hh_r, 0.0, -1.0)
+    _arc_pts(-hw_r + r, hh_r - r, math.pi/2, math.pi, True)
+    _flat_pt(-hw_r, hh_r - r, -hw_r, -hh_r + r, 1.0, 0.0)
+    _arc_pts(-hw_r + r, -hh_r + r, math.pi, 3*math.pi/2, True)
+    _flat_pt(-hw_r + r, -hh_r, hw_r - r, -hh_r, 0.0, 1.0)
+    _arc_pts(hw_r - r, -hh_r + r, 3*math.pi/2, 2*math.pi, True)
+    n_peri = len(peri)
+
+    # Sweep quarter-circle profile along perimeter
+    n_rows = 6  # profile resolution (matches torus seg_p)
+    bm = _bm_qt.new()
+    rows = []
+    n_peri = len(peri)
+    for k in range(n_rows + 1):
+        t = k / n_rows
+        ph = math.pi/2 + (math.pi/2) * t   # π/2 → π
+        if is_outer:
+            zc = fr * (1.0 - math.sin(ph))    # 0 → +fr (from bottom face curving up to hole edge)
+        else:
+            zc = -fr * (1.0 - math.sin(ph))   # 0 → -fr (from inner face curving down into hole)
+        disp = -fr * math.cos(ph)             # 0 → +fr (inward, cos negative for ph>π/2)
+        row_v = []
+        for px_p, py_p, nx, ny in peri:
+            row_v.append(bm.verts.new((px_p + nx * disp, py_p + ny * disp, zc)))
+        rows.append(row_v)
+    bm.verts.ensure_lookup_table()
+    # Side faces (sweep quads) — torus ring has NO caps, just the swept surface
+    for i in range(n_peri):
+        i2 = (i + 1) % n_peri
+        for k in range(n_rows):
+            bm.faces.new([rows[k][i], rows[k][i2], rows[k+1][i2], rows[k+1][i]])
+    bm.normal_update()
+    # Merge any near-duplicate vertices from sweep
+    bmesh.ops.remove_doubles(bm, verts=list(bm.verts), dist=0.00001)
+    # Validate mesh before converting
+    if not bm.is_valid:
+        print("[STEP Exporter] ERROR: rrect ring BMesh invalid, skipping")
+        bm.free()
+        return
+    bm.verts.ensure_lookup_table()
+    bm.edges.ensure_lookup_table()
+
+    msh = bpy.data.meshes.new("BtRRecRing_M")
+    bm.to_mesh(msh); bm.free()
+    ring_obj = bpy.data.objects.new("BtRRecRing", msh)
+    bpy.context.collection.objects.link(ring_obj)
+    ring_obj.location = pos  # built in correct orientation, no flip needed
+    bpy.context.view_layer.update()
+    if not union:
+        ring_obj.name = "BtRRecRing_" + ("O" if is_outer else "I") + "_PREVIEW"
+        ring_obj.show_wire = True
+        ring_obj.color = (1.0, 0.3, 0.3, 1.0) if is_outer else (0.3, 0.3, 1.0, 1.0)
+        print(f"[STEP Exporter] Rrect {'outer' if is_outer else 'inner'} ring PREVIEW (no union)")
+        return ring_obj
+    bpy.context.view_layer.objects.active = obj
+    for solv in ('FAST', 'EXACT'):
+        mod = obj.modifiers.new(name="BtRRecRingU" + ("O" if is_outer else "I"), type='BOOLEAN')
+        mod.object = ring_obj; mod.operation = 'UNION'; mod.solver = solv
+        bpy.context.view_layer.update()
+        try:
+            bpy.ops.object.modifier_apply(modifier=mod.name)
+            if len(obj.data.vertices) >= 8: break
+        except: continue
+    if keep_cutters:
+        _keep_or_remove(obj, ring_obj, True)
+    else:
+        bpy.data.objects.remove(ring_obj, do_unlink=True)
+    print(f"[STEP Exporter] Rrect {'outer' if is_outer else 'inner'} ring union done")
 
 def _apply_bottom_outer_ring(obj, hole_r_mm, fillet_mm, pos, S):
     """Outer fillet on bottom face: recess cut + torus ring via Boolean modifier."""
@@ -2431,8 +2571,9 @@ def _fillet_hole_edge(obj, fillet_mm, hole_r_mm, face_code, px, py, pz, thicknes
     dist_tol = max(eps * 2, hr * 0.5)
 
     # Determine check axis and target coordinates per face
+    bf = obj.get('bottom_fillet', 0.0) * S
     if face_code == 0:
-        ax, outer_c, inner_c = 'z', -h / 2, -h / 2 + thickness
+        ax, outer_c, inner_c = 'z', -h/2+bf, -h/2+bf+thickness
     elif face_code == 1:
         ax, outer_c, inner_c = 'z', h / 2, h / 2 - thickness
     elif face_code == 2:
@@ -2524,8 +2665,9 @@ def _fillet_rrect_edge(obj, fillet_mm, hole_w_mm, hole_h_mm, hole_cr_mm, face_co
     rw = hole_w_mm * S / 2
     rh = hole_h_mm * S / 2
     eps = max(thickness * 2.0, 0.002)
+    bf = obj.get('bottom_fillet', 0.0) * S
     if face_code == 0:
-        ax, outer_c, inner_c = 'z', -h/2, -h/2+thickness
+        ax, outer_c, inner_c = 'z', -h/2+bf, -h/2+bf+thickness
     elif face_code == 1:
         ax, outer_c, inner_c = 'z', h/2, h/2-thickness
     elif face_code == 2:
@@ -2598,9 +2740,10 @@ def _fillet_rrect_edge(obj, fillet_mm, hole_w_mm, hole_h_mm, hole_cr_mm, face_co
             if ax == 'z': c0, c1 = v0.co.z, v1.co.z
             elif ax == 'x': c0, c1 = v0.co.x, v1.co.x
             else: c0, c1 = v0.co.y, v1.co.y
-            if all(abs(c - tc[0]) > thickness * 3.0 for tc in target_cs for c in (c0, c1)): continue
+            z_tol = max(thickness * 0.5, bf * 0.6) if face_code == 0 else thickness * 0.5
+            if all(abs(c - tc[0]) > max(thickness * 3.0, bf * 2.0) for tc in target_cs for c in (c0, c1)): continue
             # Must match a SPECIFIC target (not just any), to distinguish outer from inner
-            if not any(abs(c - tc[0]) < thickness * 0.5 for tc in target_cs for c in (c0, c1)): continue
+            if not any(abs(c - tc[0]) < z_tol for tc in target_cs for c in (c0, c1)): continue
             if abs(c0 - c1) > thickness * 0.3: continue
             if ax == 'z': x0,y0,x1,y1,cx,cy = v0.co.x,v0.co.y,v1.co.x,v1.co.y,px_l,py_l
             elif ax == 'x': x0,y0,x1,y1,cx,cy = v0.co.y,v0.co.z,v1.co.y,v1.co.z,py_l,pz_l

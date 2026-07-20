@@ -3504,7 +3504,8 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                         if (hf.fc == 0 || hf.fc == 1) {
                             dist = sqrt((ecx-hf.cx)*(ecx-hf.cx)+(ecy-hf.cy)*(ecy-hf.cy));
                             double effR = getEffR(hf);
-                            if (hf.fc == 0 && ecz > pos_z + thickness + effR * 0.5) continue;
+                            // bottom_fillet offsets the effective outer surface
+                            if (hf.fc == 0 && ecz > pos_z + bottom_fillet + thickness + effR * 0.5) continue;
                             if (hf.fc == 1 && ecz < pos_z + height - thickness - effR * 0.5) continue;
                         }
                         else if (hf.fc == 2 || hf.fc == 3) {
@@ -3524,7 +3525,7 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                             totalNearEdges++;
                             bool isInner = false;
                             if (hf.fc == 0)
-                                isInner = (ecz > pos_z + thickness * 0.5);
+                                isInner = (ecz > pos_z + bottom_fillet + thickness * 0.5);
                             else if (hf.fc == 1)
                                 isInner = (ecz < pos_z + height - thickness * 0.5);
                             else if (hf.fc == 2)
@@ -3640,7 +3641,7 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                             if (dist < proxDist) {
                                 bool isInner = false;
                                 if (hf.fc == 0)
-                                    isInner = (ecz > pos_z + thickness * 0.5);
+                                    isInner = (ecz > pos_z + bottom_fillet + thickness * 0.5);
                                 else if (hf.fc == 1)
                                     isInner = (ecz < pos_z + height - thickness * 0.5);
                                 else if (hf.fc == 2)
@@ -3687,7 +3688,7 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                     for (size_t hi = 0; hi < holeFillets.size(); hi++) {
                         const auto& hf = holeFillets[hi];
                         double outerC = 0, innerC = 0;
-                        if (hf.fc == 0) { outerC = pos_z; innerC = pos_z + thickness; }
+                        if (hf.fc == 0) { outerC = pos_z + bottom_fillet; innerC = pos_z + bottom_fillet + thickness; }
                         else if (hf.fc == 1) { outerC = pos_z + height; innerC = pos_z + height - thickness; }
                         else if (hf.fc == 2) { outerC = pos_x - hW; innerC = pos_x - hW + thickness; }
                         else if (hf.fc == 3) { outerC = pos_x + hW; innerC = pos_x + hW - thickness; }

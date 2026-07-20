@@ -2253,18 +2253,16 @@ def _do_simple_stage1(obj, fillet_info, fillet_type, S, h, t, px, py, face_code,
     # Bottom face fillet on curved shell: torus ring for round, recess for rrect
     if obj.get('corner_type') == 'curved' and face_code == 0 and str(fillet_type) in ('0', '1', '2'):
         if len(fillet_info) >= 11:
-            # Rrect bottom face: step-by-step (2=recess, 3=ring union, 4=recess, 5=ring union)
+            # Rrect bottom face: outer first (2+3), then inner (4+5)
+            keep = obj.get('debug_keep_cutters', False)
             if str(fillet_type) in ('0', '2'):
-                outer_z = -h/2  # original bottom face (matches torus ring, no bf offset)
-                keep = obj.get('debug_keep_cutters', False)
-                # Step 2+3: outer recess cut + ring union
+                outer_z = -h/2
                 _apply_bottom_rrect_recess(obj, fillet_info[1], fillet_info[2], fillet_info[3],
                     fillet_info[0], (px, py, outer_z + obj.location.z), S, is_outer=True, keep_cutters=keep)
                 _apply_bottom_rrect_ring(obj, fillet_info[1], fillet_info[2], fillet_info[3],
                     fillet_info[0], (px, py, outer_z + obj.location.z), S, is_outer=True, union=True, keep_cutters=keep)
             if str(fillet_type) in ('1', '2'):
-                inner_z = -h/2 + t * S  # inner bottom face (matches torus ring)
-                # Step 4+5: inner recess cut + ring union
+                inner_z = -h/2 + t * S
                 _apply_bottom_rrect_recess(obj, fillet_info[1], fillet_info[2], fillet_info[3],
                     fillet_info[0], (px, py, inner_z + obj.location.z), S, is_outer=False, keep_cutters=keep)
                 _apply_bottom_rrect_ring(obj, fillet_info[1], fillet_info[2], fillet_info[3],

@@ -1302,12 +1302,12 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
             layout.prop(self, 'hole_cr')
             layout.prop(self, 'hole_fillet')
             if self.hole_fillet > 0.0001:
-                corner_type = _get_active_shell_corner_type()
-                if corner_type == 'curved' and self.hole_fillet_type == '1':
-                    self.hole_fillet_type = '0'
-                layout.prop(self, 'hole_fillet_type')
-                if corner_type == 'curved':
-                    layout.label(text=_t("  ⚠ Inner fillet unsupported on curved shells (OCCT limitation)"), icon='ERROR')
+                # Rrect through-holes on NURBS curved shell side faces
+                # cannot distinguish inner/outer edges (OCCT limitation).
+                # Force both-sides fillet; the inner fillet is hidden inside
+                # the shell cavity and invisible from outside.
+                self.hole_fillet_type = '2'
+                layout.label(text=_t("  ℹ RRect fillet is always Both-sides (OCCT limitation, inner hidden inside wall)"), icon='INFO')
             layout.label(text=_t("  → RRect {w:.1f}×{h:.1f}mm cr={cr:.1f}").format(w=self.hole_width, h=self.hole_height, cr=self.hole_cr))
         layout.separator()
         layout.prop(self, 'keep_cutter')

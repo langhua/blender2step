@@ -3536,9 +3536,16 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                             else
                                 isInner = (ecy < pos_y + halfD - thickness * 0.5);
 
-                            // Collect edges based on type and inner/outer classification
+                            // Collect edges based on type and inner/outer classification.
+                            // For rrect holes on side faces (fc>=2): OCCT boolean cut
+                            // produces internal tube edges whose midpoint is inside the
+                            // wall — cannot reliably classify inner vs outer. Accept all.
                             bool isOuter = !isInner;
-                            bool acceptEdge = (hf.type == 2 || (hf.type == 0 && isOuter) || (hf.type == 1 && isInner));
+                            bool acceptEdge;
+                            if (hf.r < 0.001 && hf.fc >= 2)
+                                acceptEdge = true;  // rrect side face: accept all
+                            else
+                                acceptEdge = (hf.type == 2 || (hf.type == 0 && isOuter) || (hf.type == 1 && isInner));
                             // Debug: count inner/outer per face
                             int fcIdx = (int)hf.fc;
                             if (fcIdx >= 0 && fcIdx < 6) {

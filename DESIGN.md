@@ -195,7 +195,24 @@ Profile 偏移使用 `max(value, EPS)` 避免零/负尺寸。
 
 ---
 
-## 8. 模型尺寸优先级
+## 8. 圆角矩形通孔 (Rounded Rect Through-Hole)
+
+### OCCT 限制：侧壁只能双面倒角
+
+圆角矩形通孔在 NURBS 曲面侧壁（如 curved shell 的 fc=2,3,4,5 面）上，
+其 boolean cut 产生的边是管壁内部边，中点位于壁厚中间，无法可靠区分为
+外侧边还是内侧边。因此：
+
+- **圆角矩形通孔只能使用双面倒角** (fillet_type='2')
+- 内侧倒角隐藏在壳体空腔内部，外部不可见
+- Blender UI 强制圆角矩形使用双面倒角模式
+
+圆孔不受此限制——圆孔通过 `BRepAlgoAPI_Section` 补充查找面上的边，
+其分类是可靠的。
+
+---
+
+## 9. 模型尺寸优先级
 
 当 Blender mesh 与 OpenCASCADE 模型尺寸不一致时，**以 OpenCASCADE 模型尺寸为准**，确保 STEP 文件精确可用于模具制造。
 

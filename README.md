@@ -170,6 +170,8 @@ blender2step/
 
 完整的测试文档请参见 [TESTS.md](./TESTS.md)。
 
+回归测试用例矩阵请参见 [TEST_CASES.md](./TEST_CASES.md)。
+
 ### 快速验证
 
 ```powershell

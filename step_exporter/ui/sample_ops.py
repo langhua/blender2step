@@ -24,12 +24,20 @@ class STEP_EXPORTER_OT_create_top_shell(Operator):
     
 
     def execute(self, context):
-
-        script_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'examples', 'create_top_shell.py')
-
-        exec(compile(open(script_path).read(), script_path, 'exec'), {'__name__': '__main__', '__file__': script_path})
-
-        self.report({'INFO'}, _t("Top shell created"))
+        examples_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'examples')
+        blend_path = os.path.join(examples_dir, 'top_shell.blend')
+        script_path = os.path.join(examples_dir, 'create_top_shell.py')
+        
+        if os.path.exists(blend_path):
+            with bpy.data.libraries.load(blend_path, link=False) as (data_from, data_to):
+                data_to.objects = data_from.objects
+            for obj in data_to.objects:
+                if obj is not None:
+                    bpy.context.collection.objects.link(obj)
+            self.report({'INFO'}, _t("Top shell loaded from top_shell.blend"))
+        else:
+            exec(compile(open(script_path).read(), script_path, 'exec'), {'__name__': '__main__', '__file__': script_path})
+            self.report({'INFO'}, _t("Top shell created"))
 
         return {'FINISHED'}
 
@@ -50,14 +58,25 @@ class STEP_EXPORTER_OT_create_bottom_shell(Operator):
     bl_options = {'REGISTER', 'UNDO'}
 
     def execute(self, context):
-        script_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'examples', 'create_bottom_shell.py')
-        old_argv = sys.argv
-        try:
-            sys.argv = [sys.argv[0] if len(sys.argv) > 0 else "", "gallery"]
-            exec(compile(open(script_path).read(), script_path, 'exec'), {'__name__': '__main__'})
-        finally:
-            sys.argv = old_argv
-        self.report({'INFO'}, _t("Bottom shell gallery created"))
+        examples_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'examples')
+        blend_path = os.path.join(examples_dir, 'bottom_shell.blend')
+        script_path = os.path.join(examples_dir, 'create_bottom_shell.py')
+        
+        if os.path.exists(blend_path):
+            with bpy.data.libraries.load(blend_path, link=False) as (data_from, data_to):
+                data_to.objects = data_from.objects
+            for obj in data_to.objects:
+                if obj is not None:
+                    bpy.context.collection.objects.link(obj)
+            self.report({'INFO'}, _t("Bottom shell loaded from bottom_shell.blend"))
+        else:
+            old_argv = sys.argv
+            try:
+                sys.argv = [sys.argv[0] if len(sys.argv) > 0 else "", "gallery"]
+                exec(compile(open(script_path).read(), script_path, 'exec'), {'__name__': '__main__'})
+            finally:
+                sys.argv = old_argv
+            self.report({'INFO'}, _t("Bottom shell gallery created"))
 
         return {'FINISHED'}
 

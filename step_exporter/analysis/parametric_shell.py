@@ -18,6 +18,7 @@ def _analyze_parametric_shell_from_mesh(obj, context=None, scale=1.0):
     d = obj.get('depth', 80.0)
     h = obj.get('height', 50.0)
     t = obj.get('wall_thickness', 2.0)
+    bt = obj.get('bottom_thickness', t)  # default to wall thickness if not set
     cr = obj.get('corner_radius', 0.0)
     corner_type = obj.get('corner_type', 'square')
 
@@ -33,6 +34,7 @@ def _analyze_parametric_shell_from_mesh(obj, context=None, scale=1.0):
     d_mm = d * unit_factor
     h_mm = h * unit_factor
     t_mm = t * unit_factor
+    bt_mm = bt * unit_factor
     cr_mm = cr * unit_factor
 
     rim_type = obj.get('rim_type', 'none')
@@ -56,6 +58,7 @@ def _analyze_parametric_shell_from_mesh(obj, context=None, scale=1.0):
         'depth': d_mm,
         'height': h_mm,
         'wall_thickness': t_mm,
+        'bottom_thickness': bt_mm,
         'corner_type': corner_type,
         'corner_radius': cr_mm,
         'rim_type': rim_type,

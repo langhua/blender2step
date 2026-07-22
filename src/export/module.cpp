@@ -2653,7 +2653,8 @@ PyObject* merge_step_files(PyObject* self, PyObject* args) {
 // ── Parametric Shell (open-top box) ──────────────────────────────
 
 TopoDS_Shape create_parametric_shell_solid(double width, double depth, double height,
-                                            double thickness, const char* corner_type,
+                                            double thickness, double bottom_thickness,
+                                            const char* corner_type,
                                             double corner_radius,
                                             const char* rim_type,
                                             double rim_width, double rim_height,
@@ -2750,10 +2751,10 @@ TopoDS_Shape create_parametric_shell_solid(double width, double depth, double he
         TopoDS_Solid outerSolid = makeSolid(ohw, ohd, oz, oyo, cr);
         if (outerSolid.IsNull()) return TopoDS_Shape();
 
-        // Inner solid: z_shift = thickness
+        // Inner solid: z_shift = bottom_thickness (bottom wall), side walls = thickness
         double iw = hw - thickness, id_ = hd - thickness;
-        double icr = std::max(cr - thickness, 0.01);  // concentric with outer, constant wall thickness
-        auto [iz, ihw, ihd, iyo] = buildLayers(iw, id_, icr, thickness);
+        double icr = std::max(cr - thickness, 0.01);
+        auto [iz, ihw, ihd, iyo] = buildLayers(iw, id_, icr, bottom_thickness);
         TopoDS_Solid innerSolid = makeSolid(ihw, ihd, iz, iyo, icr);
         if (innerSolid.IsNull()) return TopoDS_Shape();
 
@@ -2960,7 +2961,7 @@ TopoDS_Shape create_parametric_shell_solid(double width, double depth, double he
 
     double inner_w = width - 2.0 * thickness;
     double inner_d = depth - 2.0 * thickness;
-    double inner_h = total_h - thickness + 1.0;  // extends above outer for clean open-top cut
+    double inner_h = total_h - bottom_thickness + 1.0;  // extends above outer for clean open-top cut
     if (inner_w <= 0 || inner_d <= 0 || inner_h <= 0) {
         return outerShape;
     }
@@ -2980,8 +2981,8 @@ TopoDS_Shape create_parametric_shell_solid(double width, double depth, double he
         innerSolid = sm.Solid();
     }
 
-    // Inner bottom at outer_bottom + thickness
-    double inner_z_offset = -total_h / 2.0 + thickness + inner_h / 2.0;
+    // Inner bottom at outer_bottom + bottom_thickness
+    double inner_z_offset = -total_h / 2.0 + bottom_thickness + inner_h / 2.0;
     gp_Trsf innerTrsf;
     innerTrsf.SetTranslation(gp_Vec(0, 0, inner_z_offset));
     innerSolid.Move(TopLoc_Location(innerTrsf));
@@ -2989,7 +2990,7 @@ TopoDS_Shape create_parametric_shell_solid(double width, double depth, double he
     // Bottom fillet on inner solid (same radius as outer)
     if (bottom_fillet > 0.001) {
         double inner_fillet_r = bottom_fillet;
-        double inner_bottom_z = -total_h / 2.0 + thickness;
+        double inner_bottom_z = -total_h / 2.0 + bottom_thickness;
         
         std::ofstream dbg("f:/git/blender2step/step_exporter/_cpp_dbg.txt", std::ios::app);
         dbg << "[CPP] filleting inner: r=" << inner_fillet_r
@@ -3186,11 +3187,12 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
     double bottom_fillet = 0.0;
     double curve_ratio = 0.5;
     double eccentric_y = 0.0;
+    double bottom_thickness = 0.0;
     const char* window_data = "";
 
-    if (!PyArg_ParseTuple(args, "sdddd|dsdddsddssisdddds",
+    if (!PyArg_ParseTuple(args, "sdddd|ddsdddsddssisdddds",
                           &filename, &width, &depth, &height, &thickness,
-                          &corner_radius, &corner_type,
+                          &bottom_thickness, &corner_radius, &corner_type,
                           &pos_x, &pos_y, &pos_z,
                           &rim_type, &rim_width, &rim_height,
                           &step_schema, &unit, &enable_logging,
@@ -3198,7 +3200,7 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                           &bottom_fillet, &curve_ratio, &eccentric_y, &window_data)) {
         PyErr_SetString(PyExc_TypeError,
             "export_parametric_shell_step() expected: filename, width, depth, height, thickness"
-            "[, corner_radius, corner_type, pos_x, pos_y, pos_z, rim_type, rim_width, rim_height, step_schema, unit, enable_logging, rim_shape, rim_top_ratio, bottom_fillet, curve_ratio, eccentric_y, window_data]");
+            "[, bottom_thickness, corner_radius, corner_type, pos_x, pos_y, pos_z, rim_type, rim_width, rim_height, step_schema, unit, enable_logging, rim_shape, rim_top_ratio, bottom_fillet, curve_ratio, eccentric_y, window_data]");
         return NULL;
     }
 
@@ -3233,7 +3235,7 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
 
     try {
         TopoDS_Shape shape = create_parametric_shell_solid(width, depth, height,
-                                                            thickness, corner_type, corner_radius,
+                                                            thickness, bottom_thickness, corner_type, corner_radius,
                                                             rim_type, rim_width, rim_height,
                                                             rim_shape, rim_top_ratio,
                                                             bottom_fillet, curve_ratio, eccentric_y);

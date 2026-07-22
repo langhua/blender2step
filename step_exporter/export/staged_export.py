@@ -852,6 +852,7 @@ def _parametric_export_staged():
                         temp_file,
                         pparams['width'], pparams['depth'], pparams['height'],
                         pparams['wall_thickness'],
+                        pparams.get('bottom_thickness', pparams['wall_thickness']),
                         pparams.get('corner_radius', 0.0),
                         pparams.get('corner_type', 'square'),
                         pparams.get('pos_x', 0.0), pparams.get('pos_y', 0.0), pparams.get('pos_z', 0.0),

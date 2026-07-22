@@ -66,7 +66,10 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         description=_t("Height along Z axis"))
     thickness: FloatProperty(
         name=_t("Wall Thickness"), default=2.0, min=0.1, max=1000.0,
-        description=_t("Wall thickness"))
+        description=_t("Wall thickness (sides + top)"))
+    bottom_thickness: FloatProperty(
+        name=_t("Bottom Thickness"), default=2.0, min=0.1, max=1000.0,
+        description=_t("Bottom wall thickness (default same as wall)"))
     corner_radius: FloatProperty(
         name=_t("Corner Radius"), default=5.0, min=0.1, max=1000.0,
         description=_t("Fillet radius for rounded corners"))
@@ -136,6 +139,7 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         layout.prop(self, 'depth')
         layout.prop(self, 'height')
         layout.prop(self, 'thickness')
+        layout.prop(self, 'bottom_thickness')
         if self.corner_type in ('rounded', 'curved'):
             layout.prop(self, 'corner_radius')
         if self.corner_type == 'curved':
@@ -174,11 +178,12 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         S = 0.001 if self.unit == 'mm' else 1.0
 
         ws, ds, hs, ts = w * S, d * S, h * S, t * S
+        bts = self.bottom_thickness * S  # bottom wall thickness (default = t)
         crs, rws, rhs, bfs = cr * S, rw * S, rh * S, bf * S
 
         # Build shell: direct construction when bottom fillet or cosine corners
         if bfs > 0.0001 or self.corner_type == 'curved':
-            obj = self._build_shell_direct(ws, ds, hs, ts, crs, rws, rhs,
+            obj = self._build_shell_direct(ws, ds, hs, ts, bts, crs, rws, rhs,
                                            self.rim_type, self.rim_shape,
                                            self.rim_top_ratio / 100.0, bfs,
                                            self.corner_type,
@@ -187,7 +192,7 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
                                            self.debug_keep_cutters)
         else:
             total_h = hs + rhs if rw > 0 and self.rim_type != 'none' and self.rim_shape == 'rect' else hs
-            obj = self._build_boolean_shell(ws, ds, total_h, ts, crs, rws, rhs,
+            obj = self._build_boolean_shell(ws, ds, total_h, ts, bts, crs, rws, rhs,
                                              self.rim_type, self.rim_shape,
                                              self.rim_top_ratio / 100.0, bfs,
                                              self.debug_keep_cutters)
@@ -199,6 +204,7 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         obj['depth'] = d
         obj['height'] = h
         obj['wall_thickness'] = t
+        obj['bottom_thickness'] = self.bottom_thickness
         obj['corner_type'] = self.corner_type
         obj['corner_radius'] = cr
         obj['object_type'] = 'parametric_shell'
@@ -465,7 +471,7 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         ring.display_type = 'WIRE'
         return ring
 
-    def _build_boolean_shell(self, w, d, total_h, t, cr, rw, rh, rim_type, rim_shape, top_ratio, bf, keep_cutters=False):
+    def _build_boolean_shell(self, w, d, total_h, t, bt, cr, rw, rh, rim_type, rim_shape, top_ratio, bf, keep_cutters=False):
         """Build shell via Boolean (outer - inner), matching C++."""
         # Outer solid
         outer_bm = self._make_solid_box(w, d, total_h, cr)
@@ -498,7 +504,8 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         ih = total_h  # same height as outer; shifted up by t → top protrudes for clean cut
         inner_bm = self._make_solid_box(max(iw, 0.001), max(id_, 0.001), max(ih, 0.001), max(cr - t, 0))
         inner = self._bm_to_object(inner_bm, "ShellInner")
-        inner.location.z = t  # bottom at -total_h/2 + t, top at total_h/2 + t
+        # Inner solid (shifted up so bottom = bt above outer bottom, side walls = t)
+        inner.location.z = bt  # bottom wall uses bottom_thickness
 
         # Boolean difference (outer - inner)
         self._apply_bool(outer, inner)
@@ -533,14 +540,14 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
 
     # ── Direct shell with bottom fillet (manual construction) ──
 
-    def _build_shell_direct(self, w, d, h, t, cr, rw, rh, rim_type, rim_shape, top_ratio, bf,
+    def _build_shell_direct(self, w, d, h, t, bt, cr, rw, rh, rim_type, rim_shape, top_ratio, bf,
                             corner_type='rounded', curve_ratio=0.5, eccentric_y=0.0, keep_cutters=False):
         """Build shell with bottom fillet via shared profile_utils.
-        When corner_type='curved', uses cosine-curved walls (smaller bottom)."""
+        t=wall thickness, bt=bottom thickness."""
         import math
         
         if corner_type == 'curved' and cr > 0.0001:
-            return self._build_curved_shell(w, d, h, t, cr, rw, rh, rim_type, rim_shape, top_ratio, bf, curve_ratio, eccentric_y, keep_cutters)
+            return self._build_curved_shell(w, d, h, t, bt, cr, rw, rh, rim_type, rim_shape, top_ratio, bf, curve_ratio, eccentric_y, keep_cutters)
         
         print(f"[Direct] rounded/square path, bf={bf*1000:.1f}mm")
         hw, hd = w / 2.0, d / 2.0
@@ -701,9 +708,9 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
 
     # ── Curved-corner shell (cosine walls, smaller bottom) ──
 
-    def _build_curved_shell(self, w, d, h, t, cr, rw, rh, rim_type, rim_shape, top_ratio, bf, curve_ratio, eccentric_y=0.0, keep_cutters=False):
+    def _build_curved_shell(self, w, d, h, t, bt, cr, rw, rh, rim_type, rim_shape, top_ratio, bf, curve_ratio, eccentric_y=0.0, keep_cutters=False):
         """Build shell with cosine walls + bottom fillet via edge bridging.
-        eccentric_y: Y asymmetry (0=symmetric, +/-1 shifts curve center)."""
+        t=wall thickness, bt=bottom thickness."""
         import math
         
         hw_outer, hd_outer = w / 2.0, d / 2.0
@@ -786,7 +793,7 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         
         # ── Inner wall: same fillet as outer, rim handled by boolean ──
         inner_fillet_r = bf  # same as outer
-        inner_bot_z = -hh + t
+        inner_bot_z = -hh + bt  # bottom wall uses bottom_thickness
         inner_top_z = hh
         inner_wall_hw = (w - 2 * t) / 2.0
         inner_wall_hd = (d - 2 * t) / 2.0
@@ -3155,7 +3162,7 @@ def _rebuild_stage_create(obj):
 
     for key in ('width', 'depth', 'height', 'wall_thickness', 'corner_type',
                 'corner_radius', 'object_type', 'unit', 'rim_type', 'rim_width',
-                'rim_height', 'rim_shape', 'rim_top_ratio', 'bottom_fillet', 'curve_ratio', 'eccentric_y'):
+                'rim_height', 'rim_shape', 'rim_top_ratio', 'bottom_fillet', 'curve_ratio', 'eccentric_y', 'bottom_thickness'):
         val = obj.get(key)
         if val is not None:
             obj[key] = val

@@ -586,7 +586,7 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
             outer_top_v = [bm.verts.new((x,y,h)) for x,y in outer_pts]
             for i in range(4): j=(i+1)%4; bm.faces.new([outer_prev[i],outer_prev[j],outer_top_v[j],outer_top_v[i]])
             # Inner bottom
-            inner_bot_v = [bm.verts.new((x,y,t)) for x,y in inner_bot_pts]
+            inner_bot_v = [bm.verts.new((x,y,bt)) for x,y in inner_bot_pts]
             bm.faces.new(inner_bot_v)
             # Inner fillet rings
             inner_prev = inner_bot_v
@@ -596,7 +596,7 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
                 ring_off = ib_off - inner_fillet_r*sin_a
                 ring_pts = [(-hw+ring_off,-hd+ring_off),(hw-ring_off,-hd+ring_off),
                             (hw-ring_off,hd-ring_off),(-hw+ring_off,hd-ring_off)]
-                ring = [bm.verts.new((x,y,t+rise)) for x,y in ring_pts]
+                ring = [bm.verts.new((x,y,bt+rise)) for x,y in ring_pts]
                 for i in range(4): j=(i+1)%4; bm.faces.new([inner_prev[i],inner_prev[j],ring[j],ring[i]])
                 inner_prev = ring
             inner_top_v = [bm.verts.new((x,y,h)) for x,y in inner_pts]
@@ -628,7 +628,7 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
             inner_bot_v, inner_fillet_top, _ = add_fillet_rings(
                 bm, inner_wall_hw, inner_wall_hd, inner_wall_cr,
                 inner_bot_hw, inner_bot_hd, inner_bot_cr,
-                t, inner_fillet_r, fillet_seg, seg)
+                bt, inner_fillet_r, fillet_seg, seg)
             
             # Inner walls up to z=h
             inner_top_v = [bm.verts.new((x, y, h)) for x, y in inner_pts]

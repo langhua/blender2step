@@ -1489,7 +1489,7 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
             self._keep_cutter = self.keep_cutter
             # Start modal progress bar
             set_operator(self)
-            start_progress(context, "Adding fillet...")
+            start_progress(context, _t("Adding fillet..."))
             wm = context.window_manager
             self._timer = wm.event_timer_add(0.2, window=context.window)
             wm.modal_handler_add(self)
@@ -1511,7 +1511,7 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
             self._simple_stage = 0
             self._simple_keep_cutter = self.keep_cutter
             set_operator(self)
-            start_progress(context, "Adding hole...")
+            start_progress(context, _t("Adding hole..."))
             wm = context.window_manager
             self._timer = wm.event_timer_add(0.2, window=context.window)
             wm.modal_handler_add(self)
@@ -1532,7 +1532,7 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
                     return {'CANCELLED'}
                 stage = self._simple_stage
                 if stage == 0:
-                    update_progress(30, "Cutting hole...")
+                    update_progress(30, _t("Cutting hole..."))
                     ok = _do_simple_stage0(obj, self._simple_cutter,
                                            keep=getattr(self, '_simple_keep_cutter', False))
                     # rrect on curved: use ring step instead of bevel (NURBS unreliable)
@@ -1544,7 +1544,7 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
                     self._simple_stage = 1.5 if (is_rrect_curved and ok) else (2 if not ok else 1)
                 elif stage == 1.5:
                     # rrect ring step for curved side walls
-                    update_progress(70, "Step ring...")
+                    update_progress(70, _t("Step ring..."))
                     fi = self._simple_fillet_info
                     _add_rrect_step_ring(obj, fi[1], fi[2], fi[3], fi[0],
                                          self._simple_px, self._simple_py, fi[7],
@@ -1554,14 +1554,14 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
                                          fillet_type=self._simple_fillet_type)
                     self._simple_stage = 2
                 elif stage == 1:
-                    update_progress(70, "Fillet...")
+                    update_progress(70, _t("Fillet..."))
                     _do_simple_stage1(obj, self._simple_fillet_info, self._simple_fillet_type,
                                       self._simple_S, self._simple_h, self._simple_t,
                                       self._simple_px, self._simple_py, self._simple_face_code,
                                       getattr(self, 'hole_radius', 5), getattr(self, 'hole_fillet', 0))
                     self._simple_stage = 2
                 else:
-                    update_progress(100, "Done")
+                    update_progress(100, _t("Done"))
                     existing = obj.get('window_data', '')
                     obj['window_data'] = (existing + ';' + self._simple_entry) if existing else self._simple_entry
                     obj['window_data_local'] = True
@@ -1581,7 +1581,7 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
             
             stage = self._fillet_stage
             if stage == 0:
-                update_progress(5, "Sampling surface...")
+                update_progress(5, _t("Sampling surface..."))
                 obj['debug_keep_cutters'] = self._keep_cutter
                 self._fillet_result = _fillet_stage_0(obj, self._fillet_radius, self._fillet_fr,
                 self._fillet_face, self._fillet_px, self._fillet_py, self._fillet_pz,
@@ -1589,13 +1589,13 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
                 self._fillet_S, self._fillet_type)
                 self._fillet_stage = 1
             elif stage == 1:
-                update_progress(20, "Through hole...")
+                update_progress(20, _t("Through hole..."))
                 _fillet_stage_1(obj, self._fillet_result, self._fillet_face,
                     self._fillet_px, self._fillet_py, self._fillet_pz, self._fillet_thickness)
                 self._fillet_stage = 2
             elif stage == 2:
                 if self._fillet_type in ('0', '2'):
-                    update_progress(35, "Outer recess...")
+                    update_progress(35, _t("Outer recess..."))
                     _fillet_stage_2(obj, self._fillet_result, self._fillet_face,
                         self._fillet_type)
                 self._fillet_stage = 3
@@ -1604,7 +1604,7 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
                 self._fillet_stage = 4
             elif stage == 4:
                 if self._fillet_type in ('1', '2'):
-                    update_progress(70, "Inner recess...")
+                    update_progress(70, _t("Inner recess..."))
                     _fillet_stage_4(obj, self._fillet_result, self._fillet_face,
                         self._fillet_px, self._fillet_py, self._fillet_pz, self._fillet_type)
                 self._fillet_stage = 5
@@ -1612,7 +1612,7 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
                 # Inner ring skipped — EXACT UNION unreliable on curved shells
                 self._fillet_stage = 6
             elif stage == 6:
-                update_progress(100, "Done")
+                update_progress(100, _t("Done"))
                 existing = obj.get('window_data', '')
                 obj['window_data'] = (existing + ';' + self._fillet_entry) if existing else self._fillet_entry
                 obj['window_data_local'] = True
@@ -2856,7 +2856,7 @@ class STEP_EXPORTER_OT_remove_shell_hole(Operator):
         self._rb_entries = entries
         self._rb_stage = 0
         set_operator(self)
-        start_progress(context, "Removing hole...")
+        start_progress(context, _t("Removing hole..."))
         wm = context.window_manager
         self._timer = wm.event_timer_add(0.2, window=context.window)
         wm.modal_handler_add(self)
@@ -2876,11 +2876,11 @@ class STEP_EXPORTER_OT_remove_shell_hole(Operator):
             idx = self._rb_stage
             entries = self._rb_entries
             if idx < len(entries):
-                update_progress(int((idx+1)/max(len(entries),1)*100), f"Hole {idx+1}/{len(entries)}...")
+                update_progress(int((idx+1)/max(len(entries),1)*100), _t("Hole {idx}/{total}...").format(idx=idx+1, total=len(entries)))
                 _rebuild_stage_hole(obj, entries[idx])
                 self._rb_stage = idx + 1
             else:
-                update_progress(100, "Done")
+                update_progress(100, _t("Done"))
                 self.report({'INFO'}, _t("Hole removed"))
                 self._rb_cleanup(context)
                 return {'FINISHED'}
@@ -2916,9 +2916,9 @@ class STEP_EXPORTER_OT_clear_shell_holes(Operator):
         obj['window_data_local'] = False
         # Rebuild shell in execute() where obj refs are stable
         set_operator(self)
-        start_progress(context, "Clearing holes...")
+        start_progress(context, _t("Clearing holes..."))
         _rebuild_stage_create(obj)
-        update_progress(100, "Done")
+        update_progress(100, _t("Done"))
         end_progress(context)
         clear_operator()
         self.report({'INFO'}, _t("All holes cleared"))
@@ -3023,7 +3023,7 @@ class STEP_EXPORTER_OT_edit_shell_hole(Operator):
         self._rb_entries = entries
         self._rb_stage = 0
         set_operator(self)
-        start_progress(context, "Updating hole...")
+        start_progress(context, _t("Updating hole..."))
         wm = context.window_manager
         self._timer = wm.event_timer_add(0.2, window=context.window)
         wm.modal_handler_add(self)
@@ -3043,11 +3043,11 @@ class STEP_EXPORTER_OT_edit_shell_hole(Operator):
             idx = self._rb_stage
             entries = self._rb_entries
             if idx < len(entries):
-                update_progress(int((idx+1)/max(len(entries),1)*100), f"Hole {idx+1}/{len(entries)}...")
+                update_progress(int((idx+1)/max(len(entries),1)*100), _t("Hole {idx}/{total}...").format(idx=idx+1, total=len(entries)))
                 _rebuild_stage_hole(obj, entries[idx])
                 self._rb_stage = idx + 1
             else:
-                update_progress(100, "Done")
+                update_progress(100, _t("Done"))
                 self.report({'INFO'}, _t("Hole updated"))
                 self._rb_cleanup(context)
                 return {'FINISHED'}

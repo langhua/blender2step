@@ -515,6 +515,18 @@ _STRINGS = {
     "Right": {"zh_CN": "右侧"},
     "Front": {"zh_CN": "前面"},
     "Back": {"zh_CN": "后面"},
+
+    "Solver": {"zh_CN": "算法"},
+    "Fast, works for most cases": {"zh_CN": "快速，适合大多数情况"},
+    "Slower but handles complex geometry": {"zh_CN": "较慢但处理复杂几何体"},
+    "Pure-Python fallback, last resort": {"zh_CN": "纯 Python 保底方案"},
+    "BMesh": {"zh_CN": "BMesh"},
+    "FLOAT": {"zh_CN": "FLOAT"},
+    "EXACT": {"zh_CN": "EXACT"},
+    "Manifold": {"zh_CN": "Manifold"},
+    "Manifold solver (requires Blender 5.x+)": {"zh_CN": "Manifold 求解器（需要 Blender 5.x+）"},
+    "Position: ({cx:.1f}, {cy:.1f}, {cz:.1f}) {face}": {"zh_CN": "位置: ({cx:.1f}, {cy:.1f}, {cz:.1f}) {face}"},
+    "Solver": {"zh_CN": "算法"},
 }
 
 def _get_language():

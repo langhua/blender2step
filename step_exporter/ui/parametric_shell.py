@@ -1228,6 +1228,15 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
     hole_width: FloatProperty(name=_t("Width"), default=10.0, min=0.1, max=500.0)
     hole_height: FloatProperty(name=_t("Height"), default=8.0, min=0.1, max=500.0)
     hole_cr: FloatProperty(name=_t("Corner R"), default=2.0, min=0.0, max=500.0)
+    hole_solver: EnumProperty(
+        name=_t("Solver"),
+        items=[
+            ('FLOAT', 'FLOAT', _t("Fast, works for most cases")),
+            ('EXACT', 'EXACT', _t("Slower but handles complex geometry")),
+            ('bmesh', 'BMesh', _t("Pure-Python fallback, last resort")),
+        ],
+        default='FLOAT',
+    )
 
     @classmethod
     def poll(cls, context):
@@ -1330,6 +1339,7 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
                     layout.prop(self, 'hole_fillet_type')
             layout.label(text=_t("  → RRect {w:.1f}×{h:.1f}mm cr={cr:.1f}").format(w=self.hole_width, h=self.hole_height, cr=self.hole_cr))
         layout.separator()
+        layout.prop(self, 'hole_solver')
         layout.prop(self, 'keep_cutter')
 
     def execute(self, context):
@@ -1500,6 +1510,7 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
             self._simple_obj_name = obj.name
             self._simple_entry = entry
             self._simple_cutter = cutter
+            self._simple_solver = self.hole_solver
             self._simple_fillet_info = _hole_fillet_info
             self._simple_fillet_type = _hole_fillet_type
             self._simple_face_code = face_code
@@ -1534,7 +1545,8 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
                 if stage == 0:
                     update_progress(30, _t("Cutting hole..."))
                     ok = _do_simple_stage0(obj, self._simple_cutter,
-                                           keep=getattr(self, '_simple_keep_cutter', False))
+                                           keep=getattr(self, '_simple_keep_cutter', False),
+                                           solver=getattr(self, '_simple_solver', 'EXACT'))
                     # rrect on curved: use ring step instead of bevel (NURBS unreliable)
                     is_rrect_curved = (getattr(self, 'hole_type', '') == 'rrect'
                                        and obj.get('corner_type') == 'curved'
@@ -2087,55 +2099,48 @@ def _apply_fillet_torus_union(obj, hole_r_mm, fillet_mm, face_code, px, py, pz, 
         _fillet_stage_5(obj, result, face_code)
     print(f"[STEP Exporter] Done (type={fillet_type})")
 
-def _direct_cut_hole(obj, cutter):
-    """Cut hole using Blender 5.2 Boolean (FLOAT first for speed, EXACT fallback)."""
+def _direct_cut_hole(obj, cutter, solver='EXACT'):
+    """Cut hole using Boolean modifier. solver: 'EXACT', 'FLOAT', or 'bmesh'."""
     bpy.context.view_layer.objects.active = obj
     bpy.context.view_layer.update()
     
+    # Save cutter info before deletion
+    cutter_loc = cutter.location.copy()
+    cutter_radius = cutter.dimensions.x / 2
+    
+    # bmesh path: skip Boolean entirely
+    if solver == 'bmesh':
+        bpy.data.objects.remove(cutter, do_unlink=True)
+        _bmesh_cut_circle(obj, cutter_loc, cutter_radius)
+        return True
+    
     vbefore = len(obj.data.vertices)
+    primary = solver
+    fallback = 'FLOAT' if solver == 'EXACT' else 'EXACT'
     
-    # Try FLOAT first (fast, reliable in 5.2)
-    for m in list(obj.modifiers):
-        obj.modifiers.remove(m)
-    mod = obj.modifiers.new(name="DirectCut", type='BOOLEAN')
-    mod.object = cutter; mod.operation = 'DIFFERENCE'
-    mod.solver = 'FLOAT'
-    bpy.context.view_layer.update()
-    try:
-        bpy.ops.object.modifier_apply(modifier="DirectCut")
-    except:
-        pass
-    
-    vnow = len(obj.data.vertices)
-    if vnow != vbefore and vnow >= 8:
-        bpy.data.objects.remove(cutter, do_unlink=True)
-        _cleanup_after_bool(obj)
-        return True
-    
-    # FLOAT failed or produced bad result — try EXACT
-    for m in list(obj.modifiers):
-        obj.modifiers.remove(m)
-    mod = obj.modifiers.new(name="DirectCut", type='BOOLEAN')
-    mod.object = cutter; mod.operation = 'DIFFERENCE'
-    mod.solver = 'EXACT'
-    mod.use_self = False
-    bpy.context.view_layer.update()
-    try:
-        bpy.ops.object.modifier_apply(modifier="DirectCut")
-    except:
-        pass
-    
-    vnow = len(obj.data.vertices)
-    if vnow != vbefore and vnow >= 8:
-        bpy.data.objects.remove(cutter, do_unlink=True)
-        _cleanup_after_bool(obj)
-        return True
+    for solv in (primary, fallback):
+        for m in list(obj.modifiers):
+            obj.modifiers.remove(m)
+        mod = obj.modifiers.new(name="DirectCut", type='BOOLEAN')
+        mod.object = cutter; mod.operation = 'DIFFERENCE'
+        mod.solver = solv
+        if solv == 'EXACT':
+            mod.use_self = False
+        bpy.context.view_layer.update()
+        try:
+            bpy.ops.object.modifier_apply(modifier="DirectCut")
+        except:
+            continue
+        vnow = len(obj.data.vertices)
+        if vnow != vbefore and vnow >= 8:
+            bpy.data.objects.remove(cutter, do_unlink=True)
+            _cleanup_after_bool(obj)
+            return True
     
     # Both failed — bmesh fallback
     print(f"[STEP Exporter] Boolean failed, using bmesh fallback...")
     bpy.data.objects.remove(cutter, do_unlink=True)
-    _bmesh_cut_circle(obj, cutter.location, cutter.dimensions.x / 2)
-    return True
+    _bmesh_cut_circle(obj, cutter_loc, cutter_radius)
     return True
 
 
@@ -2208,29 +2213,37 @@ def _cleanup_mesh(obj):
     _bm.to_mesh(obj.data); _bm.free()
 
 def _bmesh_cut_circle(obj, pos, radius):
-    """Fallback: cut hole via curve circle + join + intersect_boolean."""
-    bpy.ops.curve.primitive_bezier_circle_add(radius=radius, location=pos)
-    curve = bpy.context.active_object
-    bpy.ops.object.convert(target='MESH')
+    """Fallback: cut hole via cylinder + Boolean modifier (avoids problematic join+intersect)."""
+    bpy.ops.mesh.primitive_cylinder_add(vertices=32, radius=radius, depth=radius * 20, location=pos)
+    cutter = bpy.context.active_object
+    cutter.name = "FallbackCutter"
     bpy.context.view_layer.objects.active = obj
-    obj.select_set(True)
-    curve.select_set(True)
-    bpy.ops.object.join()
-    bpy.ops.object.mode_set(mode='EDIT')
-    bpy.ops.mesh.select_all(action='SELECT')
-    bpy.ops.mesh.intersect_boolean(operation='DIFFERENCE', solver='FLOAT')
-    bpy.ops.mesh.select_all(action='DESELECT')
-    bpy.ops.object.mode_set(mode='OBJECT')
-    import bmesh as _bmc
-    _bm = _bmc.new(); _bm.from_mesh(obj.data)
-    _bmc.ops.remove_doubles(_bm, verts=_bm.verts, dist=0.00005)
-    _bm.to_mesh(obj.data); _bm.free()
+    bpy.context.view_layer.update()
+    
+    for solv in ('EXACT', 'FLOAT'):
+        for m in list(obj.modifiers):
+            obj.modifiers.remove(m)
+        mod = obj.modifiers.new(name="FallbackCut", type='BOOLEAN')
+        mod.object = cutter; mod.operation = 'DIFFERENCE'; mod.solver = solv
+        if solv == 'EXACT':
+            mod.use_self = False
+        bpy.context.view_layer.update()
+        try:
+            bpy.ops.object.modifier_apply(modifier="FallbackCut")
+        except:
+            continue
+        if len(obj.data.vertices) >= 8:
+            bpy.data.objects.remove(cutter, do_unlink=True)
+            _cleanup_after_bool(obj)
+            return
+    
+    bpy.data.objects.remove(cutter, do_unlink=True)
+    print(f"[STEP Exporter] BMesh fallback also failed")
 
-def _do_simple_stage0(obj, cutter, keep=False):
+def _do_simple_stage0(obj, cutter, keep=False, solver='EXACT'):
     """Stage 0: cut hole. Returns True if successful. If keep=True, saves cutter copy."""
     cutter.hide_viewport = False
     bpy.context.view_layer.update()
-    # _direct_cut_hole always deletes the cutter. If user wants to keep it, duplicate first.
     cutter_copy = None
     if keep and cutter:
         mesh_copy = cutter.data.copy()
@@ -2238,7 +2251,7 @@ def _do_simple_stage0(obj, cutter, keep=False):
         cutter_copy.location = cutter.location
         cutter_copy.rotation_euler = cutter.rotation_euler
         bpy.context.collection.objects.link(cutter_copy)
-    ok = _direct_cut_hole(obj, cutter)
+    ok = _direct_cut_hole(obj, cutter, solver)
     if cutter_copy:
         _keep_or_remove(obj, cutter_copy, True)
     return ok
@@ -3036,6 +3049,15 @@ class STEP_EXPORTER_OT_edit_shell_hole(Operator):
             return {'CANCELLED'}
         entry = holes[self.hole_index][0]
         parts = entry.split(',')
+        # Parse hole center coordinates for display
+        try:
+            self._hole_cx = float(parts[0])
+            self._hole_cy = float(parts[1])
+            self._hole_cz = float(parts[2])
+            self._hole_face = int(float(parts[-1])) if len(parts) >= 8 else -1
+        except (ValueError, IndexError):
+            self._hole_cx = self._hole_cy = self._hole_cz = 0.0
+            self._hole_face = -1
         try:
             tc = int(float(parts[4]))
             if tc == 1:
@@ -3056,6 +3078,14 @@ class STEP_EXPORTER_OT_edit_shell_hole(Operator):
 
     def draw(self, context):
         layout = self.layout
+        # Show hole center position (read-only)
+        face_names = {0: _t("Bottom"), 1: _t("Top"), 2: _t("Left"), 3: _t("Right"), 4: _t("Front"), 5: _t("Back")}
+        fn = face_names.get(getattr(self, '_hole_face', -1), '')
+        box = layout.box()
+        box.label(text=_t("Position: ({cx:.1f}, {cy:.1f}, {cz:.1f}) {face}").format(
+            cx=getattr(self, '_hole_cx', 0), cy=getattr(self, '_hole_cy', 0),
+            cz=getattr(self, '_hole_cz', 0), face=fn))
+        layout.separator()
         layout.prop(self, 'edit_type')
         if self.edit_type == 'round':
             layout.prop(self, 'edit_radius')

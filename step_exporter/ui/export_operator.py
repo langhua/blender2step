@@ -789,6 +789,14 @@ def _execute_analysis_and_export(operator, params):
     total_objects = len(_g._export_objects)
     for idx, obj in enumerate(_g._export_objects):
         if obj.type == 'MESH':
+            # Skip objects excluded from current view layer
+            if obj.name not in context.view_layer.objects:
+                log_to_file(f"[STEP Exporter] Skipping excluded from view layer: {obj.name}")
+                continue
+            # Skip invisible objects (hidden in viewport or globally)
+            if obj.hide_viewport or obj.hide_get():
+                log_to_file(f"[STEP Exporter] Skipping hidden: {obj.name}")
+                continue
             # Skip wireframe-displayed objects (debug cutters, visual aids)
             if obj.display_type == 'WIRE':
                 log_to_file(f"[STEP Exporter] Skipping wireframe: {obj.name}")

@@ -143,7 +143,7 @@ def add_material(obj, name=None):
         obj.data.materials.append(mat)
 
 
-def apply_boolean(obj, tool_obj, operation='DIFFERENCE', solver='FAST'):
+def apply_boolean(obj, tool_obj, operation='DIFFERENCE', solver='FLOAT'):
     mod = obj.modifiers.new(name="Boolean", type='BOOLEAN')
     mod.operation = operation
     mod.object = tool_obj
@@ -166,7 +166,7 @@ def apply_boolean(obj, tool_obj, operation='DIFFERENCE', solver='FAST'):
                 obj.data = source_mesh
                 if old_data and old_data.users == 0:
                     bpy.data.meshes.remove(old_data)
-            return apply_boolean(obj, tool_obj, operation, solver='FAST')
+            return apply_boolean(obj, tool_obj, operation, solver='FLOAT')
         raise
 
     # 检查结果是否为空
@@ -175,7 +175,7 @@ def apply_boolean(obj, tool_obj, operation='DIFFERENCE', solver='FAST'):
             print(f"  [WARN] EXACT produced empty mesh, retrying with FAST...")
             if source_mesh:
                 obj.data = source_mesh
-            return apply_boolean(obj, tool_obj, operation, solver='FAST')
+            return apply_boolean(obj, tool_obj, operation, solver='FLOAT')
         else:
             print(f"  [ERROR] FAST solver also produced empty mesh!")
 
@@ -366,7 +366,7 @@ def create_hollow_top_shell(name, width, depth, outer_height, top_thickness,
             mod = outer.modifiers.new(name=f"Boolean_Boss_{i}", type='BOOLEAN')
             mod.operation = 'DIFFERENCE'
             mod.object = boss_obj
-            mod.solver = 'FAST'
+            mod.solver = 'FLOAT'
 
         bpy.context.view_layer.objects.active = outer
         for i in range(len(boss_objs)):

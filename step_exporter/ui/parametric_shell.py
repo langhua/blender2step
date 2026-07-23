@@ -529,7 +529,7 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
                 mod = outer.modifiers.new(name="RimBool", type='BOOLEAN')
                 mod.object = ring
                 mod.operation = 'DIFFERENCE'
-                mod.solver = 'FAST'
+                mod.solver = 'FLOAT'
                 bpy.ops.object.modifier_apply(modifier="RimBool")
                 if not keep_cutters:
                     bpy.data.objects.remove(ring, do_unlink=True)
@@ -860,7 +860,7 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
             if ring:
                 # Shift shell so bottom at Z=0, then apply rim boolean
                 obj.location.z = h / 2.0
-                self._apply_bool(obj, ring, op='DIFFERENCE', solver='FAST')
+                self._apply_bool(obj, ring, op='DIFFERENCE', solver='FLOAT')
                 if not keep_cutters:
                     bpy.data.objects.remove(ring, do_unlink=True)
                 else:
@@ -2088,66 +2088,54 @@ def _apply_fillet_torus_union(obj, hole_r_mm, fillet_mm, face_code, px, py, pz, 
     print(f"[STEP Exporter] Done (type={fillet_type})")
 
 def _direct_cut_hole(obj, cutter):
-    """Cut hole using Boolean modifier with retry. Returns True on success.
-    Tries EXACT solver first on clean quad mesh; only triangulates as last resort."""
+    """Cut hole using Blender 5.2 Boolean (FLOAT first for speed, EXACT fallback)."""
     bpy.context.view_layer.objects.active = obj
     bpy.context.view_layer.update()
     
     vbefore = len(obj.data.vertices)
     
-    # ── Pass 1: EXACT on clean mesh (preserves quad topology) ──
-    # use_self=False avoids self-intersection artifacts on curved surfaces
-    for solv in ('EXACT', 'FAST'):
-        for m in list(obj.modifiers):
-            obj.modifiers.remove(m)
-        mod = obj.modifiers.new(name="DirectCut", type='BOOLEAN')
-        mod.object = cutter; mod.operation = 'DIFFERENCE'; mod.solver = solv
-        mod.use_self = False
-        if hasattr(mod, 'use_hole_tolerant'):
-            mod.use_hole_tolerant = True
-        bpy.context.view_layer.update()
-        try:
-            bpy.ops.object.modifier_apply(modifier="DirectCut")
-        except:
-            continue
-        vnow = len(obj.data.vertices)
-        if vnow != vbefore and vnow >= 8:
-            bpy.data.objects.remove(cutter, do_unlink=True)
-            _cleanup_after_bool(obj)
-            return True
-    
-    # ── Pass 2: Triangulate + dissolve then retry ──
-    bpy.ops.object.mode_set(mode='EDIT')
-    bpy.ops.mesh.select_all(action='SELECT')
-    bpy.ops.mesh.quads_convert_to_tris(quad_method='BEAUTY', ngon_method='BEAUTY')
-    bpy.ops.mesh.select_all(action='SELECT')
-    bpy.ops.mesh.dissolve_limited(angle_limit=0.02)
-    bpy.ops.object.mode_set(mode='OBJECT')
+    # Try FLOAT first (fast, reliable in 5.2)
+    for m in list(obj.modifiers):
+        obj.modifiers.remove(m)
+    mod = obj.modifiers.new(name="DirectCut", type='BOOLEAN')
+    mod.object = cutter; mod.operation = 'DIFFERENCE'
+    mod.solver = 'FLOAT'
     bpy.context.view_layer.update()
+    try:
+        bpy.ops.object.modifier_apply(modifier="DirectCut")
+    except:
+        pass
     
-    for solv in ('EXACT', 'FAST'):
-        for m in list(obj.modifiers):
-            obj.modifiers.remove(m)
-        mod = obj.modifiers.new(name="DirectCut", type='BOOLEAN')
-        mod.object = cutter; mod.operation = 'DIFFERENCE'; mod.solver = solv
-        mod.use_self = False
-        if hasattr(mod, 'use_hole_tolerant'):
-            mod.use_hole_tolerant = True
-        bpy.context.view_layer.update()
-        try:
-            bpy.ops.object.modifier_apply(modifier="DirectCut")
-        except:
-            continue
-        vnow = len(obj.data.vertices)
-        if vnow != vbefore and vnow >= 8:
-            bpy.data.objects.remove(cutter, do_unlink=True)
-            _cleanup_after_bool(obj)
-            return True
+    vnow = len(obj.data.vertices)
+    if vnow != vbefore and vnow >= 8:
+        bpy.data.objects.remove(cutter, do_unlink=True)
+        _cleanup_after_bool(obj)
+        return True
     
-    # ── Pass 3: bmesh fallback ──
-    print(f"[STEP Exporter] Boolean failed, using bmesh circle cut...")
+    # FLOAT failed or produced bad result — try EXACT
+    for m in list(obj.modifiers):
+        obj.modifiers.remove(m)
+    mod = obj.modifiers.new(name="DirectCut", type='BOOLEAN')
+    mod.object = cutter; mod.operation = 'DIFFERENCE'
+    mod.solver = 'EXACT'
+    mod.use_self = False
+    bpy.context.view_layer.update()
+    try:
+        bpy.ops.object.modifier_apply(modifier="DirectCut")
+    except:
+        pass
+    
+    vnow = len(obj.data.vertices)
+    if vnow != vbefore and vnow >= 8:
+        bpy.data.objects.remove(cutter, do_unlink=True)
+        _cleanup_after_bool(obj)
+        return True
+    
+    # Both failed — bmesh fallback
+    print(f"[STEP Exporter] Boolean failed, using bmesh fallback...")
     bpy.data.objects.remove(cutter, do_unlink=True)
     _bmesh_cut_circle(obj, cutter.location, cutter.dimensions.x / 2)
+    return True
     return True
 
 
@@ -2230,7 +2218,7 @@ def _bmesh_cut_circle(obj, pos, radius):
     bpy.ops.object.join()
     bpy.ops.object.mode_set(mode='EDIT')
     bpy.ops.mesh.select_all(action='SELECT')
-    bpy.ops.mesh.intersect_boolean(operation='DIFFERENCE', solver='FAST')
+    bpy.ops.mesh.intersect_boolean(operation='DIFFERENCE', solver='FLOAT')
     bpy.ops.mesh.select_all(action='DESELECT')
     bpy.ops.object.mode_set(mode='OBJECT')
     import bmesh as _bmc
@@ -2438,7 +2426,7 @@ def _apply_bottom_rrect_recess(obj, hole_w_mm, hole_h_mm, hole_cr_mm, fillet_mm,
     rc.name = "BtRRecRecess" + ("O" if is_outer else "I")
     rc.location = (pos[0], pos[1], pos[2] + fr*0.25 if is_outer else pos[2] - fr*0.25)
     bpy.context.view_layer.update()
-    for solv in ('FAST', 'EXACT'):
+    for solv in ('FLOAT', 'EXACT'):
         bpy.context.view_layer.objects.active = obj
         mod = obj.modifiers.new(name="BtRRecCut" + ("O" if is_outer else "I"), type='BOOLEAN')
         mod.object = rc; mod.operation = 'DIFFERENCE'; mod.solver = solv
@@ -2532,7 +2520,7 @@ def _apply_bottom_rrect_ring(obj, hole_w_mm, hole_h_mm, hole_cr_mm, fillet_mm, p
         print(f"[STEP Exporter] Rrect {'outer' if is_outer else 'inner'} ring PREVIEW (no union)")
         return ring_obj
     bpy.context.view_layer.objects.active = obj
-    for solv in ('FAST', 'EXACT'):
+    for solv in ('FLOAT', 'EXACT'):
         mod = obj.modifiers.new(name="BtRRecRingU" + ("O" if is_outer else "I"), type='BOOLEAN')
         mod.object = ring_obj; mod.operation = 'UNION'; mod.solver = solv
         bpy.context.view_layer.update()
@@ -2559,7 +2547,7 @@ def _apply_bottom_outer_ring(obj, hole_r_mm, fillet_mm, pos, S):
     rc = bpy.context.active_object; rc.name = "BtRecessO"
     rc.location = (pos[0], pos[1], pos[2] - fr * 0.25)  # slightly below, extends into wall
     bpy.context.view_layer.update()
-    for solv in ('FAST', 'EXACT'):
+    for solv in ('FLOAT', 'EXACT'):
         bpy.context.view_layer.objects.active = obj
         mod = obj.modifiers.new(name="BtRecessCutO", type='BOOLEAN')
         mod.object = rc; mod.operation = 'DIFFERENCE'; mod.solver = solv
@@ -2598,7 +2586,7 @@ def _apply_bottom_outer_ring(obj, hole_r_mm, fillet_mm, pos, S):
     bpy.context.view_layer.update()
     bpy.context.view_layer.objects.active = obj
     mod = obj.modifiers.new(name="BtRingUOuter", type='BOOLEAN')
-    mod.object = ring_obj; mod.operation = 'UNION'; mod.solver = 'FAST'
+    mod.object = ring_obj; mod.operation = 'UNION'; mod.solver = 'FLOAT'
     bpy.context.view_layer.update()
     bpy.ops.object.modifier_apply(modifier="BtRingUOuter")
     bpy.data.objects.remove(ring_obj, do_unlink=True)
@@ -2624,7 +2612,7 @@ def _apply_bottom_inner_ring(obj, hole_r_mm, fillet_mm, pos, S):
     rc = bpy.context.active_object; rc.name = "BtRecess"
     rc.location = (pos[0], pos[1], pos[2] + fr * 0.25)
     bpy.context.view_layer.update()
-    for solv in ('FAST', 'EXACT'):
+    for solv in ('FLOAT', 'EXACT'):
         bpy.context.view_layer.objects.active = obj
         mod = obj.modifiers.new(name="BtRecessCut", type='BOOLEAN')
         mod.object = rc; mod.operation = 'DIFFERENCE'; mod.solver = solv
@@ -2663,7 +2651,7 @@ def _apply_bottom_inner_ring(obj, hole_r_mm, fillet_mm, pos, S):
     bpy.context.view_layer.update()
     bpy.context.view_layer.objects.active = obj
     mod = obj.modifiers.new(name="BtRingUnion", type='BOOLEAN')
-    mod.object = ring_obj; mod.operation = 'UNION'; mod.solver = 'FAST'
+    mod.object = ring_obj; mod.operation = 'UNION'; mod.solver = 'FLOAT'
     bpy.context.view_layer.update()
     bpy.ops.object.modifier_apply(modifier="BtRingUnion")
     bpy.data.objects.remove(ring_obj, do_unlink=True)
@@ -3353,7 +3341,7 @@ def _rebuild_stage_hole(obj, entry):
     mod = obj.modifiers.new(name="HoleRebuild", type='BOOLEAN')
     mod.object = cutter
     mod.operation = 'DIFFERENCE'
-    mod.solver = 'FAST'
+    mod.solver = 'FLOAT'
     mod.use_self = True
     cutter.hide_viewport = True
     bpy.context.view_layer.update()

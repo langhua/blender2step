@@ -46,11 +46,11 @@ jobs:
           Expand-Archive -Path "${{ runner.temp }}/occt.zip" -DestinationPath "${{ github.workspace }}/vcpkg_installed" -Force
           Write-Host "OCCT 7.8.1 ready"
 
-      # ----- 3. 设置 Python 3.11 -----
+      # ----- 3. 设置 Python 3.13 -----
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.13'
 
       # ----- 4. 切换到 CI CMakeLists -----
       - name: Prepare CI CMakeLists
@@ -63,7 +63,7 @@ jobs:
         run: |
           cmake -B build `
             -DPYTHON_INCLUDE_DIR="${{ env.pythonLocation }}/include" `
-            -DPYTHON_LIBRARY="${{ env.pythonLocation }}/libs/python311.lib"
+            -DPYTHON_LIBRARY="${{ env.pythonLocation }}/libs/python313.lib"
 
       # ----- 5. 编译 -----
       - name: Build
@@ -106,13 +106,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Download Blender 4.2
+      - name: Download Blender 5.2
         run: |
-          curl -L -o ${{ runner.temp }}\blender.zip "https://download.blender.org/release/Blender4.2/blender-4.2.1-windows-x64.zip"
+          curl -L -o ${{ runner.temp }}\blender.zip "https://download.blender.org/release/Blender5.2/blender-5.2.0-windows-x64.zip"
           tar -xf ${{ runner.temp }}\blender.zip -C ${{ runner.temp }}
 
       - name: Run tests
-        run: ${{ runner.temp }}\blender-4.2.1-windows-x64\blender.exe --background --python ci_test_runner.py
+        run: ${{ runner.temp }}\blender-5.2.0-windows-x64\blender.exe --background --python ci_test_runner.py
 
   # ============================================================
   # Python 代码质量检查（并行运行，几秒完成）
@@ -126,7 +126,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.13'
 
       - name: Install linters
         run: pip install ruff
@@ -152,10 +152,10 @@ jobs:
           name: step_exporter-pyd
           path: step_exporter/lib
 
-      - name: Download Blender 4.2
+      - name: Download Blender 5.2
         run: |
-          curl -L -o ${{ runner.temp }}\blender.zip "https://download.blender.org/release/Blender4.2/blender-4.2.1-windows-x64.zip"
+          curl -L -o ${{ runner.temp }}\blender.zip "https://download.blender.org/release/Blender5.2/blender-5.2.0-windows-x64.zip"
           tar -xf ${{ runner.temp }}\blender.zip -C ${{ runner.temp }}
 
       - name: Run integration tests
-        run: ${{ runner.temp }}\blender-4.2.1-windows-x64\blender.exe --background --python ci_integration_test.py
+        run: ${{ runner.temp }}\blender-5.2.0-windows-x64\blender.exe --background --python ci_integration_test.py

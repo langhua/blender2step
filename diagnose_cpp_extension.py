@@ -154,7 +154,7 @@ def diagnose_cpp_extension():
             
             # 检查缺少的DLL
             print("[INFO] Checking for required DLLs in build directory:")
-            required_dlls = ['python311.dll', 'TKernel.dll', 'TKDESTEP.dll', 'TKSTEP.dll']
+            required_dlls = ['python313.dll', 'TKernel.dll', 'TKDESTEP.dll', 'TKSTEP.dll']
             
             for dll in required_dlls:
                 dll_path = build_dir / dll

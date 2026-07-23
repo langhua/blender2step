@@ -2088,24 +2088,21 @@ def _apply_fillet_torus_union(obj, hole_r_mm, fillet_mm, face_code, px, py, pz, 
     print(f"[STEP Exporter] Done (type={fillet_type})")
 
 def _direct_cut_hole(obj, cutter):
-    """Cut hole using Boolean modifier with retry. Returns True on success."""
+    """Cut hole using Boolean modifier with retry. Returns True on success.
+    Tries EXACT solver first on clean quad mesh; only triangulates as last resort."""
     bpy.context.view_layer.objects.active = obj
-    bpy.ops.object.mode_set(mode='EDIT')
-    bpy.ops.mesh.select_all(action='SELECT')
-    bpy.ops.mesh.quads_convert_to_tris(quad_method='BEAUTY', ngon_method='BEAUTY')
-    # Merge coplanar tris to keep mesh complexity low
-    bpy.ops.mesh.select_all(action='SELECT')
-    bpy.ops.mesh.dissolve_limited(angle_limit=0.02)
-    bpy.ops.object.mode_set(mode='OBJECT')
     bpy.context.view_layer.update()
     
     vbefore = len(obj.data.vertices)
-    for solv in ('FAST', 'EXACT'):
+    
+    # ── Pass 1: EXACT on clean mesh (preserves quad topology) ──
+    # use_self=False avoids self-intersection artifacts on curved surfaces
+    for solv in ('EXACT', 'FAST'):
         for m in list(obj.modifiers):
             obj.modifiers.remove(m)
         mod = obj.modifiers.new(name="DirectCut", type='BOOLEAN')
         mod.object = cutter; mod.operation = 'DIFFERENCE'; mod.solver = solv
-        mod.use_self = (solv == 'EXACT')
+        mod.use_self = False
         if hasattr(mod, 'use_hole_tolerant'):
             mod.use_hole_tolerant = True
         bpy.context.view_layer.update()
@@ -2113,18 +2110,114 @@ def _direct_cut_hole(obj, cutter):
             bpy.ops.object.modifier_apply(modifier="DirectCut")
         except:
             continue
-        if len(obj.data.vertices) != vbefore and len(obj.data.vertices) >= 8:
+        vnow = len(obj.data.vertices)
+        if vnow != vbefore and vnow >= 8:
             bpy.data.objects.remove(cutter, do_unlink=True)
-            import bmesh as _bmc
-            _bm = _bmc.new(); _bm.from_mesh(obj.data)
-            _bmc.ops.remove_doubles(_bm, verts=_bm.verts, dist=0.00005)
-            _bm.to_mesh(obj.data); _bm.free()
+            _cleanup_after_bool(obj)
             return True
-    # Boolean failed — use bmesh fallback
+    
+    # ── Pass 2: Triangulate + dissolve then retry ──
+    bpy.ops.object.mode_set(mode='EDIT')
+    bpy.ops.mesh.select_all(action='SELECT')
+    bpy.ops.mesh.quads_convert_to_tris(quad_method='BEAUTY', ngon_method='BEAUTY')
+    bpy.ops.mesh.select_all(action='SELECT')
+    bpy.ops.mesh.dissolve_limited(angle_limit=0.02)
+    bpy.ops.object.mode_set(mode='OBJECT')
+    bpy.context.view_layer.update()
+    
+    for solv in ('EXACT', 'FAST'):
+        for m in list(obj.modifiers):
+            obj.modifiers.remove(m)
+        mod = obj.modifiers.new(name="DirectCut", type='BOOLEAN')
+        mod.object = cutter; mod.operation = 'DIFFERENCE'; mod.solver = solv
+        mod.use_self = False
+        if hasattr(mod, 'use_hole_tolerant'):
+            mod.use_hole_tolerant = True
+        bpy.context.view_layer.update()
+        try:
+            bpy.ops.object.modifier_apply(modifier="DirectCut")
+        except:
+            continue
+        vnow = len(obj.data.vertices)
+        if vnow != vbefore and vnow >= 8:
+            bpy.data.objects.remove(cutter, do_unlink=True)
+            _cleanup_after_bool(obj)
+            return True
+    
+    # ── Pass 3: bmesh fallback ──
     print(f"[STEP Exporter] Boolean failed, using bmesh circle cut...")
     bpy.data.objects.remove(cutter, do_unlink=True)
     _bmesh_cut_circle(obj, cutter.location, cutter.dimensions.x / 2)
     return True
+
+
+def _cleanup_after_bool(obj):
+    """Clean up mesh after Boolean: remove doubles + delete loose fragments."""
+    bpy.context.view_layer.objects.active = obj
+    bpy.ops.object.mode_set(mode='EDIT')
+    bpy.ops.mesh.select_all(action='SELECT')
+    bpy.ops.mesh.remove_doubles(threshold=0.00001)
+    # Separate and delete any tiny loose fragments (Boolean artifacts)
+    bpy.ops.mesh.select_all(action='DESELECT')
+    bpy.ops.object.mode_set(mode='OBJECT')
+    bpy.context.view_layer.update()
+    _delete_small_fragments(obj)
+    bpy.ops.object.mode_set(mode='OBJECT')
+
+
+def _delete_small_fragments(obj):
+    """Delete small disconnected mesh fragments (Boolean artifacts)."""
+    import bmesh as _bmc
+    _bm = _bmc.new()
+    _bm.from_mesh(obj.data)
+    
+    # Find connected components
+    vert_island_map = {}
+    islands = []
+    for v in _bm.verts:
+        if v.index in vert_island_map:
+            continue
+        # BFS to find all verts in this island
+        island = set()
+        stack = [v]
+        while stack:
+            cv = stack.pop()
+            if cv.index in vert_island_map:
+                continue
+            vert_island_map[cv.index] = len(islands)
+            island.add(cv)
+            for e in cv.link_edges:
+                ov = e.other_vert(cv)
+                if ov.index not in vert_island_map:
+                    stack.append(ov)
+        islands.append(island)
+    
+    if len(islands) <= 1:
+        _bm.free()
+        return
+    
+    # Keep the largest island, delete the rest
+    largest = max(islands, key=len)
+    to_delete = []
+    for island in islands:
+        if island is not largest:
+            to_delete.extend(island)
+    
+    if to_delete:
+        bmesh.ops.delete(_bm, geom=list(to_delete), context='VERTS')
+        _bm.to_mesh(obj.data)
+        _bm.free()
+        print(f"[STEP Exporter] Removed {len(islands)-1} Boolean fragment(s)")
+    else:
+        _bm.free()
+
+
+def _cleanup_mesh(obj):
+    """Minimal mesh cleanup after Boolean — remove doubles only, no topology changes."""
+    import bmesh as _bmc
+    _bm = _bmc.new(); _bm.from_mesh(obj.data)
+    _bmc.ops.remove_doubles(_bm, verts=_bm.verts, dist=0.00001)
+    _bm.to_mesh(obj.data); _bm.free()
 
 def _bmesh_cut_circle(obj, pos, radius):
     """Fallback: cut hole via curve circle + join + intersect_boolean."""

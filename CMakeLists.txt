@@ -55,10 +55,9 @@ foreach(LIB ${OpenCASCADE_LIBRARIES})
 endforeach()
 
 # ====== 4. 设置 Python 路径 ======
-# 使用标准 Python 3.11 头文件和导入库
-# 运行时由Blender环境提供python311.dll
-set(PYTHON_INCLUDE_DIR "C:/Python311/include")
-set(PYTHON_LIBRARY "C:/Python311/libs/python311.lib")
+# Python 3.13 (Blender 5.2.x); 运行时由Blender提供python313.dll
+set(PYTHON_INCLUDE_DIR "C:/Python313/include")
+set(PYTHON_LIBRARY "C:/Python313/libs/python313.lib")
 
 # 禁用 vcpkg 自动检测 Python
 set(Python3_EXECUTABLE "" CACHE FILEPATH "Python3 executable")
@@ -114,7 +113,7 @@ add_library(step_exporter SHARED
     src/cylinder/cylinder_parametric.cpp
 )
 
-# 设置 Python 头文件路径（使用 Blender 自带的 Python 3.11 头文件）
+# 设置 Python 头文件路径（使用 Blender 自带的 Python 3.13 头文件）
 include_directories(
     ${PYTHON_INCLUDE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/include

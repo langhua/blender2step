@@ -1,11 +1,11 @@
 # blender2step
 Blender step exporter based on OpenCASCADE.
 
-本模块仅支持Blender 4.2.1，主要由DeepSeek V4 Pro等AI模型生成。
+本模块支持Blender 4.2+ / 5.x，主要由DeepSeek V4 Pro等AI模型生成。
 
 本模块是为了在Blender中设计模型，用于模具制造。
 
-> **blender2step** is a Blender 4.2.1 addon that exports 3D models to STEP format using OpenCASCADE 7.8.1. It is part of a simple gadget manufacturing toolchain: design enclosures in Blender, export STEP, and send to mold factories for mass production. Built primarily with AI assistance (DeepSeek V4 Pro).
+> **blender2step** is a Blender 4.2+ / 5.x addon that exports 3D models to STEP format using OpenCASCADE 7.8.1. It is part of a simple gadget manufacturing toolchain: design enclosures in Blender, export STEP, and send to mold factories for mass production. Built primarily with AI assistance (DeepSeek V4 Pro).
 
 ## Toolchain
 
@@ -47,55 +47,38 @@ flowchart LR
 | [CMake Tools](https://marketplace.visualstudio.com/items?itemName=ms-vscode.cmake-tools) | CMake 项目配置和编译集成 |
 
 > Blender 插件通过 **junction** 链接到 git 仓库：
-> `C:\Users\...\Blender Foundation\Blender\4.2\scripts\addons\step_exporter\` → `f:\git\blender2step\step_exporter\`
+> `C:\Users\...\Blender Foundation\Blender\5.2\scripts\addons\step_exporter\` → `f:\git\blender2step\step_exporter\`
 > 修改仓库文件会立即反映在 Blender 中，无需手动复制。
 
-### Install Python 3.11.7
+### Install Python 3.13
 
-As the python version in Blender 4.2.1 is 3.11.7, you need to install the same version of Python.
+As the python version in Blender 5.2 is 3.13.x, you need to install the same version of Python.
 
-1. 进入Blender 4.2.1目录，确认Python版本。
+1. 进入Blender 5.2目录，确认Python版本。
 ```shell
-> cd "F:\Blender Foundation\Blender Foundation\Blender 4.2\4.2\python\bin"
+> cd "F:\Blender Foundation\Blender 5.2\5.2\python\bin"
 > .\python.exe --version
-Python 3.11.7
+Python 3.13.13
 ```
 
-2. Visit https://www.python.org/downloads/release/python-3117/
+2. Visit https://www.python.org/downloads/
 
-3. Download "Windows installer (64-bit)" and install it.
+3. Download "Windows installer (64-bit)" for Python 3.13 and install it.
 
 
-### Build Python 3.11.7 on Windows 11 with Visual Studio Community 2022
+### Build Python 3.13 on Windows 11 with Visual Studio Community 2022
 
 Note: This is not necessary, only if you want to debug the python code.
 
-As I didn't have python311_d.lib installed, I built it from source.
+1. Visit the source code from https://www.python.org/ftp/python/3.13.13/
 
-1. Visit the source code from https://www.python.org/ftp/python/3.11.7/
+2. Download Python-3.13.13.tar.xz and extract it.
 
-2. Download Python-3.11.7.tar.xz and extract it.
+3. Open a terminal, cd Python-3.13.13\PCbuild, run .\get_externals.bat.
 
-3. Open a terminal, cd \Python-3.11.7.tar\Python-3.11.7\PCbuild, run .\get_externals.bat:
+4. Open Python-3.13.13\PCbuild\pcbuild.sln with Visual Studio Community 2022, run Debug|x64, build the solution.
 
-```
-PS F:\Python-3.11.7.tar\Python-3.11.7\PCbuild> .\get_externals.bat
-Using "F:\Python-3.11.7.tar\Python-3.11.7\PCbuild\\..\externals\pythonx86\tools\python.exe" (found in externals directory)
-Fetching external libraries...
-Fetching bzip2-1.0.8...
-Fetching sqlite-3.42.0.0...
-Fetching xz-5.2.5...
-Fetching zlib-1.2.13...
-Fetching external binaries...
-Fetching libffi-3.4.4...
-Fetching openssl-bin-1.1.1u...
-Fetching tcltk-8.6.12.1...
-Finished.
-```
-
-4. Open Python-3.11.7.tar\Python-3.11.7\PCbuild\pcbuild.sln with Visual Studio Community 2022, run Debug|x64, build the solution.
-
-5. Copy python311_d.lib from Python-3.11.7.tar\Python-3.11.7\PCbuild\amd64\ to the installed python 3.11.7 lib folder, e.g. C:\Python311\libs.
+5. Copy python313_d.lib from Python-3.13.13\PCbuild\amd64\ to the installed python 3.13 lib folder, e.g. C:\Python313\libs.
 
 ### Build OpenCASCADE 7.8.1 on Windows 11 with vcpkg
 
@@ -184,7 +167,7 @@ python verify_build.py
 python -m pytest step_exporter/tests/test_core_utils.py step_exporter/tests/test_i18n.py -v
 
 # 4. 完整 CI 测试（需 Blender）
-& "f:\Program Files\Blender Foundation\Blender 4.2\blender.exe" --background --python ci_test_runner.py
+& "f:\Program Files\Blender Foundation\Blender 5.2\blender.exe" --background --python ci_test_runner.py
 ```
 
 ### CI

@@ -32,7 +32,7 @@ def check_opencascade():
 def check_python():
     """检查Python安装"""
     python_paths = [
-        r"C:\Python311\python.exe",
+        r"C:\Python313\python.exe",
         sys.executable
     ]
     

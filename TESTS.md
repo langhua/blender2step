@@ -72,7 +72,7 @@
 & "f:\Program Files\Blender Foundation\Blender 4.2\blender.exe" --background --python ci_test_runner.py
 
 # 运行单个集成测试
-& "f:\Program Files\Blender Foundation\Blender 4.2\blender.exe" --background --python ci_integration_test.py
+& "f:\Program Files\Blender Foundation\Blender 5.2\blender.exe" --background --python ci_integration_test.py
 ```
 
 ### C. 构建验证
@@ -125,7 +125,7 @@ python verify_build.py
 python -m pytest step_exporter/tests/test_core_utils.py step_exporter/tests/test_i18n.py -v
 
 # 4. 运行完整 CI 测试（需 Blender，约 30 秒）
-& "f:\Program Files\Blender Foundation\Blender 4.2\blender.exe" --background --python ci_test_runner.py
+& "f:\Program Files\Blender Foundation\Blender 5.2\blender.exe" --background --python ci_test_runner.py
 ```
 
 ### 一键测试脚本
@@ -151,7 +151,7 @@ CI 配置位于 `.github/workflows/ci.yml`，触发条件：
 | Job | 说明 | 耗时 |
 |-----|------|------|
 | `build` | 从 GitHub Release 下载 OCCT 7.8.1 → 编译 C++ .pyd → 上传构建产物 | ~3 分钟 |
-| `test` | 下载 Blender 4.2 → 运行 `ci_test_runner.py`（pytest 单元测试） | ~2 分钟 |
+| `test` | 下载 Blender 5.2 → 运行 `ci_test_runner.py`（pytest 单元测试） | ~2 分钟 |
 | `lint` | ubuntu-latest 上运行 `ruff check`（Python 代码质量，允许失败） | ~30 秒 |
 | `integration` | 依赖 `build`，下载 .pyd + Blender → 运行 `ci_integration_test.py`（完整流程） | ~5 分钟 |
 

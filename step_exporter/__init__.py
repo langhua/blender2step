@@ -6,8 +6,8 @@ Version 4.1.2 with advanced BREP and solid creation support
 bl_info = {
     "name": "STEP Exporter (Enhanced)",
     "author": "Blender STEP Exporter",
-    "version": (4, 1, 2),
-    "blender": (4, 2, 1),
+    "version": (4, 1, 3),
+    "blender": (4, 2, 0),
     "location": "File > Export > STEP (Enhanced)",
     "description": "Export to STEP format with advanced BREP, solid creation and geometry fixing",
     "category": "Import-Export",

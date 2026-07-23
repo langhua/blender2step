@@ -5,7 +5,7 @@
 | 组件 | 版本 | 说明 |
 |------|------|------|
 | Visual Studio | 2022 Community | 含 C++ CMake 工具 |
-| Python | 3.11.7 | 与 Blender 4.2.1 一致 |
+| Python | 3.13.x | 与 Blender 5.2 一致 |
 | vcpkg | latest | 包管理器 |
 | OpenCASCADE | 7.8.1 | 通过 vcpkg 安装 |
 
@@ -55,8 +55,8 @@ cmake .. -DCMAKE_TOOLCHAIN_FILE="F:/git/vcpkg/scripts/buildsystems/vcpkg.cmake" 
 
 ### Python 链接错误
 
-确保 `C:\Python311\libs\python311.lib` 存在。如果缺失：
-- 安装 Python 3.11.7 或从源码构建（详见 README.md）
+确保 `C:\Python313\libs\python313.lib` 存在。如果缺失：
+- 安装 Python 3.13.x 或从源码构建
 
 ### OpenCASCADE 找不到
 
@@ -79,7 +79,7 @@ python step_exporter/tests/diagnose_step_exporter.py
 | | 本地 (CMakeLists.txt) | CI (CMakeLists.ci.txt) |
 |---|---|---|
 | vcpkg | 本地 `f:/git/vcpkg/` | GitHub Release 预编译包 |
-| Python | `C:/Python311/` | `actions/setup-python@v5` |
+| Python | `C:/Python313/` | `actions/setup-python@v5` |
 | 用途 | 开发调试 | CI 验证编译 |
 
 CI 使用 `CMakeLists.ci.txt`（不含硬编码路径），从 GitHub Release 下载 OCCT 预编译包。

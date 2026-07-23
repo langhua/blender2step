@@ -28,7 +28,7 @@ def check_all_dependencies():
     """检查所有依赖"""
     project_dir = Path(__file__).parent.parent
     vcpkg_dir = Path(r"F:\git\vcpkg")
-    python_dir = Path(r"C:\Python311")
+    python_dir = Path(r"C:\Python313")
     
     print("=" * 60)
     print("Dependency Check Tool")
@@ -42,8 +42,8 @@ def check_all_dependencies():
     print(f"   Architecture: {'64-bit' if sys.maxsize > 2**32 else '32-bit'}")
     print(f"   Executable: {sys.executable}")
     
-    # 检查 python311.dll
-    python_dll = python_dir / "python311.dll"
+    # 检查 python313.dll
+    python_dll = python_dir / "python313.dll"
     if python_dll.exists():
         print(f"   [OK] Python DLL: {python_dll}")
     else:
@@ -213,7 +213,7 @@ def test_plugin_in_directory(build_dir):
             
             # 检查缺少的 DLL
             print("   Checking for missing DLLs:")
-            required_dlls = ['TKernel.dll', 'TKDESTEP.dll', 'TKSTEP.dll', 'python311.dll']
+            required_dlls = ['TKernel.dll', 'TKDESTEP.dll', 'TKSTEP.dll', 'python313.dll']
             
             for dll in required_dlls:
                 dll_path = os.path.join(build_dir, dll)

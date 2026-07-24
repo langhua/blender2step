@@ -181,21 +181,15 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         bts = self.bottom_thickness * S  # bottom wall thickness (default = t)
         crs, rws, rhs, bfs = cr * S, rw * S, rh * S, bf * S
 
-        # Build shell: direct construction when bottom fillet or cosine corners
-        if bfs > 0.0001 or self.corner_type == 'curved':
-            obj = self._build_shell_direct(ws, ds, hs, ts, bts, crs, rws, rhs,
-                                           self.rim_type, self.rim_shape,
-                                           self.rim_top_ratio / 100.0, bfs,
-                                           self.corner_type,
-                                           self.curve_ratio / 100.0,
-                                           self.eccentric_y / 100.0,
-                                           self.debug_keep_cutters)
-        else:
-            total_h = hs + rhs if rw > 0 and self.rim_type != 'none' and self.rim_shape == 'rect' else hs
-            obj = self._build_boolean_shell(ws, ds, total_h, ts, bts, crs, rws, rhs,
-                                             self.rim_type, self.rim_shape,
-                                             self.rim_top_ratio / 100.0, bfs,
-                                             self.debug_keep_cutters)
+        # Build shell: always use direct bmesh construction (no Boolean)
+        total_h = hs + rhs if rw > 0 and self.rim_type != 'none' and self.rim_shape == 'rect' else hs
+        obj = self._build_shell_direct(ws, ds, total_h, ts, bts, crs, rws, rhs,
+                                       self.rim_type, self.rim_shape,
+                                       self.rim_top_ratio / 100.0, bfs,
+                                       self.corner_type,
+                                       self.curve_ratio / 100.0,
+                                       self.eccentric_y / 100.0,
+                                       self.debug_keep_cutters)
 
         # Store params (in user-facing unit)
 
@@ -564,77 +558,88 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
             outer_pts = [(-hw, -hd), (hw, -hd), (hw, hd), (-hw, hd)]
             inner_pts = [(-hw+t, -hd+t), (hw-t, -hd+t), (hw-t, hd-t), (-hw+t, hd-t)]
             num_pts = 4
-            # Square bottom profiles (simple offset)
-            outer_bot_pts = [(-hw+bf, -hd+bf), (hw-bf, -hd+bf), (hw-bf, hd-bf), (-hw+bf, hd-bf)]
-            ib_off = t + inner_fillet_r
-            inner_bot_pts = [(-hw+ib_off, -hd+ib_off), (hw-ib_off, -hd+ib_off),
-                             (hw-ib_off, hd-ib_off), (-hw+ib_off, hd-ib_off)]
-            # Outer bottom
-            outer_bot_v = [bm.verts.new((x, y, 0)) for x, y in outer_bot_pts]
-            bm.faces.new(list(reversed(outer_bot_v)))
-            # Outer fillet rings (square: linear interp)
-            outer_prev = outer_bot_v
-            for si in range(1, fillet_seg + 1):
-                frac = si / fillet_seg; ang = math.pi/2*frac
-                sin_a = math.sin(ang); rise = bf*(1-math.cos(ang))
-                ring_off = bf*(1-sin_a)
-                ring_pts = [(-hw+ring_off,-hd+ring_off),(hw-ring_off,-hd+ring_off),
-                            (hw-ring_off,hd-ring_off),(-hw+ring_off,hd-ring_off)]
-                ring = [bm.verts.new((x,y,rise)) for x,y in ring_pts]
-                for i in range(4): j=(i+1)%4; bm.faces.new([outer_prev[i],outer_prev[j],ring[j],ring[i]])
-                outer_prev = ring
-            outer_top_v = [bm.verts.new((x,y,h)) for x,y in outer_pts]
-            for i in range(4): j=(i+1)%4; bm.faces.new([outer_prev[i],outer_prev[j],outer_top_v[j],outer_top_v[i]])
-            # Inner bottom
-            inner_bot_v = [bm.verts.new((x,y,bt)) for x,y in inner_bot_pts]
-            bm.faces.new(inner_bot_v)
-            # Inner fillet rings
-            inner_prev = inner_bot_v
-            for si in range(1, fillet_seg + 1):
-                frac = si/fillet_seg; ang = math.pi/2*frac
-                sin_a = math.sin(ang); rise = inner_fillet_r*(1-math.cos(ang))
-                ring_off = ib_off - inner_fillet_r*sin_a
-                ring_pts = [(-hw+ring_off,-hd+ring_off),(hw-ring_off,-hd+ring_off),
-                            (hw-ring_off,hd-ring_off),(-hw+ring_off,hd-ring_off)]
-                ring = [bm.verts.new((x,y,bt+rise)) for x,y in ring_pts]
-                for i in range(4): j=(i+1)%4; bm.faces.new([inner_prev[i],inner_prev[j],ring[j],ring[i]])
-                inner_prev = ring
-            inner_top_v = [bm.verts.new((x,y,h)) for x,y in inner_pts]
-            for i in range(4): j=(i+1)%4; bm.faces.new([inner_prev[i],inner_prev[j],inner_top_v[j],inner_top_v[i]])
+            if bf > 0.0001:
+                outer_bot_pts = [(-hw+bf, -hd+bf), (hw-bf, -hd+bf), (hw-bf, hd-bf), (-hw+bf, hd-bf)]
+                ib_off = t + inner_fillet_r
+                inner_bot_pts = [(-hw+ib_off, -hd+ib_off), (hw-ib_off, -hd+ib_off),
+                                 (hw-ib_off, hd-ib_off), (-hw+ib_off, hd-ib_off)]
+                outer_bot_v = [bm.verts.new((x, y, 0)) for x, y in outer_bot_pts]
+                bm.faces.new(list(reversed(outer_bot_v)))
+                outer_prev = outer_bot_v
+                for si in range(1, fillet_seg + 1):
+                    frac = si / fillet_seg; ang = math.pi/2*frac
+                    sin_a = math.sin(ang); rise = bf*(1-math.cos(ang))
+                    ring_off = bf*(1-sin_a)
+                    ring_pts = [(-hw+ring_off,-hd+ring_off),(hw-ring_off,-hd+ring_off),
+                                (hw-ring_off,hd-ring_off),(-hw+ring_off,hd-ring_off)]
+                    ring = [bm.verts.new((x,y,rise)) for x,y in ring_pts]
+                    for i in range(4): j=(i+1)%4; bm.faces.new([outer_prev[i],outer_prev[j],ring[j],ring[i]])
+                    outer_prev = ring
+                outer_top_v = [bm.verts.new((x,y,h)) for x,y in outer_pts]
+                for i in range(4): j=(i+1)%4; bm.faces.new([outer_prev[i],outer_prev[j],outer_top_v[j],outer_top_v[i]])
+                inner_bot_v = [bm.verts.new((x,y,bt)) for x,y in inner_bot_pts]
+                bm.faces.new(inner_bot_v)
+                inner_prev = inner_bot_v
+                for si in range(1, fillet_seg + 1):
+                    frac = si/fillet_seg; ang = math.pi/2*frac
+                    sin_a = math.sin(ang); rise = inner_fillet_r*(1-math.cos(ang))
+                    ring_off = ib_off - inner_fillet_r*sin_a
+                    ring_pts = [(-hw+ring_off,-hd+ring_off),(hw-ring_off,-hd+ring_off),
+                                (hw-ring_off,hd-ring_off),(-hw+ring_off,hd-ring_off)]
+                    ring = [bm.verts.new((x,y,bt+rise)) for x,y in ring_pts]
+                    for i in range(4): j=(i+1)%4; bm.faces.new([inner_prev[i],inner_prev[j],ring[j],ring[i]])
+                    inner_prev = ring
+                inner_top_v = [bm.verts.new((x,y,h)) for x,y in inner_pts]
+                for i in range(4): j=(i+1)%4; bm.faces.new([inner_prev[i],inner_prev[j],inner_top_v[j],inner_top_v[i]])
+            else:
+                # No fillet: direct walls
+                outer_bot_v = [bm.verts.new((x, y, 0)) for x, y in outer_pts]
+                bm.faces.new(list(reversed(outer_bot_v)))
+                outer_top_v = [bm.verts.new((x, y, h)) for x, y in outer_pts]
+                for i in range(4): j=(i+1)%4; bm.faces.new([outer_bot_v[i],outer_bot_v[j],outer_top_v[j],outer_top_v[i]])
+                inner_bot_v = [bm.verts.new((x, y, bt)) for x, y in inner_pts]
+                bm.faces.new(inner_bot_v)
+                inner_top_v = [bm.verts.new((x, y, h)) for x, y in inner_pts]
+                for i in range(4): j=(i+1)%4; bm.faces.new([inner_bot_v[i],inner_bot_v[j],inner_top_v[j],inner_top_v[i]])
         else:
             # Rounded: use shared utilities
             outer_pts = make_profile(hw, hd, cr, seg)
             inner_pts = make_profile(hw - t, hd - t, ir, seg)
             num_pts = 8 * seg
             
-            # Outer fillet + walls
-            bot_cr_o = cr  # keep corner radius constant
-            outer_bot_v, outer_fillet_top, _ = add_fillet_rings(
-                bm, hw, hd, cr, hw-bf, hd-bf, bot_cr_o, 0.0, bf, fillet_seg, seg)
-            
-            # Outer walls up to z=h
-            outer_top_v = [bm.verts.new((x, y, h)) for x, y in outer_pts]
-            for i in range(num_pts):
-                j = (i + 1) % num_pts
-                bm.faces.new([outer_fillet_top[i], outer_fillet_top[j], outer_top_v[j], outer_top_v[i]])
-            
-            # Inner fillet + walls
-            inner_wall_hw = hw - t
-            inner_wall_hd = hd - t
-            inner_wall_cr = ir
-            inner_bot_hw = inner_wall_hw - inner_fillet_r
-            inner_bot_hd = inner_wall_hd - inner_fillet_r
-            inner_bot_cr = inner_wall_cr  # keep corner radius constant
-            inner_bot_v, inner_fillet_top, _ = add_fillet_rings(
-                bm, inner_wall_hw, inner_wall_hd, inner_wall_cr,
-                inner_bot_hw, inner_bot_hd, inner_bot_cr,
-                bt, inner_fillet_r, fillet_seg, seg)
-            
-            # Inner walls up to z=h
-            inner_top_v = [bm.verts.new((x, y, h)) for x, y in inner_pts]
-            for i in range(num_pts):
-                j = (i + 1) % num_pts
-                bm.faces.new([inner_fillet_top[i], inner_fillet_top[j], inner_top_v[j], inner_top_v[i]])
+            if bf > 0.0001:
+                bot_cr_o = cr
+                outer_bot_v, outer_fillet_top, _ = add_fillet_rings(
+                    bm, hw, hd, cr, hw-bf, hd-bf, bot_cr_o, 0.0, bf, fillet_seg, seg)
+                outer_top_v = [bm.verts.new((x, y, h)) for x, y in outer_pts]
+                for i in range(num_pts):
+                    j = (i + 1) % num_pts
+                    bm.faces.new([outer_fillet_top[i], outer_fillet_top[j], outer_top_v[j], outer_top_v[i]])
+                inner_wall_hw = hw - t; inner_wall_hd = hd - t; inner_wall_cr = ir
+                inner_bot_hw = inner_wall_hw - inner_fillet_r; inner_bot_hd = inner_wall_hd - inner_fillet_r
+                inner_bot_cr = inner_wall_cr
+                inner_bot_v, inner_fillet_top, _ = add_fillet_rings(
+                    bm, inner_wall_hw, inner_wall_hd, inner_wall_cr,
+                    inner_bot_hw, inner_bot_hd, inner_bot_cr,
+                    bt, inner_fillet_r, fillet_seg, seg)
+                inner_top_v = [bm.verts.new((x, y, h)) for x, y in inner_pts]
+                for i in range(num_pts):
+                    j = (i + 1) % num_pts
+                    bm.faces.new([inner_fillet_top[i], inner_fillet_top[j], inner_top_v[j], inner_top_v[i]])
+            else:
+                # No fillet: direct walls
+                outer_bot_v = [bm.verts.new((x, y, 0)) for x, y in outer_pts]
+                bm.faces.new(list(reversed(outer_bot_v)))
+                outer_top_v = [bm.verts.new((x, y, h)) for x, y in outer_pts]
+                for i in range(num_pts):
+                    j = (i + 1) % num_pts
+                    bm.faces.new([outer_bot_v[i], outer_bot_v[j], outer_top_v[j], outer_top_v[i]])
+                inner_bot_v = [bm.verts.new((x, y, bt)) for x, y in inner_pts]
+                bm.faces.new(inner_bot_v)
+                inner_top_v = [bm.verts.new((x, y, h)) for x, y in inner_pts]
+                for i in range(num_pts):
+                    j = (i + 1) % num_pts
+                    bm.faces.new([inner_bot_v[i], inner_bot_v[j], inner_top_v[j], inner_top_v[i]])
         
         # --- Top rim ---
         for i in range(num_pts):

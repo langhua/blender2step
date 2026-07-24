@@ -1251,7 +1251,7 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
     hole_solver: EnumProperty(
         name=_t("Solver"),
         items=[
-            ('bmesh', 'BMesh', _t("Pure-Python fallback, last resort")),
+            ('bmesh', 'BMesh', _t("Try FLOAT then EXACT, circle fallback for round holes")),
             ('FLOAT', 'FLOAT', _t("Fast, works for most cases")),
             ('EXACT', 'EXACT', _t("Slower but handles complex geometry")),
         ],
@@ -1371,7 +1371,16 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
                     layout.prop(self, 'hole_fillet_type')
             layout.label(text=_t("  → RRect {w:.1f}×{h:.1f}mm cr={cr:.1f}").format(w=self.hole_width, h=self.hole_height, cr=self.hole_cr))
         layout.separator()
-        layout.prop(self, 'hole_solver')
+        if self.hole_type == 'round':
+            layout.prop(self, 'hole_solver')
+        else:
+            # rrect: BMesh useless → show only FLOAT/EXACT toggle
+            if self.hole_solver == 'bmesh':
+                self.hole_solver = 'FLOAT'
+            row = layout.row(align=True)
+            row.label(text=_t("Solver"))
+            row.prop_enum(self, 'hole_solver', 'FLOAT')
+            row.prop_enum(self, 'hole_solver', 'EXACT')
         layout.prop(self, 'keep_cutter')
 
     def execute(self, context):
@@ -1547,7 +1556,7 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
             self._simple_obj_name = obj.name
             self._simple_entry = entry
             self._simple_cutter = cutter
-            self._simple_solver = self.hole_solver
+            self._simple_solver = 'FLOAT' if (self.hole_type != 'round' and self.hole_solver == 'bmesh') else self.hole_solver
             self._simple_fillet_info = _hole_fillet_info
             self._simple_fillet_type = _hole_fillet_type
             self._simple_face_code = face_code
@@ -2141,21 +2150,19 @@ def _direct_cut_hole(obj, cutter, solver='bmesh'):
     bpy.context.view_layer.objects.active = obj
     bpy.context.view_layer.update()
     
-    # Save cutter info before deletion
+    # Save cutter info for fallback
     cutter_loc = cutter.location.copy()
     cutter_radius = cutter.dimensions.x / 2
+    is_rrect = ('RRCutter' in cutter.name or 'Hole_RR' in cutter.name)
     
-    # bmesh path: skip Boolean entirely
+    # BMesh: try Boolean first, only circle fallback for round holes
     if solver == 'bmesh':
-        bpy.data.objects.remove(cutter, do_unlink=True)
-        _bmesh_cut_circle(obj, cutter_loc, cutter_radius)
-        return True
+        solvers = ('FLOAT', 'EXACT')
+    else:
+        solvers = (solver, 'FLOAT' if solver == 'EXACT' else 'EXACT')
     
     vbefore = len(obj.data.vertices)
-    primary = solver
-    fallback = 'FLOAT' if solver == 'EXACT' else 'EXACT'
-    
-    for solv in (primary, fallback):
+    for solv in solvers:
         for m in list(obj.modifiers):
             obj.modifiers.remove(m)
         mod = obj.modifiers.new(name="DirectCut", type='BOOLEAN')
@@ -2174,10 +2181,14 @@ def _direct_cut_hole(obj, cutter, solver='bmesh'):
             _cleanup_after_bool(obj)
             return True
     
-    # Both failed — bmesh fallback
-    print(f"[STEP Exporter] Boolean failed, using bmesh fallback...")
-    bpy.data.objects.remove(cutter, do_unlink=True)
-    _bmesh_cut_circle(obj, cutter_loc, cutter_radius)
+    # All Boolean failed — circle fallback (round holes only)
+    if not is_rrect:
+        print(f"[STEP Exporter] Boolean failed, using bmesh circle fallback...")
+        bpy.data.objects.remove(cutter, do_unlink=True)
+        _bmesh_cut_circle(obj, cutter_loc, cutter_radius)
+    else:
+        print(f"[STEP Exporter] Boolean failed for rrect, no fallback available")
+        bpy.data.objects.remove(cutter, do_unlink=True)
     return True
 
 
@@ -3076,6 +3087,15 @@ class STEP_EXPORTER_OT_edit_shell_hole(Operator):
     edit_width: bpy.props.FloatProperty(name=_t("Width"), default=10.0, min=0.1, max=500.0)
     edit_height: bpy.props.FloatProperty(name=_t("Height"), default=8.0, min=0.1, max=500.0)
     edit_cr: bpy.props.FloatProperty(name=_t("Corner R"), default=2.0, min=0.0, max=500.0)
+    edit_solver: bpy.props.EnumProperty(
+        name=_t("Solver"),
+        items=[
+            ('bmesh', 'BMesh', _t("Try FLOAT then EXACT, circle fallback for round holes")),
+            ('FLOAT', 'FLOAT', _t("Fast, works for most cases")),
+            ('EXACT', 'EXACT', _t("Slower but handles complex geometry")),
+        ],
+        default='bmesh',
+    )
 
     @classmethod
     def poll(cls, context):
@@ -3141,6 +3161,16 @@ class STEP_EXPORTER_OT_edit_shell_hole(Operator):
             layout.prop(self, 'edit_fillet')
             if self.edit_fillet > 0.0001:
                 layout.prop(self, 'edit_fillet_type')
+        layout.separator()
+        if self.edit_type == 'round':
+            layout.prop(self, 'edit_solver')
+        else:
+            if self.edit_solver == 'bmesh':
+                self.edit_solver = 'FLOAT'
+            row = layout.row(align=True)
+            row.label(text=_t("Solver"))
+            row.prop_enum(self, 'edit_solver', 'FLOAT')
+            row.prop_enum(self, 'edit_solver', 'EXACT')
 
     def execute(self, context):
         obj = context.active_object
@@ -3171,6 +3201,7 @@ class STEP_EXPORTER_OT_edit_shell_hole(Operator):
         obj['window_data'] = ';'.join(entries)
         # Rebuild shell in execute() where obj refs are stable
         _rebuild_stage_create(obj)
+        obj['_edit_solver'] = self.edit_solver
         # Start modal for hole processing
         self._rb_obj_name = obj.name
         self._rb_entries = entries
@@ -3366,7 +3397,7 @@ def _rebuild_stage_hole(obj, entry):
             bpy.ops.mesh.primitive_cylinder_add(
                 vertices=32, radius=radius, depth=cutter_depth, location=(cx * S, cy * S, cz * S))
             cutter = bpy.context.active_object; cutter.name = "Hole_R_rebuild"
-            _direct_cut_hole(obj, cutter)
+            _direct_cut_hole(obj, cutter, solver=obj.get('_edit_solver', 'FLOAT'))
             # Apply fillets via ring functions
             outer_z = -h * S / 2
             inner_z = -h * S / 2 + thickness
@@ -3413,7 +3444,10 @@ def _rebuild_stage_hole(obj, entry):
     mod = obj.modifiers.new(name="HoleRebuild", type='BOOLEAN')
     mod.object = cutter
     mod.operation = 'DIFFERENCE'
-    mod.solver = 'FLOAT'
+    solver = obj.get('_edit_solver', 'FLOAT')
+    if solver == 'bmesh':
+        solver = 'FLOAT'
+    mod.solver = solver
     mod.use_self = True
     cutter.hide_viewport = True
     bpy.context.view_layer.update()

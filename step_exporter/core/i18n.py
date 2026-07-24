@@ -526,6 +526,9 @@ _STRINGS = {
     "Manifold": {"zh_CN": "Manifold"},
     "Manifold solver (requires Blender 5.x+)": {"zh_CN": "Manifold 求解器（需要 Blender 5.x+）"},
     "Position: ({cx:.1f}, {cy:.1f}, {cz:.1f}) {face}": {"zh_CN": "位置: ({cx:.1f}, {cy:.1f}, {cz:.1f}) {face}"},
+    "Position: {face}": {"zh_CN": "位置: {face}"},
+    " (shell-local)": {"zh_CN": "（壳内坐标）"},
+    "Position (X/Y from center, Z from bottom) mm": {"zh_CN": "位置（X/Y 距中心，Z 距底面）mm"},
     "Solver": {"zh_CN": "算法"},
 }
 

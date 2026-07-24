@@ -56,25 +56,25 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
 
     # ── Dimensions ──
     width: FloatProperty(
-        name=_t("Width (X)"), default=100.0, min=1.0, max=10000.0,
+        name=_t("Width (X)"), default=100.0, min=1.0, max=10000.0, step=0.1, precision=1,
         description=_t("Width along X axis"))
     depth: FloatProperty(
-        name=_t("Depth (Y)"), default=80.0, min=1.0, max=10000.0,
+        name=_t("Depth (Y)"), default=80.0, min=1.0, max=10000.0, step=0.1, precision=1,
         description=_t("Depth along Y axis"))
     height: FloatProperty(
-        name=_t("Height (Z)"), default=50.0, min=1.0, max=10000.0,
+        name=_t("Height (Z)"), default=50.0, min=0.1, max=10000.0, step=0.1, precision=1,
         description=_t("Height along Z axis"))
     thickness: FloatProperty(
-        name=_t("Wall Thickness"), default=2.0, min=0.1, max=1000.0,
+        name=_t("Wall Thickness"), default=2.0, min=0.1, max=1000.0, step=0.1, precision=1,
         description=_t("Wall thickness (sides + top)"))
     bottom_thickness: FloatProperty(
-        name=_t("Bottom Thickness"), default=2.0, min=0.1, max=1000.0,
+        name=_t("Bottom Thickness"), default=2.0, min=0.1, max=1000.0, step=0.1, precision=1,
         description=_t("Bottom wall thickness (default same as wall)"))
     corner_radius: FloatProperty(
-        name=_t("Corner Radius"), default=5.0, min=0.1, max=1000.0,
+        name=_t("Corner Radius"), default=5.0, min=0.1, max=1000.0, step=0.1, precision=1,
         description=_t("Fillet radius for rounded corners"))
     bottom_fillet: FloatProperty(
-        name=_t("Bottom Fillet"), default=0.0, min=0.0, max=100.0,
+        name=_t("Bottom Fillet"), default=0.0, min=0.0, max=100.0, step=0.1, precision=1,
         description=_t("Fillet radius at bottom edges"))
 
     # ── Rim (壳边) ──
@@ -709,15 +709,14 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
     # ── Curved-corner shell (cosine walls, smaller bottom) ──
 
     def _build_curved_shell(self, w, d, h, t, bt, cr, rw, rh, rim_type, rim_shape, top_ratio, bf, curve_ratio, eccentric_y=0.0, keep_cutters=False):
-        """Build shell with cosine walls + bottom fillet via edge bridging.
-        t=wall thickness, bt=bottom thickness."""
+        """Build shell with cosine walls — all in one bmesh, no Boolean."""
         import math
         
         hw_outer, hd_outer = w / 2.0, d / 2.0
         hh = h / 2.0
         total_inset = min(hw_outer, hd_outer) * curve_ratio * 0.5
-        ecc_y = eccentric_y  # -1..+1, maps to -total_inset..+total_inset Y shift
-        seg = max(24, int(cr / min(w, d) * 64))  # more segments for cleaner boolean cuts
+        ecc_y = eccentric_y
+        seg = max(24, int(cr / min(w, d) * 64))
         side_segs = seg * 2
         num_pts = 8 * seg
         
@@ -726,26 +725,18 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
             cc = [(-rhw+cr_a,-rhd+cr_a),(rhw-cr_a,-rhd+cr_a),
                   (rhw-cr_a,rhd-cr_a),(-rhw+cr_a,rhd-cr_a)]
             pts = []
-            for i in range(1,n+1):
-                pts.append((rhw, -rhd+cr_a+(2*(rhd-cr_a))*i/n))
+            for i in range(1,n+1): pts.append((rhw, -rhd+cr_a+(2*(rhd-cr_a))*i/n))
             cx,cy=cc[2]
-            for j in range(1,n+1):
-                a=j*(math.pi/2)/n; pts.append((cx+cr_a*math.cos(a),cy+cr_a*math.sin(a)))
-            for i in range(1,n+1):
-                pts.append((rhw-cr_a-(2*(rhw-cr_a))*i/n, rhd))
+            for j in range(1,n+1): a=j*(math.pi/2)/n; pts.append((cx+cr_a*math.cos(a),cy+cr_a*math.sin(a)))
+            for i in range(1,n+1): pts.append((rhw-cr_a-(2*(rhw-cr_a))*i/n, rhd))
             cx,cy=cc[3]
-            for j in range(1,n+1):
-                a=math.pi/2+j*(math.pi/2)/n; pts.append((cx+cr_a*math.cos(a),cy+cr_a*math.sin(a)))
-            for i in range(1,n+1):
-                pts.append((-rhw, rhd-cr_a-(2*(rhd-cr_a))*i/n))
+            for j in range(1,n+1): a=math.pi/2+j*(math.pi/2)/n; pts.append((cx+cr_a*math.cos(a),cy+cr_a*math.sin(a)))
+            for i in range(1,n+1): pts.append((-rhw, rhd-cr_a-(2*(rhd-cr_a))*i/n))
             cx,cy=cc[0]
-            for j in range(1,n+1):
-                a=math.pi+j*(math.pi/2)/n; pts.append((cx+cr_a*math.cos(a),cy+cr_a*math.sin(a)))
-            for i in range(1,n+1):
-                pts.append((-rhw+cr_a+(2*(rhw-cr_a))*i/n, -rhd))
+            for j in range(1,n+1): a=math.pi+j*(math.pi/2)/n; pts.append((cx+cr_a*math.cos(a),cy+cr_a*math.sin(a)))
+            for i in range(1,n+1): pts.append((-rhw+cr_a+(2*(rhw-cr_a))*i/n, -rhd))
             cx,cy=cc[1]
-            for j in range(1,n+1):
-                a=3*math.pi/2+j*(math.pi/2)/n; pts.append((cx+cr_a*math.cos(a),cy+cr_a*math.sin(a)))
+            for j in range(1,n+1): a=3*math.pi/2+j*(math.pi/2)/n; pts.append((cx+cr_a*math.cos(a),cy+cr_a*math.sin(a)))
             return pts
         
         def _layer_at_z(z_target):
@@ -753,122 +744,143 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
             t_frac = max(0.0, min(1.0, t_frac))
             return total_inset * (1.0 - math.cos(math.pi / 2 * t_frac))
         
-        def _connect_layers(layers, reversed_winding=False):
-            """Create quads between consecutive layers."""
-            for li in range(len(layers) - 1):
-                cur, nxt = layers[li], layers[li + 1]
-                for i in range(num_pts):
-                    j = (i + 1) % num_pts
-                    if reversed_winding:
-                        bm.faces.new([cur[j], cur[i], nxt[i], nxt[j]])
-                    else:
-                        bm.faces.new([cur[i], cur[j], nxt[j], nxt[i]])
-        
         bm = bmesh.new()
         
-        # ── Outer wall: one continuous loop from +hh to -hh (wall extends into fillet) ──
+        # ── Build outer layers (top→bottom) ──
         bf_segs = max(16, int(bf / min(w, d) * 128)) if bf > 0.0001 else 0
-        total_steps = side_segs + bf_segs
+        outer_steps = side_segs + bf_segs
         outer_layers = []
-        for sl in range(0, total_steps + 1):
-            z_val = hh - 2 * hh * sl / total_steps
-            inset = _layer_at_z(z_val)
-            hw = hw_outer - inset
-            hd = hd_outer - (hd_outer / hw_outer * inset) if hw_outer > 0 else 0
+        for sl in range(outer_steps + 1):
+            zv = hh - 2 * hh * sl / outer_steps
+            ins = _layer_at_z(zv)
+            ohw = hw_outer - ins
+            ohd = hd_outer - (hd_outer / hw_outer * ins) if hw_outer > 0 else 0
             r = cr
-            if bf > 0.0001 and z_val < -hh + bf:
-                s = (z_val + hh) / bf
-                s = max(0.0, min(1.0, s))
-                sin_t = math.sin(math.pi / 2 * s)
-                offset = bf * (1.0 - sin_t)
-                hw -= offset
-                hd -= (hd_outer / hw_outer * offset) if hw_outer > 0 else 0
-                # Keep corner radius constant; only wall position changes
-            pts = _profile(hw, hd, r, seg)
-            y_off = inset * ecc_y  # Y eccentricity proportional to curve inset
-            outer_layers.append([bm.verts.new((x, y + y_off, z_val)) for x, y in pts])
+            if bf > 0.0001 and zv < -hh + bf:
+                s = (zv + hh) / bf; s = max(0, min(1, s))
+                off = bf * (1 - math.sin(math.pi/2 * s))
+                ohw -= off; ohd -= (hd_outer/hw_outer*off) if hw_outer>0 else 0
+            pts = _profile(ohw, ohd, r, seg)
+            yo = ins * ecc_y
+            outer_layers.append([bm.verts.new((x, y+yo, zv)) for x, y in pts])
+        # Outer side faces (reversed winding)
+        for li in range(len(outer_layers)-1):
+            c, n = outer_layers[li], outer_layers[li+1]
+            for i in range(num_pts):
+                j = (i+1) % num_pts
+                bm.faces.new([c[j], c[i], n[i], n[j]])
+        # Outer bottom
+        bm.faces.new(list(reversed(outer_layers[-1])))
         
-        _connect_layers(outer_layers, reversed_winding=True)
-        bm.faces.new(list(reversed(outer_layers[-1])))  # bottom face (DOWN normal)
-        
-        # ── Inner wall: same fillet as outer, rim handled by boolean ──
-        inner_fillet_r = bf  # same as outer
-        inner_bot_z = -hh + bt  # bottom wall uses bottom_thickness
-        inner_top_z = hh
-        inner_wall_hw = (w - 2 * t) / 2.0
-        inner_wall_hd = (d - 2 * t) / 2.0
+        # ── Build inner layers (top→inner_bottom) ──
+        inner_bot_z = -hh + bt
+        iwhw, iwhd = (w - 2*t) / 2, (d - 2*t) / 2
         icr = max(cr - t, 0.0001)
-        ibf_segs = max(16, int(bf / min(w, d) * 128)) if bf > 0.0001 else 0
-        itotal_steps = side_segs + ibf_segs
+        ibfs = max(16, int(bf/min(w,d)*128)) if bf > 0.0001 else 0
+        inner_steps = side_segs + ibfs
         inner_layers = []
-        inner_z_bot = inner_bot_z
-        for sl in range(0, itotal_steps + 1):
-            z_val = inner_top_z - (inner_top_z - inner_z_bot) * sl / itotal_steps
-            inset = _layer_at_z(z_val)
-            hw = inner_wall_hw - inset
-            hd = inner_wall_hd - (inner_wall_hd / inner_wall_hw * inset) if inner_wall_hw > 0 else 0
+        for sl in range(inner_steps + 1):
+            zv = hh - (hh - inner_bot_z) * sl / inner_steps
+            ins = _layer_at_z(zv)
+            ihw = iwhw - ins
+            ihd = iwhd - (iwhd/iwhw*ins) if iwhw>0 else 0
             r = icr
-            if bf > 0.0001 and z_val < inner_bot_z + bf:
-                s = (z_val - inner_bot_z) / bf
-                s = max(0.0, min(1.0, s))
-                sin_t = math.sin(math.pi / 2 * s)
-                offset = bf * (1.0 - sin_t)
-                hw -= offset
-                hd -= (inner_wall_hd / inner_wall_hw * offset) if inner_wall_hw > 0 else 0
-            pts = _profile(hw, hd, r, seg)
-            y_off = inset * ecc_y  # Y eccentricity proportional to curve inset
-            inner_layers.append([bm.verts.new((x, y + y_off, z_val)) for x, y in pts])
+            if bf > 0.0001 and zv < inner_bot_z + bf:
+                s = (zv - inner_bot_z) / bf; s = max(0, min(1, s))
+                off = bf * (1 - math.sin(math.pi/2 * s))
+                ihw -= off; ihd -= (iwhd/iwhw*off) if iwhw>0 else 0
+            pts = _profile(ihw, ihd, r, seg)
+            yo = ins * ecc_y
+            inner_layers.append([bm.verts.new((x, y+yo, zv)) for x, y in pts])
+        # Inner side faces (reversed winding for outside visibility)
+        for li in range(len(inner_layers)-1):
+            c, n = inner_layers[li], inner_layers[li+1]
+            for i in range(num_pts):
+                j = (i+1) % num_pts
+                bm.faces.new([c[j], c[i], n[i], n[j]])
+        # Inner bottom
+        bm.faces.new(inner_layers[-1])
         
-        _connect_layers(inner_layers, reversed_winding=False)
-        bm.faces.new(list(reversed(inner_layers[-1])))  # inner bottom face (DOWN normal)
-        
-        # ── Top face: connect outer to inner ──
-        ot = outer_layers[0]; it = inner_layers[0]
-        for i in range(num_pts):
-            j = (i + 1) % num_pts
-            bm.faces.new([ot[i], ot[j], it[j], it[i]])
+        # Top rim (follows curved profile, sharp edges for rectangular look)
+        has_rim = rim_type != 'none' and rw > 0.0001 and rh > 0.0001
+        ratio = top_ratio if rim_shape == 'trapezoid' else 1.0
+        if has_rim:
+            if rim_type == 'outside':
+                obase = outer_layers[0]
+                ot_up = [bm.verts.new((v.co.x, v.co.y, hh + rh)) for v in obase]
+                for i in range(num_pts):
+                    j = (i+1) % num_pts
+                    bm.faces.new([obase[i], obase[j], ot_up[j], ot_up[i]])
+                def _shift(v, dist):
+                    r = math.sqrt(v.co.x**2 + v.co.y**2)
+                    if r < 0.0001: return (v.co.x, v.co.y)
+                    return (v.co.x - v.co.x/r * dist, v.co.y - v.co.y/r * dist)
+                st = [bm.verts.new((*_shift(v, rw*ratio), hh + rh)) for v in obase] if ratio > 0.001 else ot_up
+                if ratio > 0.001:
+                    for i in range(num_pts):
+                        j = (i+1) % num_pts
+                        bm.faces.new([ot_up[i], ot_up[j], st[j], st[i]])
+                sb = [bm.verts.new((*_shift(v, rw), hh)) for v in obase]
+                for i in range(num_pts):
+                    j = (i+1) % num_pts
+                    bm.faces.new([st[i], st[j], sb[j], sb[i]])
+                it = inner_layers[0]
+                for i in range(num_pts):
+                    j = (i+1) % num_pts
+                    bm.faces.new([sb[j], sb[i], it[i], it[j]])
+            else:  # inside
+                ibase = inner_layers[0]
+                it_up = [bm.verts.new((v.co.x, v.co.y, hh + rh)) for v in ibase]
+                for i in range(num_pts):
+                    j = (i+1) % num_pts
+                    bm.faces.new([ibase[i], ibase[j], it_up[j], it_up[i]])
+                def _shift(v, dist):
+                    r = math.sqrt(v.co.x**2 + v.co.y**2)
+                    if r < 0.0001: return (v.co.x, v.co.y)
+                    return (v.co.x + v.co.x/r * dist, v.co.y + v.co.y/r * dist)
+                st = [bm.verts.new((*_shift(v, rw*ratio), hh + rh)) for v in ibase] if ratio > 0.001 else it_up
+                if ratio > 0.001:
+                    for i in range(num_pts):
+                        j = (i+1) % num_pts
+                        bm.faces.new([it_up[i], it_up[j], st[j], st[i]])
+                sb = [bm.verts.new((*_shift(v, rw), hh)) for v in ibase]
+                for i in range(num_pts):
+                    j = (i+1) % num_pts
+                    bm.faces.new([st[i], st[j], sb[j], sb[i]])
+                ot = outer_layers[0]
+                for i in range(num_pts):
+                    j = (i+1) % num_pts
+                    bm.faces.new([ot[j], ot[i], sb[i], sb[j]])
+        else:
+            ot = outer_layers[0]; it = inner_layers[0]
+            for i in range(num_pts):
+                j = (i+1) % num_pts
+                bm.faces.new([ot[j], ot[i], it[i], it[j]])
         
         bm.normal_update()
         obj = self._bm_to_object(bm, "CurvedShell")
         obj.name = "ParamShell"
         obj.data.name = "ParamShell"
+        obj.location.z = h / 2.0
         for f in obj.data.polygons:
             f.use_smooth = True
-        # Mark corner vertical edges, top rim, and bottom-perimeter edges as sharp
         for e in obj.data.edges:
             v0, v1 = e.vertices
             z0 = obj.data.vertices[v0].co.z
             z1 = obj.data.vertices[v1].co.z
-            # Bottom perimeter
+            # Rim edges: mark shelf + top perimeter as sharp for rectangular look
+            if has_rim:
+                if abs(z0 - (hh + rh)) < 0.0001 and abs(z1 - (hh + rh)) < 0.0001:
+                    e.use_edge_sharp = True
             if abs(z0 + hh) < 0.0001 and abs(z1 + hh) < 0.0001:
                 e.use_edge_sharp = True
-            # Top perimeter (outer + inner rim)
             elif abs(z0 - hh) < 0.0001 and abs(z1 - hh) < 0.0001:
                 e.use_edge_sharp = True
-            # Vertical corner edges: both verts at same profile index (multiple of seg)
-            idx0 = v0 % num_pts
-            idx1 = v1 % num_pts
-            if idx0 == idx1 and (idx0 % seg == 0):
+            if (v0 % num_pts) == (v1 % num_pts) and (v0 % seg == 0):
                 e.use_edge_sharp = True
         
         print(f"[Curved] bf={bf*1000:.1f}mm inset={total_inset*1000:.1f}mm "
               f"v={len(obj.data.vertices)} f={len(obj.data.polygons)}")
-        
-        # ── Rim via boolean (same approach as _build_boolean_shell) ──
-        if rim_type != 'none' and rw > 0.0001 and rh > 0.0001:
-            ring = self._make_rim_ring_debug(w, d, t, rw, rh, rim_type, h, cr, rim_shape, top_ratio)
-            if ring:
-                # Shift shell so bottom at Z=0, then apply rim boolean
-                obj.location.z = h / 2.0
-                self._apply_bool(obj, ring, op='DIFFERENCE', solver='FLOAT')
-                if not keep_cutters:
-                    bpy.data.objects.remove(ring, do_unlink=True)
-                else:
-                    ring.hide_viewport = False
-                    ring.hide_select = False
-        else:
-            # Shift shell so bottom at Z=0
-            obj.location.z = h / 2.0
         
         return obj
 
@@ -1228,14 +1240,17 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
     hole_width: FloatProperty(name=_t("Width"), default=10.0, min=0.1, max=500.0)
     hole_height: FloatProperty(name=_t("Height"), default=8.0, min=0.1, max=500.0)
     hole_cr: FloatProperty(name=_t("Corner R"), default=2.0, min=0.0, max=500.0)
+    hole_pos_x: FloatProperty(name="X", default=0.0, precision=1)
+    hole_pos_y: FloatProperty(name="Y", default=0.0, precision=1)
+    hole_pos_z: FloatProperty(name="Z", default=0.0, precision=1)
     hole_solver: EnumProperty(
         name=_t("Solver"),
         items=[
+            ('bmesh', 'BMesh', _t("Pure-Python fallback, last resort")),
             ('FLOAT', 'FLOAT', _t("Fast, works for most cases")),
             ('EXACT', 'EXACT', _t("Slower but handles complex geometry")),
-            ('bmesh', 'BMesh', _t("Pure-Python fallback, last resort")),
         ],
-        default='FLOAT',
+        default='bmesh',
     )
 
     @classmethod
@@ -1244,9 +1259,21 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
         return obj and obj.type == 'MESH' and obj.get('object_type') == 'parametric_shell'
 
     def invoke(self, context, event):
-        # Pre-fill from 3D cursor
+        # Pre-fill from 3D cursor, converted to shell-local mm
+        obj = context.active_object
         cursor = context.scene.cursor.location
-        self.cursor_pos = (cursor.x, cursor.y, cursor.z)
+        if obj and obj.get('object_type') == 'parametric_shell':
+            S = 0.001 if obj.get('unit', 'mm') == 'mm' else 1.0
+            h_m = obj.get('height', 50.0) * S
+            loc = obj.location
+            # Shell-local: X/Y relative to shell center, Z from shell bottom
+            self.hole_pos_x = round((cursor.x - loc.x) * 1000, 1)
+            self.hole_pos_y = round((cursor.y - loc.y) * 1000, 1)
+            self.hole_pos_z = round((cursor.z - (loc.z - h_m/2)) * 1000, 1)
+        else:
+            self.hole_pos_x = cursor.x * 1000
+            self.hole_pos_y = cursor.y * 1000
+            self.hole_pos_z = cursor.z * 1000
         return context.window_manager.invoke_props_dialog(self, width=340)
 
     def draw(self, context):
@@ -1261,15 +1288,12 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
             t = obj.get('wall_thickness', 2.0)
             S = 0.001 if obj.get('unit', 'mm') == 'mm' else 1.0
             ws, ds, hs = w * S, d * S, h * S
-            cursor = context.scene.cursor.location
-            # Shell-local coords: mesh is centered at obj.location
-            # bottom Z = loc.z - hs/2, top Z = loc.z + hs/2
-            loc = obj.location
-            px = cursor.x - loc.x
-            py = cursor.y - loc.y
-            pz = cursor.z - (loc.z - hs / 2)  # relative to shell bottom
+            # Position fields are shell-local mm: X/Y relative to shell center, Z from bottom
+            px = self.hole_pos_x * 0.001  # mm → m shell-local
+            py = self.hole_pos_y * 0.001
+            pz = self.hole_pos_z * 0.001  # from shell bottom
 
-            # Determine which wall / face the cursor is near
+            # Determine which wall / face the position is near
             dist_right = abs(px - ws/2)
             dist_left = abs(px + ws/2)
             dist_front = abs(py - ds/2)
@@ -1279,8 +1303,11 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
             min_wall = min(dist_right, dist_left, dist_front, dist_back, dist_bottom, dist_top)
 
             box = layout.box()
-            box.label(text=_t("Position"), icon='ORIENTATION_LOCAL')
-            box.label(text=_t("Cursor: X={x:.1f} Y={y:.1f} Z={z:.1f} mm").format(x=cursor.x*1000, y=cursor.y*1000, z=cursor.z*1000))
+            box.label(text=_t("Position (X/Y from center, Z from bottom) mm"), icon='ORIENTATION_LOCAL')
+            row = box.row(align=True)
+            row.prop(self, 'hole_pos_x')
+            row.prop(self, 'hole_pos_y')
+            row.prop(self, 'hole_pos_z')
             # Wall identification
             wall_names = {
                 min_wall == dist_right: _t("Right wall (+X)"),
@@ -1344,23 +1371,24 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
 
     def execute(self, context):
         import math
-        cursor = context.scene.cursor.location
+        # Position fields are shell-local mm: X/Y from center, Z from bottom
+        px_r_mm = self.hole_pos_x  # shell-local X (mm)
+        py_r_mm = self.hole_pos_y  # shell-local Y (mm)
+        pz_r_mm = self.hole_pos_z  # shell-local Z from bottom (mm)
         
-        # Find the closest visible parametric shell to the 3D cursor
+        # Find the target shell (closest to active)
         obj = context.active_object
-        best_dist = float('inf')
-        best_obj = None
-        for o in bpy.data.objects:
-            if o.get('object_type') != 'parametric_shell':
-                continue
-            if o.hide_viewport or o.hide_get():
-                continue
-            d = (o.location - cursor).length
-            if d < best_dist:
-                best_dist = d
-                best_obj = o
-        if best_obj:
-            obj = best_obj
+        if not obj or obj.get('object_type') != 'parametric_shell':
+            best_dist = float('inf')
+            for o in bpy.data.objects:
+                if o.get('object_type') != 'parametric_shell':
+                    continue
+                if o.hide_viewport or o.hide_get():
+                    continue
+                d = (o.location - context.scene.cursor.location).length
+                if d < best_dist:
+                    best_dist = d
+                    obj = o
         
         if not obj or obj.get('object_type') != 'parametric_shell':
             self.report({'ERROR'}, _t("Select a parametric shell first"))
@@ -1381,13 +1409,17 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
             return {'CANCELLED'}
 
         loc = obj.location
-        # Shell-local cursor coords: mesh is centered at obj.location
-        # bottom Z = loc.z - h/2, top Z = loc.z + h/2
         h = obj.get('height', 50.0) * S
         shell_bottom_z = loc.z - h / 2
-        px_r = cursor.x - loc.x
-        py_r = cursor.y - loc.y
-        pz_r = cursor.z - shell_bottom_z  # relative to shell bottom
+        # Shell-local coords in meters (from mm)
+        px_r = px_r_mm * 0.001
+        py_r = py_r_mm * 0.001
+        pz_r = pz_r_mm * 0.001
+
+        # World coords for cutter placement
+        px = px_r + loc.x
+        py = py_r + loc.y
+        pz = pz_r + shell_bottom_z
 
         # Hole dimensions in Blender units
         extra = t * S * 1.5
@@ -1546,7 +1578,7 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
                     update_progress(30, _t("Cutting hole..."))
                     ok = _do_simple_stage0(obj, self._simple_cutter,
                                            keep=getattr(self, '_simple_keep_cutter', False),
-                                           solver=getattr(self, '_simple_solver', 'EXACT'))
+                                           solver=getattr(self, '_simple_solver', 'bmesh'))
                     # rrect on curved: use ring step instead of bevel (NURBS unreliable)
                     is_rrect_curved = (getattr(self, 'hole_type', '') == 'rrect'
                                        and obj.get('corner_type') == 'curved'
@@ -2099,7 +2131,7 @@ def _apply_fillet_torus_union(obj, hole_r_mm, fillet_mm, face_code, px, py, pz, 
         _fillet_stage_5(obj, result, face_code)
     print(f"[STEP Exporter] Done (type={fillet_type})")
 
-def _direct_cut_hole(obj, cutter, solver='EXACT'):
+def _direct_cut_hole(obj, cutter, solver='bmesh'):
     """Cut hole using Boolean modifier. solver: 'EXACT', 'FLOAT', or 'bmesh'."""
     bpy.context.view_layer.objects.active = obj
     bpy.context.view_layer.update()
@@ -2240,7 +2272,7 @@ def _bmesh_cut_circle(obj, pos, radius):
     bpy.data.objects.remove(cutter, do_unlink=True)
     print(f"[STEP Exporter] BMesh fallback also failed")
 
-def _do_simple_stage0(obj, cutter, keep=False, solver='EXACT'):
+def _do_simple_stage0(obj, cutter, keep=False, solver='bmesh'):
     """Stage 0: cut hole. Returns True if successful. If keep=True, saves cutter copy."""
     cutter.hide_viewport = False
     bpy.context.view_layer.update()
@@ -3027,6 +3059,9 @@ class STEP_EXPORTER_OT_edit_shell_hole(Operator):
 
     hole_index: bpy.props.IntProperty(default=-1)
     edit_type: bpy.props.EnumProperty(name=_t("Type"), items=[('round', _t("Round"), ""), ('rrect', _t("Rounded Rect"), "")])
+    edit_cx: bpy.props.FloatProperty(name="X", default=0.0, precision=1)
+    edit_cy: bpy.props.FloatProperty(name="Y", default=0.0, precision=1)
+    edit_cz: bpy.props.FloatProperty(name="Z", default=0.0, precision=1)
     edit_radius: bpy.props.FloatProperty(name=_t("Radius"), default=5.0, min=0.1, max=500.0)
     edit_fillet: bpy.props.FloatProperty(name=_t("Edge Fillet"), default=0.0, min=0.0, max=100.0)
     edit_fillet_type: bpy.props.EnumProperty(
@@ -3049,14 +3084,14 @@ class STEP_EXPORTER_OT_edit_shell_hole(Operator):
             return {'CANCELLED'}
         entry = holes[self.hole_index][0]
         parts = entry.split(',')
-        # Parse hole center coordinates for display
+        # Parse hole center coordinates
         try:
-            self._hole_cx = float(parts[0])
-            self._hole_cy = float(parts[1])
-            self._hole_cz = float(parts[2])
+            self.edit_cx = float(parts[0])
+            self.edit_cy = float(parts[1])
+            self.edit_cz = float(parts[2])
             self._hole_face = int(float(parts[-1])) if len(parts) >= 8 else -1
         except (ValueError, IndexError):
-            self._hole_cx = self._hole_cy = self._hole_cz = 0.0
+            self.edit_cx = self.edit_cy = self.edit_cz = 0.0
             self._hole_face = -1
         try:
             tc = int(float(parts[4]))
@@ -3078,13 +3113,15 @@ class STEP_EXPORTER_OT_edit_shell_hole(Operator):
 
     def draw(self, context):
         layout = self.layout
-        # Show hole center position (read-only)
+        # Hole position (editable)
         face_names = {0: _t("Bottom"), 1: _t("Top"), 2: _t("Left"), 3: _t("Right"), 4: _t("Front"), 5: _t("Back")}
         fn = face_names.get(getattr(self, '_hole_face', -1), '')
         box = layout.box()
-        box.label(text=_t("Position: ({cx:.1f}, {cy:.1f}, {cz:.1f}) {face}").format(
-            cx=getattr(self, '_hole_cx', 0), cy=getattr(self, '_hole_cy', 0),
-            cz=getattr(self, '_hole_cz', 0), face=fn))
+        box.label(text=_t("Position: {face}").format(face=fn))
+        row = box.row(align=True)
+        row.prop(self, 'edit_cx')
+        row.prop(self, 'edit_cy')
+        row.prop(self, 'edit_cz')
         layout.separator()
         layout.prop(self, 'edit_type')
         if self.edit_type == 'round':
@@ -3118,9 +3155,9 @@ class STEP_EXPORTER_OT_edit_shell_hole(Operator):
         # Build new entry: keep cx,cy,cz from old; replace type-specific fields
         old_face = old_parts[-1]
         if self.edit_type == 'round':
-            new_entry = f"{old_parts[0]},{old_parts[1]},{old_parts[2]},{self.edit_radius:.3f},1,{self.edit_fillet:.3f},{self.edit_fillet_type},{old_face}"
+            new_entry = f"{self.edit_cx:.3f},{self.edit_cy:.3f},{self.edit_cz:.3f},{self.edit_radius:.3f},1,{self.edit_fillet:.3f},{self.edit_fillet_type},{old_face}"
         else:
-            new_entry = f"{old_parts[0]},{old_parts[1]},{old_parts[2]},{self.edit_width:.3f},2,{self.edit_height:.3f},{self.edit_cr:.3f},{self.edit_fillet:.3f},{self.edit_fillet_type},{old_face}"
+            new_entry = f"{self.edit_cx:.3f},{self.edit_cy:.3f},{self.edit_cz:.3f},{self.edit_width:.3f},2,{self.edit_height:.3f},{self.edit_cr:.3f},{self.edit_fillet:.3f},{self.edit_fillet_type},{old_face}"
 
         # Replace entry in window_data
         wd = obj.get('window_data', '')

@@ -1,0 +1,4 @@
+Traceback (most recent call last):
+  File "F:\git\blender2step\_verify_groups.py", line 5, in <module>
+    from OCC.Core.STEPControl import STEPControl_Reader
+ModuleNotFoundError: No module named 'OCC'

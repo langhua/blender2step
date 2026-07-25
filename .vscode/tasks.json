@@ -84,6 +84,82 @@
 			"type": "shell",
 			"command": "cmake --build build --config Release",
 			"group": "build"
+		},
+		{
+			"label": "Build step_exporter Release",
+			"type": "shell",
+			"command": "cmake --build build --config Release",
+			"group": "build"
+		},
+		{
+			"label": "Build step_exporter Release",
+			"type": "shell",
+			"command": "cmake --build build --config Release",
+			"group": "build"
+		},
+		{
+			"label": "Install pythonocc & Run Verify",
+			"type": "shell",
+			"command": "cmd /c f:\\git\\blender2step\\_install_and_run.cmd",
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "none"
+		},
+		{
+			"label": "Run DIAG export test",
+			"type": "shell",
+			"command": "python f:\\git\\blender2step\\_test_diag.py",
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "none"
+		},
+		{
+			"label": "Run DIAG export test (with DLL dir)",
+			"type": "shell",
+			"command": "python f:\\git\\blender2step\\_test_diag.py",
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "none"
+		},
+		{
+			"label": "Run DIAG with Blender 5.2 Python",
+			"type": "shell",
+			"command": "\"F:\\Program Files\\Blender Foundation\\Blender 5.2\\5.2\\python\\bin\\python.exe\" f:\\git\\blender2step\\_test_diag.py",
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "none"
+		},
+		{
+			"label": "Run DIAG with Blender 5.2 Python (cmd)",
+			"type": "shell",
+			"command": "cmd /c \"\"F:\\Program Files\\Blender Foundation\\Blender 5.2\\5.2\\python\\bin\\python.exe\" f:\\git\\blender2step\\_test_diag.py\"",
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "none"
+		},
+		{
+			"label": "Run DIAG via cmd wrapper",
+			"type": "shell",
+			"command": "f:\\git\\blender2step\\_run_diag.cmd",
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "none"
+		},
+		{
+			"label": "Analyze test_diag STEP points",
+			"type": "shell",
+			"command": "python f:\\git\\blender2step\\step_exporter\\scripts\\find_step_points2.py",
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "none"
+		},
+		{
+			"label": "Analyze test_diag STEP points",
+			"type": "shell",
+			"command": "python f:\\git\\blender2step\\step_exporter\\scripts\\find_step_points2.py",
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "none"
 		}
 	]
 }

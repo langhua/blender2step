@@ -1441,17 +1441,17 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
         thickness = t * S
 
         # Auto-clamp Z to be within the wall for reliable boolean cut
-        # Uses shell-local Z (0..h)
+        # Uses shell-local Z (0..h). Must check bottom/top INDEPENDENTLY.
         dist_walls = [abs(px_r - hw), abs(px_r + hw), abs(py_r - hd), abs(py_r + hd)]
         dist_bottom = abs(pz_r)
         dist_top = abs(pz_r - h)
         min_wall = min(dist_walls)
-        if dist_bottom < min_wall or dist_top < min_wall:
-            # Bottom/top face: clamp Z to mid-wall
-            if dist_bottom < dist_top:
-                pz_r = max(0.0, min(pz_r, thickness))
-            else:
-                pz_r = max(h - thickness, min(pz_r, h))
+        if dist_bottom < min_wall:
+            # Bottom face: clamp Z to mid-wall
+            pz_r = max(0.0, min(pz_r, thickness))
+        elif dist_top < min_wall:
+            # Top face: clamp Z to mid-wall
+            pz_r = max(h - thickness, min(pz_r, h))
         else:
             # Side wall: clamp Z within [0, h]
             pz_r = max(0.0, min(pz_r, h))

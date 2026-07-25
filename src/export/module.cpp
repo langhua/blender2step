@@ -14,6 +14,7 @@
 #include <BRepPrimAPI_MakeRevol.hxx>
 #include <BRepPrimAPI_MakePrism.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
+#include <BRepAlgoAPI_Common.hxx>
 #include <BRepAlgoAPI_Fuse.hxx>
 #include <BRepAlgoAPI_Section.hxx>
 #include <BRepFilletAPI_MakeFillet.hxx>
@@ -3189,18 +3190,20 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
     double eccentric_y = 0.0;
     double bottom_thickness = 0.0;
     const char* window_data = "";
+    double rot_x = 0.0, rot_y = 0.0, rot_z = 0.0;
 
-    if (!PyArg_ParseTuple(args, "sdddd|ddsdddsddssisdddds",
+    if (!PyArg_ParseTuple(args, "sdddd|ddsdddsddssisddddsddd",
                           &filename, &width, &depth, &height, &thickness,
                           &bottom_thickness, &corner_radius, &corner_type,
                           &pos_x, &pos_y, &pos_z,
                           &rim_type, &rim_width, &rim_height,
                           &step_schema, &unit, &enable_logging,
                           &rim_shape, &rim_top_ratio,
-                          &bottom_fillet, &curve_ratio, &eccentric_y, &window_data)) {
+                          &bottom_fillet, &curve_ratio, &eccentric_y, &window_data,
+                          &rot_x, &rot_y, &rot_z)) {
         PyErr_SetString(PyExc_TypeError,
             "export_parametric_shell_step() expected: filename, width, depth, height, thickness"
-            "[, bottom_thickness, corner_radius, corner_type, pos_x, pos_y, pos_z, rim_type, rim_width, rim_height, step_schema, unit, enable_logging, rim_shape, rim_top_ratio, bottom_fillet, curve_ratio, eccentric_y, window_data]");
+            "[, bottom_thickness, corner_radius, corner_type, pos_x, pos_y, pos_z, rim_type, rim_width, rim_height, step_schema, unit, enable_logging, rim_shape, rim_top_ratio, bottom_fillet, curve_ratio, eccentric_y, window_data, rot_x, rot_y, rot_z]");
         return NULL;
     }
 
@@ -3252,6 +3255,16 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
 
         // Translate to world position BEFORE cutting holes,
         // so hole cutters (in world coordinates) align with the shell
+        // Apply object rotation first (Euler XYZ in radians), then translation
+        if (rot_x != 0.0 || rot_y != 0.0 || rot_z != 0.0) {
+            gp_Trsf rot;
+            rot.SetRotation(gp_Ax1(gp_Pnt(0,0,0), gp_Dir(1,0,0)), rot_x);
+            shape = BRepBuilderAPI_Transform(shape, rot).Shape();
+            rot.SetRotation(gp_Ax1(gp_Pnt(0,0,0), gp_Dir(0,1,0)), rot_y);
+            shape = BRepBuilderAPI_Transform(shape, rot).Shape();
+            rot.SetRotation(gp_Ax1(gp_Pnt(0,0,0), gp_Dir(0,0,1)), rot_z);
+            shape = BRepBuilderAPI_Transform(shape, rot).Shape();
+        }
         if (pos_x != 0.0 || pos_y != 0.0 || pos_z != 0.0) {
             gp_Trsf trsf;
             trsf.SetTranslation(gp_Vec(pos_x, pos_y, pos_z));
@@ -3373,6 +3386,16 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                         std::cout << "[STEP Exporter] Hole cutter: circular r=" << hole_r
                                   << " at (" << cx << "," << cy << "," << cz << ") (dist-based)" << std::endl;
                     }
+                    // Diagnostic: print cutter axis and center
+                    {
+                        gp_Pnt center = ax.Location();
+                        gp_Dir dir = ax.Direction();
+                        std::cout << "[DIAG] Cutter(cyl) center=(" << center.X() << "," << center.Y() << "," << center.Z() << ") dir=(" << dir.X() << "," << dir.Y() << "," << dir.Z() << ") len=" << cyl_len << std::endl;
+                        // Cutter bbox estimate
+                        Bnd_Box cb; BRepBndLib::Add(BRepPrimAPI_MakeCylinder(ax, hole_r, cyl_len).Shape(), cb);
+                        double cx1,cy1,cz1,cx2,cy2,cz2; cb.Get(cx1,cy1,cz1,cx2,cy2,cz2);
+                        std::cout << "[DIAG] Cutter bbox: ("<<cx1<<","<<cy1<<","<<cz1<<") - ("<<cx2<<","<<cy2<<","<<cz2<<")" << std::endl;
+                    }
                     BRepPrimAPI_MakeCylinder cm(ax, hole_r, cyl_len);
                     if (!cm.Shape().IsNull()) {
                         cutters.push_back(cm.Solid());
@@ -3410,6 +3433,12 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                     BRepPrimAPI_MakeBox bm(gp_Pnt(bx, by, bz), sx, sy, sz);
                     if (!bm.Shape().IsNull()) {
                         TopoDS_Shape hs = bm.Shape();
+                        // Diagnostic: print rrect cutter bbox and placement
+                        {
+                            Bnd_Box cb; BRepBndLib::Add(hs, cb);
+                            double cx1,cy1,cz1,cx2,cy2,cz2; cb.Get(cx1,cy1,cz1,cx2,cy2,cz2);
+                            std::cout << "[DIAG] RRect cutter bbox: ("<<cx1<<","<<cy1<<","<<cz1<<") - ("<<cx2<<","<<cy2<<","<<cz2<<") at center approx=("<<(cx1+cx2)/2.0<<","<<(cy1+cy2)/2.0<<","<<(cz1+cz2)/2.0<<")" << std::endl;
+                        }
                         // Fillet edges parallel to the axis through the wall
                         BRepFilletAPI_MakeFillet fm(TopoDS::Solid(hs));
                         int ec = 0;
@@ -3441,18 +3470,57 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                 if (next == std::string::npos) break;
             }
 
-            // Save pre-cut shape for face replacement supplement
+                // Diagnostic: shell bbox before cuts
+                {
+                    Bnd_Box sb; BRepBndLib::Add(shape, sb);
+                    double sx1,sy1,sz1,sx2,sy2,sz2; sb.Get(sx1,sy1,sz1,sx2,sy2,sz2);
+                    std::cout << "[DIAG] Shell pre-cut bbox: ("<<sx1<<","<<sy1<<","<<sz1<<") - ("<<sx2<<","<<sy2<<","<<sz2<<")" << std::endl;
+                }
+                // Save pre-cut shape for face replacement supplement
             TopoDS_Shape shapePreCut = shape;
 
             // Cut holes one at a time
             if (!cutters.empty()) {
+                int failedCuts = 0;
                 for (size_t ci = 0; ci < cutters.size(); ci++) {
+                    // Verify cutter actually overlaps shell before attempting cut
+                    BRepAlgoAPI_Common commonOp(shape, cutters[ci]);
+                    if (!commonOp.IsDone()) {
+                        std::cout << "[STEP Exporter]   cutter " << ci
+                                  << " does not overlap shell, skipping" << std::endl;
+                        failedCuts++;
+                        continue;
+                    }
                     BRepAlgoAPI_Cut cutOp(shape, cutters[ci]);
                     if (cutOp.IsDone()) {
-                        shape = cutOp.Shape();
+                        TopoDS_Shape newShape = cutOp.Shape();
+                    // Diagnostic: bbox after this cut
+                    Bnd_Box sb2; BRepBndLib::Add(newShape, sb2);
+                    double sx1,sy1,sz1,sx2,sy2,sz2; sb2.Get(sx1,sy1,sz1,sx2,sy2,sz2);
+                    std::cout << "[DIAG] Shell post-cut bbox (cutter "<<ci<<"): ("<<sx1<<","<<sy1<<","<<sz1<<") - ("<<sx2<<","<<sy2<<","<<sz2<<")" << std::endl;
+                        // Verify shape actually changed
+                        TopExp_Explorer oldExp(shape, TopAbs_SOLID);
+                        TopExp_Explorer newExp(newShape, TopAbs_SOLID);
+                        int oldSolids = 0, newSolids = 0;
+                        for (; oldExp.More(); oldExp.Next()) oldSolids++;
+                        for (; newExp.More(); newExp.Next()) newSolids++;
+                        if (newSolids > 0) {
+                            shape = newShape;
+                        } else {
+                            std::cout << "[STEP Exporter]   cutter " << ci
+                                      << " cut produced no solids, skipping" << std::endl;
+                               PySys_WriteStdout("%s\n", "[C++ EXPORT] Cut produced no solids");
+                            failedCuts++;
+                        }
+                    } else {
+                        std::cout << "[STEP Exporter]   cutter " << ci
+                                  << " cut failed" << std::endl;
+                           PySys_WriteStdout("%s\n", "[C++ EXPORT] Cut failed");
+                        failedCuts++;
                     }
                 }
-                std::cout << "[STEP Exporter] Applied " << cutters.size()
+                std::cout << "[STEP Exporter] Applied " << (cutters.size() - failedCuts)
+                          << " of " << cutters.size()
                           << " hole cutter(s) to parametric shell" << std::endl;
             }
 

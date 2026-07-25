@@ -69,24 +69,24 @@ def _analyze_parametric_shell_from_mesh(obj, context=None, scale=1.0):
         'bottom_fillet': bf,
         'curve_ratio': obj.get('curve_ratio', 0.5) / 100.0 if obj.get('corner_type') == 'curved' else 0.5,
         'eccentric_y': obj.get('eccentric_y', 0.0) / 100.0,
-        # C++ shell has bottom at z=0; Blender mesh is centered at object origin.
-        # World bottom = obj.location.z - h/2 (in Blender units). Convert to mm.
-        # pos_z should place C++ shell bottom at the same world Z as Blender.
-        'pos_x': obj.location.x * scale, 'pos_y': obj.location.y * scale,
+        'pos_x': obj.location.x * scale, 'pos_y': -obj.location.y * scale,
         'pos_z': (obj.location.z * scale) - (h_mm / 2.0),
         'window_data': _convert_window_data(obj, scale, h_mm),
     }
 
 
 def _convert_window_data(obj, scale, h_mm):
-    """Convert window_data from shell-local to world coords if needed."""
+    """Convert window_data from shell-local to world coords.
+    Also fix incorrect cz values from old Z-clamp bug.
+    IMPORTANT: Apply Rotation (Ctrl+A) on the shell before export."""
     wd = obj.get('window_data', '')
     if not wd or not obj.get('window_data_local'):
-        return wd  # old format: already world coords, or empty
+        return wd
 
     pos_x = obj.location.x * scale
     pos_y = obj.location.y * scale
     pos_z = (obj.location.z * scale) - (h_mm / 2.0)
+    t_mm = obj.get('wall_thickness', 2.0) * (1000.0 if obj.get('unit', 'm') == 'm' else 1.0)
 
     entries = wd.split(';')
     converted = []
@@ -95,13 +95,24 @@ def _convert_window_data(obj, scale, h_mm):
         if not entry:
             continue
         parts = entry.split(',')
-        if len(parts) < 3:
+        if len(parts) < 5:
             converted.append(entry)
             continue
         try:
-            cx_w = float(parts[0]) + pos_x
-            cy_w = float(parts[1]) + pos_y
-            cz_w = float(parts[2]) + pos_z
+            cx = float(parts[0])
+            cy = float(parts[1])
+            cz = float(parts[2])
+            face = int(float(parts[-1])) if len(parts) >= 8 else -1
+
+            # Fix old Z-clamp bug: wrong cz for bottom/top face holes
+            if face == 0 and (cz > h_mm * 0.5 or cz < 0):
+                cz = min(max(cz, 0.0), t_mm)
+            elif face == 1 and (cz < h_mm * 0.5 or cz > h_mm):
+                cz = max(min(cz, h_mm), h_mm - t_mm)
+
+            cx_w = cx + pos_x
+            cy_w = -(cy + pos_y)
+            cz_w = cz + pos_z
             parts[0] = f"{cx_w:.3f}"
             parts[1] = f"{cy_w:.3f}"
             parts[2] = f"{cz_w:.3f}"

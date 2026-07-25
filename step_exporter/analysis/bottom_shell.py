@@ -45,6 +45,7 @@ def _analyze_bottom_shell_from_mesh(obj, context, scale):
             'hole_offset_x': hox, 'hole_offset_y': hoy,
             'pos_x': obj.location.x * scale, 'pos_y': obj.location.y * scale,
             'pos_z': (obj.location.z + oh / 2.0) * scale,  # bottom shell has bottom at -oh/2, compensate to Z=0
+            'rot_x': obj.rotation_euler.x, 'rot_y': obj.rotation_euler.y, 'rot_z': obj.rotation_euler.z,
         }
     
     import bmesh
@@ -483,6 +484,7 @@ def _analyze_bottom_shell_from_mesh(obj, context, scale):
         'pos_x': obj.location.x * S,
         'pos_y': obj.location.y * S,
         'pos_z': obj.location.z * S,
+        'rot_x': obj.rotation_euler.x, 'rot_y': obj.rotation_euler.y, 'rot_z': obj.rotation_euler.z,
     }
     
     if has_holes:

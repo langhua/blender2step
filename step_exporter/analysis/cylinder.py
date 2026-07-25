@@ -1217,6 +1217,9 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
     pos_x = obj.location.x
     pos_y = obj.location.y
     pos_z = obj.location.z
+    rot_x = obj.rotation_euler.x
+    rot_y = obj.rotation_euler.y
+    rot_z = obj.rotation_euler.z
     
     # 检测对象旋转：如果世界矩阵翻转了 Z 轴（绕 X 或 Y 旋转 180°），
     # 则交换 top_feature 和 bottom_feature（局部坐标中 chamfer 在顶部，
@@ -1622,6 +1625,7 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                     'pos_x': pos_x * S,
                     'pos_y': pos_y * S,
                     'pos_z': pos_z * S,
+                    'rot_x': rot_x, 'rot_y': rot_y, 'rot_z': rot_z,
                 }
                 # 通孔锥体+梯形槽：合并 groove 参数
                 if groove_params:
@@ -1683,6 +1687,7 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                     'pos_x': pos_x * S,
                     'pos_y': pos_y * S,
                     'pos_z': pos_z * S,
+                    'rot_x': rot_x, 'rot_y': rot_y, 'rot_z': rot_z,
                 }
                 if groove_params:
                     result['obj_type'] = 'hollow_cylinder_grooved'
@@ -1740,6 +1745,7 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                 'pos_x': pos_x * S,
                 'pos_y': pos_y * S,
                 'pos_z': pos_z * S,
+                'rot_x': rot_x, 'rot_y': rot_y, 'rot_z': rot_z,
                 'top_feature': top_feat,
                 'top_feature_size': top_sz * S,
                 'bottom_feature': bot_feat,
@@ -1848,6 +1854,7 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                     'pos_x': pos_x * S,
                     'pos_y': pos_y * S,
                     'pos_z': pos_z * S,
+                    'rot_x': rot_x, 'rot_y': rot_y, 'rot_z': rot_z,
                     'groove_depth': groove_params.get('groove_depth', 0) if groove_params else 0,
                     'groove_bottom_width': groove_params.get('groove_bottom_width', 0) if groove_params else 0,
                     'groove_top_width': groove_params.get('groove_top_width', 0) if groove_params else 0,
@@ -1922,6 +1929,7 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                     'pos_x': pos_x * S,
                     'pos_y': pos_y * S,
                     'pos_z': pos_z * S,
+                    'rot_x': rot_x, 'rot_y': rot_y, 'rot_z': rot_z,
                     'groove_depth': groove_params.get('groove_depth', 0) if groove_params else 0,
                     'groove_bottom_width': groove_params.get('groove_bottom_width', 0) if groove_params else 0,
                     'groove_top_width': groove_params.get('groove_top_width', 0) if groove_params else 0,
@@ -1945,6 +1953,7 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                     'pos_x': pos_x * S,
                     'pos_y': pos_y * S,
                     'pos_z': pos_z * S,
+                    'rot_x': rot_x, 'rot_y': rot_y, 'rot_z': rot_z,
                     'groove_depth': groove_params.get('groove_depth', 0) if groove_params else 0,
                     'groove_bottom_width': groove_params.get('groove_bottom_width', 0) if groove_params else 0,
                     'groove_top_width': groove_params.get('groove_top_width', 0) if groove_params else 0,
@@ -2119,6 +2128,7 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                 'pos_x': pos_x * S,
                 'pos_y': pos_y * S,
                 'pos_z': pos_z * S,
+                'rot_x': rot_x, 'rot_y': rot_y, 'rot_z': rot_z,
                 'groove_depth': groove_params.get('groove_depth', 0) if groove_params else 0,
                 'groove_bottom_width': groove_params.get('groove_bottom_width', 0) if groove_params else 0,
                 'groove_top_width': groove_params.get('groove_top_width', 0) if groove_params else 0,
@@ -2146,6 +2156,7 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
             'pos_x': pos_x * S,
             'pos_y': pos_y * S,
             'pos_z': pos_z * S,
+            'rot_x': rot_x, 'rot_y': rot_y, 'rot_z': rot_z,
             'groove_depth': groove_params.get('groove_depth', 0) if groove_params else 0,
             'groove_bottom_width': groove_params.get('groove_bottom_width', 0) if groove_params else 0,
             'groove_top_width': groove_params.get('groove_top_width', 0) if groove_params else 0,
@@ -2247,6 +2258,7 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                 'top_radius': top_radius,
                 'height': height,
                 'pos_x': pos_x, 'pos_y': pos_y, 'pos_z': pos_z,
+                'rot_x': rot_x, 'rot_y': rot_y, 'rot_z': rot_z,
                 'top_chamfer': top_feature_size if top_feature == 'chamfer' else 0,
                 'top_fillet': top_feature_size if top_feature == 'fillet' else 0,
                 'bottom_chamfer': bottom_feature_size if bottom_feature == 'chamfer' else 0,
@@ -2259,6 +2271,7 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                            else max(bottom_radius, top_radius)),
                 'height': height,
                 'pos_x': pos_x, 'pos_y': pos_y, 'pos_z': pos_z,
+                'rot_x': rot_x, 'rot_y': rot_y, 'rot_z': rot_z,
                 'top_chamfer': top_feature_size if top_feature == 'chamfer' else 0,
                 'top_fillet': top_feature_size if top_feature == 'fillet' else 0,
                 'bottom_chamfer': bottom_feature_size if bottom_feature == 'chamfer' else 0,
@@ -2296,6 +2309,7 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                     'pos_x': pos_x,
                     'pos_y': pos_y,
                     'pos_z': pos_z,
+                    'rot_x': rot_x, 'rot_y': rot_y, 'rot_z': rot_z,
                 }
             
             # 实心圆柱阶梯孔检测（优先于空心圆柱——台阶孔内壁会被检测为空心）
@@ -2317,6 +2331,7 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                         'bottom_chamfer': bottom_feature_size if bottom_feature == 'chamfer' else 0,
                         'bottom_fillet': bottom_feature_size if bottom_feature == 'fillet' else 0,
                         'pos_x': pos_x, 'pos_y': pos_y, 'pos_z': pos_z,
+                        'rot_x': rot_x, 'rot_y': rot_y, 'rot_z': rot_z,
                         'groove_depth': groove_params.get('groove_depth', 0) if groove_params else 0,
                         'groove_bottom_width': groove_params.get('groove_bottom_width', 0) if groove_params else 0,
                         'groove_top_width': groove_params.get('groove_top_width', 0) if groove_params else 0,
@@ -2337,13 +2352,14 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                     'bottom_chamfer': bottom_feature_size if bottom_feature == 'chamfer' else 0,
                     'bottom_fillet': bottom_feature_size if bottom_feature == 'fillet' else 0,
                     'pos_x': pos_x, 'pos_y': pos_y, 'pos_z': pos_z,
+                    'rot_x': rot_x, 'rot_y': rot_y, 'rot_z': rot_z,
                     'groove_depth': groove_params.get('groove_depth', 0) if groove_params else 0,
                     'groove_bottom_width': groove_params.get('groove_bottom_width', 0) if groove_params else 0,
                     'groove_top_width': groove_params.get('groove_top_width', 0) if groove_params else 0,
                     'groove_extrusion_length': groove_params.get('groove_extrusion_length', 0) if groove_params else 0,
                 'groove_angle': groove_params.get('groove_angle', 45.0) if groove_params else 45.0,
                     'pos_x': pos_x, 'pos_y': pos_y, 'pos_z': pos_z,
-                }
+                'rot_x': rot_x, 'rot_y': rot_y, 'rot_z': rot_z,
 
             obj_type = 'hollow_cylinder'
             if top_feature == 'fillet':
@@ -2358,6 +2374,7 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                 'pos_x': pos_x,
                 'pos_y': pos_y,
                 'pos_z': pos_z,
+                'rot_x': rot_x, 'rot_y': rot_y, 'rot_z': rot_z,
                 'top_feature': top_feature,
                 'top_feature_size': top_feature_size,
                 'bottom_feature': bottom_feature,
@@ -2381,6 +2398,7 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                 'pos_x': pos_x,
                 'pos_y': pos_y,
                 'pos_z': pos_z,
+                'rot_x': rot_x, 'rot_y': rot_y, 'rot_z': rot_z,
                 'top_feature': top_feature,
                 'top_feature_size': top_feature_size,
                 'bottom_feature': bottom_feature,
@@ -2413,6 +2431,7 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                     'bottom_chamfer': bottom_feature_size if bottom_feature == 'chamfer' else 0,
                     'bottom_fillet': bottom_feature_size if bottom_feature == 'fillet' else 0,
                     'pos_x': pos_x, 'pos_y': pos_y, 'pos_z': pos_z,
+                    'rot_x': rot_x, 'rot_y': rot_y, 'rot_z': rot_z,
                     'groove_depth': groove_params.get('groove_depth', 0) if groove_params else 0,
                     'groove_bottom_width': groove_params.get('groove_bottom_width', 0) if groove_params else 0,
                     'groove_top_width': groove_params.get('groove_top_width', 0) if groove_params else 0,
@@ -2433,6 +2452,7 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                 'bottom_chamfer': bottom_feature_size if bottom_feature == 'chamfer' else 0,
                 'bottom_fillet': bottom_feature_size if bottom_feature == 'fillet' else 0,
                 'pos_x': pos_x, 'pos_y': pos_y, 'pos_z': pos_z,
+                'rot_x': rot_x, 'rot_y': rot_y, 'rot_z': rot_z,
                 'groove_depth': groove_params.get('groove_depth', 0) if groove_params else 0,
                 'groove_bottom_width': groove_params.get('groove_bottom_width', 0) if groove_params else 0,
                 'groove_top_width': groove_params.get('groove_top_width', 0) if groove_params else 0,
@@ -2509,6 +2529,7 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                     'top_radius': top_radius,
                     'height': height,
                     'pos_x': pos_x, 'pos_y': pos_y, 'pos_z': pos_z,
+                    'rot_x': rot_x, 'rot_y': rot_y, 'rot_z': rot_z,
                     'top_chamfer': top_feature_size if top_feature == 'chamfer' else 0,
                     'top_fillet': top_feature_size if top_feature == 'fillet' else 0,
                     'bottom_chamfer': bottom_feature_size if bottom_feature == 'chamfer' else 0,
@@ -2521,6 +2542,7 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                                else max(bottom_radius, top_radius)),
                     'height': height,
                     'pos_x': pos_x, 'pos_y': pos_y, 'pos_z': pos_z,
+                    'rot_x': rot_x, 'rot_y': rot_y, 'rot_z': rot_z,
                     'top_chamfer': top_feature_size if top_feature == 'chamfer' else 0,
                     'top_fillet': top_feature_size if top_feature == 'fillet' else 0,
                     'bottom_chamfer': bottom_feature_size if bottom_feature == 'chamfer' else 0,
@@ -2601,6 +2623,7 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                         'bottom_feature': bottom_feature,
                         'bottom_feature_size': bottom_feature_size,
                         'pos_x': pos_x, 'pos_y': pos_y, 'pos_z': pos_z,
+                        'rot_x': rot_x, 'rot_y': rot_y, 'rot_z': rot_z,
                     }
             # Cylinder with chamfer/fillet: use stored_ctype to determine obj_type
             # Read stored feature sizes from object properties (mm, already scaled by S in this context)
@@ -2639,6 +2662,7 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                 'radius': avg_radius,
                 'height': height,
                 'pos_x': pos_x, 'pos_y': pos_y, 'pos_z': pos_z,
+                'rot_x': rot_x, 'rot_y': rot_y, 'rot_z': rot_z,
                 'top_feature': out_top_feat,
                 'top_feature_size': out_top_sz,
                 'bottom_feature': out_bot_feat,
@@ -2676,6 +2700,7 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                 'pos_x': pos_x,
                 'pos_y': pos_y,
                 'pos_z': pos_z,
+                'rot_x': rot_x, 'rot_y': rot_y, 'rot_z': rot_z,
                 'top_feature': top_feature,
                 'top_feature_size': top_feature_size,
                 'bottom_feature': bottom_feature,
@@ -2717,6 +2742,7 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                 'pos_x': pos_x,
                 'pos_y': pos_y,
                 'pos_z': pos_z,
+                'rot_x': rot_x, 'rot_y': rot_y, 'rot_z': rot_z,
                 'top_feature': top_feature,
                 'top_feature_size': top_feature_size,
                 'bottom_feature': bottom_feature,

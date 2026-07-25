@@ -175,23 +175,87 @@ PyObject* export_rounded_box_step(PyObject* self, PyObject* args) {
     }
 }
 
+// ── Rotation helper (shared by all export functions) ──
+// Rotates shape around its geometric center after translation.
+static TopoDS_Shape apply_rotation_after_translation(TopoDS_Shape shape,
+    double pos_x, double pos_y, double pos_z, double total_height,
+    double rot_x, double rot_y, double rot_z) {
+    if (fabs(rot_x) < 1e-9 && fabs(rot_y) < 1e-9 && fabs(rot_z) < 1e-9)
+        return shape;
+    double wcx = pos_x, wcy = pos_y, wcz = pos_z + total_height / 2.0;
+    gp_Trsf toOrigin; toOrigin.SetTranslation(gp_Vec(-wcx, -wcy, -wcz));
+    shape = BRepBuilderAPI_Transform(shape, toOrigin).Shape();
+    gp_Trsf rot;
+    rot.SetRotation(gp_Ax1(gp_Pnt(0,0,0), gp_Dir(1,0,0)), rot_x);
+    shape = BRepBuilderAPI_Transform(shape, rot).Shape();
+    rot.SetRotation(gp_Ax1(gp_Pnt(0,0,0), gp_Dir(0,1,0)), rot_y);
+    shape = BRepBuilderAPI_Transform(shape, rot).Shape();
+    rot.SetRotation(gp_Ax1(gp_Pnt(0,0,0), gp_Dir(0,0,1)), rot_z);
+    shape = BRepBuilderAPI_Transform(shape, rot).Shape();
+    gp_Trsf toWorld; toWorld.SetTranslation(gp_Vec(wcx, wcy, wcz));
+    shape = BRepBuilderAPI_Transform(shape, toWorld).Shape();
+    return shape;
+}
+
+// ── Generic STEP file rotation (post-export) ──
+// Reads a STEP file, rotates all shapes, and rewrites.
+// Used for export types that don't natively support rotation.
+PyObject* rotate_step_file(PyObject* self, PyObject* args) {
+    const char* filename;
+    double pos_x, pos_y, pos_z, total_height;
+    double rot_x = 0.0, rot_y = 0.0, rot_z = 0.0;
+    
+    if (!PyArg_ParseTuple(args, "sdddd|ddd",
+                          &filename, &pos_x, &pos_y, &pos_z, &total_height,
+                          &rot_x, &rot_y, &rot_z)) {
+        PyErr_SetString(PyExc_TypeError,
+            "rotate_step_file() expected: filename, pos_x, pos_y, pos_z, total_height, [rot_x], [rot_y], [rot_z]");
+        return NULL;
+    }
+    
+    if (fabs(rot_x) < 1e-9 && fabs(rot_y) < 1e-9 && fabs(rot_z) < 1e-9)
+        Py_RETURN_TRUE;
+    
+    try {
+        STEPControl_Reader reader;
+        IFSelect_ReturnStatus status = reader.ReadFile(filename);
+        if (status != IFSelect_RetDone) {
+            Py_RETURN_FALSE;
+        }
+        reader.TransferRoots();
+        TopoDS_Shape shape = reader.OneShape();
+        if (shape.IsNull()) Py_RETURN_FALSE;
+        
+        shape = apply_rotation_after_translation(shape, pos_x, pos_y, pos_z, total_height, rot_x, rot_y, rot_z);
+        
+        STEPControl_Writer writer;
+        writer.Transfer(shape, STEPControl_AsIs);
+        writer.Write(filename);
+        Py_RETURN_TRUE;
+    } catch (...) {
+        Py_RETURN_FALSE;
+    }
+}
+
 PyObject* export_bottom_shell_filleted_step(PyObject* self, PyObject* args) {
     const char* filename;
     double width, depth, outer_height, bottom_thickness, wall_thickness, corner_radius;
     double outer_fillet_radius, inner_fillet_radius, step_height = 1.0;
     double pos_x = 0.0, pos_y = 0.0, pos_z = 0.0;
+    double rot_x = 0.0, rot_y = 0.0, rot_z = 0.0;
     const char* step_schema = "AP214IS";
     const char* unit = "MILLIMETER";
     int enable_logging = 1;
 
-    if (!PyArg_ParseTuple(args, "sdddddddd|ddddssi",
+    if (!PyArg_ParseTuple(args, "sdddddddd|ddddssi|ddd",
                           &filename,
                           &width, &depth, &outer_height,
                           &bottom_thickness, &wall_thickness, &corner_radius,
                           &outer_fillet_radius, &inner_fillet_radius,
                           &step_height,
                           &pos_x, &pos_y, &pos_z,
-                          &step_schema, &unit, &enable_logging)) {
+                          &step_schema, &unit, &enable_logging,
+                          &rot_x, &rot_y, &rot_z)) {
         PyErr_SetString(PyExc_TypeError,
             "export_bottom_shell_filleted_step() expected: filename, width, depth, outer_height, "
             "bottom_thickness, wall_thickness, corner_radius, "
@@ -242,6 +306,7 @@ PyObject* export_bottom_shell_filleted_step(PyObject* self, PyObject* args) {
             trsf.SetTranslation(gp_Vec(pos_x, pos_y, pos_z));
             shape = BRepBuilderAPI_Transform(shape, trsf).Shape();
         }
+        shape = apply_rotation_after_translation(shape, pos_x, pos_y, pos_z, outer_height, rot_x, rot_y, rot_z);
 
         std::string logPath2;
         const char* log_filename = nullptr;
@@ -642,18 +707,20 @@ PyObject* export_cylinder_step(PyObject* self, PyObject* args) {
     const char* filename;
     double radius, height;
     double pos_x = 0.0, pos_y = 0.0, pos_z = 0.0;
+    double rot_x = 0.0, rot_y = 0.0, rot_z = 0.0;
     const char* step_schema = "AP214IS";
     const char* unit = "MILLIMETER";
     int enable_logging = 1;
 
-    if (!PyArg_ParseTuple(args, "sdd|dddssi",
+    if (!PyArg_ParseTuple(args, "sdd|dddssi|ddd",
                           &filename,
                           &radius, &height,
                           &pos_x, &pos_y, &pos_z,
-                          &step_schema, &unit, &enable_logging)) {
+                          &step_schema, &unit, &enable_logging,
+                          &rot_x, &rot_y, &rot_z)) {
         PyErr_SetString(PyExc_TypeError,
             "export_cylinder_step() expected: filename, radius, height, "
-            "[pos_x], [pos_y], [pos_z], [step_schema], [unit], [enable_logging]");
+            "[pos_x], [pos_y], [pos_z], [step_schema], [unit], [enable_logging], [rot_x], [rot_y], [rot_z]");
         return NULL;
     }
 
@@ -671,6 +738,8 @@ PyObject* export_cylinder_step(PyObject* self, PyObject* args) {
             trsf.SetTranslation(gp_Vec(pos_x, pos_y, pos_z));
             shape = BRepBuilderAPI_Transform(shape, trsf).Shape();
         }
+        // 旋转
+        shape = apply_rotation_after_translation(shape, pos_x, pos_y, pos_z, height, rot_x, rot_y, rot_z);
 
         // 验证并修复 shape
         BRepCheck_Analyzer analyzer(shape);
@@ -710,18 +779,20 @@ PyObject* export_cone_step(PyObject* self, PyObject* args) {
     const char* filename;
     double bottom_radius, top_radius, height;
     double pos_x = 0.0, pos_y = 0.0, pos_z = 0.0;
+    double rot_x = 0.0, rot_y = 0.0, rot_z = 0.0;
     const char* step_schema = "AP214IS";
     const char* unit = "MILLIMETER";
     int enable_logging = 1;
 
-    if (!PyArg_ParseTuple(args, "sddd|dddssi",
+    if (!PyArg_ParseTuple(args, "sddd|dddssi|ddd",
                           &filename,
                           &bottom_radius, &top_radius, &height,
                           &pos_x, &pos_y, &pos_z,
-                          &step_schema, &unit, &enable_logging)) {
+                          &step_schema, &unit, &enable_logging,
+                          &rot_x, &rot_y, &rot_z)) {
         PyErr_SetString(PyExc_TypeError,
             "export_cone_step() expected: filename, bottom_radius, top_radius, height, "
-            "[pos_x], [pos_y], [pos_z], [step_schema], [unit], [enable_logging]");
+            "[pos_x], [pos_y], [pos_z], [step_schema], [unit], [enable_logging], [rot_x], [rot_y], [rot_z]");
         return NULL;
     }
 
@@ -738,6 +809,7 @@ PyObject* export_cone_step(PyObject* self, PyObject* args) {
             trsf.SetTranslation(gp_Vec(pos_x, pos_y, pos_z));
             shape = BRepBuilderAPI_Transform(shape, trsf).Shape();
         }
+        shape = apply_rotation_after_translation(shape, pos_x, pos_y, pos_z, height, rot_x, rot_y, rot_z);
 
         // 验证并修复 shape
         BRepCheck_Analyzer conAnalyzer(shape);
@@ -4024,6 +4096,7 @@ static PyMethodDef step_exporter_methods[] = {
     {"export_hollow_cone_fillet_with_groove_step", export_hollow_cone_fillet_with_groove_step, METH_VARARGS, "Export parametric hollow cone with top fillet and trapezoid groove to STEP"},
     {"export_cone_stepped_hole_step", export_cone_stepped_hole_step, METH_VARARGS, "Export parametric cone with stepped inner hole to STEP"},
     {"export_cone_stepped_hole_groove_step", export_cone_stepped_hole_groove_step, METH_VARARGS, "Export parametric cone with stepped hole and external groove to STEP"},
+    {"rotate_step_file", rotate_step_file, METH_VARARGS, "Read a STEP file, rotate all shapes around geometric center, and rewrite"},
     {"init_incremental_export", init_incremental_export, METH_VARARGS, "Initialize incremental export"},
     {"add_object_to_export", add_object_to_export, METH_VARARGS, "Add single object to incremental export"},
     {"finalize_incremental_export", finalize_incremental_export, METH_NOARGS, "Finalize incremental export and write file"},

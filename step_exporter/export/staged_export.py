@@ -18,18 +18,31 @@ def _highlight_export_object(obj_params):
             bl_obj = obj_params
         
         if bl_obj and hasattr(bl_obj, 'select_set'):
-            # 清除所有选中，只选中当前物体
             for o in bpy.context.scene.objects:
                 if hasattr(o, 'select_set'):
                     o.select_set(False)
             bl_obj.select_set(True)
             bpy.context.view_layer.objects.active = bl_obj
-            # 强制刷新视图
             for area in bpy.context.screen.areas:
                 if area.type == 'VIEW_3D':
                     area.tag_redraw()
     except Exception:
-        pass  # 高亮失败不影响导出流程
+        pass
+
+
+def _apply_rotation_after_export(cpp_exporter, temp_file, params):
+    """Apply object rotation to an already-exported STEP temp file."""
+    rx = params.get('rot_x', 0.0)
+    ry = params.get('rot_y', 0.0)
+    rz = params.get('rot_z', 0.0)
+    if abs(rx) < 1e-6 and abs(ry) < 1e-6 and abs(rz) < 1e-6:
+        return
+    px = params.get('pos_x', 0.0)
+    py = params.get('pos_y', 0.0)
+    pz = params.get('pos_z', 0.0)
+    # Total height varies by type
+    total_h = params.get('outer_height', params.get('height', params.get('outer_height', 10.0)))
+    cpp_exporter.rotate_step_file(temp_file, px, py, pz, total_h, rx, ry, rz)
 
 
 
@@ -226,18 +239,18 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
     pz = cparams.get('pos_z', 0.0)
     
     if obj_type == 'cylinder':
-        return cpp_exporter.export_cylinder_step(
+        success = cpp_exporter.export_cylinder_step(
             temp_file, cparams['radius'], cparams['height'],
             px, py, pz, data['step_schema'], data['step_unit'],
             1 if data['enable_logging'] else 0)
     elif obj_type == 'cone':
-        return cpp_exporter.export_cone_step(
+        success = cpp_exporter.export_cone_step(
             temp_file, cparams['bottom_radius'], cparams['top_radius'],
             cparams['height'], px, py, pz,
             data['step_schema'], data['step_unit'],
             1 if data['enable_logging'] else 0)
     elif obj_type == 'hollow_cylinder':
-        return cpp_exporter.export_hollow_cylinder_step(
+        success = cpp_exporter.export_hollow_cylinder_step(
             temp_file, cparams['outer_radius'], cparams['inner_radius'],
             cparams['height'], px, py, pz,
             data['step_schema'], data['step_unit'],
@@ -910,6 +923,12 @@ def _parametric_export_staged():
                             log_to_file(f"[STEP Exporter]   FAILED init incremental for {obj.name}")
                 
                 if success:
+                    # Apply object rotation (parametric_shell handles it internally)
+                    if obj_type != 'parametric_shell' and obj_type != 'regular':
+                        try:
+                            _apply_rotation_after_export(cpp_exporter, temp_file, obj_params)
+                        except Exception:
+                            pass  # rotation is best-effort
                     log_to_file(f"[STEP Exporter]   Object {obj_num}/{total_objects} OK ({time.time()-obj_start:.3f}s)")
                     # 验证导出结果
                     shell_cnt, face_cnts = _verify_step_shell(temp_file)

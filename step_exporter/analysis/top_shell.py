@@ -422,5 +422,6 @@ def _analyze_top_shell_from_mesh(obj, context, scale):
         'pos_x': obj.location.x * S,
         'pos_y': obj.location.y * S,
         'pos_z': obj.location.z * S,
+        'rot_x': obj.rotation_euler.x, 'rot_y': obj.rotation_euler.y, 'rot_z': obj.rotation_euler.z,
     }
 

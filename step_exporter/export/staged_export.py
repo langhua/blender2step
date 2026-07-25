@@ -866,7 +866,10 @@ def _parametric_export_staged():
                         bf_val,
                         pparams.get('curve_ratio', 0.5),
                         pparams.get('eccentric_y', 0.0),
-                        wd)
+                        wd,
+                        pparams.get('rot_x', 0.0),
+                        pparams.get('rot_y', 0.0),
+                        pparams.get('rot_z', 0.0))
                 
                 elif obj_type == 'regular':
                     obj = obj_params

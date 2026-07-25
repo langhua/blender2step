@@ -3254,17 +3254,8 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
         }
 
         // Translate to world position BEFORE cutting holes,
-        // so hole cutters (in world coordinates) align with the shell
-        // Apply object rotation first (Euler XYZ in radians), then translation
-        if (rot_x != 0.0 || rot_y != 0.0 || rot_z != 0.0) {
-            gp_Trsf rot;
-            rot.SetRotation(gp_Ax1(gp_Pnt(0,0,0), gp_Dir(1,0,0)), rot_x);
-            shape = BRepBuilderAPI_Transform(shape, rot).Shape();
-            rot.SetRotation(gp_Ax1(gp_Pnt(0,0,0), gp_Dir(0,1,0)), rot_y);
-            shape = BRepBuilderAPI_Transform(shape, rot).Shape();
-            rot.SetRotation(gp_Ax1(gp_Pnt(0,0,0), gp_Dir(0,0,1)), rot_z);
-            shape = BRepBuilderAPI_Transform(shape, rot).Shape();
-        }
+        // so hole cutters (in world coordinates) align with the shell.
+        // Rotation is applied AFTER cutting to preserve correct face_code.
         if (pos_x != 0.0 || pos_y != 0.0 || pos_z != 0.0) {
             gp_Trsf trsf;
             trsf.SetTranslation(gp_Vec(pos_x, pos_y, pos_z));
@@ -3896,6 +3887,46 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                         shape = filletedShape;
                     }
                 }
+            }
+        }
+
+        // Apply object rotation AFTER hole cutting (preserves correct face_code).
+        // Rotate around world geometric center: (pos_x, pos_y, pos_z + total_h/2).
+        {
+            double total_h = height;
+            if (rim_type && strcmp(rim_type, "none") != 0) {
+                bool is_curved = (corner_type && strcmp(corner_type, "curved") == 0);
+                if (!is_curved) total_h += rim_height;
+            }
+            // Rotate around world geometric center: (pos_x, pos_y, pos_z + total_h/2).
+            double rot_center_z = total_h / 2.0;
+            if (rot_x != 0.0 || rot_y != 0.0 || rot_z != 0.0) {
+                double wcx = pos_x, wcy = pos_y, wcz = pos_z + rot_center_z;
+                fprintf(stderr, "[STEP DIAG] ROTATION: rx=%.4f ry=%.4f rz=%.4f center=(%.3f,%.3f,%.3f) total_h=%.3f\n",
+                        rot_x, rot_y, rot_z, wcx, wcy, wcz, total_h);
+                // Bounds before rotation
+                Bnd_Box bbox_before; BRepBndLib::Add(shape, bbox_before);
+                double bx1, by1, bz1, bx2, by2, bz2;
+                bbox_before.Get(bx1, by1, bz1, bx2, by2, bz2);
+                fprintf(stderr, "[STEP DIAG]   bounds BEFORE rot: X=[%.2f,%.2f] Y=[%.2f,%.2f] Z=[%.2f,%.2f]\n",
+                        bx1, bx2, by1, by2, bz1, bz2);
+                gp_Trsf toOrigin; toOrigin.SetTranslation(gp_Vec(-wcx, -wcy, -wcz));
+                shape = BRepBuilderAPI_Transform(shape, toOrigin).Shape();
+                gp_Trsf rot;
+                rot.SetRotation(gp_Ax1(gp_Pnt(0,0,0), gp_Dir(1,0,0)), rot_x);
+                shape = BRepBuilderAPI_Transform(shape, rot).Shape();
+                rot.SetRotation(gp_Ax1(gp_Pnt(0,0,0), gp_Dir(0,1,0)), rot_y);
+                shape = BRepBuilderAPI_Transform(shape, rot).Shape();
+                rot.SetRotation(gp_Ax1(gp_Pnt(0,0,0), gp_Dir(0,0,1)), rot_z);
+                shape = BRepBuilderAPI_Transform(shape, rot).Shape();
+                gp_Trsf toWorld; toWorld.SetTranslation(gp_Vec(wcx, wcy, wcz));
+                shape = BRepBuilderAPI_Transform(shape, toWorld).Shape();
+                // Bounds after rotation
+                Bnd_Box bbox_after; BRepBndLib::Add(shape, bbox_after);
+                double ax1, ay1, az1, ax2, ay2, az2;
+                bbox_after.Get(ax1, ay1, az1, ax2, ay2, az2);
+                fprintf(stderr, "[STEP DIAG]   bounds AFTER  rot: X=[%.2f,%.2f] Y=[%.2f,%.2f] Z=[%.2f,%.2f]\n",
+                        ax1, ax2, ay1, ay2, az1, az2);
             }
         }
 

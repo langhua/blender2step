@@ -108,6 +108,37 @@
 | `step_exporter/tests/check_coords.py` | 检查坐标数据 |
 | `step_exporter/tests/simple_test.py` | 简单 Blender 插件加载测试 |
 
+### F. 旋转验证（Rotation Testing）
+
+验证所有物体类型在 Blender 中旋转后的 STEP 导出位置与视图一致。
+
+**支持旋转的物体类型：**
+
+| 类型 | 旋转机制 | 说明 |
+|------|---------|------|
+| `parametric_shell` | C++ 内置旋转 | `export_parametric_shell_step` 在切割孔后应用 Euler XYZ 旋转 |
+| `bottom_shell` | `rotate_step_file` 后处理 | 导出后读取 STEP → 旋转 → 重写 |
+| `top_shell` | `rotate_step_file` 后处理 | 同上 |
+| `cylinder` / `cone` 等 | `rotate_step_file` 后处理 | 全部 24 种圆柱/圆锥子类型 |
+| Mesh（`regular`） | `matrix_world` 烘焙 | 顶点坐标已在世界空间中 |
+
+**旋转实现细节：**
+
+- 旋转中心：物体几何中心 `(pos_x, pos_y, pos_z + total_height/2)`
+- 旋转顺序：Blender Euler XYZ（X→Y→Z 内旋）
+- `rotate_step_file` C++ 函数读取已导出的 STEP 文件，对所有实体应用旋转后重写
+- 参数化壳体的孔位置通过 Python 预补偿（Y 轴旋转时取反 X），由 C++ 旋转还原
+
+**手动测试旋转：**
+
+```powershell
+# 1. 在 Blender 中创建带旋转的物体并导出
+# 2. 在 FreeCAD 或其他 STEP 查看器中打开，确认物体方向与 Blender 视图一致
+
+# 验证 rotate_step_file 可用
+python -c "import _step_exporter as c; print(hasattr(c, 'rotate_step_file'))"
+```
+
 ---
 
 ## 运行测试

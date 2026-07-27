@@ -1,99 +1,90 @@
-# blender2step
-Blender step exporter based on OpenCASCADE.
+﻿# blender2step
+Blender STEP exporter based on OpenCASCADE.
 
-本模块支持Blender 4.2+ / 5.x，主要由DeepSeek V4 Pro等AI模型生成。
+This addon supports Blender 4.2+ / 5.x and was developed with AI assistance such as DeepSeek V4 Pro. It is designed for modeling parts in Blender for mold manufacturing.
 
-本模块是为了在Blender中设计模型，用于模具制造。
+📘 Chinese documentation: [README_zh.md](./README_zh.md)
 
 > **blender2step** is a Blender 4.2+ / 5.x addon that exports 3D models to STEP format using OpenCASCADE 7.8.1. It is part of a simple gadget manufacturing toolchain: design enclosures in Blender, export STEP, and send to mold factories for mass production. Built primarily with AI assistance (DeepSeek V4 Pro).
 
 ## Toolchain
 
-blender2step 是简单电子产品制造工具链的一环：
+blender2step is one step in a simple electronics manufacturing toolchain:
 
 ```mermaid
 flowchart LR
-    A[★ Fritzing ★<br/>电路设计] -->|Gerber RS-274X| B[PCB 厂家<br/>生产电路板]
-    A -->|PNP 文件| C[pnp2cpl<br/>格式转换] -->|CSV 装配文件| B
-    A -->|Gerber RS-274X| D[FritzingToBlender<br/>导入 Blender] --> E[★ Blender ★<br/>外壳设计 / 3D 打印试装<br/>外观图 / 分解图]
-    E --> F[blender2step<br/>导出 STEP] -->|STEP| G[模具厂家<br/>批量生产外壳]
+    A[★ Fritzing ★<br/>Circuit design] -->|Gerber RS-274X| B[PCB Factory<br/>Circuit board production]
+    A -->|PNP file| C[pnp2cpl<br/>Format conversion] -->|CSV assembly list| B
+    A -->|Gerber RS-274X| D[FritzingToBlender<br/>Import into Blender] --> E[★ Blender ★<br/>Enclosure design / fit testing<br/>Rendering / exploded views]
+    E --> F[blender2step<br/>Export STEP] -->|STEP| G[Mold factory<br/>Mass production]
 
-    H[Inkscape<br/>绘制元器件] -.->|SVG| A
-    I[fritzing-parts-langhua<br/>开源元器件库] -.->|SVG| A
+    H[Inkscape<br/>Part graphics] -.->|SVG| A
+    I[fritzing-parts-langhua<br/>Open parts library] -.->|SVG| A
 
     style F fill:#f9a825,stroke:#333,stroke-width:2px,color:#000,font-size:16px
 ```
 
-| 环节 | 项目 | 说明 |
-|------|------|------|
-| 电路设计 | [Fritzing](https://fritzing.org/) | 开源电路设计软件 |
-| 元器件绘制 | [Inkscape](https://inkscape.org/) | 绘制 Fritzing 中缺失的元器件 SVG |
-| 元器件库 | [fritzing-parts-langhua](https://github.com/langhua/fritzing-parts-langhua) | 开源元器件库 |
-| PCB 生产 | — | Fritzing 导出 Gerber RS-274X → PCB 厂家生产双层板 |
-| 格式转换 | [pnp2cpl](https://github.com/langhua/pnp2cpl) | PNP 文件 → 元器件名称/位置/角度的 CSV 装配文件 |
-| 外壳设计 | [FritzingToBlender](https://github.com/langhua/FritzingToBlender) | Gerber RS-274X 导入 Blender，外壳建模、外观图、分解图、3D 打印试装 |
-| STEP 导出 | **blender2step** ← 你在这里 | Blender 外壳 → STEP 格式 → 模具制造 |
+| Stage | Project | Description |
+|------|---------|-------------|
+| Circuit design | [Fritzing](https://fritzing.org/) | Open-source circuit design software |
+| Part graphics | [Inkscape](https://inkscape.org/) | Draw missing Fritzing SVG parts |
+| Parts library | [fritzing-parts-langhua](https://github.com/langhua/fritzing-parts-langhua) | Open source component library |
+| PCB manufacturing | — | Export Gerber RS-274X from Fritzing → factory produces double-sided boards |
+| Format conversion | [pnp2cpl](https://github.com/langhua/pnp2cpl) | Convert PNP file to component name/location/rotation CSV |
+| Enclosure design | [FritzingToBlender](https://github.com/langhua/FritzingToBlender) | Import Gerber RS-274X into Blender for enclosure modeling, fit testing, rendering, and exploded views |
+| STEP export | **blender2step** ← you are here | Blender enclosure → STEP format → mold manufacturing |
 
 ## Development
 
 ### Recommended Tools
 
-开发本模块推荐使用以下 VS Code 插件：
+Recommended VS Code extensions for developing this addon:
 
-| 插件 | 用途 |
-|------|------|
-| [Blender Development](https://marketplace.visualstudio.com/items?itemName=JacquesLucke.blender-development) | 在 VS Code 中调试 Blender Python 代码，支持断点、变量查看 |
-| [GitHub Copilot](https://marketplace.visualstudio.com/items?itemName=GitHub.copilot) | AI 辅助编码（本项目主要由 DeepSeek V4 Pro 等 AI 模型生成） |
-| [CMake Tools](https://marketplace.visualstudio.com/items?itemName=ms-vscode.cmake-tools) | CMake 项目配置和编译集成 |
+| Extension | Use |
+|-----------|-----|
+| [Blender Development](https://marketplace.visualstudio.com/items?itemName=JacquesLucke.blender-development) | Debug Blender Python code in VS Code with breakpoints and variable inspection |
+| [GitHub Copilot](https://marketplace.visualstudio.com/items?itemName=GitHub.copilot) | AI-assisted coding (this project was developed with DeepSeek V4 Pro and similar tools) |
+| [CMake Tools](https://marketplace.visualstudio.com/items?itemName=ms-vscode.cmake-tools) | CMake project configuration and build integration |
 
-> Blender 插件通过 **junction** 链接到 git 仓库：
+> The Blender addon is linked to the git repository through a junction:
 > `C:\Users\...\Blender Foundation\Blender\5.2\scripts\addons\step_exporter\` → `f:\git\blender2step\step_exporter\`
-> 修改仓库文件会立即反映在 Blender 中，无需手动复制。
+> Changes in the repository appear immediately in Blender without manual copying.
 
 ### Install Python 3.13
 
-As the python version in Blender 5.2 is 3.13.x, you need to install the same version of Python.
+Because Blender 5.2 uses Python 3.13.x, install the same version of Python locally.
 
-1. 进入Blender 5.2目录，确认Python版本。
+1. Open the Blender 5.2 Python directory and verify the Python version.
 ```shell
 > cd "F:\Blender Foundation\Blender 5.2\5.2\python\bin"
 > .\python.exe --version
 Python 3.13.13
 ```
-
 2. Visit https://www.python.org/downloads/
-
-3. Download "Windows installer (64-bit)" for Python 3.13 and install it.
-
+3. Download the Windows installer for Python 3.13 (64-bit) and install it.
 
 ### Build Python 3.13 on Windows 11 with Visual Studio Community 2022
 
-Note: This is not necessary, only if you want to debug the python code.
+Note: This is only necessary if you want to debug the Python code.
 
-1. Visit the source code from https://www.python.org/ftp/python/3.13.13/
-
+1. Visit the source archive at https://www.python.org/ftp/python/3.13.13/
 2. Download Python-3.13.13.tar.xz and extract it.
-
-3. Open a terminal, cd Python-3.13.13\PCbuild, run .\get_externals.bat.
-
-4. Open Python-3.13.13\PCbuild\pcbuild.sln with Visual Studio Community 2022, run Debug|x64, build the solution.
-
-5. Copy python313_d.lib from Python-3.13.13\PCbuild\amd64\ to the installed python 3.13 lib folder, e.g. C:\Python313\libs.
+3. Open a terminal, cd into Python-3.13.13\PCbuild, and run .\get_externals.bat.
+4. Open Python-3.13.13\PCbuild\pcbuild.sln with Visual Studio Community 2022, choose Debug|x64, and build the solution.
+5. Copy python313_d.lib from Python-3.13.13\PCbuild\amd64\ to the installed Python 3.13 libs folder, for example C:\Python313\libs.
 
 ### Build OpenCASCADE 7.8.1 on Windows 11 with vcpkg
 
-1. Check FreeCAD OpenCASCADE verion:
+1. Check the OpenCASCADE version shown by FreeCAD:
+Open FreeCAD, click Help → About FreeCAD, and check the OpenCASCADE version.
 
-Open FreeCAD, click Help->About FreeCAD, check the OpenCASCADE version.
-
-![FreeCAD OpenCASCADE verion](./docs/images/freecad-opencascade-version.png)
-
+![FreeCAD OpenCASCADE version](./docs/images/freecad-opencascade-version.png)
 
 2. Clone vcpkg:
 ```
 cd F:\git\
 git clone https://github.com/microsoft/vcpkg.git
-cd vcpkg
+cd vcppg
 ```
 
 3. Bootstrap vcpkg:
@@ -118,111 +109,106 @@ Remove-Item -Recurse -Force F:\git\vcpkg\buildtrees\opencascade\x64-windows-dbg\
 
 See [BUILD.md](./BUILD.md) for details.
 
-
 ## Project Structure
 
 ```
 blender2step/
-├── step_exporter/              # Blender 插件（Python）
-│   ├── __init__.py             # 插件入口，C++ 加载，注册/注销
-│   ├── core/                   # 核心工具：i18n, mesh_data, utils
-│   ├── analysis/               # 几何分析：圆柱/圆锥/壳体识别
-│   ├── export/                 # 导出模块：同步/分阶段导出
-│   ├── ui/                     # UI 面板、操作符、参数化圆柱
-│   ├── examples/               # 示例脚本（Gallery 生成）
-│   ├── tests/                  # Blender 内测试脚本
-│   └── lib/                    # _step_exporter.pyd 目标目录
-├── src/                        # C++ 源码（OpenCASCADE）
-│   ├── curve/                  # 曲线函数（Bezier, NURBS, Poly）
-│   ├── shape/                  # 形状创建/修复/圆角
-│   ├── export/                 # STEP 导出核心（enhanced, incremental）
-│   └── step_converter.cpp      # Python ↔ C++ 桥接
-├── include/                    # C++ 头文件
-├── scripts/                    # 构建辅助脚本
-├── tests/                      # 纯 Python 测试（无需 Blender）
-├── docs/                       # 文档图片
-├── .github/workflows/ci.yml    # CI 配置
-├── CMakeLists.txt              # 本地构建
-├── CMakeLists.ci.txt           # CI 构建
-├── BUILD.md                    # 构建说明
-└── TESTS.md                    # 测试文档
+├── step_exporter/              # Blender addon (Python)
+│   ├── __init__.py             # Addon entry, C++ loader, register/unregister
+│   ├── core/                   # Core utilities: i18n, mesh_data, utils
+│   ├── analysis/               # Geometry analysis: cylinders, cones, shells
+│   ├── export/                 # Export modules: sync / staged export
+│   ├── ui/                     # UI panels, operators, parametric cylinders
+│   ├── examples/               # Example scripts (Gallery generation)
+│   ├── tests/                  # Blender test scripts
+│   └── lib/                    # _step_exporter.pyd output folder
+├── src/                        # C++ source (OpenCASCADE)
+│   ├── curve/                  # Curve utilities (Bezier, NURBS, Poly)
+│   ├── shape/                  # Shape creation, repair, fillets
+│   ├── export/                 # STEP export core (enhanced, incremental)
+│   └── step_converter.cpp      # Python ↔ C++ bridge
+├── include/                    # C++ headers
+├── scripts/                    # Build helper scripts
+├── tests/                      # Pure Python tests (no Blender required)
+├── docs/                       # Documentation images
+├── .github/workflows/ci.yml    # CI configuration
+├── CMakeLists.txt              # Local build
+├── CMakeLists.ci.txt           # CI build
+├── BUILD.md                    # Build instructions
+└── TESTS.md                    # Test documentation
 ```
 
 ## Testing
 
-完整的测试文档请参见 [TESTS.md](./TESTS.md)。
+See [TESTS.md](./TESTS.md) for full test documentation.
 
-回归测试用例矩阵请参见 [TEST_CASES.md](./TEST_CASES.md)。
+See [TEST_CASES.md](./TEST_CASES.md) for the regression test case matrix.
 
-### 快速验证
+### Quick verification
 
 ```powershell
-# 1. 构建环境检查
+# 1. Build environment check
 python check_build.py
 
-# 2. 验证 .pyd 编译
+# 2. Verify .pyd build
 python verify_build.py
 
-# 3. 单元测试（无需 Blender）
+# 3. Unit tests (no Blender required)
 python -m pytest step_exporter/tests/test_core_utils.py step_exporter/tests/test_i18n.py -v
 
-# 4. 完整 CI 测试（需 Blender）
+# 4. Full CI-style test (requires Blender)
 & "f:\Program Files\Blender Foundation\Blender 5.2\blender.exe" --background --python ci_test_runner.py
 ```
 
 ### CI
 
-GitHub Actions 在 Push/PR 到 `main` 分支时自动运行（配置：`.github/workflows/ci.yml`）：
+GitHub Actions run automatically on push/PR to `main` (.github/workflows/ci.yml):
 
-- **build**: 编译 C++ .pyd（使用 OCCT 7.8.1 预编译包）
-- **test**: 在 Blender 中运行 pytest 单元测试
-- **lint**: `ruff check` 代码质量检查
-- **integration**: 完整集成测试（创建圆柱 → 导出 STEP → 验证）
+- **build**: compile the C++ .pyd (using OCCT 7.8.1)
+- **test**: run pytest unit tests inside Blender
+- **lint**: `ruff check` code quality
+- **integration**: full integration test (create cylinder → export STEP → verify)
 
+### Measurement units
 
-### Measure Unit
-
-**Blender 场景设置:**
-    Scene Properties（场景属性）▸ Units
+**Blender scene settings:**
+    Scene Properties → Units
     Unit System  → Metric
     Unit Scale   → 0.001
     Length       → Millimeters
 
-    即：
-    Unit Scale  = 0.001  →  1 BU = 1 mm
-    Length      = Millimeters
-
+    That means:
+    Unit Scale = 0.001 → 1 BU = 1 mm
+    Length = Millimeters
 
 **FreeCAD:** millimeter
 
-**坐标数据流:**
-    Blender mesh 顶点裸值（BU）→ 在当前 Unit Scale 下数值上 = 毫米
-    Python 取 vertex.co（经 matrix_world 变换后）→ 裸 BU 值 → 直接作为 mm 传入 C++
-    不要额外 ×1000（×1000 只在 Unit Scale=1 / 把 BU 当米解释时才需要）
+**Coordinate data flow:**
+    Blender mesh vertex raw values (BU) → with current Unit Scale interpreted as mm
+    Python reads vertex.co (after matrix_world) → raw BU values → passed directly as mm into C++
+    Do not multiply by 1000 unless your Unit Scale is 1 and you treat BU as meters.
 
-    STEP 文件单位声明: MILLIMETER
-    FreeCAD 打开: 毫米（一致 ✓）
+STEP file unit declaration: MILLIMETER
+FreeCAD open: millimeters (consistent ✓)
 
+### Model sizing
 
-### 模型尺寸
-
-Blender很多mesh模型，OpenCASCADE还不能很好支持，遇到模型尺寸不一致的情况，以OpenCASCADE模型尺寸为准，以便能生成准确的STEP文件，用于模具制造。
-
+Many Blender mesh models are not fully supported by OpenCASCADE. If you encounter size inconsistencies, trust the OpenCASCADE model size so the STEP file can be generated correctly for mold manufacturing.
 
 ## Examples
 
-更多功能演示截图和说明请参见 [EXAMPLES.md](./EXAMPLES.md)。
+See [EXAMPLES.md](./EXAMPLES.md) for additional demo content.
 
 There are 3 galleries: cylinder, cone and inverted cone, generated by Python scripts.
 
 ### Cylinder Gallery
 
-Cylinder Gallery has 192 cylinders, the first 8 are original, the others are derived from the original ones.
+The Cylinder Gallery contains 192 cylinders. The first 8 are original shapes; the rest are derived from those originals.
 
-Here is a gif shows how the cylinder gallery is generated:
+Here is a gif showing how the cylinder gallery is generated:
 
 <details>
-<summary>▶ 点击播放演示</summary>
+<summary>▶ Click to play demo</summary>
 
 <img src="./docs/images/create_cylinder_gallery.gif" width="900">
 
@@ -230,18 +216,34 @@ Here is a gif shows how the cylinder gallery is generated:
 
 ### Cone Gallery
 
-Cone Gallery 包含各种锥形圆柱体变体（标准锥、倒锥、台阶孔锥等），通过 `step_exporter/examples/create_cone_gallery.py` 生成。
+The Cone Gallery contains variations of conical cylinders (standard cones, inverted cones, stepped holes, etc.), generated by `step_exporter/examples/create_cone_gallery.py`.
 
 ### Inverted Cone Gallery
 
-Inverted Cone Gallery 包含倒锥形圆柱体变体，通过 `step_exporter/examples/create_cone_gallery_inverted.py` 生成。
+The Inverted Cone Gallery contains inverted-cone variations generated by `step_exporter/examples/create_cone_gallery_inverted.py`.
 
 ## Design Rules
 
-项目的核心设计规则和约定请参见 [DESIGN.md](./DESIGN.md)，包括：
+See [DESIGN.md](./DESIGN.md) for the project's core design rules and conventions, including:
 
-- 单位与坐标转换规则（Unit Scale, Z=0 规则）
-- 圆柱体补偿架构（Python 预补偿，C++ 不补偿）
-- 底部圆角手动构建规范
-- Blender Boolean 求解器选择
-- Rim 公式与锥形台阶孔几何
+- unit and coordinate conversion rules (Unit Scale, Z=0 rule)
+- cylinder compensation architecture (pre-compensation in Python, no compensation in C++)
+- bottom fillet construction guidelines
+- Blender boolean solver selection
+- rim formula and stepped-cone hole geometry
+
+## Coordinate System
+
+Blender and FreeCAD both use the same right-handed Cartesian coordinate system: **Z-up, X-right, Y-back**. The STEP geometry is 1:1 compatible.
+
+If you want FreeCAD to display the model with a view direction that looks more like Blender's, enable the new **Mirror X Axis** export option. This mirrors the exported STEP geometry along the X axis (X → -X) for better visual correspondence between the two applications while preserving the underlying model shape.
+
+If the model appears rotated or offset when opened in FreeCAD:
+
+| Symptom | Fix in FreeCAD |
+|---|---|
+| Model at wrong angle | Use **Placement → Rotation** (rotate around X/Y/Z), never mirror with Scale = -1 |
+| Model far from origin | Use **Placement → Position** to translate back, or apply object location in Blender before export |
+| Model too large or too small | Enable **Edit → Preferences → Import-Export → STEP → Scale to millimeters** |
+
+View directions may appear mirrored between the two applications due to different default view naming conventions — this is a display convention, not a coordinate mismatch. Rotate the view in FreeCAD to match Blender's perspective.

@@ -1221,21 +1221,8 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
     rot_y = obj.rotation_euler.y
     rot_z = obj.rotation_euler.z
     
-    # 检测对象旋转：如果世界矩阵翻转了 Z 轴（绕 X 或 Y 旋转 180°），
-    # 则交换 top_feature 和 bottom_feature（局部坐标中 chamfer 在顶部，
-    # 但世界坐标中应该在底部），同时交换 top_radius/bottom_radius
-    world_mat = obj.matrix_world
-    if world_mat[2][2] < 0:
-        if top_feature or bottom_feature:
-            log_to_file(f"[STEP Exporter] Z-axis flipped by rotation, swapping top/bottom features")
-            top_feature, bottom_feature = bottom_feature, top_feature
-            top_feature_size, bottom_feature_size = bottom_feature_size, top_feature_size
-        # 交换上下半径（对于锥体/空心锥体，上下半径不同，旋转180°后需要对应交换）
-        if abs(bottom_radius - top_radius) > 0.0001:
-            top_radius, bottom_radius = bottom_radius, top_radius
-            if is_hollow:
-                inner_radius, inner_top_radius = inner_top_radius, inner_radius
-            log_to_file(f"[STEP Exporter] Z-axis flipped by rotation, swapping top/bottom radii")
+    # 旋转由 staged_export 中的 rotate_step_file 统一处理
+    # 不再在分析阶段交换参数（会干扰 rotate_step_file）
     
     # ===== Mesh-based Stepped Hole Detection for Hollow Cones =====
     # Detects stepped inner holes: constant-radius straight section at top,

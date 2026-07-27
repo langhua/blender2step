@@ -61,6 +61,7 @@ def clear_scene():
 def test_case(name, **params):
     global passed, failed
     import signal
+    import math
 
     def timeout_handler(signum, frame):
         raise TimeoutError("C++ export too slow")
@@ -68,7 +69,15 @@ def test_case(name, **params):
     # Only available on Unix, skip on Windows CI
     has_signal = hasattr(signal, 'SIGALRM')
 
-    print(f"\n  [{name}]")
+    rot_x = params.pop('_rot_x', 0.0)
+    rot_y = params.pop('_rot_y', 0.0)
+    rot_z = params.pop('_rot_z', 0.0)
+
+    rot_label = ""
+    if rot_x or rot_y or rot_z:
+        rot_label = f" [rot=({rot_x:.0f},{rot_y:.0f},{rot_z:.0f})]"
+
+    print(f"\n  [{name}{rot_label}]")
     clear_scene()
 
     try:
@@ -83,6 +92,11 @@ def test_case(name, **params):
         print(f"    FAIL: no mesh")
         failed += 1
         return
+
+    # Apply test rotation to the created object
+    if rot_x or rot_y or rot_z:
+        objs[0].rotation_euler = (rot_x, rot_y, rot_z)
+        bpy.context.view_layer.update()
 
     verts = len(objs[0].data.vertices)
     print(f"    Mesh: {objs[0].name} ({verts} verts)")
@@ -140,6 +154,70 @@ test_case("taper_no_hole", cylinder_type='tapered',
 test_case("std_stepped", cylinder_type='standard', radius=15.0, height=40.0,
           hole_type='stepped', stepped_large_radius=7.0, stepped_large_height=60,
           stepped_small_radius=3.0)
+
+import math
+import _step_exporter as cpp_exporter2
+
+# Rotation test: create (no rotation), export mesh (no rotation),
+# then rotate STEP file via rotate_step_file
+def test_rotation(name, **params):
+    global passed, failed
+    # Extract rotation param BEFORE passing to operator (operator won't accept it)
+    ry = params.pop('_rot_y', 0.0)
+    print(f"\n  [{name}] (rot_y={math.degrees(ry):.0f}°)")
+    clear_scene()
+    try:
+        bpy.ops.step_exporter.create_parametric_cylinder(**params)
+    except Exception as e:
+        print(f"    SKIP: create error: {e}")
+        failed += 1
+        return
+
+    objs = [o for o in bpy.context.scene.objects if o.type == 'MESH']
+    if not objs:
+        print(f"    FAIL: no mesh")
+        failed += 1
+        return
+
+    step_path = os.path.join(tempfile.gettempdir(), f"ci_int_{name}.step")
+    try:
+        ok = _export_sync(step_path, objs)
+    except Exception as e:
+        print(f"    FAIL: export exception: {e}")
+        failed += 1
+        return
+
+    if not ok or not os.path.exists(step_path):
+        print(f"    FAIL: export failed")
+        failed += 1
+        return
+
+    # Apply rotation to the STEP file (post-export)
+    if abs(ry) > 1e-6:
+        cpp_exporter2.rotate_step_file(step_path, 0.0, 0.0, 0.0, 40.0, 0.0, ry, 0.0)
+
+    shells, faces = _verify_step_shell(step_path)
+    size = os.path.getsize(step_path)
+    if shells >= 1:
+        print(f"    PASS: {size} bytes, {shells} shell(s)")
+        passed += 1
+    else:
+        print(f"    FAIL: {shells} shell(s)")
+        failed += 1
+
+    try:
+        os.unlink(step_path)
+    except:
+        pass
+
+test_rotation("std_y30", cylinder_type='standard', radius=15.0, height=40.0,
+              _rot_y=math.radians(30))
+test_rotation("taper_y90", cylinder_type='tapered',
+              top_radius=10.0, bottom_radius=20.0, height=40.0,
+              _rot_y=math.radians(90))
+test_rotation("inv_taper_y180", cylinder_type='tapered',
+              top_radius=20.0, bottom_radius=10.0, height=40.0,
+              _rot_y=math.radians(180))
 
 print(f"\n{'=' * 60}")
 print(f"Results: {passed} passed, {failed} failed")

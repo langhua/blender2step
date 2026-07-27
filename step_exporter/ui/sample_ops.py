@@ -1115,11 +1115,11 @@ class STEP_EXPORTER_OT_create_cone_gallery_inverted(Operator):
                            m.TOP_R, m.BOT_R, base_ctype, base_fr, hole, hd, he)
 
                 # Last column: mark for rotation at end
-                if self._item_idx == n - 1:
-                    if not hasattr(self, '_last_col_names'):
-                        self._last_col_names = []
-                    self._last_col_names.append(f"S{self._shelf_idx+1}_{name_sfx}")
-
+                # 倒锥库：第7-12列分别旋转 30/60/90/120/150/180°
+                if 6 <= self._item_idx <= 11:
+                    if not hasattr(self, '_rot_cols'):
+                        self._rot_cols = {}
+                    self._rot_cols[f"S{self._shelf_idx+1}_{name_sfx}"] = (self._item_idx - 5) * 30
                 m.add_label(y, z, label)
 
                 self._done += 1
@@ -1357,19 +1357,18 @@ class STEP_EXPORTER_OT_create_cone_gallery_inverted(Operator):
 
         # ===== Phase 7: finish (95→100%) =====
 
-        # Apply Y=180° rotation to last column (both left and right copies)
-        if hasattr(self, '_last_col_names'):
-            for name in self._last_col_names:
+        # 倒锥库：第7-12列分别旋转 30/60/90/120/150/180°
+        if hasattr(self, '_rot_cols'):
+            for name, deg in self._rot_cols.items():
                 obj = bpy.data.objects.get(name)
                 if obj:
-                    obj.rotation_euler.y = math.radians(180)
-                    print(f"[ROTATION] Applied Y=180 to {name}")
-                # Also rotate the right-side copy (G-prefixed)
+                    obj.rotation_euler.y = math.radians(deg)
+                    print(f"[ROTATION] Applied Y={deg} to {name}")
                 gname = 'G' + name
                 gobj = bpy.data.objects.get(gname)
                 if gobj:
-                    gobj.rotation_euler.y = math.radians(180)
-                    print(f"[ROTATION] Applied Y=180 to {gname}")
+                    gobj.rotation_euler.y = math.radians(deg)
+                    print(f"[ROTATION] Applied Y={deg} to {gname}")
 
         update_progress(100, _t("Done!"), context)
 

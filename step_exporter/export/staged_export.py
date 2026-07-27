@@ -939,7 +939,9 @@ def _parametric_export_staged():
                     # Apply object rotation (parametric_shell handles it internally)
                     # hollow_cone now handles rotation in C++ directly
                     inner_type = obj_params.get('obj_type', '')
-                    if obj_type != 'parametric_shell' and obj_type != 'regular' and inner_type not in ('hollow_cone', 'cone_stepped_hole'):
+                    # hollow_cone: analysis already handles Y=180° via param swap, skip rotation
+                    # cone_stepped_hole: analysis handles Y=180° via param swap, skip only for ~180°
+                    if obj_type != 'parametric_shell' and obj_type != 'regular':
                         log_to_file(f"[ROTATION] Calling _apply_rotation_after_export for {obj_type}/{inner_type} rot_y={obj_params.get('rot_y', 0):.4f}")
                         try:
                             _apply_rotation_after_export(cpp_exporter, temp_file, obj_params, obj_type)

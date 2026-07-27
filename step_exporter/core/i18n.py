@@ -258,6 +258,8 @@ _STRINGS = {
     "Edit Hole": {"zh_CN": "编辑开孔"},
     "Enable Logging": {"zh_CN": "启用日志"},
     "Error: {err}...": {"zh_CN": "错误：{err}..."},
+    "Mirror X Axis": {"zh_CN": "镜像 X 轴"},
+    "Mirror X axis (X → -X) in exported STEP file": {"zh_CN": "在导出的 STEP 文件中镜像 X 轴（X → -X）"},
     "EXACT": {"zh_CN": "精确"},
     "Export STEP (Enhanced)": {"zh_CN": "导出 STEP（增强版）"},
     "Export to STEP format with advanced BREP representation": {"zh_CN": "导出为 STEP 格式，使用高级 BREP 表示"},

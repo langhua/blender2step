@@ -122,6 +122,16 @@ def _export_worker_timer():
             
             success = _g.step_exporter.finalize_incremental_export()
             
+            if success and params.get('flip_x', False):
+                try:
+                    mirror_ok = _g.step_exporter.mirror_step_file(params['filepath'])
+                    if mirror_ok:
+                        log_to_file(f"[STEP Exporter] flip_x applied to exported file")
+                    else:
+                        log_to_file(f"[STEP Exporter] flip_x request failed during mirror_step_file")
+                except Exception as mirror_err:
+                    log_to_file(f"[STEP Exporter] flip_x mirror error: {mirror_err}")
+            
             _g._export_stage = 5
             
             # 更新进度为 100%

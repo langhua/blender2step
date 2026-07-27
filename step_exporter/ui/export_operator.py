@@ -116,6 +116,12 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
         default=True,
     ) # type: ignore
     
+    flip_x: BoolProperty(
+        name=_t("Mirror X Axis"),
+        description="Mirror X axis (X → -X) in exported STEP file",
+        default=False,
+    ) # type: ignore
+    
     def draw(self, context):
         layout = self.layout
         
@@ -142,6 +148,7 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
         box.prop(self, "use_selected")
         box.prop(self, "apply_modifiers")
         box.prop(self, "enable_logging")
+        box.prop(self, "flip_x")
         
         # 高级 BREP 设置
         box = layout.box()
@@ -265,6 +272,7 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
             'create_solid': self.create_solid,
             'advanced_brep': self.advanced_brep,
             'sew_tolerance': self.sew_tolerance,
+            'flip_x': self.flip_x,
             'filepath': self.filepath,
             'context': context,
         }
@@ -749,6 +757,7 @@ def _execute_analysis_and_export(operator, params):
     create_solid = params['create_solid']
     advanced_brep = params['advanced_brep']
     sew_tolerance = params['sew_tolerance']
+    flip_x = params.get('flip_x', False)
     filepath = params['filepath']
     
     import bpy
@@ -871,6 +880,7 @@ def _execute_analysis_and_export(operator, params):
             'advanced_brep': advanced_brep,
             'sew_tolerance': sew_tolerance,
             'context': context,
+            'flip_x': flip_x,
         }
 
         _g._export_complete = False
@@ -919,6 +929,7 @@ def _execute_analysis_and_export(operator, params):
             'step_schema': step_schema,
             'sew_tolerance': sew_tolerance,
             'enable_logging': enable_logging,
+            'flip_x': flip_x,
             'context': context,
             'scale': scale,
             'apply_modifiers': True,

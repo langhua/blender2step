@@ -1009,6 +1009,18 @@ def _parametric_export_staged():
                 shutil.copy2(successful_temp_files[0], data['filepath'])
                 log_to_file(f"[STEP Exporter] Single file copied")
             
+            # Apply global X-axis mirroring if requested
+            if data.get('flip_x', False):
+                try:
+                    if os.path.exists(data['filepath']):
+                        mirror_ok = cpp_exporter.mirror_step_file(data['filepath'])
+                        if mirror_ok:
+                            log_to_file(f"[STEP Exporter] flip_x applied to merged STEP output")
+                        else:
+                            log_to_file(f"[STEP Exporter] flip_x request failed during merge output mirror")
+                except Exception as mirror_err:
+                    log_to_file(f"[STEP Exporter] flip_x mirror error: {mirror_err}")
+
             # 清理临时文件
             for tf in _g._parametric_temp_files:
                 for ext in ('', '.log'):

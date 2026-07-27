@@ -237,6 +237,41 @@ PyObject* rotate_step_file(PyObject* self, PyObject* args) {
     }
 }
 
+static TopoDS_Shape apply_mirror_yz_plane(TopoDS_Shape shape) {
+    gp_Trsf mirror;
+    mirror.SetMirror(gp_Ax2(gp_Pnt(0, 0, 0), gp_Dir(1, 0, 0)));
+    return BRepBuilderAPI_Transform(shape, mirror).Shape();
+}
+
+PyObject* mirror_step_file(PyObject* self, PyObject* args) {
+    const char* filename;
+    if (!PyArg_ParseTuple(args, "s", &filename)) {
+        PyErr_SetString(PyExc_TypeError,
+            "mirror_step_file() expected: filename");
+        return NULL;
+    }
+
+    try {
+        STEPControl_Reader reader;
+        IFSelect_ReturnStatus status = reader.ReadFile(filename);
+        if (status != IFSelect_RetDone) {
+            Py_RETURN_FALSE;
+        }
+        reader.TransferRoots();
+        TopoDS_Shape shape = reader.OneShape();
+        if (shape.IsNull()) Py_RETURN_FALSE;
+
+        shape = apply_mirror_yz_plane(shape);
+
+        STEPControl_Writer writer;
+        writer.Transfer(shape, STEPControl_AsIs);
+        writer.Write(filename);
+        Py_RETURN_TRUE;
+    } catch (...) {
+        Py_RETURN_FALSE;
+    }
+}
+
 PyObject* export_bottom_shell_filleted_step(PyObject* self, PyObject* args) {
     const char* filename;
     double width, depth, outer_height, bottom_thickness, wall_thickness, corner_radius;
@@ -4105,6 +4140,7 @@ static PyMethodDef step_exporter_methods[] = {
     {"export_hollow_cone_fillet_with_groove_step", export_hollow_cone_fillet_with_groove_step, METH_VARARGS, "Export parametric hollow cone with top fillet and trapezoid groove to STEP"},
     {"export_cone_stepped_hole_step", export_cone_stepped_hole_step, METH_VARARGS, "Export parametric cone with stepped inner hole to STEP"},
     {"export_cone_stepped_hole_groove_step", export_cone_stepped_hole_groove_step, METH_VARARGS, "Export parametric cone with stepped hole and external groove to STEP"},
+    {"mirror_step_file", mirror_step_file, METH_VARARGS, "Read a STEP file, mirror all shapes across the YZ plane (X -> -X), and rewrite"},
     {"rotate_step_file", rotate_step_file, METH_VARARGS, "Read a STEP file, rotate all shapes around geometric center, and rewrite"},
     {"init_incremental_export", init_incremental_export, METH_VARARGS, "Initialize incremental export"},
     {"add_object_to_export", add_object_to_export, METH_VARARGS, "Add single object to incremental export"},

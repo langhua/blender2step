@@ -2336,7 +2336,7 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                         'groove_bottom_width': groove_params.get('groove_bottom_width', 0) if groove_params else 0,
                         'groove_top_width': groove_params.get('groove_top_width', 0) if groove_params else 0,
                         'groove_extrusion_length': groove_params.get('groove_extrusion_length', 0) if groove_params else 0,
-                'groove_angle': groove_params.get('groove_angle', 45.0) if groove_params else 45.0,
+                        'groove_angle': groove_params.get('groove_angle', 45.0) if groove_params else 45.0,
                     }
                 return {
                     'obj_type': 'cylinder_stepped_hole',
@@ -2357,9 +2357,8 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                     'groove_bottom_width': groove_params.get('groove_bottom_width', 0) if groove_params else 0,
                     'groove_top_width': groove_params.get('groove_top_width', 0) if groove_params else 0,
                     'groove_extrusion_length': groove_params.get('groove_extrusion_length', 0) if groove_params else 0,
-                'groove_angle': groove_params.get('groove_angle', 45.0) if groove_params else 45.0,
-                    'pos_x': pos_x, 'pos_y': pos_y, 'pos_z': pos_z,
-                'rot_x': rot_x, 'rot_y': rot_y, 'rot_z': rot_z,
+                    'groove_angle': groove_params.get('groove_angle', 45.0) if groove_params else 45.0,
+                }
 
             obj_type = 'hollow_cylinder'
             if top_feature == 'fillet':

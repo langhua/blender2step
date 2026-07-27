@@ -979,8 +979,9 @@ PyObject* export_hollow_cone_step(PyObject* self, PyObject* args) {
     double top_chamfer = 0.0, top_fillet = 0.0;
     double bottom_chamfer = 0.0, bottom_fillet = 0.0;
     double hole_fillet_radius = 0.0;
+    double rot_x = 0.0, rot_y = 0.0, rot_z = 0.0;
 
-    if (!PyArg_ParseTuple(args, "sddddd|ddddddddssi",
+    if (!PyArg_ParseTuple(args, "sddddd|ddddddddssiddd",
                           &filename,
                           &outer_bottom_radius, &outer_top_radius,
                           &inner_bottom_radius, &inner_top_radius,
@@ -989,13 +990,15 @@ PyObject* export_hollow_cone_step(PyObject* self, PyObject* args) {
                           &bottom_chamfer, &bottom_fillet,
                           &hole_fillet_radius,
                           &pos_x, &pos_y, &pos_z,
-                          &step_schema, &unit, &enable_logging)) {
+                          &step_schema, &unit, &enable_logging,
+                          &rot_x, &rot_y, &rot_z)) {
         PyErr_SetString(PyExc_TypeError,
             "export_hollow_cone_step() expected: filename, outer_bottom_radius, outer_top_radius, "
             "inner_bottom_radius, inner_top_radius, height, "
             "[top_chamfer], [top_fillet], [bottom_chamfer], [bottom_fillet], "
             "[hole_fillet_radius], "
-            "[pos_x], [pos_y], [pos_z], [step_schema], [unit], [enable_logging]");
+            "[pos_x], [pos_y], [pos_z], [step_schema], [unit], [enable_logging], "
+            "[rot_x], [rot_y], [rot_z]");
         return NULL;
     }
 
@@ -1021,6 +1024,7 @@ PyObject* export_hollow_cone_step(PyObject* self, PyObject* args) {
             trsf.SetTranslation(gp_Vec(pos_x, pos_y, pos_z));
             shape = BRepBuilderAPI_Transform(shape, trsf).Shape();
         }
+        shape = apply_rotation_after_translation(shape, pos_x, pos_y, pos_z, 0.0, rot_x, rot_y, rot_z);
 
         // 验证并修复 shape
         BRepCheck_Analyzer hconeAnalyzer(shape);
@@ -2092,11 +2096,12 @@ PyObject* export_cone_stepped_hole_step(PyObject* self, PyObject* args) {
     double top_chamfer = 0.0;
     double bottom_chamfer = 0.0;
     double pos_x = 0.0, pos_y = 0.0, pos_z = 0.0;
+    double rot_x = 0.0, rot_y = 0.0, rot_z = 0.0;
     const char* step_schema = "AP214IS";
     const char* unit = "MILLIMETER";
     int enable_logging = 1;
 
-    if (!PyArg_ParseTuple(args, "sddddddd|ddddddddssi",
+    if (!PyArg_ParseTuple(args, "sddddddd|ddddddddssiddd",
                           &filename,
                           &outer_bottom_radius, &outer_top_radius,
                           &height,
@@ -2108,12 +2113,15 @@ PyObject* export_cone_stepped_hole_step(PyObject* self, PyObject* args) {
                           &top_chamfer,
                           &bottom_chamfer,
                           &pos_x, &pos_y, &pos_z,
-                          &step_schema, &unit, &enable_logging)) {
+                          &step_schema, &unit, &enable_logging,
+                          &rot_x, &rot_y, &rot_z)) {
         PyErr_SetString(PyExc_TypeError,
             "export_cone_stepped_hole_step() expected: filename, "
             "outer_bottom_radius, outer_top_radius, height, "
             "small_hole_radius, small_hole_height, inner_bottom_radius, inner_top_radius, "
-            "[top_fillet_radius], [bottom_fillet_radius], [hole_fillet_radius], [top_chamfer], [bottom_chamfer], [pos_x], [pos_y], [pos_z], [step_schema], [unit], [enable_logging]");
+            "[top_fillet_radius], [bottom_fillet_radius], [hole_fillet_radius], [top_chamfer], [bottom_chamfer], "
+            "[pos_x], [pos_y], [pos_z], [step_schema], [unit], [enable_logging], "
+            "[rot_x], [rot_y], [rot_z]");
         return NULL;
     }
 
@@ -2131,6 +2139,7 @@ PyObject* export_cone_stepped_hole_step(PyObject* self, PyObject* args) {
             trsf.SetTranslation(gp_Vec(pos_x, pos_y, pos_z));
             shape = BRepBuilderAPI_Transform(shape, trsf).Shape();
         }
+        shape = apply_rotation_after_translation(shape, pos_x, pos_y, pos_z, 0.0, rot_x, rot_y, rot_z);
 
         BRepCheck_Analyzer paramAnalyzer(shape);
         if (!paramAnalyzer.IsValid() && shape.ShapeType() != TopAbs_COMPOUND) {

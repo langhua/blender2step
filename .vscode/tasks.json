@@ -160,6 +160,40 @@
 			"isBackground": false,
 			"problemMatcher": [],
 			"group": "none"
+		},
+		{
+			"label": "Analyze STEP Rotation",
+			"type": "shell",
+			"command": "C:\\Python313\\python.exe _analyze_rotation.py"
+		},
+		{
+			"label": "Analyze rotated STEP files",
+			"type": "shell",
+			"command": "C:\\Python313\\python.exe _analyze_rotated.py",
+			"group": "none"
+		},
+		{
+			"label": "Compare rotated vs non-rotated",
+			"type": "shell",
+			"command": "C:\\Python313\\python.exe _analyze_rotated2.py",
+			"group": "none"
+		},
+		{
+			"label": "List all test31 files",
+			"type": "shell",
+			"command": "C:\\Python313\\python.exe _analyze_rotated3.py",
+			"group": "none"
+		},
+		{
+			"label": "List all test31 step files",
+			"type": "shell",
+			"command": "C:\\Python313\\python.exe _analyze_rotated3.py",
+			"group": "none"
+		},
+		{
+			"label": "Compare Vertex Positions",
+			"type": "shell",
+			"command": "C:\\Python313\\python.exe f:\\git\\blender2step\\_compare_vertices.py"
 		}
 	]
 }

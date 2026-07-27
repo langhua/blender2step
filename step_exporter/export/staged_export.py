@@ -30,7 +30,7 @@ def _highlight_export_object(obj_params):
         pass
 
 
-def _apply_rotation_after_export(cpp_exporter, temp_file, params):
+def _apply_rotation_after_export(cpp_exporter, temp_file, params, obj_type=None):
     """Apply object rotation to an already-exported STEP temp file."""
     rx = params.get('rot_x', 0.0)
     ry = params.get('rot_y', 0.0)
@@ -40,9 +40,19 @@ def _apply_rotation_after_export(cpp_exporter, temp_file, params):
     px = params.get('pos_x', 0.0)
     py = params.get('pos_y', 0.0)
     pz = params.get('pos_z', 0.0)
-    # Total height varies by type
     total_h = params.get('outer_height', params.get('height', params.get('outer_height', 10.0)))
-    cpp_exporter.rotate_step_file(temp_file, px, py, pz, total_h, rx, ry, rz)
+    if obj_type == 'bottom_shell':
+        pz_adj = pz - total_h
+    else:
+        pz_adj = pz - total_h / 2.0
+    try:
+        cpp_exporter.rotate_step_file(temp_file, px, py, pz_adj, total_h, rx, -ry, rz)
+    except Exception:
+        pass  # best-effort
+
+
+
+
 
 
 
@@ -280,7 +290,8 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
             cparams.get('hole_fillet_radius', 0),
             px, py, pz,
             data['step_schema'], data['step_unit'],
-            1 if data['enable_logging'] else 0)
+            1 if data['enable_logging'] else 0,
+            0, 0, 0)
     elif obj_type == 'cylinder_chamfer':
         top_sz = cparams.get('top_feature_size', 0) if cparams.get('top_feature') == 'chamfer' else 0
         btm_sz = cparams.get('bottom_feature_size', 0) if cparams.get('bottom_feature') == 'chamfer' else 0
@@ -638,6 +649,7 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
         if cparams.get('groove_depth', 0) > 0.01:
             log_to_file(f"[STEP Exporter]   cone_stepped_hole with groove not supported parametrically, fallback to mesh")
             return _export_as_mesh_fallback(cpp_exporter, temp_file, cparams, data)
+        log_to_file(f"[STEP Exporter]   cone_stepped_hole: top_ch={top_ch:.1f} top_fr={top_fr:.1f} btm_ch={btm_ch:.1f} btm_fr={btm_fr:.1f} hole_fr={hole_fr:.1f}")
         try:
             result = cpp_exporter.export_cone_stepped_hole_step(
                 temp_file,
@@ -649,7 +661,8 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
                 cparams.get('inner_bottom_radius', cparams.get('inner_radius', 0)),
                 cparams.get('inner_top_radius', cparams.get('inner_radius', 0)),
                 top_fr, btm_fr, hole_fr, top_ch, btm_ch, px, py, pz, data['step_schema'], data['step_unit'],
-                1 if data['enable_logging'] else 0)
+                1 if data['enable_logging'] else 0,
+                0, 0, 0)
             if result:
                 return True
         except Exception as e:
@@ -924,11 +937,15 @@ def _parametric_export_staged():
                 
                 if success:
                     # Apply object rotation (parametric_shell handles it internally)
-                    if obj_type != 'parametric_shell' and obj_type != 'regular':
+                    # hollow_cone now handles rotation in C++ directly
+                    inner_type = obj_params.get('obj_type', '')
+                    if obj_type != 'parametric_shell' and obj_type != 'regular' and inner_type not in ('hollow_cone', 'cone_stepped_hole'):
+                        log_to_file(f"[ROTATION] Calling _apply_rotation_after_export for {obj_type}/{inner_type} rot_y={obj_params.get('rot_y', 0):.4f}")
                         try:
-                            _apply_rotation_after_export(cpp_exporter, temp_file, obj_params)
-                        except Exception:
-                            pass  # rotation is best-effort
+                            _apply_rotation_after_export(cpp_exporter, temp_file, obj_params, obj_type)
+                        except Exception as rot_err:
+                            from ..core.utils import log_to_file as _log_rot_err
+                            _log_rot_err(f"[ROTATION] Error applying rotation: {rot_err}")
                     log_to_file(f"[STEP Exporter]   Object {obj_num}/{total_objects} OK ({time.time()-obj_start:.3f}s)")
                     # 验证导出结果
                     shell_cnt, face_cnts = _verify_step_shell(temp_file)
@@ -958,55 +975,37 @@ def _parametric_export_staged():
             successful_count = len(successful_temp_files)
             
             if successful_count > 1:
-                try:
-                    # Python merge (fixed entity renumbering) as primary
-                    _merge_step_files(data['filepath'], successful_temp_files)
-                    log_to_file(f"[STEP Exporter] Python merge: {successful_count} objects into {data['filepath']}")
-                except Exception as merge_err:
-                    log_to_file(f"[STEP Exporter] Python merge failed: {merge_err}, trying C++ fallback")
-                    import traceback
-                    log_to_file(traceback.format_exc())
+                # 分批合并，显示进度
+                chunk_size = 20
+                batch_files = []
+                for i in range(0, successful_count, chunk_size):
+                    chunk = successful_temp_files[i:i+chunk_size]
+                    batch_out = data['filepath'] + f'.batch{i//chunk_size}.step'
                     try:
-                        result = cpp_exporter.merge_step_files(data['filepath'], successful_temp_files,
-                            data['step_schema'], data['step_unit'],
-                            1 if data['enable_logging'] else 0)
-                        if result and result > 0:
-                            log_to_file(f"[STEP Exporter] C++ fallback: merged {result} shapes")
-                        else:
-                            log_to_file(f"[STEP Exporter] Both merges failed")
-                    except Exception as cpp_err:
-                        log_to_file(f"[STEP Exporter] C++ fallback also failed: {cpp_err}")
-                        if os.path.exists(successful_temp_files[0]):
-                            try:
-                                import shutil
-                                shutil.copy2(successful_temp_files[0], data['filepath'])
-                            except:
-                                pass
-                finally:
-                    try:
-                        _merge_log_files(os.path.dirname(data['filepath']), data['filepath'])
-                    except:
-                        pass
-            elif successful_count == 1:
-                # Single file: still run through merge to strip wireframe chain
-                try:
-                    temp_file = successful_temp_files[0]
-                    temp_size = os.path.getsize(temp_file) if os.path.exists(temp_file) else -1
-                    log_to_file(f"[STEP Exporter] Merging single file: {temp_file} ({temp_size} bytes) -> {data['filepath']}")
-                    _merge_step_files(data['filepath'], [temp_file])
-                    log_to_file(f"[STEP Exporter] Single file merge OK")
-                except Exception as merge_err:
-                    log_to_file(f"[STEP Exporter] _merge_step_files failed: {merge_err}, trying os.replace")
-                    try:
-                        os.replace(temp_file, data['filepath'])
-                    except:
+                        _merge_step_files(batch_out, chunk)
+                    except Exception:
                         import shutil
-                        shutil.copy2(temp_file, data['filepath'])
-                finally:
+                        shutil.copy2(chunk[0], batch_out)
+                    batch_files.append(batch_out)
+                    pct = 90 + int(8 * (i + len(chunk)) / successful_count)
+                    update_progress(min(pct, 98), f"合并批次 {i//chunk_size+1}/{(successful_count+chunk_size-1)//chunk_size}...", context)
+                
+                # 最终合并所有批次
+                update_progress(98, "合并所有批次...", context)
+                _merge_step_files(data['filepath'], batch_files)
+                
+                # 清理批次文件
+                for bf in batch_files:
                     try:
-                        _merge_log_files(os.path.dirname(data['filepath']), data['filepath'])
+                        os.remove(bf)
                     except:
                         pass
+                log_to_file(f"[STEP Exporter] Chunked merge OK ({successful_count} objects)")
+            elif successful_count == 1:
+                # 单文件：直接复制
+                import shutil
+                shutil.copy2(successful_temp_files[0], data['filepath'])
+                log_to_file(f"[STEP Exporter] Single file copied")
             
             # 清理临时文件
             for tf in _g._parametric_temp_files:

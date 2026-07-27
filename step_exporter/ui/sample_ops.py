@@ -1,6 +1,6 @@
 """Sample geometry operators."""
 
-import sys, os
+import sys, os, math
 
 import bpy
 
@@ -242,6 +242,12 @@ class STEP_EXPORTER_OT_create_cylinder_gallery(Operator):
                 m.add_cylinder(0, y, z, f"C{self._shelf_idx+1}_{name_sfx}",
 
                               m.R, base_ctype, base_fr, hole, hd, he)
+
+                # Last column: mark for rotation at end
+                if self._item_idx == n - 1:
+                    if not hasattr(self, '_last_col_names'):
+                        self._last_col_names = []
+                    self._last_col_names.append(f"C{self._shelf_idx+1}_{name_sfx}")
 
                 m.add_label(0, y, z, label)
 
@@ -505,6 +511,20 @@ class STEP_EXPORTER_OT_create_cylinder_gallery(Operator):
 
         # ===== Phase 7: finish (95→100%) =====
 
+        # Apply X=30° rotation to last column objects (both left and right copies)
+        if hasattr(self, '_last_col_names'):
+            for name in self._last_col_names:
+                obj = bpy.data.objects.get(name)
+                if obj:
+                    obj.rotation_euler.x = math.radians(30)
+                    print(f"[ROTATION] Applied X=30 to {name}")
+                # Also rotate the right-side copy (G-prefixed)
+                gname = 'G' + name
+                gobj = bpy.data.objects.get(gname)
+                if gobj:
+                    gobj.rotation_euler.x = math.radians(30)
+                    print(f"[ROTATION] Applied X=30 to {gname}")
+
         update_progress(100, _t("Done!"), context)
 
         context.window_manager.event_timer_remove(self._timer)
@@ -672,6 +692,12 @@ class STEP_EXPORTER_OT_create_cone_gallery(Operator):
                 m.add_cone(y, z, f"S{self._shelf_idx+1}_{name_sfx}",
 
                            m.BOT_R, m.TOP_R, base_ctype, base_fr, hole, hd, he)
+
+                # Last column: mark for rotation at end
+                if self._item_idx == n - 1:
+                    if not hasattr(self, '_last_col_names'):
+                        self._last_col_names = []
+                    self._last_col_names.append(f"S{self._shelf_idx+1}_{name_sfx}")
 
                 m.add_label(y, z, label)
 
@@ -910,6 +936,20 @@ class STEP_EXPORTER_OT_create_cone_gallery(Operator):
 
         # ===== Phase 7: finish (95→100%) =====
 
+        # Apply Y=90° rotation to last column (both left and right copies)
+        if hasattr(self, '_last_col_names'):
+            for name in self._last_col_names:
+                obj = bpy.data.objects.get(name)
+                if obj:
+                    obj.rotation_euler.y = math.radians(90)
+                    print(f"[ROTATION] Applied Y=90 to {name}")
+                # Also rotate the right-side copy (G-prefixed)
+                gname = 'G' + name
+                gobj = bpy.data.objects.get(gname)
+                if gobj:
+                    gobj.rotation_euler.y = math.radians(90)
+                    print(f"[ROTATION] Applied Y=90 to {gname}")
+
         update_progress(100, _t("Done!"), context)
 
         context.window_manager.event_timer_remove(self._timer)
@@ -1073,6 +1113,12 @@ class STEP_EXPORTER_OT_create_cone_gallery_inverted(Operator):
                 m.add_cone(y, z, f"S{self._shelf_idx+1}_{name_sfx}",
 
                            m.TOP_R, m.BOT_R, base_ctype, base_fr, hole, hd, he)
+
+                # Last column: mark for rotation at end
+                if self._item_idx == n - 1:
+                    if not hasattr(self, '_last_col_names'):
+                        self._last_col_names = []
+                    self._last_col_names.append(f"S{self._shelf_idx+1}_{name_sfx}")
 
                 m.add_label(y, z, label)
 
@@ -1310,6 +1356,20 @@ class STEP_EXPORTER_OT_create_cone_gallery_inverted(Operator):
 
 
         # ===== Phase 7: finish (95→100%) =====
+
+        # Apply Y=180° rotation to last column (both left and right copies)
+        if hasattr(self, '_last_col_names'):
+            for name in self._last_col_names:
+                obj = bpy.data.objects.get(name)
+                if obj:
+                    obj.rotation_euler.y = math.radians(180)
+                    print(f"[ROTATION] Applied Y=180 to {name}")
+                # Also rotate the right-side copy (G-prefixed)
+                gname = 'G' + name
+                gobj = bpy.data.objects.get(gname)
+                if gobj:
+                    gobj.rotation_euler.y = math.radians(180)
+                    print(f"[ROTATION] Applied Y=180 to {gname}")
 
         update_progress(100, _t("Done!"), context)
 

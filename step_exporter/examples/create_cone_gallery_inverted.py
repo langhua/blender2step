@@ -813,10 +813,13 @@ if __name__ == '__main__':
         label_y = start_y + STEP_Y * (n - 1) / 2
         add_shelf_label(label_y, z, shelf_label)
 
-        for name_sfx, hole, hd, he, label in items:
+        for item_idx, (name_sfx, hole, hd, he, label) in enumerate(items):
             br, tr = TOP_R, BOT_R
-            add_cone(y, z, f"S{shelf_idx+1}_{name_sfx}", br, tr,
+            obj = add_cone(y, z, f"S{shelf_idx+1}_{name_sfx}", br, tr,
                      base_ctype, base_fr, hole, hd, he)
+            # Last column: rotate 30° around Y for rotation verification
+            if item_idx == n - 1 and obj:
+                obj.rotation_euler.y = math.radians(30)
             add_label(y, z, label)
             y += STEP_Y
 
@@ -830,11 +833,13 @@ if __name__ == '__main__':
         label_y = start_y + STEP_Y * (n - 1) / 2
         add_shelf_label(label_y, z, f"G {shelf_label}")
 
-        for name_sfx, hole, hd, he, label in items:
+        for item_idx, (name_sfx, hole, hd, he, label) in enumerate(items):
             br, tr = TOP_R, BOT_R
             obj = add_cone(y, z, f"GS{shelf_idx+1}_{name_sfx}", br, tr,
                           base_ctype, base_fr, hole, hd, he)
             obj.location.x = X_GS  # offset to right column
+            if item_idx == n - 1 and obj:
+                obj.rotation_euler.y = math.radians(30)
             _add_groove_to_cone(obj)
             y += STEP_Y
 

@@ -683,8 +683,9 @@ def build(progress_cb=None):
 
         for item_idx, (name_sfx, hole, hd, he, label) in enumerate(items):
             y = start_y + item_idx * STEP_Y
-            add_cylinder(0, y, z, f"C{shelf_idx+1}_{name_sfx}",
+            obj = add_cylinder(0, y, z, f"C{shelf_idx+1}_{name_sfx}",
                         R, base_ctype, base_fr, hole, hd, he)
+            add_label(0, y, z, label)
             add_label(0, y, z, label)
             _step()
 

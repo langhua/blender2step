@@ -1,11 +1,11 @@
 ﻿# blender2step
 基于 OpenCASCADE 的 Blender STEP 导出器。
 
-本插件支持 Blender 4.2+ / 5.x，并借助 DeepSeek V4 Pro 等 AI 工具辅助开发。它用于在 Blender 中建模外壳，并导出 STEP 文件以支持模具制造。
+本插件支持 Blender 5.2，并借助 DeepSeek V4 Pro 等 AI 工具辅助开发。它用于在 Blender 中建模外壳，并导出 STEP 文件以支持模具制造。
 
 📘 English documentation: [README.md](./README.md)
 
-> **blender2step** 是一个 Blender 4.2+ / 5.x 插件，使用 OpenCASCADE 7.8.1 将 3D 模型导出为 STEP 格式。它是一个简单的小型电子产品制造工具链的一部分：在 Blender 中设计外壳、导出 STEP，并发送给模具厂家用于量产。主要由 AI 辅助开发（DeepSeek V4 Pro）。
+> **blender2step** 是一个 Blender 5.2 插件，使用 OpenCASCADE 7.8.1 将 3D 模型导出为 STEP 格式。它是一个简单的小型电子产品制造工具链的一部分：在 Blender 中设计外壳、导出 STEP，并发送给模具厂家用于量产。主要由 AI 辅助开发（DeepSeek V4 Pro）。
 
 ## 工具链
 

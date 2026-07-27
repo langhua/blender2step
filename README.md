@@ -1,11 +1,11 @@
 ﻿# blender2step
 Blender STEP exporter based on OpenCASCADE.
 
-This addon supports Blender 4.2+ / 5.x and was developed with AI assistance such as DeepSeek V4 Pro. It is designed for modeling parts in Blender for mold manufacturing.
+This addon supports Blender 5.2 and was developed with AI assistance such as DeepSeek V4 Pro. It is designed for modeling parts in Blender for mold manufacturing.
 
 📘 Chinese documentation: [README_zh.md](./README_zh.md)
 
-> **blender2step** is a Blender 4.2+ / 5.x addon that exports 3D models to STEP format using OpenCASCADE 7.8.1. It is part of a simple gadget manufacturing toolchain: design enclosures in Blender, export STEP, and send to mold factories for mass production. Built primarily with AI assistance (DeepSeek V4 Pro).
+> **blender2step** is a Blender 5.2 addon that exports 3D models to STEP format using OpenCASCADE 7.8.1. It is part of a simple gadget manufacturing toolchain: design enclosures in Blender, export STEP, and send to mold factories for mass production. Built primarily with AI assistance (DeepSeek V4 Pro).
 
 ## Toolchain
 

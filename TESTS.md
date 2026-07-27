@@ -69,7 +69,7 @@
 
 ```powershell
 # 运行全部 CI 测试（推荐）
-& "f:\Program Files\Blender Foundation\Blender 4.2\blender.exe" --background --python ci_test_runner.py
+& "f:\Program Files\Blender Foundation\Blender 5.2\blender.exe" --background --python ci_test_runner.py
 
 # 运行单个集成测试
 & "f:\Program Files\Blender Foundation\Blender 5.2\blender.exe" --background --python ci_integration_test.py

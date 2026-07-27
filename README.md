@@ -84,7 +84,7 @@ Open FreeCAD, click Help → About FreeCAD, and check the OpenCASCADE version.
 ```
 cd F:\git\
 git clone https://github.com/microsoft/vcpkg.git
-cd vcppg
+cd vcpkg
 ```
 
 3. Bootstrap vcpkg:

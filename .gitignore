@@ -33,3 +33,4 @@ vcpkg_overlay/
 test_output/
 *.blend*
 occt-x64-windows-release.zip
+!step_exporter/examples/*.blend

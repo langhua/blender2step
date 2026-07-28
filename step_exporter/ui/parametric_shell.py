@@ -1216,6 +1216,20 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
 
 # ── Add Hole to Shell (post-creation step) ────────────────
 
+def _move_cursor_to_hole_pos(op, context):
+    """Move 3D cursor to world coords matching shell-local hole_pos_x/y/z (mm)."""
+    obj = context.active_object
+    if not obj or obj.get('object_type') != 'parametric_shell':
+        return
+    S = 0.001 if obj.get('unit', 'mm') == 'mm' else 1.0
+    h_m = obj.get('height', 50.0) * S
+    loc = obj.location
+    world_x = loc.x + op.hole_pos_x * 0.001
+    world_y = loc.y + op.hole_pos_y * 0.001
+    world_z = (loc.z - h_m / 2) + op.hole_pos_z * 0.001
+    context.scene.cursor.location = (world_x, world_y, world_z)
+
+
 class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
     """Add a hole/window to an existing parametric shell at the 3D cursor position."""
     bl_idname = "step_exporter.add_hole_to_shell"
@@ -1245,9 +1259,12 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
     hole_width: FloatProperty(name=_t("Width"), default=10.0, min=0.1, max=500.0)
     hole_height: FloatProperty(name=_t("Height"), default=8.0, min=0.1, max=500.0)
     hole_cr: FloatProperty(name=_t("Corner R"), default=2.0, min=0.0, max=500.0)
-    hole_pos_x: FloatProperty(name="X", default=0.0, precision=1)
-    hole_pos_y: FloatProperty(name="Y", default=0.0, precision=1)
-    hole_pos_z: FloatProperty(name="Z", default=0.0, precision=1)
+    hole_pos_x: FloatProperty(name="X", default=0.0, precision=1,
+        update=lambda self, ctx: _move_cursor_to_hole_pos(self, ctx))
+    hole_pos_y: FloatProperty(name="Y", default=0.0, precision=1,
+        update=lambda self, ctx: _move_cursor_to_hole_pos(self, ctx))
+    hole_pos_z: FloatProperty(name="Z", default=0.0, precision=1,
+        update=lambda self, ctx: _move_cursor_to_hole_pos(self, ctx))
     hole_solver: EnumProperty(
         name=_t("Solver"),
         items=[
@@ -1441,43 +1458,35 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
         thickness = t * S
 
         # Auto-clamp Z to be within the wall for reliable boolean cut
-        # Uses shell-local Z (0..h). Must check bottom/top INDEPENDENTLY.
+        # Uses shell-local Z (0..h). Compare ALL 6 faces (bottom, top, 4 side walls).
         dist_walls = [abs(px_r - hw), abs(px_r + hw), abs(py_r - hd), abs(py_r + hd)]
         dist_bottom = abs(pz_r)
         dist_top = abs(pz_r - h)
-        min_wall = min(dist_walls)
-        if dist_bottom < min_wall:
+        # right=0, left=1, back=2, front=3 in dist_walls
+        all_dists = [dist_bottom, dist_top] + dist_walls
+        nearest = all_dists.index(min(all_dists))
+        # 0=bottom, 1=top, 2=right, 3=left, 4=back, 5=front
+        
+        if nearest == 0:
             # Bottom face: clamp Z to mid-wall
             pz_r = max(0.0, min(pz_r, thickness))
-        elif dist_top < min_wall:
+            face_code = 0
+        elif nearest == 1:
             # Top face: clamp Z to mid-wall
             pz_r = max(h - thickness, min(pz_r, h))
+            face_code = 1
         else:
             # Side wall: clamp Z within [0, h]
             pz_r = max(0.0, min(pz_r, h))
+            wall_idx = nearest - 2
+            # dist_walls: right=0→3, left=1→2, back=2→5, front=3→4
+            face_code_map = {0: 3, 1: 2, 2: 5, 3: 4}
+            face_code = face_code_map[wall_idx]
 
         # Convert back to world coordinates for cutter placement & window_data
         px = px_r + loc.x
         py = py_r + loc.y
         pz = pz_r + shell_bottom_z
-
-        # Determine face code for STEP export — reuse the SAME detection as Z-clamp
-        # 0=bottom, 1=top, 2=left(X-), 3=right(X+), 4=front(Y-), 5=back(Y+)
-        face_code = 0
-        if dist_bottom < min_wall:
-            face_code = 0  # bottom
-        elif dist_top < min_wall:
-            face_code = 1  # top
-        else:
-            min_i = dist_walls.index(min_wall)
-            if min_i == 0:
-                face_code = 3  # right (X+)
-            elif min_i == 1:
-                face_code = 2  # left (X-)
-            elif min_i == 2:
-                face_code = 5  # back (Y+)
-            else:
-                face_code = 4  # front (Y-)
 
         bpy.context.view_layer.objects.active = obj
         if bpy.context.mode != 'OBJECT':
@@ -1490,10 +1499,10 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
                 vertices=64, radius=rh, depth=cutter_depth, location=(0, 0, 0))
             cutter = bpy.context.active_object
             cutter.name = "Hole_R"
-            # Orient based on nearest face (already detected above)
-            if not (dist_bottom < min_wall or dist_top < min_wall):
-                min_i = dist_walls.index(min_wall)
-                if min_i <= 1:
+            # Orient based on nearest face
+            if nearest >= 2:  # side wall
+                wall_idx = nearest - 2
+                if wall_idx <= 1:
                     cutter.rotation_euler = (0, math.pi / 2, 0)  # X-wall
                 else:
                     cutter.rotation_euler = (math.pi / 2, 0, 0)  # Y-wall
@@ -3067,6 +3076,20 @@ class STEP_EXPORTER_OT_clear_shell_holes(Operator):
         return {'FINISHED'}
 
 
+def _move_cursor_to_edit_hole_pos(op, context):
+    """Move 3D cursor to world coords matching shell-local edit_cx/cy/cz (mm)."""
+    obj = context.active_object
+    if not obj or obj.get('object_type') != 'parametric_shell':
+        return
+    S = 0.001 if obj.get('unit', 'mm') == 'mm' else 1.0
+    h_m = obj.get('height', 50.0) * S
+    loc = obj.location
+    world_x = loc.x + op.edit_cx * 0.001
+    world_y = loc.y + op.edit_cy * 0.001
+    world_z = (loc.z - h_m / 2) + op.edit_cz * 0.001
+    context.scene.cursor.location = (world_x, world_y, world_z)
+
+
 class STEP_EXPORTER_OT_edit_shell_hole(Operator):
     """Edit a hole on the parametric shell"""
     bl_idname = "step_exporter.edit_shell_hole"
@@ -3075,9 +3098,12 @@ class STEP_EXPORTER_OT_edit_shell_hole(Operator):
 
     hole_index: bpy.props.IntProperty(default=-1)
     edit_type: bpy.props.EnumProperty(name=_t("Type"), items=[('round', _t("Round"), ""), ('rrect', _t("Rounded Rect"), "")])
-    edit_cx: bpy.props.FloatProperty(name="X", default=0.0, precision=1)
-    edit_cy: bpy.props.FloatProperty(name="Y", default=0.0, precision=1)
-    edit_cz: bpy.props.FloatProperty(name="Z", default=0.0, precision=1)
+    edit_cx: bpy.props.FloatProperty(name="X", default=0.0, precision=1,
+        update=lambda self, ctx: _move_cursor_to_edit_hole_pos(self, ctx))
+    edit_cy: bpy.props.FloatProperty(name="Y", default=0.0, precision=1,
+        update=lambda self, ctx: _move_cursor_to_edit_hole_pos(self, ctx))
+    edit_cz: bpy.props.FloatProperty(name="Z", default=0.0, precision=1,
+        update=lambda self, ctx: _move_cursor_to_edit_hole_pos(self, ctx))
     edit_radius: bpy.props.FloatProperty(name=_t("Radius"), default=5.0, min=0.1, max=500.0)
     edit_fillet: bpy.props.FloatProperty(name=_t("Edge Fillet"), default=0.0, min=0.0, max=100.0)
     edit_fillet_type: bpy.props.EnumProperty(

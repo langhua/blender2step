@@ -194,6 +194,42 @@
 			"label": "Compare Vertex Positions",
 			"type": "shell",
 			"command": "C:\\Python313\\python.exe f:\\git\\blender2step\\_compare_vertices.py"
+		},
+		{
+			"label": "Render Toolchain SVGs",
+			"type": "shell",
+			"command": "python _render_toolchain.py",
+			"group": "none"
+		},
+		{
+			"label": "Render Mermaid to SVG",
+			"type": "shell",
+			"command": "npx @mermaid-js/mermaid-cli mmdc -i docs/images/toolchain_en_mmd.mmd -o docs/images/toolchain_en.svg -w 1200 && npx @mermaid-js/mermaid-cli mmdc -i docs/images/toolchain_zh_mmd.mmd -o docs/images/toolchain_zh.svg -w 1200",
+			"group": "none"
+		},
+		{
+			"label": "Render Mermaid EN",
+			"type": "shell",
+			"command": "npx -y @mermaid-js/mermaid-cli mmdc -i docs/images/toolchain_en_mmd.mmd -o docs/images/toolchain_en.svg -w 1200",
+			"group": "none"
+		},
+		{
+			"label": "Try older mermaid-cli",
+			"type": "shell",
+			"command": "npx -y @mermaid-js/mermaid-cli@10.9.1 mmdc -i docs/images/toolchain_en_mmd.mmd -o docs/images/toolchain_en.svg",
+			"group": "none"
+		},
+		{
+			"label": "Render Mermaid ZH",
+			"type": "shell",
+			"command": "npx -y @mermaid-js/mermaid-cli@10.9.1 mmdc -i docs/images/toolchain_zh_mmd.mmd -o docs/images/toolchain_zh.svg",
+			"group": "none"
+		},
+		{
+			"label": "Clean temp files",
+			"type": "shell",
+			"command": "Remove-Item docs/images/toolchain_en_mmd.mmd, docs/images/toolchain_zh_mmd.mmd, _render_toolchain.py, _render_toolchain.bat -ErrorAction SilentlyContinue; Write-Output 'cleaned'",
+			"group": "none"
 		}
 	]
 }

@@ -1,0 +1,10 @@
+flowchart LR
+    A["★ Fritzing ★<br/>Circuit design"] -->|"Gerber RS-274X"| B["PCB Factory<br/>Board production"]
+    A -->|"PNP file"| C["pnp2cpl<br/>Format conversion"] -->|"CSV assembly list"| B
+    A -->|"Gerber RS-274X"| D["FritzingToBlender<br/>Import into Blender"] --> E["★ Blender ★<br/>Enclosure design"]
+    E --> F["blender2step<br/>Export STEP"] -->|STEP| K["★ FreeCAD ★<br/>Verify STEP"] -->|STEP| G["Mold factory<br/>Mass production"]
+    H["★ Inkscape ★<br/>Part graphics"] -.->|SVG| A
+    I["fritzing-parts-langhua<br/>Open parts library"] -.->|SVG| A
+    J["★ OpenCASCADE ★<br/>STEP engine"] -.->|powers| F
+    J -.->|powers| K
+    style F fill:#f9a825,stroke:#333,stroke-width:2px,color:#000

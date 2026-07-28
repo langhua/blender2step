@@ -73,69 +73,56 @@ def _analyze_parametric_shell_from_mesh(obj, context=None, scale=1.0):
         'pos_y': obj.location.y * scale,
         'pos_z': (obj.location.z * scale) - (h_mm / 2.0),
         'rot_x': obj.rotation_euler.x, 'rot_y': obj.rotation_euler.y, 'rot_z': obj.rotation_euler.z,
-        'window_data': _convert_window_data(obj, scale, h_mm),
+        'window_data': _fix_window_data_faces(obj),
     }
 
 
-def _convert_window_data(obj, scale, h_mm):
-    """Convert window_data from shell-local to world coords.
-    Applies object rotation to hole positions, so C++ rotation
-    (applied after cutting) flips them back to match Blender's viewport."""
+def _fix_window_data_faces(obj):
+    """Fix hole face assignments for STEP export constraints.
+    Parametric shell top is open (only a rim) → face 1 (top) holes route to nearest side wall.
+    Coordinates remain in shell-local mm — C++ cuts holes BEFORE translating the shell."""
     wd = obj.get('window_data', '')
     if not wd or not obj.get('window_data_local'):
         return wd
 
-    pos_x = obj.location.x * scale
-    pos_y = obj.location.y * scale
-    pos_z = (obj.location.z * scale) - (h_mm / 2.0)
-    t_mm = obj.get('wall_thickness', 2.0) * (1000.0 if obj.get('unit', 'm') == 'm' else 1.0)
-
-    # Check if object has significant rotation (any axis)
-    rx, ry, rz = obj.rotation_euler.x, obj.rotation_euler.y, obj.rotation_euler.z
-    has_rotation = abs(rx) > 1e-6 or abs(ry) > 1e-6 or abs(rz) > 1e-6
-
-    # For rotated shells, the C++ rotation (applied after cutting) will flip X/Z.
-    # Compensate by pre-negating coords so the net result matches Blender's viewport.
-    # Only bottom/top face holes (fc=0,1) need X compensation for Y rotation.
-    # Side face holes (fc=2-5) have different axis mappings.
-    negate_x = has_rotation and abs(ry) > 1e-6
+    unit_factor = 1000.0 if obj.get('unit', 'm') == 'm' else 1.0
+    w_mm = obj.get('width', 100.0) * unit_factor
+    d_mm = obj.get('depth', 80.0) * unit_factor
+    half_w, half_d = w_mm / 2.0, d_mm / 2.0
 
     entries = wd.split(';')
-    converted = []
+    fixed = []
     for entry in entries:
         entry = entry.strip()
         if not entry:
             continue
         parts = entry.split(',')
-        if len(parts) < 5:
-            converted.append(entry)
+        if len(parts) < 8:
+            fixed.append(entry)
             continue
         try:
-            cx = float(parts[0])
-            cy = float(parts[1])
-            cz = float(parts[2])
-            face = int(float(parts[-1])) if len(parts) >= 8 else -1
-
-            # Clamp cz to valid range for the assigned face.
-            if face == 0:
-                cz = max(0.0, min(cz, t_mm))
-            elif face == 1:
-                cz = min(h_mm, max(cz, h_mm - t_mm))
-
-            # Apply rotation compensation:
-            # Y rotation flips X; C++ will flip it back after cutting.
-            # Only applies to bottom/top face holes where X is along-face.
-            # Side face holes (fc=2-5): X is through-wall, not compensated.
-            if negate_x and face in (0, 1):
-                cx_w = pos_x - cx
-            else:
-                cx_w = cx + pos_x
-            cy_w = cy + pos_y
-            cz_w = cz + pos_z
-            parts[0] = f"{cx_w:.3f}"
-            parts[1] = f"{cy_w:.3f}"
-            parts[2] = f"{cz_w:.3f}"
-        except ValueError:
+            face = int(float(parts[-1]))
+            if face == 1:  # top → nearest side wall, snap coordinate to wall surface
+                cx = float(parts[0])
+                cy = float(parts[1])
+                dist_r = abs(cx - half_w)
+                dist_l = abs(cx + half_w)
+                dist_b = abs(cy - half_d)
+                dist_f = abs(cy + half_d)
+                nearest = min(dist_r, dist_l, dist_b, dist_f)
+                if nearest == dist_r:
+                    parts[0] = f"{half_w:.3f}"
+                    parts[-1] = "3"
+                elif nearest == dist_l:
+                    parts[0] = f"{-half_w:.3f}"
+                    parts[-1] = "2"
+                elif nearest == dist_b:
+                    parts[1] = f"{half_d:.3f}"
+                    parts[-1] = "5"
+                else:
+                    parts[1] = f"{-half_d:.3f}"
+                    parts[-1] = "4"
+        except (ValueError, IndexError):
             pass
-        converted.append(','.join(parts))
-    return ';'.join(converted)
+        fixed.append(','.join(parts))
+    return ';'.join(fixed)

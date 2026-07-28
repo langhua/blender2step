@@ -3369,16 +3369,9 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
             shape = fix_shape_enhanced(shape, 0.001);
         }
 
-        // Translate to world position BEFORE cutting holes,
-        // so hole cutters (in world coordinates) align with the shell.
-        // Rotation is applied AFTER cutting to preserve correct face_code.
-        if (pos_x != 0.0 || pos_y != 0.0 || pos_z != 0.0) {
-            gp_Trsf trsf;
-            trsf.SetTranslation(gp_Vec(pos_x, pos_y, pos_z));
-            shape = BRepBuilderAPI_Transform(shape, trsf).Shape();
-        }
-
-        // Apply hole cutters from window_data (coordinates are in mm world space)
+        // Apply hole cutters from window_data in SHELL-LOCAL mm
+        // (shell is still at origin — cut BEFORE translating to world position).
+        // Python passes raw local coords + face_code; C++ handles all transforms.
         if (window_data && window_data[0] != '\0') {
             std::cout << "[STEP Exporter] Hole cutting: window_data='" << window_data << "'" << std::endl;
             std::string wd(window_data);
@@ -3979,12 +3972,12 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                             else if (fc <= 3) midCoord = (ex1+ex2)/2.0;
                             else midCoord = (ey1+ey2)/2.0;
                             bool isInnerEdge = false;
-                            if (fc == 0) isInnerEdge = (midCoord > pos_z + thickness * 0.5);
-                            else if (fc == 1) isInnerEdge = (midCoord < pos_z + height - thickness * 0.5);
-                            else if (fc == 2) isInnerEdge = (midCoord > pos_x - halfW + thickness * 0.5);
-                            else if (fc == 3) isInnerEdge = (midCoord < pos_x + halfW - thickness * 0.5);
-                            else if (fc == 4) isInnerEdge = (midCoord > pos_y - halfD + thickness * 0.5);
-                            else isInnerEdge = (midCoord < pos_y + halfD - thickness * 0.5);
+                            if (fc == 0) isInnerEdge = (midCoord > thickness * 0.5);
+                            else if (fc == 1) isInnerEdge = (midCoord < height - thickness * 0.5);
+                            else if (fc == 2) isInnerEdge = (midCoord > -halfW + thickness * 0.5);
+                            else if (fc == 3) isInnerEdge = (midCoord < halfW - thickness * 0.5);
+                            else if (fc == 4) isInnerEdge = (midCoord > -halfD + thickness * 0.5);
+                            else isInnerEdge = (midCoord < halfD - thickness * 0.5);
                             if (isInnerEdge) innerCnt++; else outerCnt++;
                             std::cout << "\n  edge mid=(" << (ex1+ex2)/2.0 << "," << (ey1+ey2)/2.0 << "," << (ez1+ez2)/2.0 << ")" << (isInnerEdge ? " INNER" : " OUTER");
                             fm.Add(fr, e);
@@ -4006,7 +3999,15 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
             }
         }
 
-        // Apply object rotation AFTER hole cutting (preserves correct face_code).
+        // Translate shell with holes to world position AFTER cutting.
+        // (pos_z = shell bottom Z, so the shell sits exactly at world position.)
+        if (pos_x != 0.0 || pos_y != 0.0 || pos_z != 0.0) {
+            gp_Trsf trsf;
+            trsf.SetTranslation(gp_Vec(pos_x, pos_y, pos_z));
+            shape = BRepBuilderAPI_Transform(shape, trsf).Shape();
+        }
+
+        // Apply object rotation AFTER hole cutting + translation
         // Rotate around world geometric center: (pos_x, pos_y, pos_z + total_h/2).
         {
             double total_h = height;

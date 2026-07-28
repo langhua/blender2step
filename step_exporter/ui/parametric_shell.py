@@ -1221,13 +1221,15 @@ def _move_cursor_to_hole_pos(op, context):
     obj = context.active_object
     if not obj or obj.get('object_type') != 'parametric_shell':
         return
-    S = 0.001 if obj.get('unit', 'mm') == 'mm' else 1.0
-    h_m = obj.get('height', 50.0) * S
-    loc = obj.location
-    world_x = loc.x + op.hole_pos_x * 0.001
-    world_y = loc.y + op.hole_pos_y * 0.001
-    world_z = (loc.z - h_m / 2) + op.hole_pos_z * 0.001
-    context.scene.cursor.location = (world_x, world_y, world_z)
+    h_m = obj.get('height', 50.0) * (0.001 if obj.get('unit', 'mm') == 'mm' else 1.0)
+    # hole_pos_z is "from bottom" → convert to local Z (origin at shell center)
+    local = mathutils.Vector((
+        op.hole_pos_x * 0.001,
+        op.hole_pos_y * 0.001,
+        op.hole_pos_z * 0.001 - h_m / 2
+    ))
+    world = obj.matrix_world @ local
+    context.scene.cursor.location = world
 
 
 class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
@@ -1282,16 +1284,19 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
 
     def invoke(self, context, event):
         # Pre-fill from 3D cursor, converted to shell-local mm
+        # Uses object's world matrix to account for rotation
         obj = context.active_object
         cursor = context.scene.cursor.location
         if obj and obj.get('object_type') == 'parametric_shell':
             S = 0.001 if obj.get('unit', 'mm') == 'mm' else 1.0
             h_m = obj.get('height', 50.0) * S
-            loc = obj.location
+            # Convert cursor to shell-local frame (accounts for rotation)
+            cursor_local = obj.matrix_world.inverted() @ cursor
             # Shell-local: X/Y relative to shell center, Z from shell bottom
-            self.hole_pos_x = round((cursor.x - loc.x) * 1000, 1)
-            self.hole_pos_y = round((cursor.y - loc.y) * 1000, 1)
-            self.hole_pos_z = round((cursor.z - (loc.z - h_m/2)) * 1000, 1)
+            # (shell bottom is at local Z = -h_m/2)
+            self.hole_pos_x = round(cursor_local.x * 1000, 1)
+            self.hole_pos_y = round(cursor_local.y * 1000, 1)
+            self.hole_pos_z = round((cursor_local.z + h_m / 2) * 1000, 1)
         else:
             self.hole_pos_x = cursor.x * 1000
             self.hole_pos_y = cursor.y * 1000
@@ -1441,52 +1446,41 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
 
         loc = obj.location
         h = obj.get('height', 50.0) * S
-        shell_bottom_z = loc.z - h / 2
         # Shell-local coords in meters (from mm)
         px_r = px_r_mm * 0.001
         py_r = py_r_mm * 0.001
         pz_r = pz_r_mm * 0.001
-
-        # World coords for cutter placement
-        px = px_r + loc.x
-        py = py_r + loc.y
-        pz = pz_r + shell_bottom_z
 
         # Hole dimensions in Blender units
         extra = t * S * 1.5
         hw, hd = w * S / 2, d * S / 2
         thickness = t * S
 
-        # Auto-clamp Z to be within the wall for reliable boolean cut
-        # Uses shell-local Z (0..h). Compare ALL 6 faces (bottom, top, 4 side walls).
+        # Auto-clamp Z and determine face_code — same 6-face logic as draw().
+        # Coordinates stay shell-local mm; C++ cuts holes before translating.
         dist_walls = [abs(px_r - hw), abs(px_r + hw), abs(py_r - hd), abs(py_r + hd)]
         dist_bottom = abs(pz_r)
         dist_top = abs(pz_r - h)
-        # right=0, left=1, back=2, front=3 in dist_walls
         all_dists = [dist_bottom, dist_top] + dist_walls
-        nearest = all_dists.index(min(all_dists))
-        # 0=bottom, 1=top, 2=right, 3=left, 4=back, 5=front
-        
+        nearest = all_dists.index(min(all_dists))  # 0=bottom, 1=top, 2=right, 3=left, 4=back, 5=front
+
         if nearest == 0:
-            # Bottom face: clamp Z to mid-wall
             pz_r = max(0.0, min(pz_r, thickness))
             face_code = 0
         elif nearest == 1:
-            # Top face: clamp Z to mid-wall
             pz_r = max(h - thickness, min(pz_r, h))
             face_code = 1
         else:
-            # Side wall: clamp Z within [0, h]
             pz_r = max(0.0, min(pz_r, h))
-            wall_idx = nearest - 2
-            # dist_walls: right=0→3, left=1→2, back=2→5, front=3→4
-            face_code_map = {0: 3, 1: 2, 2: 5, 3: 4}
-            face_code = face_code_map[wall_idx]
+            face_code = {2: 3, 3: 2, 4: 5, 5: 4}[nearest]  # right→3, left→2, back→5, front→4
 
-        # Convert back to world coordinates for cutter placement & window_data
-        px = px_r + loc.x
-        py = py_r + loc.y
-        pz = pz_r + shell_bottom_z
+        # Convert local coords to world for Blender cutter placement.
+        # hole_pos_z is "from bottom" (0=bottom, h=top), but local frame
+        # origin is at shell center → offset by -h/2.
+        local_pos = mathutils.Vector((px_r, py_r, pz_r - h / 2))
+        world_pos = obj.matrix_world @ local_pos
+        px, py, pz = world_pos.x, world_pos.y, world_pos.z
+        print(f"[STEP Exporter] hole local=({px_r*1000:.1f},{py_r*1000:.1f},{pz_r*1000:.1f})mm → world=({px*1000:.1f},{py*1000:.1f},{pz*1000:.1f})mm fc={face_code}")
 
         bpy.context.view_layer.objects.active = obj
         if bpy.context.mode != 'OBJECT':
@@ -1564,7 +1558,7 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
             self._mode = 'simple'
             self._simple_obj_name = obj.name
             self._simple_entry = entry
-            self._simple_cutter = cutter
+            self._simple_cutter_name = cutter.name  # store by name (reference may expire between execute → modal)
             self._simple_solver = 'FLOAT' if (self.hole_type != 'round' and self.hole_solver == 'bmesh') else self.hole_solver
             self._simple_fillet_info = _hole_fillet_info
             self._simple_fillet_type = _hole_fillet_type
@@ -1599,9 +1593,15 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
                 stage = self._simple_stage
                 if stage == 0:
                     update_progress(30, _t("Cutting hole..."))
-                    ok = _do_simple_stage0(obj, self._simple_cutter,
+                    cutter = bpy.data.objects.get(getattr(self, '_simple_cutter_name', ''))
+                    if cutter is None:
+                        print(f"[STEP Exporter] ERROR: cutter '{getattr(self, '_simple_cutter_name', '')}' not found in bpy.data.objects")
+                    else:
+                        print(f"[STEP Exporter] Cutting with cutter '{cutter.name}' at world pos=({cutter.location.x:.3f},{cutter.location.y:.3f},{cutter.location.z:.3f})")
+                    ok = _do_simple_stage0(obj, cutter,
                                            keep=getattr(self, '_simple_keep_cutter', False),
                                            solver=getattr(self, '_simple_solver', 'bmesh'))
+                    print(f"[STEP Exporter] Stage 0 result: ok={ok}")
                     # rrect on curved: use ring step instead of bevel (NURBS unreliable)
                     is_rrect_curved = (getattr(self, 'hole_type', '') == 'rrect'
                                        and obj.get('corner_type') == 'curved'
@@ -2299,6 +2299,13 @@ def _bmesh_cut_circle(obj, pos, radius):
 
 def _do_simple_stage0(obj, cutter, keep=False, solver='bmesh'):
     """Stage 0: cut hole. Returns True if successful. If keep=True, saves cutter copy."""
+    if cutter is None:
+        return False
+    # Validate cutter still exists (may have been removed between execute & modal)
+    try:
+        _ = cutter.name
+    except ReferenceError:
+        return False
     cutter.hide_viewport = False
     bpy.context.view_layer.update()
     cutter_copy = None
@@ -3081,13 +3088,14 @@ def _move_cursor_to_edit_hole_pos(op, context):
     obj = context.active_object
     if not obj or obj.get('object_type') != 'parametric_shell':
         return
-    S = 0.001 if obj.get('unit', 'mm') == 'mm' else 1.0
-    h_m = obj.get('height', 50.0) * S
-    loc = obj.location
-    world_x = loc.x + op.edit_cx * 0.001
-    world_y = loc.y + op.edit_cy * 0.001
-    world_z = (loc.z - h_m / 2) + op.edit_cz * 0.001
-    context.scene.cursor.location = (world_x, world_y, world_z)
+    h_m = obj.get('height', 50.0) * (0.001 if obj.get('unit', 'mm') == 'mm' else 1.0)
+    local = mathutils.Vector((
+        op.edit_cx * 0.001,
+        op.edit_cy * 0.001,
+        op.edit_cz * 0.001 - h_m / 2
+    ))
+    world = obj.matrix_world @ local
+    context.scene.cursor.location = world
 
 
 class STEP_EXPORTER_OT_edit_shell_hole(Operator):

@@ -217,14 +217,19 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         self.report({'INFO'}, _t("Shell: {w:.0f}×{d:.0f}×{h:.0f}{u}, wall={t:.1f}{u}").format(w=w, d=d, h=h, t=t, u=unit_label))
         return {'FINISHED'}
 
-    def _make_rrect_cutter(self, w, h, cr, depth, px, py, pz, shell_hw, shell_hd, t, loc=None):
+    def _make_rrect_cutter(self, w, h, cr, depth, px, py, pz, shell_hw, shell_hd, t, loc=None, obj=None):
         """Create a rounded rectangle cutter (extruded profile).
-        loc: object world location for shell-local wall detection."""
+        loc: object world location for shell-local wall detection.
+        obj: if provided, uses matrix_world.inverted() for local coords (accounts for rotation)."""
         import math
         # Detect wall first (before building profile)
-        lx = loc.x if loc else 0.0
-        ly = loc.y if loc else 0.0
-        px_r, py_r = px - lx, py - ly
+        if obj is not None:
+            local_pos = obj.matrix_world.inverted() @ mathutils.Vector((px, py, pz))
+            px_r, py_r = local_pos.x, local_pos.y
+        else:
+            lx = loc.x if loc else 0.0
+            ly = loc.y if loc else 0.0
+            px_r, py_r = px - lx, py - ly
         near_right = abs(px_r - shell_hw) < t * 5
         near_left = abs(px_r + shell_hw) < t * 5
         near_back_wall = abs(py_r - shell_hd) < t * 5
@@ -239,7 +244,7 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         r = max(cr, 0.0001)  # min 0.1mm to avoid degenerate arcs
 
         # Build profile in XY plane (CCW, single pass, no duplicates)
-        seg = 8
+        seg = 16
         pts = []
         def add_arc(cx, cy, a0, a1):
             for i in range(seg):
@@ -1307,6 +1312,15 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
         layout = self.layout
         obj = context.active_object
 
+        # Safety: if called on wrong class instance or layout is None, bail out
+        if not hasattr(self, 'hole_pos_x') or layout is None:
+            return
+
+        # Track whether the nearest face is a side wall (NURBS) vs bottom/top (planar).
+        # Bottom/top faces are always flat even on curved shells, so NURBS limitations
+        # (force Both-sides fillet) only apply to true side walls.
+        _is_side_face = False
+
         # ── Shell info ──
         if obj and obj.get('object_type') == 'parametric_shell':
             w = obj.get('width', 100.0)
@@ -1328,6 +1342,7 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
             dist_bottom = abs(pz)
             dist_top = abs(pz - hs)
             min_wall = min(dist_right, dist_left, dist_front, dist_back, dist_bottom, dist_top)
+            _is_side_face = min_wall not in (dist_bottom, dist_top)
 
             box = layout.box()
             box.label(text=_t("Position (X/Y from center, Z from bottom) mm"), icon='ORIENTATION_LOCAL')
@@ -1370,11 +1385,12 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
             layout.prop(self, 'hole_fillet')
             if self.hole_fillet > 0.0001:
                 corner_type = _get_active_shell_corner_type()
-                if corner_type == 'curved' and self.hole_fillet_type == '1':
+                # Only restrict Inner→Outer on curved side walls; bottom/top faces are planar.
+                if corner_type == 'curved' and _is_side_face and self.hole_fillet_type == '1':
                     self.hole_fillet_type = '0'
                 layout.prop(self, 'hole_fillet_type')
-                if corner_type == 'curved':
-                    layout.label(text=_t("  ⚠ Inner fillet unsupported on curved shells (OCCT limitation)"), icon='ERROR')
+                if corner_type == 'curved' and _is_side_face:
+                    layout.label(text=_t("  ⚠ Inner fillet unsupported on curved side walls (OCCT limitation)"), icon='ERROR')
             layout.label(text=_t("  → Circular through-hole, Ø={d:.1f}mm").format(d=self.hole_radius*2))
         else:
             layout.prop(self, 'hole_width')
@@ -1382,13 +1398,14 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
             layout.prop(self, 'hole_cr')
             layout.prop(self, 'hole_fillet')
             if self.hole_fillet > 0.0001:
-                # Only force both-sides for NURBS curved shell side faces
-                # (OCCT cannot distinguish inner/outer on curved NURBS).
+                # Only force both-sides for NURBS curved shell side walls.
+                # Bottom/top faces are planar even on curved shells, so all
+                # three options (outer/inner/both) are available there.
                 obj = context.active_object
                 is_curved = obj and obj.get('corner_type') == 'curved'
-                if is_curved:
+                if is_curved and _is_side_face:
                     self.hole_fillet_type = '2'
-                    layout.label(text=_t("  ℹ RRect fillet forced Both-sides (curved NURBS OCCT limitation)"), icon='INFO')
+                    layout.label(text=_t("  ℹ RRect fillet forced Both-sides (curved side wall OCCT limitation)"), icon='INFO')
                 else:
                     layout.prop(self, 'hole_fillet_type')
             layout.label(text=_t("  → RRect {w:.1f}×{h:.1f}mm cr={cr:.1f}").format(w=self.hole_width, h=self.hole_height, cr=self.hole_cr))
@@ -1513,11 +1530,12 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
             # Build rrect cutter using the shell class's method
             cutter = STEP_EXPORTER_OT_create_parametric_shell._make_rrect_cutter(
                 None, rh_w * 2, rh_h * 2, hcr, thickness + extra * 2,
-                px, py, pz, hw, hd, thickness, loc)
+                px, py, pz, hw, hd, thickness, loc, obj=obj)
             if cutter is None:
                 self.report({'ERROR'}, _t("Failed to create cutter"))
                 return {'CANCELLED'}
-            cutter.name = "Hole_RR"
+            import time
+            cutter.name = f"Hole_RR_{int(time.time()*1000)}"  # unique name to avoid collisions
             entry = f"{px_r/S:.3f},{py_r/S:.3f},{pz_r/S:.3f},{self.hole_width:.3f},2,{self.hole_height:.3f},{self.hole_cr:.3f},{self.hole_fillet:.3f},{self.hole_fillet_type},{face_code}"
             _hole_fillet_info = (self.hole_fillet, self.hole_width, self.hole_height, self.hole_cr, face_code,
                                  px, py, pz, t * S, hw, hd, h)
@@ -1554,28 +1572,29 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
             wm.modal_handler_add(self)
             return {'RUNNING_MODAL'}
         else:
-            # Mini-modal path for non-curved-fillet holes (2 stages)
-            self._mode = 'simple'
-            self._simple_obj_name = obj.name
-            self._simple_entry = entry
-            self._simple_cutter_name = cutter.name  # store by name (reference may expire between execute → modal)
-            self._simple_solver = 'FLOAT' if (self.hole_type != 'round' and self.hole_solver == 'bmesh') else self.hole_solver
-            self._simple_fillet_info = _hole_fillet_info
-            self._simple_fillet_type = _hole_fillet_type
-            self._simple_face_code = face_code
-            self._simple_S = S
-            self._simple_h = h
-            self._simple_t = t
-            self._simple_px = px
-            self._simple_py = py
-            self._simple_stage = 0
-            self._simple_keep_cutter = self.keep_cutter
+            # Synchronous path for bottom-face and non-curved holes
+            # (avoid modal timer / cutter lifecycle issues)
             set_operator(self)
             start_progress(context, _t("Adding hole..."))
-            wm = context.window_manager
-            self._timer = wm.event_timer_add(0.2, window=context.window)
-            wm.modal_handler_add(self)
-            return {'RUNNING_MODAL'}
+            try:
+                update_progress(30, _t("Cutting hole..."))
+                solver = 'FLOAT' if (self.hole_type != 'round' and self.hole_solver == 'bmesh') else self.hole_solver
+                ok = _do_simple_stage0(obj, cutter, keep=self.keep_cutter, solver=solver)
+                print(f"[STEP Exporter] Stage 0 result: ok={ok}")
+                if ok:
+                    update_progress(70, _t("Fillet..."))
+                    _do_simple_stage1(obj, _hole_fillet_info, _hole_fillet_type,
+                                      S, h, t, px, py, face_code,
+                                      getattr(self, 'hole_radius', 5), getattr(self, 'hole_fillet', 0))
+                update_progress(100, _t("Done"))
+                existing = obj.get('window_data', '')
+                obj['window_data'] = (existing + ';' + entry) if existing else entry
+                obj['window_data_local'] = True
+                self.report({'INFO'}, _t("Hole added at cursor position"))
+            finally:
+                end_progress(context)
+                clear_operator()
+            return {'FINISHED'}
 
     def modal(self, context, event):
         if event.type != 'TIMER':
@@ -1584,64 +1603,8 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
             return {'PASS_THROUGH'}
         self._busy = True
         try:
-            # --- Simple mode (non-curved holes) ---
-            if getattr(self, '_mode', '') == 'simple':
-                obj = bpy.data.objects.get(self._simple_obj_name)
-                if not obj:
-                    self._cleanup_modal(context)
-                    return {'CANCELLED'}
-                stage = self._simple_stage
-                if stage == 0:
-                    update_progress(30, _t("Cutting hole..."))
-                    cutter = bpy.data.objects.get(getattr(self, '_simple_cutter_name', ''))
-                    if cutter is None:
-                        print(f"[STEP Exporter] ERROR: cutter '{getattr(self, '_simple_cutter_name', '')}' not found in bpy.data.objects")
-                    else:
-                        print(f"[STEP Exporter] Cutting with cutter '{cutter.name}' at world pos=({cutter.location.x:.3f},{cutter.location.y:.3f},{cutter.location.z:.3f})")
-                    ok = _do_simple_stage0(obj, cutter,
-                                           keep=getattr(self, '_simple_keep_cutter', False),
-                                           solver=getattr(self, '_simple_solver', 'bmesh'))
-                    print(f"[STEP Exporter] Stage 0 result: ok={ok}")
-                    # rrect on curved: use ring step instead of bevel (NURBS unreliable)
-                    is_rrect_curved = (getattr(self, 'hole_type', '') == 'rrect'
-                                       and obj.get('corner_type') == 'curved'
-                                       and self._simple_face_code in (2, 3, 4, 5)
-                                       and self._simple_fillet_info
-                                       and self._simple_fillet_info[0] > 0.0001)
-                    self._simple_stage = 1.5 if (is_rrect_curved and ok) else (2 if not ok else 1)
-                elif stage == 1.5:
-                    # rrect ring step for curved side walls
-                    update_progress(70, _t("Step ring..."))
-                    fi = self._simple_fillet_info
-                    _add_rrect_step_ring(obj, fi[1], fi[2], fi[3], fi[0],
-                                         self._simple_px, self._simple_py, fi[7],
-                                         self._simple_face_code,
-                                         fi[9], fi[10], fi[8], self._simple_S,
-                                         keep=getattr(self, '_simple_keep_cutter', False),
-                                         fillet_type=self._simple_fillet_type)
-                    self._simple_stage = 2
-                elif stage == 1:
-                    update_progress(70, _t("Fillet..."))
-                    _do_simple_stage1(obj, self._simple_fillet_info, self._simple_fillet_type,
-                                      self._simple_S, self._simple_h, self._simple_t,
-                                      self._simple_px, self._simple_py, self._simple_face_code,
-                                      getattr(self, 'hole_radius', 5), getattr(self, 'hole_fillet', 0))
-                    self._simple_stage = 2
-                else:
-                    update_progress(100, _t("Done"))
-                    existing = obj.get('window_data', '')
-                    obj['window_data'] = (existing + ';' + self._simple_entry) if existing else self._simple_entry
-                    obj['window_data_local'] = True
-                    self.report({'INFO'}, _t("Hole added at cursor position"))
-                    self._cleanup_modal(context)
-                    return {'FINISHED'}
-                for area in context.screen.areas:
-                    if area.type == 'VIEW_3D':
-                        area.tag_redraw()
-                return {'PASS_THROUGH'}
-            
-            # --- Fillet mode (curved side walls) ---
-            obj = bpy.data.objects.get(self._fillet_obj_name)
+            # --- Fillet mode (curved side walls only, rrect handled synchronously) ---
+            obj = bpy.data.objects.get(getattr(self, '_fillet_obj_name', ''))
             if not obj:
                 self._cleanup_modal(context)
                 return {'CANCELLED'}
@@ -2435,35 +2398,42 @@ def _do_simple_stage1(obj, fillet_info, fillet_type, S, h, t, px, py, face_code,
             print(f"[DEBUG] _do_simple_stage1 rrect curved bottom: fillet_type={fillet_type}")
             # Rrect bottom face: outer first (2+3), then inner (4+5)
             keep = obj.get('debug_keep_cutters', False)
+            # px,py are world; get bottom face world Z only
+            bottom_w = obj.matrix_world @ mathutils.Vector((0, 0, -h/2))
+            inner_w = obj.matrix_world @ mathutils.Vector((0, 0, -h/2 + t * S))
+            outer_pos = (px, py, bottom_w.z)
+            inner_pos = (px, py, inner_w.z)
+            print(f"[DEBUG] _do_simple_stage1: h={h*1000:.1f}mm t={t:.1f}mm S={S} bottom.z={bottom_w.z*1000:.3f}mm inner.z={inner_w.z*1000:.3f}mm thickness={(inner_w.z-bottom_w.z)*1000:.3f}mm")
             if str(fillet_type) in ('0', '2'):
-                outer_z = -h/2
                 _apply_bottom_rrect_recess(obj, fillet_info[1], fillet_info[2], fillet_info[3],
-                    fillet_info[0], (px, py, outer_z + obj.location.z), S, is_outer=True, keep_cutters=keep)
+                    fillet_info[0], outer_pos, S, is_outer=True, keep_cutters=keep)
                 _apply_bottom_rrect_ring(obj, fillet_info[1], fillet_info[2], fillet_info[3],
-                    fillet_info[0], (px, py, outer_z + obj.location.z), S, is_outer=True, union=True, keep_cutters=keep)
+                    fillet_info[0], outer_pos, S, is_outer=True, union=True, keep_cutters=keep)
             if str(fillet_type) in ('1', '2'):
-                inner_z = -h/2 + t * S
                 _apply_bottom_rrect_recess(obj, fillet_info[1], fillet_info[2], fillet_info[3],
-                    fillet_info[0], (px, py, inner_z + obj.location.z), S, is_outer=False, keep_cutters=keep)
+                    fillet_info[0], inner_pos, S, is_outer=False, keep_cutters=keep)
                 _apply_bottom_rrect_ring(obj, fillet_info[1], fillet_info[2], fillet_info[3],
-                    fillet_info[0], (px, py, inner_z + obj.location.z), S, is_outer=False, union=True, keep_cutters=keep)
+                    fillet_info[0], inner_pos, S, is_outer=False, union=True, keep_cutters=keep)
             return
-        outer_z = -h / 2
-        inner_z = -h / 2 + t * S
+        # px,py are world; compute bottom face world Z via matrix_world
+        bottom_w = obj.matrix_world @ mathutils.Vector((0, 0, -h / 2))
+        inner_w = obj.matrix_world @ mathutils.Vector((0, 0, -h / 2 + t * S))
+        outer_ring_pos = (px, py, bottom_w.z)
         if str(fillet_type) in ('0', '2'):
-            outer_ring_pos = (px, py, outer_z + obj.location.z)
             _apply_bottom_outer_ring(obj, hole_radius, hole_fillet, outer_ring_pos, S)
         if str(fillet_type) in ('1', '2'):
-            # Offset ring slightly inward if hole is near bottom fillet edge
             ipx, ipy = px, py
             margin = (hole_radius + hole_fillet) * S + 0.001  # ring outer radius + 1mm
             bw = obj.get('width', 100) * S / 2
             bd = obj.get('depth', 80) * S / 2
-            if abs(ipx) > bw - margin - 0.0001:
-                ipx = ipx * (1.0 - 0.002)  # nudge 0.2% inward
-            if abs(ipy) > bd - margin - 0.0001:
-                ipy = ipy * (1.0 - 0.002)
-            inner_ring_pos = (ipx, ipy, inner_z + obj.location.z)
+            # Use shell-relative position, not absolute world coords
+            shell_center = obj.matrix_world @ mathutils.Vector((0, 0, 0))
+            dx, dy = px - shell_center.x, py - shell_center.y
+            if abs(dx) > bw - margin - 0.0001:
+                ipx = shell_center.x + dx * (1.0 - 0.002)
+            if abs(dy) > bd - margin - 0.0001:
+                ipy = shell_center.y + dy * (1.0 - 0.002)
+            inner_ring_pos = (ipx, ipy, inner_w.z)
             _apply_bottom_inner_ring(obj, hole_radius, hole_fillet, inner_ring_pos, S)
         return
     else:
@@ -2496,13 +2466,17 @@ def _apply_bottom_rrect_recess(obj, hole_w_mm, hole_h_mm, hole_cr_mm, fillet_mm,
     bw = obj.get('width', 100) * S / 2; bd = obj.get('depth', 80) * S / 2
     t_val = obj.get('wall_thickness', 2.0) * S
 
-    recess_depth = fr * 1.5
+    recess_depth = fr * 2.5  # fully expose ring's curved surface
     rc = cls._make_rrect_cutter(None, ring_rw*2, ring_rh*2, ring_cr, recess_depth,
-                                pos[0], pos[1], pos[2], bw, bd, t_val, obj.location)
+                                pos[0], pos[1], pos[2], bw, bd, t_val, obj=obj)
     if rc is None: return
     rc.name = "BtRRecRecess" + ("O" if is_outer else "I")
     rc.location = (pos[0], pos[1], pos[2] + fr*0.25 if is_outer else pos[2] - fr*0.25)
+    rc.rotation_euler = obj.rotation_euler  # match shell orientation
+    side = "outer" if is_outer else "inner"
+    print(f"[STEP Exporter] Rrect {side} recess: pos.z={pos[2]*1000:.3f}mm recess.z={rc.location.z*1000:.3f}mm depth={recess_depth*1000:.3f}mm range=[{(rc.location.z-recess_depth/2)*1000:.3f},{(rc.location.z+recess_depth/2)*1000:.3f}]mm solver=...")
     bpy.context.view_layer.update()
+    recess_ok = False
     for solv in ('FLOAT', 'EXACT'):
         bpy.context.view_layer.objects.active = obj
         mod = obj.modifiers.new(name="BtRRecCut" + ("O" if is_outer else "I"), type='BOOLEAN')
@@ -2511,29 +2485,46 @@ def _apply_bottom_rrect_recess(obj, hole_w_mm, hole_h_mm, hole_cr_mm, fillet_mm,
         bpy.context.view_layer.update()
         try:
             bpy.ops.object.modifier_apply(modifier=mod.name)
-            if len(obj.data.vertices) >= 8: break
-        except: continue
+            vc = len(obj.data.vertices)
+            if vc >= 8:
+                recess_ok = True
+                print(f"[STEP Exporter] Rrect {side} recess OK solver={solv} verts={vc}")
+                break
+            else:
+                print(f"[STEP Exporter] Rrect {side} recess FAIL solver={solv} verts={vc} (too few)")
+        except Exception as e:
+            print(f"[STEP Exporter] Rrect {side} recess EXCEPTION solver={solv}: {e}")
+            continue
+    if not recess_ok:
+        print(f"[STEP Exporter] Rrect {side} recess: ALL SOLVERS FAILED")
     if keep_cutters:
         _keep_or_remove(obj, rc, True)
     else:
         bpy.data.objects.remove(rc, do_unlink=True)
     print(f"[STEP Exporter] Rrect {'outer' if is_outer else 'inner'} recess cut done")
-    print(f"[STEP Exporter] Rrect {'outer' if is_outer else 'inner'} recess cut done")
 
 def _apply_bottom_rrect_ring(obj, hole_w_mm, hole_h_mm, hole_cr_mm, fillet_mm, pos, S, is_outer=True, union=True, keep_cutters=False):
     """Step 3/5: Build rrect fillet ring. If union=True, boolean UNION with shell."""
     import math, bmesh as _bm_qt
+    side = "outer" if is_outer else "inner"
     rw = hole_w_mm * S / 2; rh = hole_h_mm * S / 2
     cr = max(hole_cr_mm * S, 0.0001); fr = fillet_mm * S
     ring_rw = rw + fr; ring_rh = rh + fr; ring_cr = cr + fr
+    print(f"[STEP Exporter] Rrect {side} ring: pos.z={pos[2]*1000:.3f}mm rw={rw*1000:.3f} rh={rh*1000:.3f} cr={cr*1000:.3f} fr={fr*1000:.3f}")
 
-    # Build perimeter EXACTLY matching _make_rrect_cutter profile (CCW, seg=8, 1 pt/flat)
+    # Perimeter: outer ring starts at rw+fr sweeping inward; inner ring starts at
+    # the hole edge (rw) and sweeps outward into the shell wall.
     peri = []  # (x, y, nx, ny)
-    hw_r, hh_r = ring_rw, ring_rh  # same naming as cutter
-    r = ring_cr
+    ARC_SEG = 16  # arc resolution for smoother fillet
+    if is_outer:
+        hw_r, hh_r, r = ring_rw, ring_rh, ring_cr  # perimeter at outer edge
+    else:
+        # Inner ring perimeter MUST match the recess cutter (both at rw+fr).
+        # The ring sweeps inward from the face (rw+fr) down to the hole wall (rw).
+        hw_r, hh_r, r = ring_rw, ring_rh, ring_cr
     def _arc_pts(cx, cy, a0, a1, inv):
-        for i in range(8):
-            a = a0 + (a1 - a0) * i / 8
+        for i in range(ARC_SEG):
+            a = a0 + (a1 - a0) * i / ARC_SEG
             peri.append((cx + r * math.cos(a), cy + r * math.sin(a),
                          -math.cos(a) if inv else math.cos(a),
                          -math.sin(a) if inv else math.sin(a)))
@@ -2551,24 +2542,23 @@ def _apply_bottom_rrect_ring(obj, hole_w_mm, hole_h_mm, hole_cr_mm, fillet_mm, p
     n_peri = len(peri)
 
     # Sweep quarter-circle profile along perimeter
-    n_rows = 6  # profile resolution (matches torus seg_p)
+    n_rows = 16  # profile resolution for smoother fillet
     bm = _bm_qt.new()
     rows = []
     n_peri = len(peri)
     for k in range(n_rows + 1):
         t = k / n_rows
         ph = math.pi/2 + (math.pi/2) * t   # π/2 → π
-        if is_outer:
-            zc = fr * (1.0 - math.sin(ph))    # 0 → +fr (from bottom face curving up to hole edge)
-        else:
-            zc = -fr * (1.0 - math.sin(ph))   # 0 → -fr (from inner face curving down into hole)
-        disp = -fr * math.cos(ph)             # 0 → +fr (inward, cos negative for ph>π/2)
+        zc = fr * (1.0 - math.sin(ph))    # always +fr (ring built like outer)
+        # Tiny Z offset (matching round-hole torus: -0.00002)
+        zc -= 0.00002
+        disp = -fr * math.cos(ph)
         row_v = []
         for px_p, py_p, nx, ny in peri:
             row_v.append(bm.verts.new((px_p + nx * disp, py_p + ny * disp, zc)))
         rows.append(row_v)
     bm.verts.ensure_lookup_table()
-    # Side faces (sweep quads) — torus ring has NO caps, just the swept surface
+    # Side faces (sweep quads)
     for i in range(n_peri):
         i2 = (i + 1) % n_peri
         for k in range(n_rows):
@@ -2588,7 +2578,12 @@ def _apply_bottom_rrect_ring(obj, hole_w_mm, hole_h_mm, hole_cr_mm, fillet_mm, p
     bm.to_mesh(msh); bm.free()
     ring_obj = bpy.data.objects.new("BtRRecRing", msh)
     bpy.context.collection.objects.link(ring_obj)
-    ring_obj.location = pos  # built in correct orientation, no flip needed
+    ring_obj.location = pos
+    # Ring built in +Z (into shell from face); match shell rotation so +Z points inward
+    ring_obj.rotation_euler = obj.rotation_euler.copy()
+    if not is_outer:
+        # Inner ring: flip 180° around X to mirror the outer ring's orientation
+        ring_obj.rotation_euler.x += math.pi
     bpy.context.view_layer.update()
     if not union:
         ring_obj.name = "BtRRecRing_" + ("O" if is_outer else "I") + "_PREVIEW"
@@ -2596,17 +2591,38 @@ def _apply_bottom_rrect_ring(obj, hole_w_mm, hole_h_mm, hole_cr_mm, fillet_mm, p
         ring_obj.color = (1.0, 0.3, 0.3, 1.0) if is_outer else (0.3, 0.3, 1.0, 1.0)
         print(f"[STEP Exporter] Rrect {'outer' if is_outer else 'inner'} ring PREVIEW (no union)")
         return ring_obj
+    # DEBUG: log ring world-space Z range
+    bpy.context.view_layer.update()
+    ring_bbox = [ring_obj.matrix_world @ mathutils.Vector(v) for v in ring_obj.bound_box]
+    ring_z_min = min(v.z for v in ring_bbox)
+    ring_z_max = max(v.z for v in ring_bbox)
+    print(f"[STEP Exporter] Rrect {side} ring world Z range: [{ring_z_min*1000:.3f}, {ring_z_max*1000:.3f}]mm (pos.z={pos[2]*1000:.3f})")
     bpy.context.view_layer.objects.active = obj
+    ring_ok = False
     for solv in ('FLOAT', 'EXACT'):
         mod = obj.modifiers.new(name="BtRRecRingU" + ("O" if is_outer else "I"), type='BOOLEAN')
         mod.object = ring_obj; mod.operation = 'UNION'; mod.solver = solv
         bpy.context.view_layer.update()
         try:
             bpy.ops.object.modifier_apply(modifier=mod.name)
-            if len(obj.data.vertices) >= 8: break
-        except: continue
+            vc = len(obj.data.vertices)
+            if vc >= 8:
+                ring_ok = True
+                print(f"[STEP Exporter] Rrect {side} ring OK solver={solv} verts={vc}")
+                break
+            else:
+                print(f"[STEP Exporter] Rrect {side} ring FAIL solver={solv} verts={vc} (too few)")
+        except Exception as e:
+            print(f"[STEP Exporter] Rrect {side} ring EXCEPTION solver={solv}: {e}")
+            continue
+    if not ring_ok:
+        print(f"[STEP Exporter] Rrect {side} ring: ALL SOLVERS FAILED")
     if keep_cutters:
         _keep_or_remove(obj, ring_obj, True)
+        # Debug: make ring visible with bright color
+        ring_obj.hide_viewport = False
+        ring_obj.display_type = 'WIRE'
+        ring_obj.color = (0.0, 1.0, 0.0, 1.0)  # green for debug visibility
     else:
         bpy.data.objects.remove(ring_obj, do_unlink=True)
     print(f"[STEP Exporter] Rrect {'outer' if is_outer else 'inner'} ring union done")
@@ -2623,6 +2639,7 @@ def _apply_bottom_outer_ring(obj, hole_r_mm, fillet_mm, pos, S):
     bpy.ops.mesh.primitive_cylinder_add(vertices=32, radius=ring_r, depth=fr * 1.5)
     rc = bpy.context.active_object; rc.name = "BtRecessO"
     rc.location = (pos[0], pos[1], pos[2] - fr * 0.25)  # slightly below, extends into wall
+    rc.rotation_euler = obj.rotation_euler
     bpy.context.view_layer.update()
     for solv in ('FLOAT', 'EXACT'):
         bpy.context.view_layer.objects.active = obj
@@ -2647,7 +2664,7 @@ def _apply_bottom_outer_ring(obj, hole_r_mm, fillet_mm, pos, S):
         ring = []
         for j in range(seg_p + 1):
             ph = math.pi / 2.0 + (math.pi / 2.0) * j / seg_p
-            rc_val = (ring_r - fr * 0.05) + fr * 1.05 * math.cos(ph)
+            rc_val = (ring_r - fr * 0.05) + fr * 0.95 * math.cos(ph)  # inner edge at hr+0.0002, not intruding
             zc = -fr + fr * math.sin(ph) - 0.00002
             ring.append(bm.verts.new((rc_val * ct, rc_val * st, zc)))
         vv.append(ring)
@@ -2659,7 +2676,10 @@ def _apply_bottom_outer_ring(obj, hole_r_mm, fillet_mm, pos, S):
     bm.to_mesh(msh); bm.free()
     ring_obj = bpy.data.objects.new("BtOuterRing", msh)
     bpy.context.collection.objects.link(ring_obj)
-    ring_obj.matrix_world = _Mtx.Translation(pos) @ _Eul((math.pi, 0, 0), 'XYZ').to_matrix().to_4x4()
+    ring_obj.location = pos
+    # Outer ring (built for top face) → flip 180° around X for bottom face
+    ring_obj.rotation_euler = obj.rotation_euler.copy()
+    ring_obj.rotation_euler.x += math.pi
     bpy.context.view_layer.update()
     bpy.context.view_layer.objects.active = obj
     mod = obj.modifiers.new(name="BtRingUOuter", type='BOOLEAN')
@@ -2676,18 +2696,12 @@ def _apply_bottom_inner_ring(obj, hole_r_mm, fillet_mm, pos, S):
     hr = hole_r_mm * S
     fr = fillet_mm * S
     
-def _apply_bottom_inner_ring(obj, hole_r_mm, fillet_mm, pos, S):
-    """Inner fillet on bottom face: recess cut + torus ring via Boolean modifier."""
-    import math, bmesh as _bm_qt
-    from mathutils import Matrix as _Mtx, Euler as _Eul
-    hr = hole_r_mm * S
-    fr = fillet_mm * S
-    
     # Step 1: Recess cut (snug fit for ring)
     ring_r = hr + fr + 0.0002  # 0.2mm clearance
     bpy.ops.mesh.primitive_cylinder_add(vertices=32, radius=ring_r, depth=fr * 1.5)
     rc = bpy.context.active_object; rc.name = "BtRecess"
     rc.location = (pos[0], pos[1], pos[2] + fr * 0.25)
+    rc.rotation_euler = obj.rotation_euler
     bpy.context.view_layer.update()
     for solv in ('FLOAT', 'EXACT'):
         bpy.context.view_layer.objects.active = obj
@@ -2712,7 +2726,7 @@ def _apply_bottom_inner_ring(obj, hole_r_mm, fillet_mm, pos, S):
         ring = []
         for j in range(seg_p + 1):
             ph = math.pi / 2.0 + (math.pi / 2.0) * j / seg_p
-            rc_val = (ring_r - fr * 0.05) + fr * 1.05 * math.cos(ph)
+            rc_val = (ring_r - fr * 0.05) + fr * 0.95 * math.cos(ph)  # inner edge at hr+0.0002, not intruding
             zc = -fr + fr * math.sin(ph) - 0.00002
             ring.append(bm.verts.new((rc_val * ct, rc_val * st, zc)))
         vv.append(ring)
@@ -2724,7 +2738,8 @@ def _apply_bottom_inner_ring(obj, hole_r_mm, fillet_mm, pos, S):
     bm.to_mesh(msh); bm.free()
     ring_obj = bpy.data.objects.new("BtInnerRing", msh)
     bpy.context.collection.objects.link(ring_obj)
-    ring_obj.matrix_world = _Mtx.Translation(pos) @ _Eul((0,0,0), 'XYZ').to_matrix().to_4x4()
+    ring_obj.location = pos
+    ring_obj.rotation_euler = obj.rotation_euler.copy()
     bpy.context.view_layer.update()
     bpy.context.view_layer.objects.active = obj
     mod = obj.modifiers.new(name="BtRingUnion", type='BOOLEAN')
@@ -3399,6 +3414,7 @@ def _rebuild_stage_hole(obj, entry):
     unit = obj.get('unit', 'mm')
     S = 0.001 if unit == 'mm' else 1.0
     thickness = t * S
+    h_m = h * S
     hw, hd = w * S / 2, d * S / 2
 
     parts = entry.split(',')
@@ -3410,6 +3426,11 @@ def _rebuild_stage_hole(obj, entry):
         face = int(float(parts[-1])) if len(parts) >= 8 else -1
     except (ValueError, IndexError):
         return
+
+    # Convert shell-local "from bottom" mm → world coords via matrix_world
+    local_hole = mathutils.Vector((cx * S, cy * S, cz * S - h_m / 2))
+    world_hole = obj.matrix_world @ local_hole
+    wx, wy, wz = world_hole.x, world_hole.y, world_hole.z
 
     _rebuild_fillet_info = None
     _rebuild_fillet_type = '0'
@@ -3423,25 +3444,20 @@ def _rebuild_stage_hole(obj, entry):
         if obj.get('corner_type') == 'curved' and fillet_mm > 0.0001:
             if face in (2, 3, 4, 5):  # side walls: torus union
                 _apply_fillet_torus_union(obj, hole_r_mm, fillet_mm, face,
-                    cx * S, cy * S, cz * S, thickness, hw, hd, h * S, S,
+                    wx, wy, wz, thickness, hw, hd, h_m, S,
                     fillet_type=fillet_type)
                 return
             # Bottom/top face: use consistent approach with new hole creation
             cutter_depth = thickness * 4.0
             bpy.ops.mesh.primitive_cylinder_add(
-                vertices=32, radius=radius, depth=cutter_depth, location=(cx * S, cy * S, cz * S))
+                vertices=32, radius=radius, depth=cutter_depth, location=(wx, wy, wz))
             cutter = bpy.context.active_object; cutter.name = "Hole_R_rebuild"
             _direct_cut_hole(obj, cutter, solver=obj.get('_edit_solver', 'FLOAT'))
             # Apply fillets via ring functions
-            outer_z = -h * S / 2
-            inner_z = -h * S / 2 + thickness
-            px, py, pz = cx * S, cy * S, cz * S
             if str(fillet_type) in ('0', '2'):
-                _apply_bottom_outer_ring(obj, hole_r_mm, fillet_mm,
-                    (px, py, outer_z + obj.location.z), S)
+                _apply_bottom_outer_ring(obj, hole_r_mm, fillet_mm, (wx, wy, wz), S)
             if str(fillet_type) in ('1', '2'):
-                _apply_bottom_inner_ring(obj, hole_r_mm, fillet_mm,
-                    (px, py, inner_z + obj.location.z), S)
+                _apply_bottom_inner_ring(obj, hole_r_mm, fillet_mm, (wx, wy, wz), S)
             return
         cutter_depth = thickness * 4.0
         bpy.ops.mesh.primitive_cylinder_add(
@@ -3452,8 +3468,8 @@ def _rebuild_stage_hole(obj, entry):
             cutter.rotation_euler = (0, math.pi / 2, 0)
         elif face in (4, 5):
             cutter.rotation_euler = (math.pi / 2, 0, 0)
-        cutter.location = (cx * S, cy * S, cz * S)
-        _rebuild_fillet_info = (fillet_mm, hole_r_mm, face, cx*S, cy*S, cz*S, thickness, hw, hd, h * S)
+        cutter.location = (wx, wy, wz)
+        _rebuild_fillet_info = (fillet_mm, hole_r_mm, face, wx, wy, wz, thickness, hw, hd, h_m)
         _rebuild_fillet_type = fillet_type
     elif tc == 2 and len(parts) >= 7:
         rw_hole = float(parts[3]) * S
@@ -3467,9 +3483,9 @@ def _rebuild_stage_hole(obj, entry):
         cutter_depth = thickness * 4.0
         cutter = STEP_EXPORTER_OT_create_parametric_shell._make_rrect_cutter(
             None, rw_hole, rh_hole, rcr_hole, cutter_depth,
-            cx * S, cy * S, cz * S, hw, hd, thickness)
+            wx, wy, wz, hw, hd, thickness, obj=obj)
         _rebuild_fillet_info = (fillet_mm, hole_w_mm, hole_h_mm, hole_cr_mm, face,
-                                cx*S, cy*S, cz*S, thickness, hw, hd, h * S)
+                                wx, wy, wz, thickness, hw, hd, h_m)
         _rebuild_fillet_type = fillet_type
     else:
         return

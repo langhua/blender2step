@@ -1293,6 +1293,7 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
         obj = context.active_object
         cursor = context.scene.cursor.location
         if obj and obj.get('object_type') == 'parametric_shell':
+            self._invoke_obj_name = obj.name  # remember for redo panel
             S = 0.001 if obj.get('unit', 'mm') == 'mm' else 1.0
             h_m = obj.get('height', 50.0) * S
             # Convert cursor to shell-local frame (accounts for rotation)
@@ -1429,8 +1430,11 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
         py_r_mm = self.hole_pos_y  # shell-local Y (mm)
         pz_r_mm = self.hole_pos_z  # shell-local Z from bottom (mm)
         
-        # Find the target shell (closest to active)
+        # Find the target shell — use stored name from invoke() if available
         obj = context.active_object
+        stored_name = getattr(self, '_invoke_obj_name', None)
+        if stored_name:
+            obj = bpy.data.objects.get(stored_name) or obj
         if not obj or obj.get('object_type') != 'parametric_shell':
             best_dist = float('inf')
             for o in bpy.data.objects:
@@ -1442,6 +1446,10 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
                 if d < best_dist:
                     best_dist = d
                     obj = o
+        # Ensure matrix_world is up-to-date after possible rebuild
+        if obj:
+            bpy.context.view_layer.update()
+            obj = bpy.data.objects.get(obj.name) or obj  # refresh reference
         
         if not obj or obj.get('object_type') != 'parametric_shell':
             self.report({'ERROR'}, _t("Select a parametric shell first"))
@@ -1495,9 +1503,11 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
         # hole_pos_z is "from bottom" (0=bottom, h=top), but local frame
         # origin is at shell center → offset by -h/2.
         local_pos = mathutils.Vector((px_r, py_r, pz_r - h / 2))
+        bpy.context.view_layer.update()  # refresh depsgraph after possible rebuild
         world_pos = obj.matrix_world @ local_pos
         px, py, pz = world_pos.x, world_pos.y, world_pos.z
         print(f"[STEP Exporter] hole local=({px_r*1000:.1f},{py_r*1000:.1f},{pz_r*1000:.1f})mm → world=({px*1000:.1f},{py*1000:.1f},{pz*1000:.1f})mm fc={face_code}")
+        print(f"[STEP Exporter]   obj={obj.name} loc=({obj.location.x*1000:.1f},{obj.location.y*1000:.1f},{obj.location.z*1000:.1f})mm rot=({obj.rotation_euler.x:.2f},{obj.rotation_euler.y:.2f},{obj.rotation_euler.z:.2f}) h={h*1000:.1f}mm")
 
         bpy.context.view_layer.objects.active = obj
         if bpy.context.mode != 'OBJECT':
@@ -1581,6 +1591,11 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
                 solver = 'FLOAT' if (self.hole_type != 'round' and self.hole_solver == 'bmesh') else self.hole_solver
                 ok = _do_simple_stage0(obj, cutter, keep=self.keep_cutter, solver=solver)
                 print(f"[STEP Exporter] Stage 0 result: ok={ok}")
+                if ok:
+                    vc = len(obj.data.vertices)
+                    if vc < 8:
+                        print(f"[STEP Exporter] Stage 0 produced broken mesh ({vc} verts), aborting fillet")
+                        ok = False
                 if ok:
                     update_progress(70, _t("Fillet..."))
                     _do_simple_stage1(obj, _hole_fillet_info, _hole_fillet_type,
@@ -2166,6 +2181,9 @@ def _direct_cut_hole(obj, cutter, solver='bmesh'):
 
 def _cleanup_after_bool(obj):
     """Clean up mesh after Boolean: remove doubles + delete loose fragments."""
+    if len(obj.data.vertices) < 8:
+        print(f"[STEP Exporter] WARNING: _cleanup_after_bool skipped, mesh has only {len(obj.data.vertices)} verts")
+        return
     bpy.context.view_layer.objects.active = obj
     bpy.ops.object.mode_set(mode='EDIT')
     bpy.ops.mesh.select_all(action='SELECT')
@@ -2181,6 +2199,8 @@ def _cleanup_after_bool(obj):
 def _delete_small_fragments(obj):
     """Delete small disconnected mesh fragments (Boolean artifacts)."""
     import bmesh as _bmc
+    if len(obj.data.vertices) < 8:
+        return
     _bm = _bmc.new()
     _bm.from_mesh(obj.data)
     
@@ -3452,12 +3472,18 @@ def _rebuild_stage_hole(obj, entry):
             bpy.ops.mesh.primitive_cylinder_add(
                 vertices=32, radius=radius, depth=cutter_depth, location=(wx, wy, wz))
             cutter = bpy.context.active_object; cutter.name = "Hole_R_rebuild"
+            v_before = len(obj.data.vertices)
             _direct_cut_hole(obj, cutter, solver=obj.get('_edit_solver', 'FLOAT'))
-            # Apply fillets via ring functions
+            if len(obj.data.vertices) < 8:
+                print(f"[STEP Exporter] Rebuild hole cut failed, mesh corrupted, skipping fillet")
+                return
+            # Apply fillets via ring functions — pos must be face Z, not hole center
+            bottom_w = obj.matrix_world @ mathutils.Vector((0, 0, -h_m / 2))
+            inner_w = obj.matrix_world @ mathutils.Vector((0, 0, -h_m / 2 + t * S))
             if str(fillet_type) in ('0', '2'):
-                _apply_bottom_outer_ring(obj, hole_r_mm, fillet_mm, (wx, wy, wz), S)
+                _apply_bottom_outer_ring(obj, hole_r_mm, fillet_mm, (wx, wy, bottom_w.z), S)
             if str(fillet_type) in ('1', '2'):
-                _apply_bottom_inner_ring(obj, hole_r_mm, fillet_mm, (wx, wy, wz), S)
+                _apply_bottom_inner_ring(obj, hole_r_mm, fillet_mm, (wx, wy, inner_w.z), S)
             return
         cutter_depth = thickness * 4.0
         bpy.ops.mesh.primitive_cylinder_add(
@@ -3516,10 +3542,26 @@ def _rebuild_stage_hole(obj, entry):
 
 def _rebuild_shell_mesh(obj, wm=None):
     """Rebuild the shell mesh from stored params and re-apply window_data holes. (legacy sync, wrapps staged)"""
-    _rebuild_stage_create(obj)
+    # Save mesh data as backup in case rebuild corrupts it
+    try:
+        _rebuild_stage_create(obj)
+    except Exception as e:
+        print(f"[STEP Exporter] Rebuild stage create failed: {e}")
+        return
     wd = obj.get('window_data', '')
     if not wd:
         return
     entries = [e.strip() for e in wd.split(';') if e.strip()]
     for entry in entries:
-        _rebuild_stage_hole(obj, entry)
+        v_before = len(obj.data.vertices)
+        try:
+            _rebuild_stage_hole(obj, entry)
+        except Exception as e:
+            print(f"[STEP Exporter] Rebuild hole failed: {e}")
+            # If mesh was corrupted, skip remaining holes
+            if len(obj.data.vertices) < 8:
+                print(f"[STEP Exporter] Mesh corrupted during rebuild, aborting")
+                return
+    # Force mesh update to prevent stale data
+    if obj.data.users > 0:
+        obj.data.update()

@@ -1,10 +1,10 @@
-# Hole Edge Fillet Type Filter
+# Hole Edge Fillet Type Filter (updated 2026-07-30)
 
-## Overview
-When fillet_type is specified in window_data, edges are filtered:
-- `ft=0` → outer edges only
-- `ft=1` → inner edges only
-- `ft=2` → both
+## Blender Side (UI + Geometry)
+- Bottom face (face 0): all three types (0=outer, 1=inner, 2=both) supported for both round and rrect holes
+- NURBS side walls (face 2-5): inner-only (type 1) unsupported due to OCCT limitation
+- F9 redo panel disabled (`REGISTER` removed) to prevent accidental duplicate holes
+- Edit dialog uses ring functions directly for curved shell rrect holes
 
 ## Implementation (module.cpp)
 

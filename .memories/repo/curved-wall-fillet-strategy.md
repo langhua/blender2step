@@ -1,7 +1,10 @@
-# Curved Side Wall Fillet Strategy (余弦曲面侧壁圆角)
+# Curved Side Wall Fillet Strategy (余弦曲面侧壁圆角) — updated 2026-07-30
 
 ## Overview
-For cosine-curved shells (`corner_type == 'curved'`), round through-holes with fillet on side walls (faces 2,3,4,5) use a **6-stage modal with torus boolean union**. This is separate from the bottom-face approach which uses `_direct_cut_hole` + ring functions.
+For cosine-curved shells (`corner_type == 'curved'`):
+- **Side walls (face 2-5)**: use 6-stage modal with torus boolean union (unchanged)
+- **Bottom face (face 0)**: use **synchronous** ring approach (2026-07-30 — no modal timer, prevents cutter lifecycle crashes)
+- rrect holes on curved bottom: use `_apply_bottom_rrect_recess` + `_apply_bottom_rrect_ring` (same as round)
 
 ## Modal Stages (6-stage)
 

@@ -1,14 +1,17 @@
 # Build Rules
 
-- **NEVER run `cmake --build` or any compilation** — the user compiles manually
-- **CAN modify C++ files** (`.cpp`, `.h`, `CMakeLists.txt`) — just don't compile
-- CAN modify Python files (`.py`) freely
-- Build method (from BUILD.md):
+- **Build command** (from BUILD.md):
   ```
   cd blender2step\build
   cmake --build . --config Release
   ```
-- Then copy: `Copy-Item build\Release\_step_exporter.pyd step_exporter\lib\ -Force`
+- `.pyd` auto-copies to `step_exporter/lib/` on build
+- Python files (`.py`) take effect immediately (via NTFS junction to Blender addons)
+- Clear `__pycache__` after Python changes to avoid stale bytecode:
+  ```
+  Remove-Item -Path "step_exporter\__pycache__" -Recurse -Force
+  Remove-Item -Path "step_exporter\ui\__pycache__" -Recurse -Force
+  ```
 
 # Curved Shell Construction
 - BRIDGE approach: wall layers stop at z=-hh+bf, separate bottom face at z=-hh, connected via quads

@@ -1176,7 +1176,7 @@ TopoDS_Shape create_tapered_loft_shell(
         // ruled=false (smoothing mode): creates B-spline surfaces
         // This ensures boundary edges are properly shared between adjacent faces
         BRepOffsetAPI_ThruSections loft(false, false, 1e-6);
-        int nLayers = 10;  // 10 intermediate layers for cosine curve sampling
+        int nLayers = 24;  // match Blender side_segs for consistent curve approximation
 
         // Add bottom wire as first section
         loft.AddWire(bottomWire);

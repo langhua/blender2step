@@ -2799,7 +2799,7 @@ TopoDS_Shape create_parametric_shell_solid(double width, double depth, double he
         double hw = width / 2.0, hd = depth / 2.0;
         double total_inset = std::min(hw, hd) * curve_ratio * 0.5;
         double hh = total_h / 2.0;
-        int nLayers = 12;
+        int nLayers = 24;  // match Blender side_segs
         int bfSegs = (bottom_fillet > 0.001) ? 6 : 0;
         double bf = bottom_fillet;
 

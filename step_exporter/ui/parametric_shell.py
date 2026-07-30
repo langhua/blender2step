@@ -2,7 +2,7 @@
 import math
 import bpy, bmesh, mathutils
 from bpy.types import Operator
-from bpy.props import FloatProperty, EnumProperty, BoolProperty
+from bpy.props import FloatProperty, EnumProperty, BoolProperty, IntProperty
 from ..core.i18n import _t
 from ..core.profile_utils import make_profile, add_fillet_rings
 from ..export.progress_report import start_progress, update_progress, end_progress, set_operator, clear_operator
@@ -117,6 +117,9 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
     eccentric_y: FloatProperty(
         name=_t("Eccentric Y"), default=0.0, min=-100.0, max=100.0, subtype='PERCENTAGE',
         description=_t("Y eccentricity for cosine walls (0=symmetric, +/-=shift curve center in Y)"))
+    cosine_layers: IntProperty(
+        name=_t("Cosine Layers"), default=192, min=48, max=384, step=24,
+        description=_t("Cosine wall layer count (48=fast, 192=precise, 384=extreme)"))
 
     # ── Dynamic clamping for curved + rim ──
     def _clamp_cr_bf(self):
@@ -145,6 +148,7 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         if self.corner_type == 'curved':
             layout.prop(self, 'curve_ratio')
             layout.prop(self, 'eccentric_y')
+            layout.prop(self, 'cosine_layers')
         layout.prop(self, 'bottom_fillet')
         # Hint: minimum values for curved + rim
         if self.corner_type == 'curved' and self.rim_type != 'none':
@@ -189,7 +193,8 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
                                        self.corner_type,
                                        self.curve_ratio / 100.0,
                                        self.eccentric_y / 100.0,
-                                       self.debug_keep_cutters)
+                                       self.debug_keep_cutters,
+                                       self.cosine_layers)
 
         # Store params (in user-facing unit)
 
@@ -540,13 +545,14 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
     # ── Direct shell with bottom fillet (manual construction) ──
 
     def _build_shell_direct(self, w, d, h, t, bt, cr, rw, rh, rim_type, rim_shape, top_ratio, bf,
-                            corner_type='rounded', curve_ratio=0.5, eccentric_y=0.0, keep_cutters=False):
+                            corner_type='rounded', curve_ratio=0.5, eccentric_y=0.0, keep_cutters=False,
+                            cosine_layers=8):
         """Build shell with bottom fillet via shared profile_utils.
         t=wall thickness, bt=bottom thickness."""
         import math
         
         if corner_type == 'curved' and cr > 0.0001:
-            return self._build_curved_shell(w, d, h, t, bt, cr, rw, rh, rim_type, rim_shape, top_ratio, bf, curve_ratio, eccentric_y, keep_cutters)
+            return self._build_curved_shell(w, d, h, t, bt, cr, rw, rh, rim_type, rim_shape, top_ratio, bf, curve_ratio, eccentric_y, keep_cutters, cosine_layers)
         
         print(f"[Direct] rounded/square path, bf={bf*1000:.1f}mm")
         hw, hd = w / 2.0, d / 2.0
@@ -718,7 +724,7 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
 
     # ── Curved-corner shell (cosine walls, smaller bottom) ──
 
-    def _build_curved_shell(self, w, d, h, t, bt, cr, rw, rh, rim_type, rim_shape, top_ratio, bf, curve_ratio, eccentric_y=0.0, keep_cutters=False):
+    def _build_curved_shell(self, w, d, h, t, bt, cr, rw, rh, rim_type, rim_shape, top_ratio, bf, curve_ratio, eccentric_y=0.0, keep_cutters=False, cosine_layers=192):
         """Build shell with cosine walls — all in one bmesh, no Boolean."""
         import math
         
@@ -727,7 +733,7 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         total_inset = min(hw_outer, hd_outer) * curve_ratio * 0.5
         ecc_y = eccentric_y
         seg = max(24, int(cr / min(w, d) * 64))
-        side_segs = seg * 2
+        side_segs = cosine_layers
         num_pts = 8 * seg
         
         def _profile(hw_a, hd_a, cr_a, n):
@@ -894,13 +900,13 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         
         return obj
 
-    def _make_curved_solid(self, w, d, h, cr, total_inset, name):
+    def _make_curved_solid(self, w, d, h, cr, total_inset, name, cosine_layers=192):
         """Create a solid with cosine-curved walls (bottom smaller than top).
         Replicates create_rounded_box_filleted from top shell example."""
         import math
         hw, hd, hh = w/2.0, d/2.0, h/2.0
         seg = max(24, int(cr/min(w,d)*48))
-        side_segs = seg * 2
+        side_segs = cosine_layers
         
         def _profile(hw_a, hd_a, cr_a, n):
             rhw, rhd = hw_a, hd_a
@@ -1514,7 +1520,7 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
 
         if self.hole_type == 'round':
             rh = self.hole_radius * S
-            cutter_depth = thickness + extra * 2
+            cutter_depth = max(thickness + extra * 2, h * 2.0)  # ensure through shell
             bpy.ops.mesh.primitive_cylinder_add(
                 vertices=64, radius=rh, depth=cutter_depth, location=(0, 0, 0))
             cutter = bpy.context.active_object
@@ -1538,7 +1544,7 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
             hcr = self.hole_cr * S
             # Build rrect cutter using the shell class's method
             cutter = STEP_EXPORTER_OT_create_parametric_shell._make_rrect_cutter(
-                None, rh_w * 2, rh_h * 2, hcr, thickness + extra * 2,
+                None, rh_w * 2, rh_h * 2, hcr, max(thickness + extra * 2, h * 2.0),
                 px, py, pz, hw, hd, thickness, loc, obj=obj)
             if cutter is None:
                 self.report({'ERROR'}, _t("Failed to create cutter"))
@@ -2589,12 +2595,6 @@ def _apply_bottom_rrect_ring(obj, hole_w_mm, hole_h_mm, hole_cr_mm, fillet_mm, p
         ring_obj.color = (1.0, 0.3, 0.3, 1.0) if is_outer else (0.3, 0.3, 1.0, 1.0)
         print(f"[STEP Exporter] Rrect {'outer' if is_outer else 'inner'} ring PREVIEW (no union)")
         return ring_obj
-    # DEBUG: log ring world-space Z range
-    bpy.context.view_layer.update()
-    ring_bbox = [ring_obj.matrix_world @ mathutils.Vector(v) for v in ring_obj.bound_box]
-    ring_z_min = min(v.z for v in ring_bbox)
-    ring_z_max = max(v.z for v in ring_bbox)
-    print(f"[STEP Exporter] Rrect {side} ring world Z range: [{ring_z_min*1000:.3f}, {ring_z_max*1000:.3f}]mm (pos.z={pos[2]*1000:.3f})")
     bpy.context.view_layer.objects.active = obj
     for solv in ('FLOAT', 'EXACT'):
         mod = obj.modifiers.new(name="BtRRecRingU" + ("O" if is_outer else "I"), type='BOOLEAN')
@@ -3384,6 +3384,90 @@ def _rebuild_stage_create(obj):
 
     bpy.context.view_layer.objects.active = obj
     obj.select_set(True)
+
+
+class STEP_EXPORTER_OT_show_step_walls(Operator):
+    """Show theoretical inner wall positions as wireframe"""
+    bl_idname = "step_exporter.show_step_walls"
+    bl_label = _t("Show STEP Inner Walls")
+    bl_description = _t("Show theoretical inner wall positions as wireframe")
+    bl_options = {'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        obj = context.active_object
+        return obj and obj.get('object_type') == 'parametric_shell'
+
+    def execute(self, context):
+        import math, bmesh as _bm2
+        obj = context.active_object
+        context.view_layer.update()
+        
+        w = obj.get('width', 100)
+        d = obj.get('depth', 80)
+        h_val = obj.get('height', 50)
+        t_mm = obj.get('wall_thickness', 2)
+        cr = obj.get('curve_ratio', 50) / 100.0
+        unit = obj.get('unit', 'mm')
+        S = 0.001 if unit == 'mm' else 1.0
+        
+        hw = w * S / 2
+        hd = d * S / 2
+        hh = h_val * S / 2
+        t = t_mm * S
+        total_inset = min(hw, hd) * cr * 0.5
+        
+        # Inner wall at bottom face level: z = -hh + t (inner face of bottom wall)
+        # Cosine inset: inset = total_inset * (1 - cos(pi/2 * tf))
+        # where tf = (hh - z) / (2*hh), z is relative to shell center
+        inner_z = -hh + t
+        tf = (hh - inner_z) / (2.0 * hh) if hh > 0.0001 else 0.0
+        tf = max(0.0, min(1.0, tf))
+        inset = total_inset * (1.0 - math.cos(math.pi / 2.0 * tf))
+        
+        inner_hw = hw - inset - t  # outer wall minus cosine inset minus wall thickness
+        inner_hd = hd - inset - t
+        
+        print(f"[STEP Walls] Shell {w:.0f}x{d:.0f}x{h_val:.0f}mm t={t_mm:.0f}mm curve={cr*100:.0f}%")
+        print(f"[STEP Walls] Inner at z={inner_z*1000:.2f}mm: inset={inset*1000:.3f}mm hw={inner_hw*1000:.2f}mm hd={inner_hd*1000:.2f}mm")
+        
+        # Clean up old
+        for name in list(bpy.data.objects.keys()):
+            if name.startswith('STEP_Wall_'):
+                bpy.data.objects.remove(bpy.data.objects[name], do_unlink=True)
+        
+        # Draw in local coords (wireframes follow object transform)
+        for label, dist, axis in [
+            ('Left', -inner_hw, 'X'),
+            ('Right', inner_hw, 'X'),
+            ('Front', -inner_hd, 'Y'),
+            ('Back', inner_hd, 'Y'),
+        ]:
+            bm = _bm2.new()
+            dz = 0.0001
+            if axis == 'X':
+                v1 = bm.verts.new((dist, -inner_hd, inner_z - dz))
+                v2 = bm.verts.new((dist, inner_hd, inner_z - dz))
+                v3 = bm.verts.new((dist, inner_hd, inner_z + dz))
+                v4 = bm.verts.new((dist, -inner_hd, inner_z + dz))
+            else:
+                v1 = bm.verts.new((-inner_hw, dist, inner_z - dz))
+                v2 = bm.verts.new((inner_hw, dist, inner_z - dz))
+                v3 = bm.verts.new((inner_hw, dist, inner_z + dz))
+                v4 = bm.verts.new((-inner_hw, dist, inner_z + dz))
+            
+            bm.faces.new([v1, v2, v3, v4])
+            msh = bpy.data.meshes.new(f"STEP_Wall_{label}")
+            bm.to_mesh(msh)
+            bm.free()
+            wall_obj = bpy.data.objects.new(f"STEP_Wall_{label}", msh)
+            bpy.context.collection.objects.link(wall_obj)
+            wall_obj.matrix_world = obj.matrix_world
+            wall_obj.display_type = 'WIRE'
+            wall_obj.color = (1.0, 0.2, 0.2, 1.0)
+        
+        self.report({'INFO'}, _t("Inner walls: ±{hw:.1f} × ±{hd:.1f}mm").format(hw=inner_hw*1000, hd=inner_hd*1000))
+        return {'FINISHED'}
 
 
 def _rebuild_stage_hole(obj, entry):

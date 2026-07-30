@@ -3,7 +3,7 @@
         double hw = width / 2.0, hd = depth / 2.0;
         double total_inset = std::min(hw, hd) * curve_ratio * 0.5;
         double hh = total_h / 2.0;
-        int nLayers = 10;
+        int nLayers = 24;  // match Blender side_segs
         int bfSegs = (bottom_fillet > 0.001) ? 6 : 0;
         double bf = bottom_fillet;
 

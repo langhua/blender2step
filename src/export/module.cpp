@@ -2803,7 +2803,7 @@ TopoDS_Shape create_parametric_shell_solid(double width, double depth, double he
         double total_inset = std::min(hw, hd) * curve_ratio * 0.5;
         double hh = total_h / 2.0;
         int nLayers = 24;  // match Blender side_segs
-        int bfSegs = (bottom_fillet > 0.001) ? 24 : 0;  // fine fillet resolution
+        int bfSegs = (bottom_fillet > 0.001) ? 8 : 0;  // balanced fillet resolution
         double bf = bottom_fillet;
 
         // Build layers bottom→top: fillet zone then cosine wall
@@ -3457,9 +3457,10 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                         // 0=bottom, 1=top, 2=left, 3=right, 4=front, 5=back
                         // Cylinder axis passes through hole center for ALL faces
                         if (face_code == 0) {
-                            ax = gp_Ax2(gp_Pnt(cx, cy, cz - cyl_len / 2.0), gp_Dir(0, 0, 1));
+                            // Slight Z offset avoids coincident faces with shell bottom (OCCT tolerance)
+                            ax = gp_Ax2(gp_Pnt(cx, cy, cz - 0.5), gp_Dir(0, 0, 1));
                         } else if (face_code == 1) {
-                            ax = gp_Ax2(gp_Pnt(cx, cy, cz - cyl_len / 2.0), gp_Dir(0, 0, 1));
+                            ax = gp_Ax2(gp_Pnt(cx, cy, cz - 0.5), gp_Dir(0, 0, 1));
                         } else if (face_code == 2) {
                             ax = gp_Ax2(gp_Pnt(cx - cyl_len / 2.0, cy, cz), gp_Dir(1, 0, 0));
                         } else if (face_code == 3) {
@@ -4076,6 +4077,10 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
 
         IFSelect_ReturnStatus ts = writer.Transfer(shape, STEPControl_AsIs);
         if (ts != IFSelect_RetDone) {
+            if (redirectState.stdout_redirected && redirectState.log_file) {
+                _dup2(redirectState.saved_stdout_fd, _fileno(stdout));
+                fclose(redirectState.log_file);
+            }
             Py_RETURN_FALSE;
         }
 
@@ -4095,14 +4100,17 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
     }
     catch (const Standard_Failure& e) {
         std::cerr << "[STEP Exporter] OCCT error: " << e.GetMessageString() << std::endl;
+        if (saved_stdout_fd >= 0) { _dup2(saved_stdout_fd, _fileno(stdout)); if (log_file) fclose(log_file); }
         Py_RETURN_FALSE;
     }
     catch (const std::exception& e) {
         std::cerr << "[STEP Exporter] Error: " << e.what() << std::endl;
+        if (saved_stdout_fd >= 0) { _dup2(saved_stdout_fd, _fileno(stdout)); if (log_file) fclose(log_file); }
         Py_RETURN_FALSE;
     }
     catch (...) {
         std::cerr << "[STEP Exporter] Unknown error" << std::endl;
+        if (saved_stdout_fd >= 0) { _dup2(saved_stdout_fd, _fileno(stdout)); if (log_file) fclose(log_file); }
         Py_RETURN_FALSE;
     }
 }

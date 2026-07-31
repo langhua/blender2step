@@ -1522,7 +1522,10 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
 
         if self.hole_type == 'round':
             rh = self.hole_radius * S
-            cutter_depth = max(thickness + extra * 2, h * 2.0)  # ensure through shell
+            if nearest >= 2:  # side wall — short cylinder (wall thickness + margin)
+                cutter_depth = thickness * 6.0
+            else:  # bottom/top — long cylinder through shell height
+                cutter_depth = max(thickness * 6.0, h * 2.0)
             bpy.ops.mesh.primitive_cylinder_add(
                 vertices=64, radius=rh, depth=cutter_depth, location=(0, 0, 0))
             cutter = bpy.context.active_object
@@ -1792,6 +1795,14 @@ def _fillet_stage_0(obj, hole_r_mm, fillet_mm, face_code, px, py, pz, thickness,
         euler_inner = (euler_rot[0] + math.pi, euler_rot[1], euler_rot[2])
     else:
         euler_inner = (euler_rot[0], euler_rot[1] + math.pi, euler_rot[2])
+    # Apply object rotation: local→world orientation for rings/recesses
+    obj_rot_q = obj.rotation_euler.to_quaternion()
+    local_rot_q = _Eul(euler_rot, 'XYZ').to_quaternion()
+    world_rot_q = obj_rot_q @ local_rot_q
+    euler_rot = world_rot_q.to_euler('XYZ')
+    local_inner_q = _Eul(euler_inner, 'XYZ').to_quaternion()
+    world_inner_q = obj_rot_q @ local_inner_q
+    euler_inner = world_inner_q.to_euler('XYZ')
     print(f"[STEP DEBUG] face={face_code} euler_rot=({math.degrees(euler_rot[0]):.1f},{math.degrees(euler_rot[1]):.1f},{math.degrees(euler_rot[2]):.1f})deg")
     print(f"[STEP DEBUG] outer_pos=({outer_pos[0]*1000:.1f},{outer_pos[1]*1000:.1f},{outer_pos[2]*1000:.1f})mm inner_pos=({inner_pos[0]*1000:.1f},{inner_pos[1]*1000:.1f},{inner_pos[2]*1000:.1f})mm")
     print(f"[STEP DEBUG] world_thick={world_thick*1000:.2f}mm ox={ox*1000:.2f} oy={oy*1000:.2f} oz={oz*1000:.2f}")
@@ -1887,7 +1898,7 @@ def _fillet_stage_1(obj, result, face_code, px, py, pz, thickness):
     import math
     hr = result['hr']; ox = result['ox']; oy = result['oy']; oz = result['oz']
     # Cylinder MUST be deeper than wall to fully penetrate (like sphere example)
-    hole_len = thickness * 50.0
+    hole_len = thickness * 6.0  # enough to fully penetrate one wall
     hole_center = (px + ox/2, py + oy/2, pz + oz/2)
     bpy.ops.mesh.primitive_cylinder_add(vertices=32, radius=hr, depth=hole_len, location=hole_center)
     hc = bpy.context.active_object; hc.name = "ThruHole"
@@ -2260,7 +2271,7 @@ def _cleanup_mesh(obj):
 
 def _bmesh_cut_circle(obj, pos, radius):
     """Fallback: cut hole via cylinder + Boolean modifier (avoids problematic join+intersect)."""
-    bpy.ops.mesh.primitive_cylinder_add(vertices=32, radius=radius, depth=radius * 20, location=pos)
+    bpy.ops.mesh.primitive_cylinder_add(vertices=32, radius=radius, depth=radius * 8, location=pos)
     cutter = bpy.context.active_object
     cutter.name = "FallbackCutter"
     bpy.context.view_layer.objects.active = obj
@@ -3389,88 +3400,6 @@ def _rebuild_stage_create(obj):
     obj.select_set(True)
 
 
-class STEP_EXPORTER_OT_show_step_walls(Operator):
-    """Show theoretical inner wall positions as wireframe"""
-    bl_idname = "step_exporter.show_step_walls"
-    bl_label = _t("Show STEP Inner Walls")
-    bl_description = _t("Show theoretical inner wall positions as wireframe")
-    bl_options = {'UNDO'}
-
-    @classmethod
-    def poll(cls, context):
-        obj = context.active_object
-        return obj and obj.get('object_type') == 'parametric_shell'
-
-    def execute(self, context):
-        import math, bmesh as _bm2
-        obj = context.active_object
-        context.view_layer.update()
-        
-        w = obj.get('width', 100)
-        d = obj.get('depth', 80)
-        h_val = obj.get('height', 50)
-        t_mm = obj.get('wall_thickness', 2)
-        cr = obj.get('curve_ratio', 50) / 100.0
-        unit = obj.get('unit', 'mm')
-        S = 0.001 if unit == 'mm' else 1.0
-        
-        hw = w * S / 2
-        hd = d * S / 2
-        hh = h_val * S / 2
-        t = t_mm * S
-        total_inset = min(hw, hd) * cr * 0.5
-        
-        # Inner wall at bottom face level: z = -hh + t (inner face of bottom wall)
-        # Cosine inset: inset = total_inset * (1 - cos(pi/2 * tf))
-        # where tf = (hh - z) / (2*hh), z is relative to shell center
-        inner_z = -hh + t
-        tf = (hh - inner_z) / (2.0 * hh) if hh > 0.0001 else 0.0
-        tf = max(0.0, min(1.0, tf))
-        inset = total_inset * (1.0 - math.cos(math.pi / 2.0 * tf))
-        
-        inner_hw = hw - inset - t  # outer wall minus cosine inset minus wall thickness
-        inner_hd = hd - inset - t
-        
-        print(f"[STEP Walls] Shell {w:.0f}x{d:.0f}x{h_val:.0f}mm t={t_mm:.0f}mm curve={cr*100:.0f}%")
-        print(f"[STEP Walls] Inner at z={inner_z*1000:.2f}mm: inset={inset*1000:.3f}mm hw={inner_hw*1000:.2f}mm hd={inner_hd*1000:.2f}mm")
-        
-        # Clean up old
-        for name in list(bpy.data.objects.keys()):
-            if name.startswith('STEP_Wall_'):
-                bpy.data.objects.remove(bpy.data.objects[name], do_unlink=True)
-        
-        # Draw in local coords (wireframes follow object transform)
-        for label, dist, axis in [
-            ('Left', -inner_hw, 'X'),
-            ('Right', inner_hw, 'X'),
-            ('Front', -inner_hd, 'Y'),
-            ('Back', inner_hd, 'Y'),
-        ]:
-            bm = _bm2.new()
-            dz = 0.0001
-            if axis == 'X':
-                v1 = bm.verts.new((dist, -inner_hd, inner_z - dz))
-                v2 = bm.verts.new((dist, inner_hd, inner_z - dz))
-                v3 = bm.verts.new((dist, inner_hd, inner_z + dz))
-                v4 = bm.verts.new((dist, -inner_hd, inner_z + dz))
-            else:
-                v1 = bm.verts.new((-inner_hw, dist, inner_z - dz))
-                v2 = bm.verts.new((inner_hw, dist, inner_z - dz))
-                v3 = bm.verts.new((inner_hw, dist, inner_z + dz))
-                v4 = bm.verts.new((-inner_hw, dist, inner_z + dz))
-            
-            bm.faces.new([v1, v2, v3, v4])
-            msh = bpy.data.meshes.new(f"STEP_Wall_{label}")
-            bm.to_mesh(msh)
-            bm.free()
-            wall_obj = bpy.data.objects.new(f"STEP_Wall_{label}", msh)
-            bpy.context.collection.objects.link(wall_obj)
-            wall_obj.matrix_world = obj.matrix_world
-            wall_obj.display_type = 'WIRE'
-            wall_obj.color = (1.0, 0.2, 0.2, 1.0)
-        
-        self.report({'INFO'}, _t("Inner walls: ±{hw:.1f} × ±{hd:.1f}mm").format(hw=inner_hw*1000, hd=inner_hd*1000))
-        return {'FINISHED'}
 
 
 def _rebuild_stage_hole(obj, entry):

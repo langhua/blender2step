@@ -4,7 +4,14 @@ STEP Exporter utility functions: logging, STEP file verification, merging.
 
 import os
 import re
-from . import _globals as _g
+try:
+    from . import _globals as _g
+except ImportError:
+    import types as _types
+    _g = _types.SimpleNamespace()
+    _g._export_log_file = None
+    _g._log_buffer = []
+    _g.CPP_MODULE_LOADED = False
 
 
 def log_to_file(msg):

@@ -744,6 +744,38 @@ class STEP_EXPORTER_OT_export_enhanced(Operator, ExportHelper):
 
 # ====================== 延迟分析 + 导出 ======================
 
+def _is_obj_in_hidden_or_excluded_collection(obj, scene, view_layer):
+    """Check if obj is in any collection (or ancestor) that is hidden in viewport
+    or excluded from the view layer. Handles linked collections too."""
+    import bpy
+    # 1. Check collection data blocks for hide_viewport (works for non-linked collections)
+    for col in bpy.data.collections:
+        if col.hide_viewport and obj.name in col.all_objects:
+            return True
+    # 2. Check linked collections: the collection instance object controls visibility
+    for inst in bpy.data.objects:
+        if inst.instance_type == 'COLLECTION' and inst.instance_collection:
+            if obj.name in inst.instance_collection.all_objects:
+                if inst.hide_viewport or inst.hide_get():
+                    return True
+    # 3. Use Blender's own visibility query (considers all factors: object, collection, view layer)
+    try:
+        if not obj.visible_get():
+            return True
+    except Exception:
+        pass
+    # 4. Walk layer collection tree for exclude (fallback for older Blender)
+    def _walk_lc(lc, ancestor_excluded):
+        excluded_now = ancestor_excluded or lc.exclude
+        if excluded_now:
+            if obj.name in lc.collection.all_objects:
+                return True
+        for child in lc.children:
+            if _walk_lc(child, excluded_now):
+                return True
+        return False
+    return _walk_lc(view_layer.layer_collection, False)
+
 def _execute_analysis_and_export(operator, params):
     """在 app timer 中执行物体分析，然后启动参数化或常规导出。
     延迟执行确保 UI 先刷新显示进度条，避免用户看到空白等待。
@@ -805,6 +837,10 @@ def _execute_analysis_and_export(operator, params):
             # Skip invisible objects (hidden in viewport or globally)
             if obj.hide_viewport or obj.hide_get():
                 log_to_file(f"[STEP Exporter] Skipping hidden: {obj.name}")
+                continue
+            # Skip objects whose parent collections (incl. ancestors) are hidden or excluded
+            if _is_obj_in_hidden_or_excluded_collection(obj, context.scene, context.view_layer):
+                log_to_file(f"[STEP Exporter] Skipping - collection hidden/excluded: {obj.name}")
                 continue
             # Skip wireframe-displayed objects (debug cutters, visual aids)
             if obj.display_type == 'WIRE':

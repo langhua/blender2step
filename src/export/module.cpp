@@ -49,10 +49,13 @@
 #include <TopoDS.hxx>
 #include <TopoDS_Iterator.hxx>
 #include <TopLoc_Location.hxx>
+#include <BRepMesh_IncrementalMesh.hxx>
+#include <Poly_Triangulation.hxx>
 #include <string>
+#include <unordered_map>
 
 // Define version constant
-const char* MODULE_VERSION = "4.1.1";
+const char* MODULE_VERSION = "4.2.3";  // fix: fillet offset excluded from eccentricity
 
 // 获取版本信息（原始函数）
 PyObject* get_version(PyObject* self, PyObject* args) {
@@ -2800,13 +2803,14 @@ TopoDS_Shape create_parametric_shell_solid(double width, double depth, double he
         double total_inset = std::min(hw, hd) * curve_ratio * 0.5;
         double hh = total_h / 2.0;
         int nLayers = 24;  // match Blender side_segs
-        int bfSegs = (bottom_fillet > 0.001) ? 6 : 0;
+        int bfSegs = (bottom_fillet > 0.001) ? 24 : 0;  // fine fillet resolution
         double bf = bottom_fillet;
 
         // Build layers bottom→top: fillet zone then cosine wall
         auto buildLayers = [&](double base_hw, double base_hd, double base_cr,
                                 double z_shift) {
             std::vector<double> zs, hws, hds, yos;
+            double aspect = base_hd / base_hw;  // match Python's proportional inset
 
             // 1. Bottom fillet zone: z from -hh+z_shift to -hh+z_shift+bf
             if (bf > 0.001) {
@@ -2820,8 +2824,8 @@ TopoDS_Shape create_parametric_shell_solid(double width, double depth, double he
                     double cos_inset = total_inset * (1.0 - cos(M_PI / 2.0 * t));
                     zs.push_back(z);
                     hws.push_back(base_hw - cos_inset - offset);
-                    hds.push_back(base_hd - cos_inset - offset);
-                    yos.push_back((cos_inset + offset) * eccentric_y);
+                    hds.push_back(base_hd - (cos_inset + offset) * aspect);
+                    yos.push_back(cos_inset * eccentric_y);  // eccentric only on cosine, NOT fillet
                 }
             }
 
@@ -2836,7 +2840,7 @@ TopoDS_Shape create_parametric_shell_solid(double width, double depth, double he
                 double inset = total_inset * (1.0 - cos(M_PI / 2.0 * t));
                 zs.push_back(z);
                 hws.push_back(base_hw - inset);
-                hds.push_back(base_hd - inset);
+                hds.push_back(base_hd - inset * aspect);
                 yos.push_back(inset * eccentric_y);
             }
             return std::make_tuple(zs, hws, hds, yos);
@@ -2848,7 +2852,7 @@ TopoDS_Shape create_parametric_shell_solid(double width, double depth, double he
                              const std::vector<double>& z_arr,
                              const std::vector<double>& yo_arr,
                              double cr_val) -> TopoDS_Solid {
-            BRepOffsetAPI_ThruSections loft(true, false, 1e-6);  // solid, smooth
+            BRepOffsetAPI_ThruSections loft(true, false, 1e-6);  // B-spline smooth
             for (size_t i = 0; i < hw_arr.size(); i++) {
                 // Standard 8-edge wire for manageable STEP file size
                 TopoDS_Wire w = create_rounded_rect_wire(
@@ -4103,6 +4107,121 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
     }
 }
 
+// ── Mesh generation for Blender preview (OCCT-based, matches STEP export exactly) ──
+
+PyObject* generate_parametric_shell_mesh(PyObject* self, PyObject* args) {
+    double width, depth, height, thickness, bottom_thickness;
+    const char* corner_type = "square";
+    double corner_radius = 0.0;
+    const char* rim_type = "none";
+    double rim_width = 0.0, rim_height = 0.0;
+    const char* rim_shape = "rect";
+    double rim_top_ratio = 1.0;
+    double bottom_fillet = 0.0;
+    double curve_ratio = 0.5;
+    double eccentric_y = 0.0;
+
+    if (!PyArg_ParseTuple(args, "ddddd|sdsddsdddd",
+                          &width, &depth, &height, &thickness, &bottom_thickness,
+                          &corner_type, &corner_radius,
+                          &rim_type, &rim_width, &rim_height,
+                          &rim_shape, &rim_top_ratio,
+                          &bottom_fillet, &curve_ratio, &eccentric_y)) {
+        PyErr_SetString(PyExc_TypeError,
+            "generate_parametric_shell_mesh() expected: width, depth, height, thickness, bottom_thickness"
+            "[, corner_type, corner_radius, rim_type, rim_width, rim_height, rim_shape, rim_top_ratio,"
+            " bottom_fillet, curve_ratio, eccentric_y]");
+        return NULL;
+    }
+
+    try {
+        TopoDS_Shape shape = create_parametric_shell_solid(
+            width, depth, height, thickness, bottom_thickness,
+            corner_type, corner_radius,
+            rim_type, rim_width, rim_height,
+            rim_shape, rim_top_ratio,
+            bottom_fillet, curve_ratio, eccentric_y);
+
+        if (shape.IsNull()) {
+            Py_RETURN_NONE;
+        }
+
+        // Triangulate the solid
+        BRepMesh_IncrementalMesh mesh(shape, 1.0);
+        mesh.Perform();
+
+        // Hash-based vertex dedup: O(n) via position key
+        std::vector<gp_Pnt> dedupVerts;
+        std::vector<std::array<int, 3>> dedupTris;
+        std::unordered_map<uint64_t, int> posToIdx;
+
+        auto hashPos = [](const gp_Pnt& p) -> uint64_t {
+            // Quantize to 0.0001mm to merge near-identical points
+            int64_t ix = (int64_t)(p.X() * 10000.0 + 0.5);
+            int64_t iy = (int64_t)(p.Y() * 10000.0 + 0.5);
+            int64_t iz = (int64_t)(p.Z() * 10000.0 + 0.5);
+            return ((uint64_t)ix << 42) ^ ((uint64_t)iy << 21) ^ (uint64_t)iz;
+        };
+
+        for (TopExp_Explorer fex(shape, TopAbs_FACE); fex.More(); fex.Next()) {
+            const TopoDS_Face& face = TopoDS::Face(fex.Current());
+            TopLoc_Location loc;
+            Handle(Poly_Triangulation) tri = BRep_Tool::Triangulation(face, loc);
+            if (tri.IsNull()) continue;
+
+            std::vector<int> faceToGlobal;
+            for (int i = 1; i <= tri->NbNodes(); i++) {
+                gp_Pnt p = tri->Node(i).Transformed(loc);
+                uint64_t h = hashPos(p);
+                auto it = posToIdx.find(h);
+                if (it != posToIdx.end()) {
+                    faceToGlobal.push_back(it->second);
+                } else {
+                    int idx = (int)dedupVerts.size();
+                    posToIdx[h] = idx;
+                    dedupVerts.push_back(p);
+                    faceToGlobal.push_back(idx);
+                }
+            }
+            for (int i = 1; i <= tri->NbTriangles(); i++) {
+                int n1, n2, n3;
+                tri->Triangle(i).Get(n1, n2, n3);
+                dedupTris.push_back({faceToGlobal[n1-1], faceToGlobal[n2-1], faceToGlobal[n3-1]});
+            }
+        }
+
+        // Build Python dict
+        PyObject* result = PyDict_New();
+        PyObject* vertList = PyList_New(dedupVerts.size());
+        for (size_t i = 0; i < dedupVerts.size(); i++) {
+            PyObject* tup = PyTuple_Pack(3,
+                PyFloat_FromDouble(dedupVerts[i].X()),
+                PyFloat_FromDouble(dedupVerts[i].Y()),
+                PyFloat_FromDouble(dedupVerts[i].Z()));
+            PyList_SetItem(vertList, i, tup);
+        }
+        PyDict_SetItemString(result, "vertices", vertList);
+
+        PyObject* triList = PyList_New(dedupTris.size());
+        for (size_t i = 0; i < dedupTris.size(); i++) {
+            PyObject* tup = PyTuple_Pack(3,
+                PyLong_FromLong(dedupTris[i][0]),
+                PyLong_FromLong(dedupTris[i][1]),
+                PyLong_FromLong(dedupTris[i][2]));
+            PyList_SetItem(triList, i, tup);
+        }
+        PyDict_SetItemString(result, "triangles", triList);
+
+        return result;
+    } catch (Standard_Failure& e) {
+        std::cerr << "[Mesh Gen] OCCT error: " << e.GetMessageString() << std::endl;
+        Py_RETURN_NONE;
+    } catch (...) {
+        std::cerr << "[Mesh Gen] Unknown error" << std::endl;
+        Py_RETURN_NONE;
+    }
+}
+
 // 模块方法定义表
 static PyMethodDef step_exporter_methods[] = {
     {"export_step", export_step, METH_VARARGS, "Export simple shape to STEP"},
@@ -4149,6 +4268,7 @@ static PyMethodDef step_exporter_methods[] = {
     {"merge_step_files", merge_step_files, METH_VARARGS, "Merge multiple STEP temp files into one using OCCT reader/writer"},
     {"get_version", get_version, METH_NOARGS, "Get module version"},
     {"get_occt_version", get_occt_version, METH_NOARGS, "Get OpenCASCADE version"},
+    {"generate_parametric_shell_mesh", generate_parametric_shell_mesh, METH_VARARGS, "Generate parametric shell mesh using OCCT (matches STEP export)"},
     {NULL, NULL, 0, NULL}
 };
 

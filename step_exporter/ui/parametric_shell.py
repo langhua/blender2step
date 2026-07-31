@@ -116,10 +116,10 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         description=_t("Bottom shrink ratio for cosine walls (0=flat, 100=max curve)"))
     eccentric_y: FloatProperty(
         name=_t("Eccentric Y"), default=0.0, min=-100.0, max=100.0, subtype='PERCENTAGE',
-        description=_t("Y eccentricity for cosine walls (0=symmetric, +/-=shift curve center in Y)"))
+        description=_t("Y-axis offset for cosine curve center (−100%=bottom edge, +100%=top edge)"))
     cosine_layers: IntProperty(
         name=_t("Cosine Layers"), default=192, min=48, max=384, step=24,
-        description=_t("Cosine wall layer count (48=fast, 192=precise, 384=extreme)"))
+        description=_t("Wall layer count (48=fast, 192=precise, 384=extreme)"))
 
     # ── Dynamic clamping for curved + rim ──
     def _clamp_cr_bf(self):
@@ -216,6 +216,7 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         obj['bottom_fillet'] = self.bottom_fillet
         obj['curve_ratio'] = self.curve_ratio
         obj['eccentric_y'] = self.eccentric_y
+        obj['cosine_layers'] = self.cosine_layers
         obj['debug_keep_cutters'] = self.debug_keep_cutters
 
         unit_label = "mm" if self.unit == 'mm' else "m"
@@ -546,7 +547,7 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
 
     def _build_shell_direct(self, w, d, h, t, bt, cr, rw, rh, rim_type, rim_shape, top_ratio, bf,
                             corner_type='rounded', curve_ratio=0.5, eccentric_y=0.0, keep_cutters=False,
-                            cosine_layers=8):
+                            cosine_layers=192):
         """Build shell with bottom fillet via shared profile_utils.
         t=wall thickness, bt=bottom thickness."""
         import math
@@ -732,6 +733,7 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         hh = h / 2.0
         total_inset = min(hw_outer, hd_outer) * curve_ratio * 0.5
         ecc_y = eccentric_y
+        print(f"[Curved] ecc_y={ecc_y:.3f} total_inset={total_inset*1000:.1f}mm")
         seg = max(24, int(cr / min(w, d) * 64))
         side_segs = cosine_layers
         num_pts = 8 * seg
@@ -900,13 +902,13 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         
         return obj
 
-    def _make_curved_solid(self, w, d, h, cr, total_inset, name, cosine_layers=192):
+    def _make_curved_solid(self, w, d, h, cr, total_inset, name):
         """Create a solid with cosine-curved walls (bottom smaller than top).
         Replicates create_rounded_box_filleted from top shell example."""
         import math
         hw, hd, hh = w/2.0, d/2.0, h/2.0
         seg = max(24, int(cr/min(w,d)*48))
-        side_segs = cosine_layers
+        side_segs = seg * 8
         
         def _profile(hw_a, hd_a, cr_a, n):
             rhw, rhd = hw_a, hd_a
@@ -3350,7 +3352,8 @@ def _rebuild_stage_create(obj):
         corner_radius=cr, bottom_fillet=bf,
         rim_type=rim_type_str, rim_width=rim_width, rim_height=rim_height,
         rim_shape=rim_shape, rim_top_ratio=rim_top_ratio,
-        curve_ratio=curve_ratio, debug_keep_cutters=False)
+        curve_ratio=curve_ratio, eccentric_y=eccentric_y,
+        debug_keep_cutters=False)
 
     # Re-find original object by marker (Python ref was invalidated by bpy.ops)
     obj = None
@@ -3377,7 +3380,7 @@ def _rebuild_stage_create(obj):
 
     for key in ('width', 'depth', 'height', 'wall_thickness', 'corner_type',
                 'corner_radius', 'object_type', 'unit', 'rim_type', 'rim_width',
-                'rim_height', 'rim_shape', 'rim_top_ratio', 'bottom_fillet', 'curve_ratio', 'eccentric_y', 'bottom_thickness'):
+                'rim_height', 'rim_shape', 'rim_top_ratio', 'bottom_fillet', 'curve_ratio', 'eccentric_y', 'bottom_thickness', 'cosine_layers'):
         val = obj.get(key)
         if val is not None:
             obj[key] = val

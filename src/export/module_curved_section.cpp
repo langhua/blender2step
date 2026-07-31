@@ -4,7 +4,7 @@
         double total_inset = std::min(hw, hd) * curve_ratio * 0.5;
         double hh = total_h / 2.0;
         int nLayers = 24;  // match Blender side_segs
-        int bfSegs = (bottom_fillet > 0.001) ? 6 : 0;
+        int bfSegs = (bottom_fillet > 0.001) ? 24 : 0;  // fine fillet resolution
         double bf = bottom_fillet;
 
         // Build layers bottom→top: fillet zone then cosine wall
@@ -12,6 +12,7 @@
         auto buildLayers = [&](double base_hw, double base_hd, double base_cr,
                                 double z_shift) {
             std::vector<double> zs, hws, hds, yos;
+            double aspect = base_hd / base_hw;  // match Python's proportional inset
 
             // 1. Bottom fillet zone
             if (bf > 0.001) {
@@ -24,8 +25,8 @@
                     double wall_inset = total_inset * (1.0 - cos(M_PI / 2.0 * t_wall));
                     zs.push_back(z);
                     hws.push_back(base_hw - wall_inset - offset);
-                    hds.push_back(base_hd - wall_inset - offset);
-                    yos.push_back((wall_inset + offset) * eccentric_y);
+                    hds.push_back(base_hd - (wall_inset + offset) * aspect);
+                    yos.push_back(wall_inset * eccentric_y);  // eccentric only on cosine, NOT fillet
                 }
             }
 
@@ -40,7 +41,7 @@
                 double inset = total_inset * (1.0 - cos(M_PI / 2.0 * t));
                 zs.push_back(z);
                 hws.push_back(base_hw - inset);
-                hds.push_back(base_hd - inset);
+                hds.push_back(base_hd - inset * aspect);
                 yos.push_back(inset * eccentric_y);
             }
             return std::make_tuple(zs, hws, hds, yos);
@@ -52,7 +53,7 @@
                              const std::vector<double>& z_arr,
                              const std::vector<double>& yo_arr,
                              double cr_val) -> TopoDS_Solid {
-            BRepOffsetAPI_ThruSections loft(true, false, 1e-6);
+            BRepOffsetAPI_ThruSections loft(true, false, 1e-6);  // B-spline smooth
             for (size_t i = 0; i < hw_arr.size(); i++) {
                 TopoDS_Wire w = create_rounded_rect_wire(
                     hw_arr[i] * 2.0, hd_arr[i] * 2.0, cr_val, z_arr[i], yo_arr[i]);

@@ -80,10 +80,17 @@ def _analyze_parametric_shell_from_mesh(obj, context=None, scale=1.0):
 def _fix_window_data_faces(obj):
     """Fix hole face assignments for STEP export constraints.
     Parametric shell top is open (only a rim) → face 1 (top) holes route to nearest side wall.
-    Coordinates remain in shell-local mm — C++ cuts holes BEFORE translating the shell."""
+    Coordinates remain in shell-local mm — C++ cuts holes BEFORE translating the shell.
+    For rotated shells: if flipped 180° around X or Y, swap bottom↔top faces
+    since the shell-local 'top' now corresponds to the solid bottom in the user's view."""
     wd = obj.get('window_data', '')
     if not wd or not obj.get('window_data_local'):
         return wd
+
+    import math
+    rx, ry, rz = obj.rotation_euler.x, obj.rotation_euler.y, obj.rotation_euler.z
+    # Check if shell is flipped (180° around X or Y) — top/bottom swap
+    flipped = (abs(abs(rx) - math.pi) < 0.01) or (abs(abs(ry) - math.pi) < 0.01)
 
     unit_factor = 1000.0 if obj.get('unit', 'm') == 'm' else 1.0
     w_mm = obj.get('width', 100.0) * unit_factor
@@ -102,26 +109,35 @@ def _fix_window_data_faces(obj):
             continue
         try:
             face = int(float(parts[-1]))
-            if face == 1:  # top → nearest side wall, snap coordinate to wall surface
-                cx = float(parts[0])
-                cy = float(parts[1])
-                dist_r = abs(cx - half_w)
-                dist_l = abs(cx + half_w)
-                dist_b = abs(cy - half_d)
-                dist_f = abs(cy + half_d)
-                nearest = min(dist_r, dist_l, dist_b, dist_f)
-                if nearest == dist_r:
-                    parts[0] = f"{half_w:.3f}"
-                    parts[-1] = "3"
-                elif nearest == dist_l:
-                    parts[0] = f"{-half_w:.3f}"
-                    parts[-1] = "2"
-                elif nearest == dist_b:
-                    parts[1] = f"{half_d:.3f}"
-                    parts[-1] = "5"
+            if face == 1:  # top face (open rim, no solid wall)
+                if flipped:
+                    # Shell is flipped 180°: shell-local top → world bottom.
+                    # Remap to bottom face (solid wall) and mirror cz to cut actual material.
+                    h_mm = obj.get('height', 50.0) * unit_factor
+                    cz = float(parts[2])
+                    parts[2] = f"{h_mm - cz:.3f}"
+                    parts[-1] = "0"
                 else:
-                    parts[1] = f"{-half_d:.3f}"
-                    parts[-1] = "4"
+                    # Normal orientation: reroute open-top hole to nearest side wall
+                    cx = float(parts[0])
+                    cy = float(parts[1])
+                    dist_r = abs(cx - half_w)
+                    dist_l = abs(cx + half_w)
+                    dist_b = abs(cy - half_d)
+                    dist_f = abs(cy + half_d)
+                    nearest = min(dist_r, dist_l, dist_b, dist_f)
+                    if nearest == dist_r:
+                        parts[0] = f"{half_w:.3f}"
+                        parts[-1] = "3"
+                    elif nearest == dist_l:
+                        parts[0] = f"{-half_w:.3f}"
+                        parts[-1] = "2"
+                    elif nearest == dist_b:
+                        parts[1] = f"{half_d:.3f}"
+                        parts[-1] = "5"
+                    else:
+                        parts[1] = f"{-half_d:.3f}"
+                        parts[-1] = "4"
         except (ValueError, IndexError):
             pass
         fixed.append(','.join(parts))

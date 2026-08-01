@@ -2782,7 +2782,8 @@ TopoDS_Shape create_parametric_shell_solid(double width, double depth, double he
                                             double rim_top_ratio,
                                             double bottom_fillet,
                                             double curve_ratio,
-                                            double eccentric_y) {
+                                            double eccentric_y,
+                                            int n_layers = 64) {
     bool rounded = (corner_type && (strcmp(corner_type, "rounded") == 0) && corner_radius > 0.001);
     bool curved = (corner_type && strcmp(corner_type, "curved") == 0 && corner_radius > 0.001);
     double cr = (rounded || curved) ? std::min(corner_radius, std::min(width/2.0, depth/2.0)) : 0.0;
@@ -2802,7 +2803,7 @@ TopoDS_Shape create_parametric_shell_solid(double width, double depth, double he
         double hw = width / 2.0, hd = depth / 2.0;
         double total_inset = std::min(hw, hd) * curve_ratio * 0.5;
         double hh = total_h / 2.0;
-        int nLayers = 24;  // match Blender side_segs
+        int nLayers = (n_layers > 8) ? n_layers : 64;  // user-controlled loft resolution
         int bfSegs = (bottom_fillet > 0.001) ? 8 : 0;  // balanced fillet resolution
         double bf = bottom_fillet;
 
@@ -4220,18 +4221,19 @@ PyObject* generate_parametric_shell_mesh(PyObject* self, PyObject* args) {
     double curve_ratio = 0.5;
     double eccentric_y = 0.0;
     const char* window_data = "";
+    int cosine_layers = 64;
 
-    if (!PyArg_ParseTuple(args, "ddddd|sdsddsdddds",
+    if (!PyArg_ParseTuple(args, "ddddd|sdsddsddddsi",
                           &width, &depth, &height, &thickness, &bottom_thickness,
                           &corner_type, &corner_radius,
                           &rim_type, &rim_width, &rim_height,
                           &rim_shape, &rim_top_ratio,
                           &bottom_fillet, &curve_ratio, &eccentric_y,
-                          &window_data)) {
+                          &window_data, &cosine_layers)) {
         PyErr_SetString(PyExc_TypeError,
             "generate_parametric_shell_mesh() expected: width, depth, height, thickness, bottom_thickness"
             "[, corner_type, corner_radius, rim_type, rim_width, rim_height, rim_shape, rim_top_ratio,"
-            " bottom_fillet, curve_ratio, eccentric_y, window_data]");
+            " bottom_fillet, curve_ratio, eccentric_y, window_data, cosine_layers]");
         return NULL;
     }
 
@@ -4241,7 +4243,8 @@ PyObject* generate_parametric_shell_mesh(PyObject* self, PyObject* args) {
             corner_type, corner_radius,
             rim_type, rim_width, rim_height,
             rim_shape, rim_top_ratio,
-            bottom_fillet, curve_ratio, eccentric_y);
+            bottom_fillet, curve_ratio, eccentric_y,
+            cosine_layers);
 
         if (shape.IsNull()) {
             Py_RETURN_NONE;
@@ -4254,8 +4257,8 @@ PyObject* generate_parametric_shell_mesh(PyObject* self, PyObject* args) {
             Py_RETURN_NONE;
         }
 
-        // Triangulate the solid
-        BRepMesh_IncrementalMesh mesh(shape, 1.0);
+        // Triangulate the solid (fine deflection for smooth preview surface)
+        BRepMesh_IncrementalMesh mesh(shape, 0.2);
         mesh.Perform();
 
         // Hash-based vertex dedup: O(n) via position key

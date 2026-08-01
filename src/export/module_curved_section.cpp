@@ -3,7 +3,7 @@
         double hw = width / 2.0, hd = depth / 2.0;
         double total_inset = std::min(hw, hd) * curve_ratio * 0.5;
         double hh = total_h / 2.0;
-        int nLayers = 24;  // match Blender side_segs
+        int nLayers = 64;  // fine loft resolution for smooth cosine surface
         int bfSegs = (bottom_fillet > 0.001) ? 24 : 0;  // fine fillet resolution
         double bf = bottom_fillet;
 

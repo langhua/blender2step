@@ -187,15 +187,19 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
 
         # Build shell: always use direct bmesh construction (no Boolean)
         total_h = hs + rhs if rw > 0 and self.rim_type != 'none' and self.rim_shape == 'rect' else hs
-        obj = self._build_shell_direct(ws, ds, total_h, ts, bts, crs, rws, rhs,
-                                       self.rim_type, self.rim_shape,
-                                       self.rim_top_ratio / 100.0, bfs,
-                                       self.corner_type,
-                                       self.curve_ratio / 100.0,
-                                       self.eccentric_y / 100.0,
-                                       self.debug_keep_cutters,
-                                       self.cosine_layers,
-                                       S)
+        context.window.cursor_set('WAIT')
+        try:
+            obj = self._build_shell_direct(ws, ds, total_h, ts, bts, crs, rws, rhs,
+                                           self.rim_type, self.rim_shape,
+                                           self.rim_top_ratio / 100.0, bfs,
+                                           self.corner_type,
+                                           self.curve_ratio / 100.0,
+                                           self.eccentric_y / 100.0,
+                                           self.debug_keep_cutters,
+                                           self.cosine_layers,
+                                           S)
+        finally:
+            context.window.cursor_set('DEFAULT')
 
         # Store params (in user-facing unit)
 
@@ -746,7 +750,8 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
                 'curved', cr * inv,
                 rim_type, rw * inv, rh * inv,
                 rim_shape, top_ratio,
-                bf * inv, curve_ratio, eccentric_y)
+                bf * inv, curve_ratio, eccentric_y,
+                '', int(cosine_layers))
             if result is None:
                 raise RuntimeError("OCCT returned None")
             verts = result['vertices']
@@ -773,6 +778,8 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         obj.location.z = h / 2.0
         for f in obj.data.polygons:
             f.use_smooth = True
+        # Mark sharp edges by face angle (crisp corners/perimeters, smooth walls)
+        _mark_sharp_edges_by_angle(obj, threshold_deg=30.0)
         return obj
 
     def _make_curved_solid(self, w, d, h, cr, total_inset, name):
@@ -3308,6 +3315,36 @@ class STEP_EXPORTER_PT_shell_holes(bpy.types.Panel):
         layout.operator("step_exporter.clear_shell_holes", text=_t("Clear All Holes"), icon='TRASH')
 
 
+def _mark_sharp_edges_by_angle(obj, threshold_deg=30.0):
+    """Mark edges sharp where adjacent faces meet at an angle > threshold.
+    Keeps smooth curved walls smooth while making corners/perimeters crisp."""
+    import math, bmesh as _bmse
+    data = obj.data
+    try:
+        data.use_auto_smooth = True
+        data.auto_smooth_angle = math.radians(threshold_deg)
+    except Exception:
+        pass
+    thr = math.radians(threshold_deg)
+    bm = _bmse.new()
+    bm.from_mesh(data)
+    bm.edges.ensure_lookup_table()
+    bm.faces.ensure_lookup_table()
+    for e in bm.edges:
+        if len(e.link_faces) != 2:
+            continue
+        n0 = e.link_faces[0].normal
+        n1 = e.link_faces[1].normal
+        try:
+            ang = n0.angle(n1)
+        except ValueError:
+            continue
+        if ang > thr:
+            e.smooth = False
+    bm.to_mesh(data)
+    bm.free()
+
+
 def _rebuild_stage_create(obj):
     """Stage: Create fresh shell mesh and swap data. For curved shells, regenerate
     via OCCT (with holes pre-cut) for exact STEP match."""
@@ -3332,9 +3369,13 @@ def _rebuild_stage_create(obj):
     obj_name = obj.name
 
     if corner_type == 'curved':
-        _rebuild_stage_create_occt(obj, w, d, h_val, t, bt, cr, rim_type_str,
-                                   rim_width, rim_height, rim_shape, rim_top_ratio,
-                                   bf, curve_ratio, eccentric_y, wd, wd_local)
+        try:
+            bpy.context.window.cursor_set('WAIT')
+            _rebuild_stage_create_occt(obj, w, d, h_val, t, bt, cr, rim_type_str,
+                                       rim_width, rim_height, rim_shape, rim_top_ratio,
+                                       bf, curve_ratio, eccentric_y, wd, wd_local)
+        finally:
+            bpy.context.window.cursor_set('DEFAULT')
         return
 
     # Mark original object — bpy.ops will invalidate the Python reference
@@ -3421,7 +3462,7 @@ def _rebuild_stage_create_occt(obj, w, d, h_val, t, bt, cr, rim_type, rw, rh,
             rim_type, rw, rh,
             rim_shape, rim_top_ratio / 100.0,
             bf, curve_ratio / 100.0, ecc_y / 100.0,
-            wd)
+            wd, int(obj.get('cosine_layers', 64)))
         if result is None:
             print("[STEP Exporter] OCCT mesh generation failed")
             return
@@ -3455,6 +3496,8 @@ def _rebuild_stage_create_occt(obj, w, d, h_val, t, bt, cr, rim_type, rw, rh,
         obj['_holes_builtin'] = True  # holes already in OCCT mesh
         for f in obj.data.polygons:
             f.use_smooth = True
+        # Mark sharp edges by face angle (crisp corners/perimeters, smooth walls)
+        _mark_sharp_edges_by_angle(obj, threshold_deg=30.0)
         print(f"[STEP Exporter] OCCT rebuild: v={len(verts)} t={len(tris)} holes={bool(wd)}")
         bpy.context.view_layer.objects.active = obj
         obj.select_set(True)

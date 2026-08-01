@@ -4117,6 +4117,97 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
 
 // ── Mesh generation for Blender preview (OCCT-based, matches STEP export exactly) ──
 
+// Helper: cut round/rrect through-holes into a shape using window_data.
+// Returns the cut shape. (No fillets — preview only needs the hole geometry.)
+static TopoDS_Shape cut_holes_into_shape(TopoDS_Shape shape,
+                                         double width, double depth, double height,
+                                         double thickness, double curve_ratio,
+                                         const char* window_data) {
+    if (!window_data || window_data[0] == '\0')
+        return shape;
+    std::string wd(window_data);
+    std::vector<TopoDS_Shape> cutters;
+    std::string::size_type start = 0;
+    double half_w = width / 2.0, half_d = depth / 2.0;
+
+    while (true) {
+        std::string::size_type next = wd.find(';', start);
+        std::string entry = wd.substr(start, (next == std::string::npos) ? std::string::npos : next - start);
+        if (entry.size() > 0) {
+            // Parse all comma fields; last field is face_code
+            std::vector<double> fields;
+            std::string::size_type p0 = 0;
+            while (true) {
+                std::string::size_type p1 = entry.find(',', p0);
+                std::string tok = entry.substr(p0, (p1 == std::string::npos) ? std::string::npos : p1 - p0);
+                if (tok.size() > 0) fields.push_back(atof(tok.c_str()));
+                if (p1 == std::string::npos) break;
+                p0 = p1 + 1;
+            }
+            if (fields.size() < 5) { if (next == std::string::npos) break; start = next + 1; continue; }
+            double cx = fields[0], cy = fields[1], cz = fields[2];
+            double r_or_w = fields[3], type_code = fields[4];
+            double face_code = (fields.size() >= 6) ? fields.back() : -1;
+            double extra1 = (fields.size() >= 6) ? fields[5] : 0;
+            double extra2 = (fields.size() >= 7) ? fields[6] : 0;
+
+            // Type 1: round hole
+            if (fabs(type_code - 1.0) < 1e-6) {
+                double hole_r = r_or_w;
+                double curve_inset = std::min(half_w, half_d) * curve_ratio * 0.5;
+                double cyl_len = thickness * 4.0 + curve_inset * 2.0 + 10.0;
+                gp_Ax2 ax;
+                int fc = (int)face_code;
+                if (fc == 0 || fc == 1) {
+                    ax = gp_Ax2(gp_Pnt(cx, cy, cz - 0.5), gp_Dir(0, 0, 1));
+                } else if (fc == 2 || fc == 3) {
+                    ax = gp_Ax2(gp_Pnt(cx - cyl_len / 2.0, cy, cz), gp_Dir(1, 0, 0));
+                } else {
+                    ax = gp_Ax2(gp_Pnt(cx, cy - cyl_len / 2.0, cz), gp_Dir(0, 1, 0));
+                }
+                BRepPrimAPI_MakeCylinder cm(ax, hole_r, cyl_len);
+                if (!cm.Shape().IsNull()) cutters.push_back(cm.Solid());
+            }
+            // Type 2: rounded rect hole
+            else if (fields.size() >= 7 && fabs(type_code - 2.0) < 1e-6) {
+                double rw = r_or_w, rh = extra1, rcr = extra2;
+                if (rcr <= 0) rcr = 0.5;
+                double cut_d = thickness * 4.0;
+                double bx, by, bz, sx, sy, sz;
+                int fc = (int)face_code;
+                if (fc == 0 || fc == 1) {
+                    bx = cx - rw / 2.0; by = cy - rh / 2.0; bz = cz - cut_d / 2.0;
+                    sx = rw; sy = rh; sz = cut_d;
+                } else if (fc == 2 || fc == 3) {
+                    bx = cx - cut_d / 2.0; by = cy - rh / 2.0; bz = cz - rw / 2.0;
+                    sx = cut_d; sy = rh; sz = rw;
+                } else {
+                    bx = cx - rw / 2.0; by = cy - cut_d / 2.0; bz = cz - rh / 2.0;
+                    sx = rw; sy = cut_d; sz = rh;
+                }
+                // Rounded box cutter
+                TopoDS_Shape rbox = create_rounded_box_solid(sx, sy, sz, rcr);
+                if (!rbox.IsNull()) {
+                    gp_Trsf trsf;
+                    trsf.SetTranslation(gp_Vec(bx + sx / 2.0, by + sy / 2.0, bz + sz / 2.0));
+                    cutters.push_back(BRepBuilderAPI_Transform(rbox, trsf).Shape());
+                }
+            }
+        }
+        if (next == std::string::npos) break;
+        start = next + 1;
+    }
+
+    if (cutters.empty()) return shape;
+    TopoDS_Shape result = shape;
+    for (size_t ci = 0; ci < cutters.size(); ci++) {
+        BRepAlgoAPI_Cut cutOp(result, cutters[ci]);
+        if (cutOp.IsDone() && !cutOp.Shape().IsNull())
+            result = cutOp.Shape();
+    }
+    return result;
+}
+
 PyObject* generate_parametric_shell_mesh(PyObject* self, PyObject* args) {
     double width, depth, height, thickness, bottom_thickness;
     const char* corner_type = "square";
@@ -4128,17 +4219,19 @@ PyObject* generate_parametric_shell_mesh(PyObject* self, PyObject* args) {
     double bottom_fillet = 0.0;
     double curve_ratio = 0.5;
     double eccentric_y = 0.0;
+    const char* window_data = "";
 
-    if (!PyArg_ParseTuple(args, "ddddd|sdsddsdddd",
+    if (!PyArg_ParseTuple(args, "ddddd|sdsddsdddds",
                           &width, &depth, &height, &thickness, &bottom_thickness,
                           &corner_type, &corner_radius,
                           &rim_type, &rim_width, &rim_height,
                           &rim_shape, &rim_top_ratio,
-                          &bottom_fillet, &curve_ratio, &eccentric_y)) {
+                          &bottom_fillet, &curve_ratio, &eccentric_y,
+                          &window_data)) {
         PyErr_SetString(PyExc_TypeError,
             "generate_parametric_shell_mesh() expected: width, depth, height, thickness, bottom_thickness"
             "[, corner_type, corner_radius, rim_type, rim_width, rim_height, rim_shape, rim_top_ratio,"
-            " bottom_fillet, curve_ratio, eccentric_y]");
+            " bottom_fillet, curve_ratio, eccentric_y, window_data]");
         return NULL;
     }
 
@@ -4150,6 +4243,13 @@ PyObject* generate_parametric_shell_mesh(PyObject* self, PyObject* args) {
             rim_shape, rim_top_ratio,
             bottom_fillet, curve_ratio, eccentric_y);
 
+        if (shape.IsNull()) {
+            Py_RETURN_NONE;
+        }
+
+        // Cut holes (preview only needs geometry, no fillets)
+        shape = cut_holes_into_shape(shape, width, depth, height, thickness,
+                                     curve_ratio, window_data);
         if (shape.IsNull()) {
             Py_RETURN_NONE;
         }

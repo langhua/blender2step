@@ -118,8 +118,8 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         name=_t("Eccentric Y"), default=0.0, min=-100.0, max=100.0, subtype='PERCENTAGE',
         description=_t("Y-axis offset for cosine curve center (−100%=bottom edge, +100%=top edge)"))
     cosine_layers: IntProperty(
-        name=_t("Cosine Layers"), default=192, min=48, max=384, step=24,
-        description=_t("Wall layer count (48=fast, 192=precise, 384=extreme)"))
+        name=_t("Cosine Layers"), default=64, min=24, max=256, step=8,
+        description=_t("Wall layer count (24=fast, 64=standard, 128=precise, 256=extreme)"))
 
     # ── Dynamic clamping for curved + rim ──
     def _clamp_cr_bf(self):
@@ -194,7 +194,8 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
                                        self.curve_ratio / 100.0,
                                        self.eccentric_y / 100.0,
                                        self.debug_keep_cutters,
-                                       self.cosine_layers)
+                                       self.cosine_layers,
+                                       S)
 
         # Store params (in user-facing unit)
 
@@ -547,13 +548,13 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
 
     def _build_shell_direct(self, w, d, h, t, bt, cr, rw, rh, rim_type, rim_shape, top_ratio, bf,
                             corner_type='rounded', curve_ratio=0.5, eccentric_y=0.0, keep_cutters=False,
-                            cosine_layers=192):
+                            cosine_layers=64, S=0.001):
         """Build shell with bottom fillet via shared profile_utils.
         t=wall thickness, bt=bottom thickness."""
         import math
         
         if corner_type == 'curved' and cr > 0.0001:
-            return self._build_curved_shell(w, d, h, t, bt, cr, rw, rh, rim_type, rim_shape, top_ratio, bf, curve_ratio, eccentric_y, keep_cutters, cosine_layers)
+            return self._build_curved_shell(w, d, h, t, bt, cr, rw, rh, rim_type, rim_shape, top_ratio, bf, curve_ratio, eccentric_y, keep_cutters, cosine_layers, S)
         
         print(f"[Direct] rounded/square path, bf={bf*1000:.1f}mm")
         hw, hd = w / 2.0, d / 2.0
@@ -725,181 +726,53 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
 
     # ── Curved-corner shell (cosine walls, smaller bottom) ──
 
-    def _build_curved_shell(self, w, d, h, t, bt, cr, rw, rh, rim_type, rim_shape, top_ratio, bf, curve_ratio, eccentric_y=0.0, keep_cutters=False, cosine_layers=192):
-        """Build shell with cosine walls — all in one bmesh, no Boolean."""
-        import math
+    def _build_curved_shell(self, w, d, h, t, bt, cr, rw, rh, rim_type, rim_shape, top_ratio, bf, curve_ratio, eccentric_y=0.0, keep_cutters=False, cosine_layers=64, S=0.001):
+        """Build shell with cosine walls via OCCT (exact STEP match).
+        w,d,h,t,bt,cr,rw,rh,bf are in Blender units; converted to STEP units for C++."""
+        import bmesh as _bmc
         
-        hw_outer, hd_outer = w / 2.0, d / 2.0
-        hh = h / 2.0
-        total_inset = min(hw_outer, hd_outer) * curve_ratio * 0.5
-        ecc_y = eccentric_y
-        print(f"[Curved] ecc_y={ecc_y:.3f} total_inset={total_inset*1000:.1f}mm")
-        seg = max(24, int(cr / min(w, d) * 64))
-        side_segs = cosine_layers
-        num_pts = 8 * seg
+        bm = _bmc.new()
+        try:
+            from ..core import _globals as _g
+            cpp = _g.step_exporter
+            if cpp is None:
+                import _step_exporter as cpp
+            if not hasattr(cpp, 'generate_parametric_shell_mesh'):
+                raise RuntimeError("no OCCT mesh generator")
+            # Blender units → STEP units (mm for unit='mm', m for unit='m')
+            inv = (1.0 / S) if S > 0 else 1.0
+            result = cpp.generate_parametric_shell_mesh(
+                w * inv, d * inv, h * inv, t * inv, bt * inv,
+                'curved', cr * inv,
+                rim_type, rw * inv, rh * inv,
+                rim_shape, top_ratio,
+                bf * inv, curve_ratio, eccentric_y)
+            if result is None:
+                raise RuntimeError("OCCT returned None")
+            verts = result['vertices']
+            tris = result['triangles']
+            if len(verts) < 4 or len(tris) < 4:
+                raise RuntimeError("empty mesh")
+            hh_m = h / 2.0  # Blender-unit half-height (center the shell)
+            bm_verts = [bm.verts.new((v[0]*S, v[1]*S, v[2]*S - hh_m)) for v in verts]
+            bm.verts.ensure_lookup_table()
+            for tri in tris:
+                try:
+                    bm.faces.new([bm_verts[tri[0]], bm_verts[tri[1]], bm_verts[tri[2]]])
+                except ValueError:
+                    pass
+            bm.normal_update()
+            print(f"[Curved] OCCT: v={len(verts)} t={len(tris)}")
+        except Exception as e:
+            print(f"[Curved] OCCT failed ({e}), fallback cube")
+            _bmc.ops.create_cube(bm, size=max(w, d, h))
         
-        def _profile(hw_a, hd_a, cr_a, n):
-            rhw, rhd = hw_a, hd_a
-            cc = [(-rhw+cr_a,-rhd+cr_a),(rhw-cr_a,-rhd+cr_a),
-                  (rhw-cr_a,rhd-cr_a),(-rhw+cr_a,rhd-cr_a)]
-            pts = []
-            for i in range(1,n+1): pts.append((rhw, -rhd+cr_a+(2*(rhd-cr_a))*i/n))
-            cx,cy=cc[2]
-            for j in range(1,n+1): a=j*(math.pi/2)/n; pts.append((cx+cr_a*math.cos(a),cy+cr_a*math.sin(a)))
-            for i in range(1,n+1): pts.append((rhw-cr_a-(2*(rhw-cr_a))*i/n, rhd))
-            cx,cy=cc[3]
-            for j in range(1,n+1): a=math.pi/2+j*(math.pi/2)/n; pts.append((cx+cr_a*math.cos(a),cy+cr_a*math.sin(a)))
-            for i in range(1,n+1): pts.append((-rhw, rhd-cr_a-(2*(rhd-cr_a))*i/n))
-            cx,cy=cc[0]
-            for j in range(1,n+1): a=math.pi+j*(math.pi/2)/n; pts.append((cx+cr_a*math.cos(a),cy+cr_a*math.sin(a)))
-            for i in range(1,n+1): pts.append((-rhw+cr_a+(2*(rhw-cr_a))*i/n, -rhd))
-            cx,cy=cc[1]
-            for j in range(1,n+1): a=3*math.pi/2+j*(math.pi/2)/n; pts.append((cx+cr_a*math.cos(a),cy+cr_a*math.sin(a)))
-            return pts
-        
-        def _layer_at_z(z_target):
-            t_frac = (hh - z_target) / (2 * hh)
-            t_frac = max(0.0, min(1.0, t_frac))
-            return total_inset * (1.0 - math.cos(math.pi / 2 * t_frac))
-        
-        bm = bmesh.new()
-        
-        # ── Build outer layers (top→bottom) ──
-        bf_segs = max(16, int(bf / min(w, d) * 128)) if bf > 0.0001 else 0
-        outer_steps = side_segs + bf_segs
-        outer_layers = []
-        for sl in range(outer_steps + 1):
-            zv = hh - 2 * hh * sl / outer_steps
-            ins = _layer_at_z(zv)
-            ohw = hw_outer - ins
-            ohd = hd_outer - (hd_outer / hw_outer * ins) if hw_outer > 0 else 0
-            r = cr
-            if bf > 0.0001 and zv < -hh + bf:
-                s = (zv + hh) / bf; s = max(0, min(1, s))
-                off = bf * (1 - math.sin(math.pi/2 * s))
-                ohw -= off; ohd -= (hd_outer/hw_outer*off) if hw_outer>0 else 0
-            pts = _profile(ohw, ohd, r, seg)
-            yo = ins * ecc_y
-            outer_layers.append([bm.verts.new((x, y+yo, zv)) for x, y in pts])
-        # Outer side faces (reversed winding)
-        for li in range(len(outer_layers)-1):
-            c, n = outer_layers[li], outer_layers[li+1]
-            for i in range(num_pts):
-                j = (i+1) % num_pts
-                bm.faces.new([c[j], c[i], n[i], n[j]])
-        # Outer bottom
-        bm.faces.new(list(reversed(outer_layers[-1])))
-        
-        # ── Build inner layers (top→inner_bottom) ──
-        inner_bot_z = -hh + bt
-        iwhw, iwhd = (w - 2*t) / 2, (d - 2*t) / 2
-        icr = max(cr - t, 0.0001)
-        ibfs = max(16, int(bf/min(w,d)*128)) if bf > 0.0001 else 0
-        inner_steps = side_segs + ibfs
-        inner_layers = []
-        for sl in range(inner_steps + 1):
-            zv = hh - (hh - inner_bot_z) * sl / inner_steps
-            ins = _layer_at_z(zv)
-            ihw = iwhw - ins
-            ihd = iwhd - (iwhd/iwhw*ins) if iwhw>0 else 0
-            r = icr
-            if bf > 0.0001 and zv < inner_bot_z + bf:
-                s = (zv - inner_bot_z) / bf; s = max(0, min(1, s))
-                off = bf * (1 - math.sin(math.pi/2 * s))
-                ihw -= off; ihd -= (iwhd/iwhw*off) if iwhw>0 else 0
-            pts = _profile(ihw, ihd, r, seg)
-            yo = ins * ecc_y
-            inner_layers.append([bm.verts.new((x, y+yo, zv)) for x, y in pts])
-        # Inner side faces (reversed winding for outside visibility)
-        for li in range(len(inner_layers)-1):
-            c, n = inner_layers[li], inner_layers[li+1]
-            for i in range(num_pts):
-                j = (i+1) % num_pts
-                bm.faces.new([c[j], c[i], n[i], n[j]])
-        # Inner bottom
-        bm.faces.new(inner_layers[-1])
-        
-        # Top rim (follows curved profile, sharp edges for rectangular look)
-        has_rim = rim_type != 'none' and rw > 0.0001 and rh > 0.0001
-        ratio = top_ratio if rim_shape == 'trapezoid' else 1.0
-        if has_rim:
-            if rim_type == 'outside':
-                obase = outer_layers[0]
-                ot_up = [bm.verts.new((v.co.x, v.co.y, hh + rh)) for v in obase]
-                for i in range(num_pts):
-                    j = (i+1) % num_pts
-                    bm.faces.new([obase[i], obase[j], ot_up[j], ot_up[i]])
-                def _shift(v, dist):
-                    r = math.sqrt(v.co.x**2 + v.co.y**2)
-                    if r < 0.0001: return (v.co.x, v.co.y)
-                    return (v.co.x - v.co.x/r * dist, v.co.y - v.co.y/r * dist)
-                st = [bm.verts.new((*_shift(v, rw*ratio), hh + rh)) for v in obase] if ratio > 0.001 else ot_up
-                if ratio > 0.001:
-                    for i in range(num_pts):
-                        j = (i+1) % num_pts
-                        bm.faces.new([ot_up[i], ot_up[j], st[j], st[i]])
-                sb = [bm.verts.new((*_shift(v, rw), hh)) for v in obase]
-                for i in range(num_pts):
-                    j = (i+1) % num_pts
-                    bm.faces.new([st[i], st[j], sb[j], sb[i]])
-                it = inner_layers[0]
-                for i in range(num_pts):
-                    j = (i+1) % num_pts
-                    bm.faces.new([sb[j], sb[i], it[i], it[j]])
-            else:  # inside
-                ibase = inner_layers[0]
-                it_up = [bm.verts.new((v.co.x, v.co.y, hh + rh)) for v in ibase]
-                for i in range(num_pts):
-                    j = (i+1) % num_pts
-                    bm.faces.new([ibase[i], ibase[j], it_up[j], it_up[i]])
-                def _shift(v, dist):
-                    r = math.sqrt(v.co.x**2 + v.co.y**2)
-                    if r < 0.0001: return (v.co.x, v.co.y)
-                    return (v.co.x + v.co.x/r * dist, v.co.y + v.co.y/r * dist)
-                st = [bm.verts.new((*_shift(v, rw*ratio), hh + rh)) for v in ibase] if ratio > 0.001 else it_up
-                if ratio > 0.001:
-                    for i in range(num_pts):
-                        j = (i+1) % num_pts
-                        bm.faces.new([it_up[i], it_up[j], st[j], st[i]])
-                sb = [bm.verts.new((*_shift(v, rw), hh)) for v in ibase]
-                for i in range(num_pts):
-                    j = (i+1) % num_pts
-                    bm.faces.new([st[i], st[j], sb[j], sb[i]])
-                ot = outer_layers[0]
-                for i in range(num_pts):
-                    j = (i+1) % num_pts
-                    bm.faces.new([ot[j], ot[i], sb[i], sb[j]])
-        else:
-            ot = outer_layers[0]; it = inner_layers[0]
-            for i in range(num_pts):
-                j = (i+1) % num_pts
-                bm.faces.new([ot[j], ot[i], it[i], it[j]])
-        
-        bm.normal_update()
         obj = self._bm_to_object(bm, "CurvedShell")
         obj.name = "ParamShell"
         obj.data.name = "ParamShell"
         obj.location.z = h / 2.0
         for f in obj.data.polygons:
             f.use_smooth = True
-        for e in obj.data.edges:
-            v0, v1 = e.vertices
-            z0 = obj.data.vertices[v0].co.z
-            z1 = obj.data.vertices[v1].co.z
-            # Rim edges: mark shelf + top perimeter as sharp for rectangular look
-            if has_rim:
-                if abs(z0 - (hh + rh)) < 0.0001 and abs(z1 - (hh + rh)) < 0.0001:
-                    e.use_edge_sharp = True
-            if abs(z0 + hh) < 0.0001 and abs(z1 + hh) < 0.0001:
-                e.use_edge_sharp = True
-            elif abs(z0 - hh) < 0.0001 and abs(z1 - hh) < 0.0001:
-                e.use_edge_sharp = True
-            if (v0 % num_pts) == (v1 % num_pts) and (v0 % seg == 0):
-                e.use_edge_sharp = True
-        
-        print(f"[Curved] bf={bf*1000:.1f}mm inset={total_inset*1000:.1f}mm "
-              f"v={len(obj.data.vertices)} f={len(obj.data.polygons)}")
-        
         return obj
 
     def _make_curved_solid(self, w, d, h, cr, total_inset, name):
@@ -1280,15 +1153,6 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
         update=lambda self, ctx: _move_cursor_to_hole_pos(self, ctx))
     hole_pos_z: FloatProperty(name="Z", default=0.0, precision=1,
         update=lambda self, ctx: _move_cursor_to_hole_pos(self, ctx))
-    hole_solver: EnumProperty(
-        name=_t("Solver"),
-        items=[
-            ('bmesh', 'BMesh', _t("Try FLOAT then EXACT, circle fallback for round holes")),
-            ('FLOAT', 'FLOAT', _t("Fast, works for most cases")),
-            ('EXACT', 'EXACT', _t("Slower but handles complex geometry")),
-        ],
-        default='bmesh',
-    )
 
     @classmethod
     def poll(cls, context):
@@ -1419,16 +1283,6 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
                     layout.prop(self, 'hole_fillet_type')
             layout.label(text=_t("  → RRect {w:.1f}×{h:.1f}mm cr={cr:.1f}").format(w=self.hole_width, h=self.hole_height, cr=self.hole_cr))
         layout.separator()
-        if self.hole_type == 'round':
-            layout.prop(self, 'hole_solver')
-        else:
-            # rrect: BMesh useless → show only FLOAT/EXACT toggle
-            if self.hole_solver == 'bmesh':
-                self.hole_solver = 'FLOAT'
-            row = layout.row(align=True)
-            row.label(text=_t("Solver"))
-            row.prop_enum(self, 'hole_solver', 'FLOAT')
-            row.prop_enum(self, 'hole_solver', 'EXACT')
         layout.prop(self, 'keep_cutter')
 
     def execute(self, context):
@@ -1561,28 +1415,26 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
                                  px, py, pz, t * S, hw, hd, h)
             _hole_fillet_type = self.hole_fillet_type
 
-        # For cosine-curved side walls: fillet via staged modal for progress bar
+        # For cosine-curved side walls with fillet: OCCT rebuild handles hole+geometry.
+        # (Boolean fillet unreliable on dense curved mesh — OCCT preview matches STEP.)
         if (obj.get('corner_type') == 'curved' and self.hole_type == 'round'
                 and _hole_fillet_info and _hole_fillet_info[0] > 0.0001
                 and face_code in (2, 3, 4, 5)):  # side walls only, skip bottom/top
             bpy.data.objects.remove(cutter, do_unlink=True)
-            # Store fillet params for modal stages
-            self._fillet_obj_name = obj.name
-            self._fillet_radius = self.hole_radius
-            self._fillet_fr = self.hole_fillet
-            self._fillet_face = face_code
-            self._fillet_px = px
-            self._fillet_py = py
-            self._fillet_pz = pz
-            self._fillet_thickness = t * S
-            self._fillet_hw = hw
-            self._fillet_hd = hd
-            self._fillet_h = h
-            self._fillet_S = S
-            self._fillet_type = _hole_fillet_type
-            self._fillet_entry = entry
-            self._fillet_stage = 0
-            self._keep_cutter = self.keep_cutter
+            existing = obj.get('window_data', '')
+            obj['window_data'] = (existing + ';' + entry) if existing else entry
+            obj['window_data_local'] = True
+            set_operator(self)
+            start_progress(context, _t("Adding hole..."))
+            try:
+                update_progress(50, _t("Cutting hole..."))
+                _rebuild_stage_create(obj)
+                update_progress(100, _t("Done"))
+                self.report({'INFO'}, _t("Hole added at cursor position"))
+            finally:
+                end_progress(context)
+                clear_operator()
+            return {'FINISHED'}
             # Start modal progress bar
             set_operator(self)
             start_progress(context, _t("Adding fillet..."))
@@ -1596,25 +1448,37 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
             set_operator(self)
             start_progress(context, _t("Adding hole..."))
             try:
-                update_progress(30, _t("Cutting hole..."))
-                solver = 'FLOAT'  # always prefer FLOAT for reliability
-                ok = _do_simple_stage0(obj, cutter, keep=self.keep_cutter, solver=solver)
-                print(f"[STEP Exporter] Stage 0 result: ok={ok}")
-                if ok:
-                    vc = len(obj.data.vertices)
-                    if vc < 8:
-                        print(f"[STEP Exporter] Stage 0 produced broken mesh ({vc} verts), aborting fillet")
-                        ok = False
-                if ok:
-                    update_progress(70, _t("Fillet..."))
-                    _do_simple_stage1(obj, _hole_fillet_info, _hole_fillet_type,
-                                      S, h, t, px, py, face_code,
-                                      getattr(self, 'hole_radius', 5), getattr(self, 'hole_fillet', 0))
-                update_progress(100, _t("Done"))
+                is_curved = obj.get('corner_type') == 'curved'
                 existing = obj.get('window_data', '')
-                obj['window_data'] = (existing + ';' + entry) if existing else entry
-                obj['window_data_local'] = True
-                self.report({'INFO'}, _t("Hole added at cursor position"))
+                new_wd = (existing + ';' + entry) if existing else entry
+                if is_curved:
+                    # Regenerate shell via OCCT with holes pre-cut (exact STEP match)
+                    bpy.data.objects.remove(cutter, do_unlink=True)
+                    update_progress(50, _t("Cutting hole..."))
+                    obj['window_data'] = new_wd
+                    obj['window_data_local'] = True
+                    _rebuild_stage_create(obj)
+                    update_progress(100, _t("Done"))
+                    self.report({'INFO'}, _t("Hole added at cursor position"))
+                else:
+                    update_progress(30, _t("Cutting hole..."))
+                    solver = 'FLOAT'  # always prefer FLOAT for reliability
+                    ok = _do_simple_stage0(obj, cutter, keep=self.keep_cutter, solver=solver)
+                    print(f"[STEP Exporter] Stage 0 result: ok={ok}")
+                    if ok:
+                        vc = len(obj.data.vertices)
+                        if vc < 8:
+                            print(f"[STEP Exporter] Stage 0 produced broken mesh ({vc} verts), aborting fillet")
+                            ok = False
+                    if ok:
+                        update_progress(70, _t("Fillet..."))
+                        _do_simple_stage1(obj, _hole_fillet_info, _hole_fillet_type,
+                                          S, h, t, px, py, face_code,
+                                          getattr(self, 'hole_radius', 5), getattr(self, 'hole_fillet', 0))
+                    obj['window_data'] = new_wd
+                    obj['window_data_local'] = True
+                    update_progress(100, _t("Done"))
+                    self.report({'INFO'}, _t("Hole added at cursor position"))
             finally:
                 end_progress(context)
                 clear_operator()
@@ -1692,7 +1556,7 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
 def _fillet_stage_0(obj, hole_r_mm, fillet_mm, face_code, px, py, pz, thickness, hw, hd, h_total, S, fillet_type):
     """Stage 0: Compute surface angles, positions, and rotations. Returns result dict."""
     import math, bmesh as _bm_v
-    from mathutils import Matrix as _Mtx, Euler as _Eul
+    from mathutils import Matrix as _Mtx, Euler as _Eul, Vector as _Vec
     fr = fillet_mm * S
     hr = hole_r_mm * S
     curve_r = obj.get('curve_ratio', 50.0) / 100.0
@@ -1701,6 +1565,9 @@ def _fillet_stage_0(obj, hole_r_mm, fillet_mm, face_code, px, py, pz, thickness,
     total_inset = min(hw_outer, hd_outer) * curve_r * 0.5
     hh = h_total / 2.0
     mesh_z = pz - obj.location.z
+    # Hole position in local coords
+    local_hole = obj.matrix_world.inverted() @ _Vec((px, py, pz))
+    lx, ly, lz = local_hole.x, local_hole.y, local_hole.z
     z_top = mesh_z + hr + fr
     z_bot = mesh_z - hr - fr
     # --- Compute surface positions analytically (100% reliable, no vertex sampling) ---
@@ -1729,20 +1596,22 @@ def _fillet_stage_0(obj, hole_r_mm, fillet_mm, face_code, px, py, pz, thickness,
             sur_y = hd_m - inset * (hd_m / hw_m if hw_m > 0 else 1.0)  # meters
             if face_code == 4: sur_y = -sur_y
             sv = sur_y
+            local_pos = _Vec((lx, sur_y, sz))
         elif face_code in (2, 3):
             sur_x = hw_m - inset  # meters
             if face_code == 2: sur_x = -sur_x
             sv = sur_x
+            local_pos = _Vec((sur_x, ly, sz))
         else:
             sv = mesh_z
+            local_pos = _Vec((lx, ly, sz))
         samples.append((sz, sv))
         # Debug: show surface sample points when keep cutters is enabled
         if obj.get('debug_keep_cutters') and face_code in (2, 3, 4, 5):
-            wz = sz + obj.location.z
-            if face_code in (4,5):
-                bpy.ops.mesh.primitive_uv_sphere_add(radius=0.00035, location=(px, sv + obj.location.y, wz))
-            elif face_code in (2,3):
-                bpy.ops.mesh.primitive_uv_sphere_add(radius=0.00035, location=(sv + obj.location.x, py, wz))
+            world_pos = obj.matrix_world @ local_pos
+            bpy.ops.mesh.primitive_uv_sphere_add(radius=0.00035, location=world_pos)
+            bpy.context.active_object.display_type = 'WIRE'
+            _keep_or_remove(obj, bpy.context.active_object, True)
             bpy.context.active_object.display_type = 'WIRE'
             _keep_or_remove(obj, bpy.context.active_object, True)
     
@@ -1781,13 +1650,14 @@ def _fillet_stage_0(obj, hole_r_mm, fillet_mm, face_code, px, py, pz, thickness,
     if sur_ok and len(samples) >= 2:
         z1, s1 = samples[0]; z2, s2 = samples[-1]
         slope = (s2 - s1) / (z2 - z1)
-        sur_mid = s1 + slope * (mesh_z - z1)
+        sur_mid = s1 + slope * (lz - z1)
         if face_code in (4, 5):
-            outer_pos = (px, sur_mid + obj.location.y, pz)
+            local_outer = _Vec((lx, sur_mid, lz))
         elif face_code in (2, 3):
-            outer_pos = (sur_mid + obj.location.x, py, pz)
+            local_outer = _Vec((sur_mid, ly, lz))
         else:
-            outer_pos = (px, py, sur_mid + obj.location.z)
+            local_outer = _Vec((lx, ly, sur_mid))
+        outer_pos = tuple(obj.matrix_world @ local_outer)
     else:
         outer_pos = (px + ox, py + oy, pz + oz)
     inner_pos = (outer_pos[0] - ox, outer_pos[1] - oy, outer_pos[2] - oz)
@@ -1805,7 +1675,7 @@ def _fillet_stage_0(obj, hole_r_mm, fillet_mm, face_code, px, py, pz, thickness,
     euler_inner = world_inner_q.to_euler('XYZ')
     print(f"[STEP DEBUG] face={face_code} euler_rot=({math.degrees(euler_rot[0]):.1f},{math.degrees(euler_rot[1]):.1f},{math.degrees(euler_rot[2]):.1f})deg")
     print(f"[STEP DEBUG] outer_pos=({outer_pos[0]*1000:.1f},{outer_pos[1]*1000:.1f},{outer_pos[2]*1000:.1f})mm inner_pos=({inner_pos[0]*1000:.1f},{inner_pos[1]*1000:.1f},{inner_pos[2]*1000:.1f})mm")
-    print(f"[STEP DEBUG] world_thick={world_thick*1000:.2f}mm ox={ox*1000:.2f} oy={oy*1000:.2f} oz={oz*1000:.2f}")
+    print(f"[STEP DEBUG] lx={lx*1000:.1f} ly={ly*1000:.1f} lz={lz*1000:.1f} world_thick={world_thick*1000:.2f}mm")
     return {'fr': fr, 'hr': hr, 'euler_rot': euler_rot, 'euler_inner': euler_inner,
             'outer_pos': outer_pos, 'inner_pos': inner_pos, 'ox': ox, 'oy': oy, 'oz': oz,
             'face_code': face_code, 'thickness': thickness}
@@ -2193,6 +2063,125 @@ def _direct_cut_hole(obj, cutter, solver='bmesh'):
     else:
         print(f"[STEP Exporter] Boolean failed for rrect, no fallback available")
         bpy.data.objects.remove(cutter, do_unlink=True)
+    return True
+
+
+def _bmesh_cut_round_tunnel(obj, hole_pos, hole_r, hole_rot, hole_depth):
+    """BMesh direct round through-hole: delete faces in cylinder, bridge tunnel walls.
+    Returns True on success. hole_pos is world; converted to local for BMesh."""
+    import bmesh as _bm, math
+    from mathutils import Vector as _Vec, Matrix as _Mtx, Euler as _Eul
+    
+    # Convert world→local
+    mat_inv = obj.matrix_world.inverted()
+    local_pos = mat_inv @ _Vec(hole_pos)
+    
+    bm = _bm.new()
+    bm.from_mesh(obj.data)
+    bm.faces.ensure_lookup_table()
+    bm.edges.ensure_lookup_table()
+    bm.verts.ensure_lookup_table()
+    
+    # Cylinder axis in WORLD, convert to LOCAL direction
+    ax_x = ax_y = ax_z = 0.0
+    if abs(abs(hole_rot[0]) - math.pi/2) < 0.01:
+        ax_y = 1.0  # Y-axis
+    elif abs(abs(hole_rot[1]) - math.pi/2) < 0.01:
+        ax_x = 1.0  # X-axis
+    else:
+        ax_z = 1.0  # Z-axis
+    
+    world_axis = _Vec((ax_x, ax_y, ax_z)).normalized()
+    # Transform world axis to local (rotate only)
+    rot_inv = mat_inv.to_3x3()
+    axis = (rot_inv @ world_axis).normalized()
+    
+    # Half-length of cylinder along axis
+    half_len = hole_depth / 2.0
+    
+    def dist_perp(p):
+        v = p - _Vec(local_pos)
+        proj = v.dot(axis)
+        return (v - axis * proj).length
+    
+    # Delete faces whose center is within the cylinder volume
+    to_del = []
+    for f in bm.faces:
+        c = f.calc_center_median()
+        v = c - _Vec(local_pos)
+        proj = v.dot(axis)
+        if abs(proj) <= half_len and dist_perp(c) <= hole_r * 1.02:
+            to_del.append(f)
+    if not to_del:
+        bm.free()
+        return False
+    bmesh.ops.delete(bm, geom=to_del, context='FACES')
+    
+    bm.faces.ensure_lookup_table()
+    bm.edges.ensure_lookup_table()
+    
+    # Find boundary edge loops (edges with 1 face) near the hole
+    boundary = [e for e in bm.edges if len(e.link_faces) == 1]
+    
+    # Group boundary edges into loops by connectivity
+    visited = set()
+    loops = []
+    for be in boundary:
+        if be in visited:
+            continue
+        loop = []
+        stack = [be]
+        while stack:
+            e = stack.pop()
+            if e in visited:
+                continue
+            visited.add(e)
+            loop.append(e)
+            for v in e.verts:
+                for ne in v.link_edges:
+                    if ne in boundary and ne not in visited:
+                        stack.append(ne)
+        if len(loop) >= 6:
+            loops.append(loop)
+    
+    # Keep only loops near the hole (within hole_r*2 of center, in perpendicular plane)
+    near_loops = []
+    for loop in loops:
+        # Compute loop center
+        verts = set()
+        for e in loop:
+            verts.add(e.verts[0]); verts.add(e.verts[1])
+        c = sum((v.co for v in verts), _Vec((0,0,0))) / max(len(verts), 1)
+        if dist_perp(c) < hole_r * 2.5:
+            near_loops.append((c, loop))
+    
+    if len(near_loops) < 2:
+        bm.to_mesh(obj.data)
+        bm.free()
+        obj.data.update()
+        _cleanup_after_bool(obj)
+        return True
+    
+    # Sort loops along the cylinder axis → outer and inner
+    near_loops.sort(key=lambda cl: (cl[0] - _Vec(local_pos)).dot(axis))
+    
+    # Bridge outer→inner with a cylindrical wall
+    loops = [loop for _, loop in near_loops]
+    # Match edge counts between the two largest loops
+    loops.sort(key=lambda l: -len(l))
+    if len(loops) >= 2:
+        edges_a = loops[0]
+        edges_b = loops[1]
+        ret = bmesh.ops.bridge_loops(bm, edges=edges_a + edges_b)
+        if not ret.get('faces'):
+            # Retry with the other pair
+            if len(loops) >= 3:
+                bmesh.ops.bridge_loops(bm, edges=loops[0] + loops[2])
+    
+    bm.to_mesh(obj.data)
+    bm.free()
+    obj.data.update()
+    _cleanup_after_bool(obj)
     return True
 
 
@@ -3131,15 +3120,6 @@ class STEP_EXPORTER_OT_edit_shell_hole(Operator):
     edit_width: bpy.props.FloatProperty(name=_t("Width"), default=10.0, min=0.1, max=500.0)
     edit_height: bpy.props.FloatProperty(name=_t("Height"), default=8.0, min=0.1, max=500.0)
     edit_cr: bpy.props.FloatProperty(name=_t("Corner R"), default=2.0, min=0.0, max=500.0)
-    edit_solver: bpy.props.EnumProperty(
-        name=_t("Solver"),
-        items=[
-            ('bmesh', 'BMesh', _t("Try FLOAT then EXACT, circle fallback for round holes")),
-            ('FLOAT', 'FLOAT', _t("Fast, works for most cases")),
-            ('EXACT', 'EXACT', _t("Slower but handles complex geometry")),
-        ],
-        default='bmesh',
-    )
 
     @classmethod
     def poll(cls, context):
@@ -3205,16 +3185,6 @@ class STEP_EXPORTER_OT_edit_shell_hole(Operator):
             layout.prop(self, 'edit_fillet')
             if self.edit_fillet > 0.0001:
                 layout.prop(self, 'edit_fillet_type')
-        layout.separator()
-        if self.edit_type == 'round':
-            layout.prop(self, 'edit_solver')
-        else:
-            if self.edit_solver == 'bmesh':
-                self.edit_solver = 'FLOAT'
-            row = layout.row(align=True)
-            row.label(text=_t("Solver"))
-            row.prop_enum(self, 'edit_solver', 'FLOAT')
-            row.prop_enum(self, 'edit_solver', 'EXACT')
 
     def execute(self, context):
         obj = context.active_object
@@ -3245,7 +3215,6 @@ class STEP_EXPORTER_OT_edit_shell_hole(Operator):
         obj['window_data'] = ';'.join(entries)
         # Rebuild shell in execute() where obj refs are stable
         _rebuild_stage_create(obj)
-        obj['_edit_solver'] = self.edit_solver
         # Start modal for hole processing
         self._rb_obj_name = obj.name
         self._rb_entries = entries
@@ -3270,6 +3239,12 @@ class STEP_EXPORTER_OT_edit_shell_hole(Operator):
                 return {'CANCELLED'}
             idx = self._rb_stage
             entries = self._rb_entries
+            if obj.get('_holes_builtin', False):
+                # OCCT rebuild already includes all holes — skip Boolean processing
+                update_progress(100, _t("Done"))
+                self.report({'INFO'}, _t("Hole updated"))
+                self._rb_cleanup(context)
+                return {'FINISHED'}
             if idx < len(entries):
                 update_progress(int((idx+1)/max(len(entries),1)*100), _t("Hole {idx}/{total}...").format(idx=idx+1, total=len(entries)))
                 _rebuild_stage_hole(obj, entries[idx])
@@ -3334,7 +3309,8 @@ class STEP_EXPORTER_PT_shell_holes(bpy.types.Panel):
 
 
 def _rebuild_stage_create(obj):
-    """Stage: Create fresh shell mesh and swap data."""
+    """Stage: Create fresh shell mesh and swap data. For curved shells, regenerate
+    via OCCT (with holes pre-cut) for exact STEP match."""
     w = obj.get('width', 100.0)
     d = obj.get('depth', 80.0)
     h_val = obj.get('height', 50.0)
@@ -3350,9 +3326,17 @@ def _rebuild_stage_create(obj):
     bf = obj.get('bottom_fillet', 0.0)
     curve_ratio = obj.get('curve_ratio', 50.0)
     eccentric_y = obj.get('eccentric_y', 0.0)
+    bt = obj.get('bottom_thickness', t)
     wd = obj.get('window_data', '')
     wd_local = obj.get('window_data_local', False)
     obj_name = obj.name
+
+    if corner_type == 'curved':
+        _rebuild_stage_create_occt(obj, w, d, h_val, t, bt, cr, rim_type_str,
+                                   rim_width, rim_height, rim_shape, rim_top_ratio,
+                                   bf, curve_ratio, eccentric_y, wd, wd_local)
+        return
+
     # Mark original object — bpy.ops will invalidate the Python reference
     obj['_rb_marker'] = 1
 
@@ -3398,6 +3382,84 @@ def _rebuild_stage_create(obj):
 
     bpy.context.view_layer.objects.active = obj
     obj.select_set(True)
+
+
+def _rebuild_stage_create_occt(obj, w, d, h_val, t, bt, cr, rim_type, rw, rh,
+                               rim_shape, rim_top_ratio, bf, curve_ratio, ecc_y,
+                               wd, wd_local):
+    """Regenerate curved shell mesh via OCCT with holes pre-cut (exact STEP match)."""
+    import bmesh as _bm_occt
+    try:
+        from ..core import _globals as _g
+        cpp = _g.step_exporter
+        if cpp is None:
+            import _step_exporter as cpp
+        if not hasattr(cpp, 'generate_parametric_shell_mesh'):
+            print("[STEP Exporter] C++ mesh generation unavailable")
+            return
+        # Clamp hole coordinates to shell bounds (prevents garbage positions)
+        if wd:
+            hw_c, hd_c = w / 2.0, d / 2.0
+            cleaned = []
+            for e in wd.split(';'):
+                e = e.strip()
+                if not e:
+                    continue
+                parts = e.split(',')
+                if len(parts) >= 5:
+                    try:
+                        parts[0] = f"{max(-hw_c, min(hw_c, float(parts[0]))):.3f}"
+                        parts[1] = f"{max(-hd_c, min(hd_c, float(parts[1]))):.3f}"
+                        parts[2] = f"{max(0.0, min(h_val, float(parts[2]))):.3f}"
+                    except ValueError:
+                        pass
+                cleaned.append(','.join(parts))
+            wd = ';'.join(cleaned)
+        result = cpp.generate_parametric_shell_mesh(
+            w, d, h_val, t, bt,
+            'curved', cr,
+            rim_type, rw, rh,
+            rim_shape, rim_top_ratio / 100.0,
+            bf, curve_ratio / 100.0, ecc_y / 100.0,
+            wd)
+        if result is None:
+            print("[STEP Exporter] OCCT mesh generation failed")
+            return
+
+        verts = result['vertices']
+        tris = result['triangles']
+        if len(verts) < 4 or len(tris) < 4:
+            return
+
+        # OCCT returns mm; Blender mesh uses scene units (S=0.001 for mm mode)
+        S = 0.001 if obj.get('unit', 'mm') == 'mm' else 1.0
+        bm = _bm_occt.new()
+        hh_m = h_val * S / 2.0
+        bm_verts = [bm.verts.new((v[0]*S, v[1]*S, v[2]*S - hh_m)) for v in verts]
+        bm.verts.ensure_lookup_table()
+        for tri in tris:
+            try:
+                bm.faces.new([bm_verts[tri[0]], bm_verts[tri[1]], bm_verts[tri[2]]])
+            except ValueError:
+                pass
+        bm.normal_update()
+        new_mesh = bpy.data.meshes.new(obj.name + "_occt")
+        bm.to_mesh(new_mesh)
+        bm.free()
+
+        old_mesh = obj.data
+        obj.data = new_mesh
+        bpy.data.meshes.remove(old_mesh, do_unlink=True)
+        obj['window_data'] = wd
+        obj['window_data_local'] = wd_local
+        obj['_holes_builtin'] = True  # holes already in OCCT mesh
+        for f in obj.data.polygons:
+            f.use_smooth = True
+        print(f"[STEP Exporter] OCCT rebuild: v={len(verts)} t={len(tris)} holes={bool(wd)}")
+        bpy.context.view_layer.objects.active = obj
+        obj.select_set(True)
+    except Exception as e:
+        print(f"[STEP Exporter] OCCT rebuild failed: {e}")
 
 
 
@@ -3554,6 +3616,10 @@ def _rebuild_shell_mesh(obj, wm=None):
         _rebuild_stage_create(obj)
     except Exception as e:
         print(f"[STEP Exporter] Rebuild stage create failed: {e}")
+        return
+    # For OCCT-built curved shells, holes are already in the mesh
+    if obj.get('_holes_builtin', False):
+        obj.data.update()
         return
     wd = obj.get('window_data', '')
     if not wd:

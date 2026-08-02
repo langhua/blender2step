@@ -8,24 +8,6 @@ from ..core.profile_utils import make_profile, add_fillet_rings
 from ..export.progress_report import start_progress, update_progress, end_progress, set_operator, clear_operator
 
 
-def _get_active_shell_corner_type():
-    """Find the closest visible parametric shell and return its corner_type."""
-    import bpy
-    best_dist = float('inf')
-    best_type = 'square'
-    cursor = bpy.context.scene.cursor.location
-    for o in bpy.data.objects:
-        if o.get('object_type') != 'parametric_shell':
-            continue
-        if o.hide_viewport or o.hide_get():
-            continue
-        d = (o.location - cursor).length
-        if d < best_dist:
-            best_dist = d
-            best_type = o.get('corner_type', 'square')
-    return best_type
-
-
 class STEP_EXPORTER_OT_create_parametric_shell(Operator):
     """创建参数化外壳（无盖盒子）"""
     bl_idname = "step_exporter.create_parametric_shell"
@@ -1264,13 +1246,9 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
             layout.prop(self, 'hole_radius')
             layout.prop(self, 'hole_fillet')
             if self.hole_fillet > 0.0001:
-                corner_type = _get_active_shell_corner_type()
-                # Only restrict Inner→Outer on curved side walls; bottom/top faces are planar.
-                if corner_type == 'curved' and _is_side_face and self.hole_fillet_type == '1':
-                    self.hole_fillet_type = '0'
+                # Inner/outer/both all supported on curved side walls via OCCT
+                # single-best-edge fillet (verified: both works, inner uses same path).
                 layout.prop(self, 'hole_fillet_type')
-                if corner_type == 'curved' and _is_side_face:
-                    layout.label(text=_t("  ⚠ Inner fillet unsupported on curved side walls (OCCT limitation)"), icon='ERROR')
             layout.label(text=_t("  → Circular through-hole, Ø={d:.1f}mm").format(d=self.hole_radius*2))
         else:
             layout.prop(self, 'hole_width')

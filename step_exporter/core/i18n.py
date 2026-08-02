@@ -7,7 +7,6 @@ _STRINGS = {
     "  ℹ RRect fillet forced Both-sides (curved NURBS OCCT limitation)": {"zh_CN": "  ℹ 圆角矩形强制双侧圆角（余弦NURBS OCCT限制）"},
     "  → Circular through-hole, Ø={d:.1f}mm": {"zh_CN": "  → 圆形通孔, Ø={d:.1f}mm"},
     "  → RRect {w:.1f}×{h:.1f}mm cr={cr:.1f}": {"zh_CN": "  → 圆角矩形 {w:.1f}×{h:.1f}mm 转角={cr:.1f}"},
-    "  ⚠ Inner fillet unsupported on curved shells (OCCT limitation)": {"zh_CN": "  ⚠ 余弦壳体内侧圆角不支持（OCCT 限制）"},
     " (shell-local)": {"zh_CN": "（壳内坐标）"},
     " +Groove": {"zh_CN": "+梯形槽"},
     "+B.Blind": {"zh_CN": "+底盲孔"},

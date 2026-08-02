@@ -3053,32 +3053,17 @@ TopoDS_Shape create_parametric_shell_solid(double width, double depth, double he
     if (bottom_fillet > 0.001) {
         double outer_bottom_z = -total_h / 2.0;
         
-        // Write debug to log file
-        std::ofstream dbg("f:/git/blender2step/step_exporter/_cpp_dbg.txt", std::ios::app);
-        dbg << "[CPP] filleting outer: r=" << bottom_fillet
-            << " bottom_z=" << outer_bottom_z << " total_h=" << total_h << std::endl;
-        
         TopoDS_Shape filleted = apply_bottom_fillet_to_box(outerSolid, bottom_fillet, outer_bottom_z);
         
-        dbg << "[CPP] outer fillet result type=" << filleted.ShapeType()
-            << " (SOLID=" << TopAbs_SOLID << ")" << std::endl;
-        dbg << "[CPP] outerSolid ptr before=" << (void*)&outerSolid
-            << " filleted ptr=" << (void*)&filleted << std::endl;
-        
-        // Extract solid from result
+        // Extract solid from result (on failure keep the unfilleted solid)
         if (filleted.ShapeType() == TopAbs_SOLID) {
             outerSolid = TopoDS::Solid(filleted);
-            dbg << "[CPP] outer fillet OK (direct solid)" << std::endl;
         } else {
             TopExp_Explorer exp(filleted, TopAbs_SOLID);
             if (exp.More()) {
                 outerSolid = TopoDS::Solid(exp.Current());
-                dbg << "[CPP] outer fillet OK (extracted from compound)" << std::endl;
-            } else {
-                dbg << "[CPP] outer fillet FAILED - no solid found!" << std::endl;
             }
         }
-        dbg.close();
     }
 
     double inner_w = width - 2.0 * thickness;
@@ -3114,28 +3099,16 @@ TopoDS_Shape create_parametric_shell_solid(double width, double depth, double he
         double inner_fillet_r = bottom_fillet;
         double inner_bottom_z = -total_h / 2.0 + bottom_thickness;
         
-        std::ofstream dbg("f:/git/blender2step/step_exporter/_cpp_dbg.txt", std::ios::app);
-        dbg << "[CPP] filleting inner: r=" << inner_fillet_r
-            << " bottom_z=" << inner_bottom_z << std::endl;
-        
         TopoDS_Shape filleted = apply_bottom_fillet_to_box(innerSolid, inner_fillet_r, inner_bottom_z);
-        
-        dbg << "[CPP] inner fillet result type=" << filleted.ShapeType()
-            << " (SOLID=" << TopAbs_SOLID << ")" << std::endl;
         
         if (filleted.ShapeType() == TopAbs_SOLID) {
             innerSolid = TopoDS::Solid(filleted);
-            dbg << "[CPP] inner fillet OK (direct solid)" << std::endl;
         } else {
             TopExp_Explorer exp(filleted, TopAbs_SOLID);
             if (exp.More()) {
                 innerSolid = TopoDS::Solid(exp.Current());
-                dbg << "[CPP] inner fillet OK (extracted from compound)" << std::endl;
-            } else {
-                dbg << "[CPP] inner fillet FAILED - no solid found!" << std::endl;
             }
         }
-        dbg.close();
     }
 
     // Boolean cut: outer - inner → open-top shell
@@ -3299,6 +3272,21 @@ TopoDS_Shape create_parametric_shell_solid(double width, double depth, double he
 
 // ── Python-facing export function ────────────────────────────────
 
+// Shared hole fillet data/function (also defined below for the preview path;
+// forward-declared here so the STEP export can use the same proven logic).
+struct HoleFilletInfo {
+    double cx, cy, cz, r, fr;
+    int type;      // 0=outer, 1=inner, 2=both
+    double w, h;   // rrect dims (0 for round)
+    int fc;        // face_code 0-5
+    double thick;  // wall thickness
+};
+
+static TopoDS_Shape apply_hole_fillets(TopoDS_Shape shape,
+                                       const std::vector<HoleFilletInfo>& holeFillets,
+                                       double width, double depth, double height,
+                                       double thickness);
+
 PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
     const char* filename; const char* corner_type = "square"; const char* step_schema = "AP214IS";
     const char* unit = "MILLIMETER"; int enable_logging = 1;
@@ -3381,7 +3369,6 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
             std::cout << "[STEP Exporter] Hole cutting: window_data='" << window_data << "'" << std::endl;
             std::string wd(window_data);
             std::vector<TopoDS_Shape> cutters;
-            struct HoleFilletInfo { double cx, cy, cz, r, fr; int type; double w, h; int fc; double thick; };
             std::vector<HoleFilletInfo> holeFillets;
             double hh = height / 2.0;  // half-height for z-axis centering
 
@@ -3648,360 +3635,9 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                 }
             }
             if (!holeFillets.empty() && !resultSolid.IsNull()) {
-                // Helper: effective radius for proximity checks.
-                // Circular holes: r = hole radius; Rrect holes: r = max(half-width, half-height)
-                auto getEffR = [](const HoleFilletInfo& hf) -> double {
-                    // Effective radius for proximity checks.
-                    // Circular holes: r is the radius; edges sit at distance ≈0 from center
-                    //   (complete circles), so r * 0.6 works as a proximity threshold.
-                    // Rrect holes: edges sit at distance max(w/2, h/2) from center
-                    //   (midpoints of straight side edges). The callers multiply by 0.6,
-                    //   so we need effR * 0.6 >= max(w/2, h/2) → effR >= max(w, h) / 1.2.
-                    if (hf.r > 0.001) return hf.r;
-                    return std::max(hf.w, hf.h) / 1.2;
-                };
-
-                TopTools_IndexedDataMapOfShapeListOfShape edgeFaceMap;
-                TopExp::MapShapesAndAncestors(resultSolid, TopAbs_EDGE, TopAbs_FACE, edgeFaceMap);
-                // Collect edges to fillet.
-                // For PLANAR faces (fc=0/1): keep all edges near hole (clean circular edges from cut)
-                // For NURBS side faces (fc=2-5): pick only the SINGLE best edge per hole —
-                //   the one whose midpoint is closest to the inner/outer ideal position.
-                //   Boolean cut on NURBS produces fragmented edges that OCCT fillet can't handle.
-                std::vector<TopoDS_Edge> edgesToFillet;
-                int totalNearEdges = 0, filteredOut = 0;
-                // Debug: per-face inner/outer counters
-                int faceInnerCnt[6] = {0}, faceOuterCnt[6] = {0}, faceNearCnt[6] = {0};
-                double halfW = width / 2.0, halfD = depth / 2.0;
-
-                for (TopExp_Explorer ex(resultSolid, TopAbs_EDGE); ex.More(); ex.Next()) {
-                    const TopoDS_Edge& edge = TopoDS::Edge(ex.Current());
-                    Bnd_Box eb; BRepBndLib::Add(edge, eb);
-                    double ex1,ey1,ez1,ex2,ey2,ez2; eb.Get(ex1,ey1,ez1,ex2,ey2,ez2);
-                    double ecx = (ex1+ex2)/2.0, ecy = (ey1+ey2)/2.0, ecz = (ez1+ez2)/2.0;
-                    for (size_t hi = 0; hi < holeFillets.size(); hi++) {
-                        const auto& hf = holeFillets[hi];
-                        double dist = 0;
-                        if (hf.fc == 0 || hf.fc == 1) {
-                            dist = sqrt((ecx-hf.cx)*(ecx-hf.cx)+(ecy-hf.cy)*(ecy-hf.cy));
-                            double effR = getEffR(hf);
-                            // bottom_fillet offsets the effective outer surface
-                            if (hf.fc == 0 && ecz > pos_z + bottom_fillet + thickness + effR * 0.5) continue;
-                            if (hf.fc == 1 && ecz < pos_z + height - thickness - effR * 0.5) continue;
-                        }
-                        else if (hf.fc == 2 || hf.fc == 3) {
-                            dist = sqrt((ecy-hf.cy)*(ecy-hf.cy)+(ecz-hf.cz)*(ecz-hf.cz));
-                            // Strict face-side: left face edges must be on negative X side, right on positive X
-                            if (hf.fc == 2 && ecx > pos_x) continue;
-                            if (hf.fc == 3 && ecx < pos_x) continue;
-                        }
-                        else {
-                            dist = sqrt((ecx-hf.cx)*(ecx-hf.cx)+(ecz-hf.cz)*(ecz-hf.cz));
-                            // Strict face-side: front face edges must be on negative Y side, back on positive Y
-                            if (hf.fc == 4 && ecy > pos_y) continue;
-                            if (hf.fc == 5 && ecy < pos_y) continue;
-                        }
-                        double effR_prox = getEffR(hf);
-                        if (dist < effR_prox * 0.6) {
-                            totalNearEdges++;
-                            bool isInner = false;
-                            if (hf.fc == 0)
-                                isInner = (ecz > pos_z + bottom_fillet + thickness * 0.5);
-                            else if (hf.fc == 1)
-                                isInner = (ecz < pos_z + height - thickness * 0.5);
-                            else if (hf.fc == 2)
-                                isInner = (ecx > pos_x - halfW + thickness * 0.5);
-                            else if (hf.fc == 3)
-                                isInner = (ecx < pos_x + halfW - thickness * 0.5);
-                            else if (hf.fc == 4)
-                                isInner = (ecy > pos_y - halfD + thickness * 0.5);
-                            else
-                                isInner = (ecy < pos_y + halfD - thickness * 0.5);
-
-                            // Collect edges based on type and inner/outer classification.
-                            // For rrect holes on side faces (fc>=2): OCCT boolean cut
-                            // produces internal tube edges whose midpoint is inside the
-                            // wall — cannot reliably classify inner vs outer. Accept all.
-                            bool isOuter = !isInner;
-                            bool acceptEdge;
-                            bool isCurved = (corner_type && strcmp(corner_type, "curved") == 0);
-                            if (hf.r < 0.001 && hf.fc >= 2 && isCurved)
-                                acceptEdge = true;  // rrect curved side face: accept all (OCCT NURBS limitation)
-                            else
-                                acceptEdge = (hf.type == 2 || (hf.type == 0 && isOuter) || (hf.type == 1 && isInner));
-                            // Debug: count inner/outer per face
-                            int fcIdx = (int)hf.fc;
-                            if (fcIdx >= 0 && fcIdx < 6) {
-                                faceNearCnt[fcIdx]++;
-                                if (isInner) faceInnerCnt[fcIdx]++; else faceOuterCnt[fcIdx]++;
-                            }
-                            if (acceptEdge) {
-                                edgesToFillet.push_back(edge);
-                            } else {
-                                filteredOut++;
-                            }
-                            break;
-                        }
-                    }
-                }
-
-                std::cout << "[STEP Exporter] Found " << edgesToFillet.size() << " hole edges from cut"
-                          << " (totalNear=" << totalNearEdges << " filteredOut=" << filteredOut << ")" << std::endl;
-                // Debug: per-face breakdown
-                for (int fi = 0; fi < 6; fi++) {
-                    if (faceNearCnt[fi] > 0) {
-                        std::cout << "[STEP Exporter]   fc=" << fi << " near=" << faceNearCnt[fi]
-                                  << " inner=" << faceInnerCnt[fi] << " outer=" << faceOuterCnt[fi] << std::endl;
-                    }
-                }
-
-                // Supplement: use BRepAlgoAPI_Section for edges missing from boolean cut
-                // (OCCT boolean cut may not produce edges on NURBS faces, e.g. curved top face)
-                double curve_inset_sec = std::min(width/2.0, depth/2.0) * curve_ratio * 0.5;
-                double sec_cyl_len = thickness * 4.0 + curve_inset_sec * 2.0 + 10.0;
-                for (const auto& hf : holeFillets) {
-                    TopoDS_Shape secShape;
-                    double proxDist;
-                    if (hf.r > 0.001) {
-                    // Round hole: section cylinder
-                    gp_Ax2 ax;
-                    if (hf.fc == 0 || hf.fc == 1) {
-                        ax = gp_Ax2(gp_Pnt(hf.cx, hf.cy, hf.cz - sec_cyl_len/2.0), gp_Dir(0,0,1));
-                    } else if (hf.fc == 2 || hf.fc == 3) {
-                        ax = gp_Ax2(gp_Pnt(hf.cx - sec_cyl_len/2.0, hf.cy, hf.cz), gp_Dir(1,0,0));
-                    } else {
-                        ax = gp_Ax2(gp_Pnt(hf.cx, hf.cy - sec_cyl_len/2.0, hf.cz), gp_Dir(0,1,0));
-                    }
-                    BRepPrimAPI_MakeCylinder cm(ax, hf.r * 1.01, sec_cyl_len);
-                    secShape = cm.Shape();
-                    proxDist = hf.r * 1.2;
-                    } else {
-                    // Rrect hole: section box slightly larger than rrect in face plane,
-                    // extending through wall in axis direction.
-                    double rw = hf.w, rh = hf.h;
-                    double sm = thickness + 3.0;
-                    double bx, by, bz, bsx, bsy, bsz;
-                    if (hf.fc == 0 || hf.fc == 1) {
-                        bx = hf.cx - rw * 0.525; by = hf.cy - rh * 0.525;
-                        bz = hf.cz - sm; bsx = rw * 1.05; bsy = rh * 1.05; bsz = sm * 2;
-                    } else if (hf.fc == 2 || hf.fc == 3) {
-                        bx = hf.cx - sm; by = hf.cy - rw * 0.525;
-                        bz = hf.cz - rh * 0.525; bsx = sm * 2; bsy = rw * 1.05; bsz = rh * 1.05;
-                    } else {
-                        bx = hf.cx - rw * 0.525; by = hf.cy - sm;
-                        bz = hf.cz - rh * 0.525; bsx = rw * 1.05; bsy = sm * 2; bsz = rh * 1.05;
-                    }
-                    BRepPrimAPI_MakeBox bm(gp_Pnt(bx, by, bz), bsx, bsy, bsz);
-                    if (bm.Shape().IsNull()) continue;
-                    secShape = bm.Shape();
-                    proxDist = std::max(rw, rh) * 0.6;
-                    }
-
-                    BRepAlgoAPI_Section sec(resultSolid, secShape);
-                    sec.Build();
-                    if (sec.IsDone()) {
-                        int added = 0, secFilteredOut = 0;
-                        for (TopExp_Explorer ex(sec.Shape(), TopAbs_EDGE); ex.More(); ex.Next()) {
-                            const TopoDS_Edge& e = TopoDS::Edge(ex.Current());
-                            Bnd_Box eb; BRepBndLib::Add(e, eb);
-                            double ex1,ey1,ez1,ex2,ey2,ez2; eb.Get(ex1,ey1,ez1,ex2,ey2,ez2);
-                            double ecx=(ex1+ex2)/2.0, ecy=(ey1+ey2)/2.0, ecz=(ez1+ez2)/2.0;
-                            double dist = 0;
-                            if (hf.fc == 0 || hf.fc == 1) {
-                                dist = sqrt((ecx-hf.cx)*(ecx-hf.cx)+(ecy-hf.cy)*(ecy-hf.cy));
-                            }
-                            else if (hf.fc == 2 || hf.fc == 3) {
-                                dist = sqrt((ecy-hf.cy)*(ecy-hf.cy)+(ecz-hf.cz)*(ecz-hf.cz));
-                                if (hf.fc == 2 && ecx > pos_x) continue;
-                                if (hf.fc == 3 && ecx < pos_x) continue;
-                            }
-                            else {
-                                dist = sqrt((ecx-hf.cx)*(ecx-hf.cx)+(ecz-hf.cz)*(ecz-hf.cz));
-                                if (hf.fc == 4 && ecy > pos_y) continue;
-                                if (hf.fc == 5 && ecy < pos_y) continue;
-                            }
-                            if (dist < proxDist) {
-                                bool isInner = false;
-                                if (hf.fc == 0)
-                                    isInner = (ecz > pos_z + bottom_fillet + thickness * 0.5);
-                                else if (hf.fc == 1)
-                                    isInner = (ecz < pos_z + height - thickness * 0.5);
-                                else if (hf.fc == 2)
-                                    isInner = (ecx > pos_x - halfW + thickness * 0.5);
-                                else if (hf.fc == 3)
-                                    isInner = (ecx < pos_x + halfW - thickness * 0.5);
-                                else if (hf.fc == 4)
-                                    isInner = (ecy > pos_y - halfD + thickness * 0.5);
-                                else
-                                    isInner = (ecy < pos_y + halfD - thickness * 0.5);
-                                bool isOuter = !isInner;
-                                if (hf.type != 2 && !(hf.type == 0 && isOuter) && !(hf.type == 1 && isInner)) {
-                                    secFilteredOut++;
-                                    continue;
-                                }
-                                bool dup = false;
-                                TopoDS_Vertex nv1, nv2;
-                                TopExp::Vertices(e, nv1, nv2);
-                                gp_Pnt np1 = BRep_Tool::Pnt(nv1), np2 = BRep_Tool::Pnt(nv2);
-                                for (const auto& existing : edgesToFillet) {
-                                    TopoDS_Vertex ov1, ov2;
-                                    TopExp::Vertices(existing, ov1, ov2);
-                                    gp_Pnt op1 = BRep_Tool::Pnt(ov1), op2 = BRep_Tool::Pnt(ov2);
-                                    if ((np1.Distance(op1) < 0.001 && np2.Distance(op2) < 0.001) ||
-                                        (np1.Distance(op2) < 0.001 && np2.Distance(op1) < 0.001))
-                                    { dup = true; break; }
-                                }
-                                if (!dup) { edgesToFillet.push_back(e); added++; }
-                            }
-                        }
-                        if (added > 0) {
-                            const char* tag = (hf.r > 0.001) ? "Section" : "RrectSection";
-                            std::cout << "[STEP Exporter] " << tag << " found " << added << " extra edges for hole at (" << hf.cx << "," << hf.cy << "," << hf.cz << ") ft=" << hf.type << " (filteredOut=" << secFilteredOut << ")" << std::endl;
-                        }
-                    }
-                }
-                std::cout << "[STEP Exporter] Total hole edges to fillet: " << edgesToFillet.size() << std::endl;
-
-                // Final supplement: find hole edges from cylindrical surfaces in cut result.
-                if (!holeFillets.empty()) {
-                    double hW = width / 2.0, hD = depth / 2.0;
-                    struct HoleNeed { int idx; double targetC; int fc; };
-                    std::vector<HoleNeed> needed;
-                    for (size_t hi = 0; hi < holeFillets.size(); hi++) {
-                        const auto& hf = holeFillets[hi];
-                        double outerC = 0, innerC = 0;
-                        if (hf.fc == 0) { outerC = pos_z + bottom_fillet; innerC = pos_z + bottom_fillet + thickness; }
-                        else if (hf.fc == 1) { outerC = pos_z + height; innerC = pos_z + height - thickness; }
-                        else if (hf.fc == 2) { outerC = pos_x - hW; innerC = pos_x - hW + thickness; }
-                        else if (hf.fc == 3) { outerC = pos_x + hW; innerC = pos_x + hW - thickness; }
-                        else if (hf.fc == 4) { outerC = pos_y - hD; innerC = pos_y - hD + thickness; }
-                        else { outerC = pos_y + hD; innerC = pos_y + hD - thickness; }
-                        
-                        bool hasOuter = false, hasInner = false;
-                        for (const auto& e : edgesToFillet) {
-                            Bnd_Box eb; BRepBndLib::Add(e, eb);
-                            double ex1,ey1,ez1,ex2,ey2,ez2; eb.Get(ex1,ey1,ez1,ex2,ey2,ez2);
-                            double ecMin = (hf.fc<2) ? ez1 : ((hf.fc<4) ? ex1 : ey1);
-                            double ecMax = (hf.fc<2) ? ez2 : ((hf.fc<4) ? ex2 : ey2);
-                            if (fabs(ecMin - outerC) < 2.0 || fabs(ecMax - outerC) < 2.0)
-                                hasOuter = true;
-                            if (fabs(ecMin - innerC) < 2.0 || fabs(ecMax - innerC) < 2.0)
-                                hasInner = true;
-                        }
-                        if (hf.type != 1 && !hasOuter) needed.push_back({(int)hi, outerC, hf.fc});
-                        if (hf.type != 0 && !hasInner) needed.push_back({(int)hi, innerC, hf.fc});
-                    }
-                    for (const auto& nd : needed) {
-                        const auto& hf = holeFillets[nd.idx];
-                        for (TopExp_Explorer fex(resultSolid, TopAbs_FACE); fex.More(); fex.Next()) {
-                            TopoDS_Face f = TopoDS::Face(fex.Current());
-                            Handle(Geom_Surface) surf = BRep_Tool::Surface(f);
-                            if (surf.IsNull()) continue;
-                            if (!surf->IsKind(STANDARD_TYPE(Geom_CylindricalSurface))) continue;
-                            Handle(Geom_CylindricalSurface) cylSurf = Handle(Geom_CylindricalSurface)::DownCast(surf);
-                            if (fabs(cylSurf->Radius() - hf.r) > 0.2) continue;
-                            gp_Pnt axLoc = cylSurf->Axis().Location();
-                            double axDist = 0;
-                            if (nd.fc < 2) axDist = sqrt(pow(axLoc.X()-hf.cx,2)+pow(axLoc.Y()-hf.cy,2));
-                            else if (nd.fc < 4) axDist = sqrt(pow(axLoc.Y()-hf.cy,2)+pow(axLoc.Z()-hf.cz,2));
-                            else axDist = sqrt(pow(axLoc.X()-hf.cx,2)+pow(axLoc.Z()-hf.cz,2));
-                            if (axDist > hf.r * 0.3) continue;
-                            // Pick the edge closest to outerC
-                            TopoDS_Edge bestE; double bestD = 1e9;
-                            for (TopExp_Explorer eex(f, TopAbs_EDGE); eex.More(); eex.Next()) {
-                                const TopoDS_Edge& e = TopoDS::Edge(eex.Current());
-                                Bnd_Box eb; BRepBndLib::Add(e, eb);
-                                double ex1,ey1,ez1,ex2,ey2,ez2; eb.Get(ex1,ey1,ez1,ex2,ey2,ez2);
-                                double ecMin = (nd.fc<2) ? ez1 : ((nd.fc<4) ? ex1 : ey1);
-                                double ecMax = (nd.fc<2) ? ez2 : ((nd.fc<4) ? ex2 : ey2);
-                                double d = std::min(fabs(ecMin - nd.targetC), fabs(ecMax - nd.targetC));
-                                if (d < bestD) { bestD = d; bestE = e; }
-                            }
-                            if (!bestE.IsNull() && bestD < thickness * 2.0) {
-                                edgesToFillet.push_back(bestE);
-                                std::cout << "[STEP Exporter] Cyl edge fc=" << nd.fc << " dist=" << bestD << std::endl;
-                            }
-                            break;
-                        }
-                    }
-                }
-                std::cout << "[STEP Exporter] Total hole edges to fillet: " << edgesToFillet.size() << std::endl;
-
-                if (!edgesToFillet.empty()) {
-                    // Per-hole fillet: apply each hole's own fillet radius to its edges.
-                    // Group edges by hole (using proximity to hole center).
-                    
-                    // Build a map from hole index to edges
-                    std::vector<std::vector<TopoDS_Edge>> holeEdges(holeFillets.size());
-                    for (const auto& e : edgesToFillet) {
-                        Bnd_Box eb; BRepBndLib::Add(e, eb);
-                        double ex1,ey1,ez1,ex2,ey2,ez2; eb.Get(ex1,ey1,ez1,ex2,ey2,ez2);
-                        double ecx = (ex1+ex2)/2.0, ecy = (ey1+ey2)/2.0, ecz = (ez1+ez2)/2.0;
-                        double bestD = 1e9; int bestHi = -1;
-                        for (size_t hi = 0; hi < holeFillets.size(); hi++) {
-                            const auto& hf = holeFillets[hi];
-                            // Face-side check: edge must be on the correct side of the shell
-                            // to prevent cross-assignment (e.g., left-face edge → right hole)
-                            if (hf.fc == 2 && ecx > pos_x) continue;      // left face: edge must be on negative X side
-                            if (hf.fc == 3 && ecx < pos_x) continue;      // right face: edge must be on positive X side
-                            if (hf.fc == 4 && ecy > pos_y) continue;      // front face: edge must be on negative Y side
-                            if (hf.fc == 5 && ecy < pos_y) continue;      // back face: edge must be on positive Y side
-                            double d = 0;
-                            if (hf.fc <= 1) d = sqrt((ecx-hf.cx)*(ecx-hf.cx)+(ecy-hf.cy)*(ecy-hf.cy));
-                            else if (hf.fc <= 3) d = sqrt((ecy-hf.cy)*(ecy-hf.cy)+(ecz-hf.cz)*(ecz-hf.cz));
-                            else d = sqrt((ecx-hf.cx)*(ecx-hf.cx)+(ecz-hf.cz)*(ecz-hf.cz));
-                            if (d < bestD) { bestD = d; bestHi = (int)hi; }
-                        }
-                        if (bestHi >= 0 && bestD < getEffR(holeFillets[bestHi]) * 2.0)
-                            holeEdges[bestHi].push_back(e);
-                    }
-
-                    // Apply fillets per hole with correct radius.
-                    TopoDS_Shape filletedShape = resultSolid;
-                    bool anyFilletOK = false;
-                    for (size_t hi = 0; hi < holeFillets.size(); hi++) {
-                        if (holeEdges[hi].empty()) continue;
-                        double fr = holeFillets[hi].fr;
-                        BRepFilletAPI_MakeFillet fm(filletedShape);
-                        std::cout << "[STEP Exporter] Hole " << hi << " (fc=" << (int)holeFillets[hi].fc
-                                  << " r=" << holeFillets[hi].r << " fr=" << fr
-                                  << " type=" << (int)holeFillets[hi].type
-                                  << "): " << holeEdges[hi].size() << " edges";
-                        int innerCnt = 0, outerCnt = 0;
-                        for (const auto& e : holeEdges[hi]) {
-                            Bnd_Box eb2; BRepBndLib::Add(e, eb2);
-                            double ex1,ey1,ez1,ex2,ey2,ez2;
-                            eb2.Get(ex1,ey1,ez1,ex2,ey2,ez2);
-                            double midCoord = 0;
-                            int fc = holeFillets[hi].fc;
-                            if (fc <= 1) midCoord = (ez1+ez2)/2.0;
-                            else if (fc <= 3) midCoord = (ex1+ex2)/2.0;
-                            else midCoord = (ey1+ey2)/2.0;
-                            bool isInnerEdge = false;
-                            if (fc == 0) isInnerEdge = (midCoord > thickness * 0.5);
-                            else if (fc == 1) isInnerEdge = (midCoord < height - thickness * 0.5);
-                            else if (fc == 2) isInnerEdge = (midCoord > -halfW + thickness * 0.5);
-                            else if (fc == 3) isInnerEdge = (midCoord < halfW - thickness * 0.5);
-                            else if (fc == 4) isInnerEdge = (midCoord > -halfD + thickness * 0.5);
-                            else isInnerEdge = (midCoord < halfD - thickness * 0.5);
-                            if (isInnerEdge) innerCnt++; else outerCnt++;
-                            std::cout << "\n  edge mid=(" << (ex1+ex2)/2.0 << "," << (ey1+ey2)/2.0 << "," << (ez1+ez2)/2.0 << ")" << (isInnerEdge ? " INNER" : " OUTER");
-                            fm.Add(fr, e);
-                        }
-                        std::cout << "\n  → inner=" << innerCnt << " outer=" << outerCnt << std::endl;
-                        fm.Build();
-                        if (fm.IsDone()) {
-                            filletedShape = fm.Shape();
-                            anyFilletOK = true;
-                            std::cout << "[STEP Exporter]   Fillet OK" << std::endl;
-                        } else {
-                            std::cout << "[STEP Exporter]   Fillet FAILED (fm.IsDone=false)" << std::endl;
-                        }
-                    }
-                    if (anyFilletOK) {
-                        shape = filletedShape;
-                    }
-                }
+                // Use the SHARED single-best-edge fillet logic (identical to the
+                // Blender preview path) so STEP export and preview match exactly.
+                shape = apply_hole_fillets(resultSolid, holeFillets, width, depth, height, thickness);
             }
         }
 
@@ -4116,6 +3752,107 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
     }
 }
 
+// ── Shared hole fillet helpers (used by STEP export and Blender preview) ──
+
+// Apply BRepFilletAPI fillets to hole rim edges.
+static TopoDS_Shape apply_hole_fillets(TopoDS_Shape shape,
+                                       const std::vector<HoleFilletInfo>& holeFillets,
+                                       double width, double depth, double height,
+                                       double thickness) {
+    if (holeFillets.empty()) return shape;
+    // Extract solid
+    TopoDS_Solid solid;
+    for (TopExp_Explorer sex(shape, TopAbs_SOLID); sex.More(); sex.Next()) {
+        solid = TopoDS::Solid(sex.Current());
+        break;
+    }
+    if (solid.IsNull()) return shape;
+
+    double halfW = width / 2.0, halfD = depth / 2.0;
+
+    // For each hole, pick single best outer/inner rim edge (round) or the whole
+    // rim edge set (rrect) and apply fillet.
+    // - Round holes have one circular edge per rim: single-best-edge selection
+    //   works even on fragmented NURBS cuts.
+    // - Rrect holes have 8 edges per rim (4 straight + 4 corner arcs): fillet the
+    //   whole rim set (matching the STEP export's proven multi-edge approach).
+    TopoDS_Shape filletedShape = solid;
+    for (size_t hi = 0; hi < holeFillets.size(); hi++) {
+        const auto& hf = holeFillets[hi];
+        if (hf.fr <= 0.0001) continue;
+        double effR = (hf.r > 0.001) ? hf.r : std::max(hf.w, hf.h) / 1.2;
+        bool isRound = (hf.r > 0.001);
+        bool bottomFace = (hf.fc == 0);
+
+        // Collect rim edges in the near-rim band (perpendicular distance ~effR).
+        TopoDS_Edge bestOuter, bestInner;
+        double bestDOuter = bottomFace ? 1e9 : -1e9;   // bottom: outer=min|z|
+        double bestDInner = bottomFace ? -1e9 : 1e9;
+        std::vector<TopoDS_Edge> rimEdges;   // rrect: all rim edges
+        std::vector<double> rimMids;         // rrect: |midCoord| per edge
+
+        for (TopExp_Explorer ex(filletedShape, TopAbs_EDGE); ex.More(); ex.Next()) {
+            const TopoDS_Edge& edge = TopoDS::Edge(ex.Current());
+            Bnd_Box eb; BRepBndLib::Add(edge, eb);
+            double ex1,ey1,ez1,ex2,ey2,ez2; eb.Get(ex1,ey1,ez1,ex2,ey2,ez2);
+            double ecx=(ex1+ex2)/2.0, ecy=(ey1+ey2)/2.0, ecz=(ez1+ez2)/2.0;
+            double dist = 0, midCoord = 0;
+            int fc = hf.fc;
+            if (fc <= 1) { dist = sqrt((ecx-hf.cx)*(ecx-hf.cx)+(ecy-hf.cy)*(ecy-hf.cy)); midCoord = ecz; }
+            else if (fc <= 3) { dist = sqrt((ecy-hf.cy)*(ecy-hf.cy)+(ecz-hf.cz)*(ecz-hf.cz)); midCoord = ecx; }
+            else { dist = sqrt((ecx-hf.cx)*(ecx-hf.cx)+(ecz-hf.cz)*(ecz-hf.cz)); midCoord = ecy; }
+            if (dist < effR * 0.5 || dist > effR * 1.6) continue;  // near rim band
+            double m = fabs(midCoord);
+            if (isRound) {
+                if (bottomFace) {   // bottom: outer rim at min|z|, inner at max|z|
+                    if (m < bestDOuter) { bestDOuter = m; bestOuter = edge; }
+                    if (m > bestDInner) { bestDInner = m; bestInner = edge; }
+                } else {            // other faces: outer = max|midCoord|, inner = min
+                    if (m > bestDOuter) { bestDOuter = m; bestOuter = edge; }
+                    if (m < bestDInner) { bestDInner = m; bestInner = edge; }
+                }
+            } else {
+                rimEdges.push_back(edge);
+                rimMids.push_back(m);
+            }
+        }
+
+        std::vector<TopoDS_Edge> sel;
+        double rimSep = fabs(bestDOuter - bestDInner);
+        if (isRound) {
+            if (hf.type == 0 && !bestOuter.IsNull() && rimSep > hf.thick * 0.2)
+                sel.push_back(bestOuter);
+            else if (hf.type == 1 && !bestInner.IsNull() && rimSep > hf.thick * 0.2)
+                sel.push_back(bestInner);
+            else if (hf.type == 2) {
+                if (!bestOuter.IsNull() && rimSep > hf.thick * 0.2) sel.push_back(bestOuter);
+                if (!bestInner.IsNull() && rimSep > hf.thick * 0.2) sel.push_back(bestInner);
+            }
+        } else if (!rimEdges.empty()) {
+            // Rrect: split collected rim edges into outer/inner by the rim band
+            // midpoint, then fillet the whole selected side (multi-edge rim).
+            double midVal = 0;
+            for (double mv : rimMids) midVal += mv;
+            midVal /= (double)rimMids.size();
+            std::vector<TopoDS_Edge> oSet, iSet;
+            for (size_t i = 0; i < rimEdges.size(); i++) {
+                bool isOuterSide = bottomFace ? (rimMids[i] < midVal) : (rimMids[i] > midVal);
+                if (isOuterSide) oSet.push_back(rimEdges[i]);
+                else iSet.push_back(rimEdges[i]);
+            }
+            if (hf.type == 0) sel = oSet;
+            else if (hf.type == 1) sel = iSet;
+            else { sel = oSet; sel.insert(sel.end(), iSet.begin(), iSet.end()); }
+        }
+        if (sel.empty()) continue;
+        BRepFilletAPI_MakeFillet fm(filletedShape);
+        for (const auto& e : sel) fm.Add(hf.fr, e);
+        fm.Build();
+        if (fm.IsDone()) filletedShape = fm.Shape();
+    }
+    return filletedShape;
+}
+
 // ── Mesh generation for Blender preview (OCCT-based, matches STEP export exactly) ──
 
 // Helper: cut round/rrect through-holes into a shape using window_data.
@@ -4128,6 +3865,7 @@ static TopoDS_Shape cut_holes_into_shape(TopoDS_Shape shape,
         return shape;
     std::string wd(window_data);
     std::vector<TopoDS_Shape> cutters;
+    std::vector<HoleFilletInfo> holeFillets;
     std::string::size_type start = 0;
     double half_w = width / 2.0, half_d = depth / 2.0;
 
@@ -4167,7 +3905,14 @@ static TopoDS_Shape cut_holes_into_shape(TopoDS_Shape shape,
                     ax = gp_Ax2(gp_Pnt(cx, cy - cyl_len / 2.0, cz), gp_Dir(0, 1, 0));
                 }
                 BRepPrimAPI_MakeCylinder cm(ax, hole_r, cyl_len);
-                if (!cm.Shape().IsNull()) cutters.push_back(cm.Solid());
+                if (!cm.Shape().IsNull()) {
+                    cutters.push_back(cm.Solid());
+                    // Round: fillet_r=fields[5], fillet_type=fields[6]
+                    double fr = (fields.size() >= 6) ? fields[5] : 0.0;
+                    int ft = (fields.size() >= 7) ? (int)fields[6] : 2;
+                    if (fr > 0.0001)
+                        holeFillets.push_back({cx, cy, cz, hole_r, fr, ft, 0, 0, fc, thickness});
+                }
             }
             // Type 2: rounded rect hole
             else if (fields.size() >= 7 && fabs(type_code - 2.0) < 1e-6) {
@@ -4192,6 +3937,11 @@ static TopoDS_Shape cut_holes_into_shape(TopoDS_Shape shape,
                     gp_Trsf trsf;
                     trsf.SetTranslation(gp_Vec(bx + sx / 2.0, by + sy / 2.0, bz + sz / 2.0));
                     cutters.push_back(BRepBuilderAPI_Transform(rbox, trsf).Shape());
+                    // Rrect: fillet_r=fields[7], fillet_type=fields[8]
+                    double fr = (fields.size() >= 8) ? fields[7] : 0.0;
+                    int ft = (fields.size() >= 9) ? (int)fields[8] : 2;
+                    if (fr > 0.0001)
+                        holeFillets.push_back({cx, cy, cz, 0, fr, ft, rw, rh, fc, thickness});
                 }
             }
         }
@@ -4205,6 +3955,10 @@ static TopoDS_Shape cut_holes_into_shape(TopoDS_Shape shape,
         BRepAlgoAPI_Cut cutOp(result, cutters[ci]);
         if (cutOp.IsDone() && !cutOp.Shape().IsNull())
             result = cutOp.Shape();
+    }
+    // Apply hole fillets (outer/inner/both)
+    if (!holeFillets.empty()) {
+        result = apply_hole_fillets(result, holeFillets, width, depth, height, thickness);
     }
     return result;
 }
@@ -4258,7 +4012,8 @@ PyObject* generate_parametric_shell_mesh(PyObject* self, PyObject* args) {
         }
 
         // Triangulate the solid (fine deflection for smooth preview surface)
-        BRepMesh_IncrementalMesh mesh(shape, 0.2);
+        // Fine triangulation for smooth preview (small deflection + angular control)
+        BRepMesh_IncrementalMesh mesh(shape, 0.08, Standard_False, 0.15);
         mesh.Perform();
 
         // Hash-based vertex dedup: O(n) via position key

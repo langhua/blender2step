@@ -1,14 +1,20 @@
-# Inner Fillet on NURBS Side Walls — KNOWN LIMITATION (updated 2026-07-30)
+# Inner Fillet on NURBS Side Walls — SOLVED via single-best-edge (updated 2026-08-02)
 
-## OCCT 7.8.1 硬限制（仅侧壁 face 2-5）
+## OCCT 7.8.1 — 单条最佳边策略下全部可用
 
-`BRepFilletAPI_MakeFillet` 不支持 NURBS/B-spline 曲面上的内侧圆角方向控制。
+`apply_hole_fillets` 重写为**单条最佳边/每条 rim 只选一条**后，NURBS 侧壁三种 fillet 全可用：
 
 | fillet_type | NURBS 侧壁 (face 2-5) | NURBS 底面 (face 0) | Planar |
 |-------------|----------------------|---------------------|--------|
 | 0 (outer)   | ✅ 可用 | ✅ 可用 | ✅ |
-| 1 (inner)   | ⚠️ 不可靠 | ✅ 可用 (2026-07-30修复) | ✅ |
+| 1 (inner)   | ✅ 可用 (2026-08-02 启用) | ✅ 可用 | ✅ |
 | 2 (both)    | ✅ 可用 | ✅ 可用 | ✅ |
+
+**关键**：type=1 与 type=2 共享同一 `bestInner` 选择逻辑（dist band effR*0.5..1.6 + 沿孔轴 |midCoord| 最小）。type=2 已验证可用（内含内侧边圆角），type=1 走完全相同的单边路径，同样可靠。UI 已解除"curved side wall 禁止 Inner"限制（round hole）。
+
+## 旧限制（多边实现，已过时）
+
+旧实现推入 rim 附近**所有**碎片边 → BRepFilletAPI 在 NURBS 碎片边上方向失控。此限制不再适用于单条最佳边实现。
 
 ## 2026-07-30 Blender 侧修复
 

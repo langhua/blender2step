@@ -250,21 +250,23 @@ bool curved = strcmp(corner_type, "curved") == 0;  // 必须带 'd'
 
 `'curve'`（无 'd'）被当作 `'square'` 处理。
 
-### 9.4 NURBS 面圆角限制（OCCT 7.8.1 硬限制）
+### 9.4 NURBS 面圆角限制（OCCT 7.8.1）— 2026-08-02 更新
 
-`corner_type='curved'` 的余弦 loft 侧壁面为 NURBS/B-spline 曲面。OCCT 的 `BRepFilletAPI_MakeFillet` 在此类面上的行为：
+`corner_type='curved'` 的余弦 loft 侧壁面为 NURBS/B-spline 曲面。OCCT 的 `BRepFilletAPI_MakeFillet` 在此类面上的行为（**单条最佳边**策略下）：
 
 | fillet_type | NURBS 面结果 | 说明 |
 |-------------|-------------|------|
-| `0`（仅外侧） | ✅ 可用 | OCCT 可正常创建外侧圆角 |
-| `1`（仅内侧） | ❌ 不可用 | OCCT 方向失控，实际产生双侧圆角（等同于 type=2）。Blender UI 已禁止在 curved shell 上选择此选项 |
-| `2`（双侧） | ✅ 可用 | 同时推入内外侧边缘，OCCT 有足够几何上下文正确创建双侧圆角 |
+| `0`（仅外侧） | ✅ 可用 | 推入单条 `bestOuter`，OCCT 正常创建外侧圆角 |
+| `1`（仅内侧） | ✅ 可用 | 推入单条 `bestInner`（与 type=2 的内侧边完全相同的边），OCCT 正确创建内侧圆角 |
+| `2`（双侧） | ✅ 可用 | 同时推入 `bestOuter` + `bestInner`，均正常创建 |
 
-**根本原因**：OCCT 不支持 NURBS 边缘的圆角方向控制。`BRepFilletAPI_MakeFillet::Add(radius, edge)` 没有面方向参数，`Add(edge, f1, f2, radius)` API 不存在（7.8.1）。当仅推入内侧边缘时，OCCT 无法判断圆角方向，默认为双侧。
+**关键**：`apply_hole_fillets` 重写为**单条最佳边/每条 rim 只选一条**后，type=1 与 type=2 共享同一 `bestInner` 选择逻辑（dist band `effR*0.5..effR*1.6` + 沿孔轴 |midCoord| 最小）。由于 type=2 已验证可用（内含内侧边圆角），type=1 使用同一单边走完全相同路径，同样可靠。
+
+**旧限制（已过时）**：旧实现把 rim 附近**所有**碎片边推入 `MakeFillet`，NURBS 碎片边导致方向失控。该限制不再适用于单条最佳边实现。
 
 `fc=0/1`（底面/顶面，解析 PLANE）始终产生标准 TOROIDAL_SURFACE，三种类型均完全可用。
 
-#### 已尝试的方案（均失败）
+#### 已尝试的方案（旧多边实现，均失败）
 
 | # | 尝试 | 代码 | 结果 |
 |---|------|------|------|
@@ -274,6 +276,6 @@ bool curved = strcmp(corner_type, "curved") == 0;  // 必须带 'd'
 | 4 | 反转 NURBS 面法向 | `BRepTools::Reverse(face)` | 未实施 — 会破坏壳体几何完整性，风险过高 |
 | 5 | 手动构建 torus 融合 | `BRepPrimAPI_MakeTorus` + `BRepAlgoAPI_Fuse` | 未实施 — 需精确匹配 NURBS 曲面，极难实现 |
 | 6 | 在切割圆柱上加圆角环 | 修改 hole cutter 几何 | 未实施 — 影响所有切割逻辑，改动范围过大 |
-| 7 | 收集所有边缘替代单一最佳边缘 | 推入全部内侧边缘片段（代替仅 1 条最佳边缘） | OCCT 仍方向失控，实际产生双侧圆角 |
+| 7 | 收集所有边缘替代单一最佳边缘 | 推入全部内侧边缘片段（代替仅 1 条最佳边缘） | OCCT 仍方向失控，实际产生双侧圆角（此方案已被"单条最佳边"取代） |
 
 ### 9.5 corner_type 字符串精确匹配

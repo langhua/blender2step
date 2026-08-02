@@ -3444,11 +3444,11 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                     if (face_code >= 0) {
                         // 0=bottom, 1=top, 2=left, 3=right, 4=front, 5=back
                         // Cylinder axis passes through hole center for ALL faces
-                        if (face_code == 0) {
-                            // Slight Z offset avoids coincident faces with shell bottom (OCCT tolerance)
-                            ax = gp_Ax2(gp_Pnt(cx, cy, cz - 0.5), gp_Dir(0, 0, 1));
-                        } else if (face_code == 1) {
-                            ax = gp_Ax2(gp_Pnt(cx, cy, cz - 0.5), gp_Dir(0, 0, 1));
+                        if (face_code == 0 || face_code == 1) {
+                            // Center the cylinder on the hole so it extends below
+                            // the exterior bottom (z=0) for a clean through-hole
+                            // (avoids a residual floor from a one-sided cutter).
+                            ax = gp_Ax2(gp_Pnt(cx, cy, cz - cyl_len / 2.0), gp_Dir(0, 0, 1));
                         } else if (face_code == 2) {
                             ax = gp_Ax2(gp_Pnt(cx - cyl_len / 2.0, cy, cz), gp_Dir(1, 0, 0));
                         } else if (face_code == 3) {
@@ -3793,9 +3793,22 @@ static TopoDS_Shape apply_hole_fillets(TopoDS_Shape shape,
 
         for (TopExp_Explorer ex(filletedShape, TopAbs_EDGE); ex.More(); ex.Next()) {
             const TopoDS_Edge& edge = TopoDS::Edge(ex.Current());
-            Bnd_Box eb; BRepBndLib::Add(edge, eb);
-            double ex1,ey1,ez1,ex2,ey2,ez2; eb.Get(ex1,ey1,ez1,ex2,ey2,ez2);
-            double ecx=(ex1+ex2)/2.0, ecy=(ey1+ey2)/2.0, ecz=(ez1+ez2)/2.0;
+            // Use the edge's actual curve midpoint (on the curve), NOT the
+            // bounding-box midpoint. A clean full circular rim edge (planar
+            // bottom/top faces) has bbox center ON the hole axis (dist≈0),
+            // which would be wrongly excluded from the rim band; its curve
+            // midpoint sits on the circle at dist≈effR.
+            double f0 = 0, f1 = 0;
+            Handle(Geom_Curve) cv = BRep_Tool::Curve(edge, f0, f1);
+            double ecx = 0, ecy = 0, ecz = 0;
+            if (!cv.IsNull() && f1 - f0 > 1e-12) {
+                gp_Pnt mp = cv->Value((f0 + f1) / 2.0);
+                ecx = mp.X(); ecy = mp.Y(); ecz = mp.Z();
+            } else {
+                Bnd_Box eb; BRepBndLib::Add(edge, eb);
+                double ex1,ey1,ez1,ex2,ey2,ez2; eb.Get(ex1,ey1,ez1,ex2,ey2,ez2);
+                ecx=(ex1+ex2)/2.0; ecy=(ey1+ey2)/2.0; ecz=(ez1+ez2)/2.0;
+            }
             double dist = 0, midCoord = 0;
             int fc = hf.fc;
             if (fc <= 1) { dist = sqrt((ecx-hf.cx)*(ecx-hf.cx)+(ecy-hf.cy)*(ecy-hf.cy)); midCoord = ecz; }
@@ -3898,7 +3911,9 @@ static TopoDS_Shape cut_holes_into_shape(TopoDS_Shape shape,
                 gp_Ax2 ax;
                 int fc = (int)face_code;
                 if (fc == 0 || fc == 1) {
-                    ax = gp_Ax2(gp_Pnt(cx, cy, cz - 0.5), gp_Dir(0, 0, 1));
+                    // Center the cylinder on the hole so it extends below the
+                    // exterior bottom (z=0) for a clean through-hole.
+                    ax = gp_Ax2(gp_Pnt(cx, cy, cz - cyl_len / 2.0), gp_Dir(0, 0, 1));
                 } else if (fc == 2 || fc == 3) {
                     ax = gp_Ax2(gp_Pnt(cx - cyl_len / 2.0, cy, cz), gp_Dir(1, 0, 0));
                 } else {

@@ -3287,6 +3287,13 @@ static TopoDS_Shape apply_hole_fillets(TopoDS_Shape shape,
                                        double width, double depth, double height,
                                        double thickness);
 
+// Build a rounded-rect box cutter: plain box with the 4 edges parallel to the
+// through-wall axis filleted by rcr (0=X, 1=Y, 2=Z). Shared by STEP export and
+// the Blender preview so both produce identical rrect holes.
+static TopoDS_Shape make_rrect_cutter_box(double bx, double by, double bz,
+                                          double sx, double sy, double sz,
+                                          double rcr, int edge_axis);
+
 PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
     const char* filename; const char* corner_type = "square"; const char* step_schema = "AP214IS";
     const char* unit = "MILLIMETER"; int enable_logging = 1;
@@ -3479,16 +3486,6 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                         std::cout << "[STEP Exporter] Hole cutter: circular r=" << hole_r
                                   << " at (" << cx << "," << cy << "," << cz << ") (dist-based)" << std::endl;
                     }
-                    // Diagnostic: print cutter axis and center
-                    {
-                        gp_Pnt center = ax.Location();
-                        gp_Dir dir = ax.Direction();
-                        std::cout << "[DIAG] Cutter(cyl) center=(" << center.X() << "," << center.Y() << "," << center.Z() << ") dir=(" << dir.X() << "," << dir.Y() << "," << dir.Z() << ") len=" << cyl_len << std::endl;
-                        // Cutter bbox estimate
-                        Bnd_Box cb; BRepBndLib::Add(BRepPrimAPI_MakeCylinder(ax, hole_r, cyl_len).Shape(), cb);
-                        double cx1,cy1,cz1,cx2,cy2,cz2; cb.Get(cx1,cy1,cz1,cx2,cy2,cz2);
-                        std::cout << "[DIAG] Cutter bbox: ("<<cx1<<","<<cy1<<","<<cz1<<") - ("<<cx2<<","<<cy2<<","<<cz2<<")" << std::endl;
-                    }
                     BRepPrimAPI_MakeCylinder cm(ax, hole_r, cyl_len);
                     if (!cm.Shape().IsNull()) {
                         cutters.push_back(cm.Solid());
@@ -3525,51 +3522,24 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                     }
                     BRepPrimAPI_MakeBox bm(gp_Pnt(bx, by, bz), sx, sy, sz);
                     if (!bm.Shape().IsNull()) {
-                        TopoDS_Shape hs = bm.Shape();
-                        // Diagnostic: print rrect cutter bbox and placement
-                        {
-                            Bnd_Box cb; BRepBndLib::Add(hs, cb);
-                            double cx1,cy1,cz1,cx2,cy2,cz2; cb.Get(cx1,cy1,cz1,cx2,cy2,cz2);
-                            std::cout << "[DIAG] RRect cutter bbox: ("<<cx1<<","<<cy1<<","<<cz1<<") - ("<<cx2<<","<<cy2<<","<<cz2<<") at center approx=("<<(cx1+cx2)/2.0<<","<<(cy1+cy2)/2.0<<","<<(cz1+cz2)/2.0<<")" << std::endl;
-                        }
-                        // Fillet edges parallel to the axis through the wall
-                        BRepFilletAPI_MakeFillet fm(TopoDS::Solid(hs));
-                        int ec = 0;
-                        for (TopExp_Explorer ex(hs, TopAbs_EDGE); ex.More(); ex.Next()) {
-                            TopoDS_Edge e = TopoDS::Edge(ex.Current());
-                            double f, l;
-                            Handle(Geom_Curve) cv = BRep_Tool::Curve(e, f, l);
-                            if (!cv.IsNull() && cv->DynamicType() == STANDARD_TYPE(Geom_Line)) {
-                                gp_Vec d(cv->Value(f), cv->Value(l));
-                                bool is_parallel = false;
-                                if (edge_axis == 0) is_parallel = (fabs(d.Y()) < 1e-6 && fabs(d.Z()) < 1e-6);
-                                else if (edge_axis == 1) is_parallel = (fabs(d.X()) < 1e-6 && fabs(d.Z()) < 1e-6);
-                                else is_parallel = (fabs(d.X()) < 1e-6 && fabs(d.Y()) < 1e-6);
-                                if (is_parallel) { fm.Add(rcr, e); ec++; }
+                        // Rounded-rect cutter (same construction as preview)
+                        TopoDS_Shape hs = make_rrect_cutter_box(bx, by, bz, sx, sy, sz, rcr, edge_axis);
+                        if (!hs.IsNull()) {
+                            cutters.push_back(hs);
+                            if (hole_fr > 0.0001) {
+                                holeFillets.push_back({cx, cy, cz, 0, hole_fr, hole_ft, rw, rh, (int)face_code, thickness});
                             }
+                            std::cout << "[STEP Exporter] Hole cutter: rounded rect "
+                                      << rw << "x" << rh << " r=" << rcr
+                                      << " at (" << cx << "," << cy << "," << cz << ") face=" << face_code << std::endl;
                         }
-                        if (ec > 0) { fm.Build(); if (fm.IsDone()) hs = fm.Shape(); else std::cout << "[STEP Exporter]   fillet FAILED" << std::endl; }
-                        cutters.push_back(hs);
-                        if (hole_fr > 0.0001) {
-                            holeFillets.push_back({cx, cy, cz, 0, hole_fr, hole_ft, rw, rh, (int)face_code, thickness});
-                        }
-                        std::cout << "[STEP Exporter] Hole cutter: rounded rect "
-                                  << rw << "x" << rh << " r=" << rcr
-                                  << " at (" << cx << "," << cy << "," << cz << ") face=" << face_code
-                                  << " edges=" << ec << std::endl;
                     }
                 }
 
                 if (next == std::string::npos) break;
             }
 
-                // Diagnostic: shell bbox before cuts
-                {
-                    Bnd_Box sb; BRepBndLib::Add(shape, sb);
-                    double sx1,sy1,sz1,sx2,sy2,sz2; sb.Get(sx1,sy1,sz1,sx2,sy2,sz2);
-                    std::cout << "[DIAG] Shell pre-cut bbox: ("<<sx1<<","<<sy1<<","<<sz1<<") - ("<<sx2<<","<<sy2<<","<<sz2<<")" << std::endl;
-                }
-                // Save pre-cut shape for face replacement supplement
+            // Save pre-cut shape for face replacement supplement
             TopoDS_Shape shapePreCut = shape;
 
             // Cut holes one at a time
@@ -3587,10 +3557,6 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                     BRepAlgoAPI_Cut cutOp(shape, cutters[ci]);
                     if (cutOp.IsDone()) {
                         TopoDS_Shape newShape = cutOp.Shape();
-                    // Diagnostic: bbox after this cut
-                    Bnd_Box sb2; BRepBndLib::Add(newShape, sb2);
-                    double sx1,sy1,sz1,sx2,sy2,sz2; sb2.Get(sx1,sy1,sz1,sx2,sy2,sz2);
-                    std::cout << "[DIAG] Shell post-cut bbox (cutter "<<ci<<"): ("<<sx1<<","<<sy1<<","<<sz1<<") - ("<<sx2<<","<<sy2<<","<<sz2<<")" << std::endl;
                         // Verify shape actually changed
                         TopExp_Explorer oldExp(shape, TopAbs_SOLID);
                         TopExp_Explorer newExp(newShape, TopAbs_SOLID);
@@ -3661,14 +3627,6 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
             double rot_center_z = total_h / 2.0;
             if (rot_x != 0.0 || rot_y != 0.0 || rot_z != 0.0) {
                 double wcx = pos_x, wcy = pos_y, wcz = pos_z + rot_center_z;
-                fprintf(stderr, "[STEP DIAG] ROTATION: rx=%.4f ry=%.4f rz=%.4f center=(%.3f,%.3f,%.3f) total_h=%.3f\n",
-                        rot_x, rot_y, rot_z, wcx, wcy, wcz, total_h);
-                // Bounds before rotation
-                Bnd_Box bbox_before; BRepBndLib::Add(shape, bbox_before);
-                double bx1, by1, bz1, bx2, by2, bz2;
-                bbox_before.Get(bx1, by1, bz1, bx2, by2, bz2);
-                fprintf(stderr, "[STEP DIAG]   bounds BEFORE rot: X=[%.2f,%.2f] Y=[%.2f,%.2f] Z=[%.2f,%.2f]\n",
-                        bx1, bx2, by1, by2, bz1, bz2);
                 gp_Trsf toOrigin; toOrigin.SetTranslation(gp_Vec(-wcx, -wcy, -wcz));
                 shape = BRepBuilderAPI_Transform(shape, toOrigin).Shape();
                 gp_Trsf rot;
@@ -3680,12 +3638,6 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                 shape = BRepBuilderAPI_Transform(shape, rot).Shape();
                 gp_Trsf toWorld; toWorld.SetTranslation(gp_Vec(wcx, wcy, wcz));
                 shape = BRepBuilderAPI_Transform(shape, toWorld).Shape();
-                // Bounds after rotation
-                Bnd_Box bbox_after; BRepBndLib::Add(shape, bbox_after);
-                double ax1, ay1, az1, ax2, ay2, az2;
-                bbox_after.Get(ax1, ay1, az1, ax2, ay2, az2);
-                fprintf(stderr, "[STEP DIAG]   bounds AFTER  rot: X=[%.2f,%.2f] Y=[%.2f,%.2f] Z=[%.2f,%.2f]\n",
-                        ax1, ax2, ay1, ay2, az1, az2);
             }
         }
 
@@ -3801,20 +3753,53 @@ static TopoDS_Shape apply_hole_fillets(TopoDS_Shape shape,
             double f0 = 0, f1 = 0;
             Handle(Geom_Curve) cv = BRep_Tool::Curve(edge, f0, f1);
             double ecx = 0, ecy = 0, ecz = 0;
+            gp_Pnt ep0(0,0,0), ep1(0,0,0);
             if (!cv.IsNull() && f1 - f0 > 1e-12) {
+                ep0 = cv->Value(f0); ep1 = cv->Value(f1);
                 gp_Pnt mp = cv->Value((f0 + f1) / 2.0);
                 ecx = mp.X(); ecy = mp.Y(); ecz = mp.Z();
             } else {
                 Bnd_Box eb; BRepBndLib::Add(edge, eb);
                 double ex1,ey1,ez1,ex2,ey2,ez2; eb.Get(ex1,ey1,ez1,ex2,ey2,ez2);
                 ecx=(ex1+ex2)/2.0; ecy=(ey1+ey2)/2.0; ecz=(ez1+ez2)/2.0;
+                ep0=gp_Pnt(ex1,ey1,ez1); ep1=gp_Pnt(ex2,ey2,ez2);
             }
             double dist = 0, midCoord = 0;
             int fc = hf.fc;
-            if (fc <= 1) { dist = sqrt((ecx-hf.cx)*(ecx-hf.cx)+(ecy-hf.cy)*(ecy-hf.cy)); midCoord = ecz; }
-            else if (fc <= 3) { dist = sqrt((ecy-hf.cy)*(ecy-hf.cy)+(ecz-hf.cz)*(ecz-hf.cz)); midCoord = ecx; }
-            else { dist = sqrt((ecx-hf.cx)*(ecx-hf.cx)+(ecz-hf.cz)*(ecz-hf.cz)); midCoord = ecy; }
-            if (dist < effR * 0.5 || dist > effR * 1.6) continue;  // near rim band
+            bool belongs = false;
+            if (isRound) {
+                // Round: keep the proven wide radius band (single circular rim per hole).
+                if (fc <= 1) { dist = sqrt((ecx-hf.cx)*(ecx-hf.cx)+(ecy-hf.cy)*(ecy-hf.cy)); midCoord = ecz; }
+                else if (fc <= 3) { dist = sqrt((ecy-hf.cy)*(ecy-hf.cy)+(ecz-hf.cz)*(ecz-hf.cz)); midCoord = ecx; }
+                else { dist = sqrt((ecx-hf.cx)*(ecx-hf.cx)+(ecz-hf.cz)*(ecz-hf.cz)); midCoord = ecy; }
+                belongs = (dist >= effR * 0.5 && dist <= effR * 1.6);
+            } else {
+                // Rrect: tight contour-box membership + rim co-planarity so each hole
+                // only collects ITS OWN rim edges (no crosstalk between adjacent holes).
+                double tol = 0.7;  // mm tolerance around the rrect footprint
+                if (fc <= 1) {
+                    midCoord = ecz;
+                    belongs = (fabs(ecx-hf.cx) <= hf.w/2.0 + tol) && (fabs(ecy-hf.cy) <= hf.h/2.0 + tol);
+                    // Rim edges run ALONG the hole contour (delta in X or Y > 0).
+                    // Vertical through-edges (Z) have ~0 delta in both X and Y.
+                    if (belongs && !cv.IsNull() && f1-f0 > 1e-12 &&
+                        fabs(ep0.X()-ep1.X()) < 1e-6 && fabs(ep0.Y()-ep1.Y()) < 1e-6) belongs = false;
+                } else if (fc <= 3) {
+                    midCoord = ecx;
+                    belongs = (fabs(ecy-hf.cy) <= hf.w/2.0 + tol) && (fabs(ecz-hf.cz) <= hf.h/2.0 + tol);
+                    // Rim edges run along Y/Z; through-edges run along X (delta Y & Z ~0).
+                    // Works for curved walls too (rim edge endpoints move in Y/Z).
+                    if (belongs && !cv.IsNull() && f1-f0 > 1e-12 &&
+                        fabs(ep0.Y()-ep1.Y()) < 1e-6 && fabs(ep0.Z()-ep1.Z()) < 1e-6) belongs = false;
+                } else {
+                    midCoord = ecy;
+                    belongs = (fabs(ecx-hf.cx) <= hf.w/2.0 + tol) && (fabs(ecz-hf.cz) <= hf.h/2.0 + tol);
+                    // Rim edges run along X/Z; through-edges run along Y (delta X & Z ~0).
+                    if (belongs && !cv.IsNull() && f1-f0 > 1e-12 &&
+                        fabs(ep0.X()-ep1.X()) < 1e-6 && fabs(ep0.Z()-ep1.Z()) < 1e-6) belongs = false;
+                }
+            }
+            if (!belongs) continue;
             double m = fabs(midCoord);
             if (isRound) {
                 if (bottomFace) {   // bottom: outer rim at min|z|, inner at max|z|
@@ -3867,6 +3852,34 @@ static TopoDS_Shape apply_hole_fillets(TopoDS_Shape shape,
 }
 
 // ── Mesh generation for Blender preview (OCCT-based, matches STEP export exactly) ──
+
+// Build a rounded-rect box cutter identical to the STEP export's rrect cutter:
+// a plain box with the 4 edges parallel to the through-wall axis filleted by rcr.
+// edge_axis: 0=X, 1=Y, 2=Z (the axis pointing through the wall).
+static TopoDS_Shape make_rrect_cutter_box(double bx, double by, double bz,
+                                          double sx, double sy, double sz,
+                                          double rcr, int edge_axis) {
+    BRepPrimAPI_MakeBox bm(gp_Pnt(bx, by, bz), sx, sy, sz);
+    if (bm.Shape().IsNull()) return TopoDS_Shape();
+    TopoDS_Shape hs = bm.Shape();
+    BRepFilletAPI_MakeFillet fm(TopoDS::Solid(hs));
+    int ec = 0;
+    for (TopExp_Explorer ex(hs, TopAbs_EDGE); ex.More(); ex.Next()) {
+        TopoDS_Edge e = TopoDS::Edge(ex.Current());
+        double f, l;
+        Handle(Geom_Curve) cv = BRep_Tool::Curve(e, f, l);
+        if (!cv.IsNull() && cv->DynamicType() == STANDARD_TYPE(Geom_Line)) {
+            gp_Vec d(cv->Value(f), cv->Value(l));
+            bool is_parallel = false;
+            if (edge_axis == 0) is_parallel = (fabs(d.Y()) < 1e-6 && fabs(d.Z()) < 1e-6);
+            else if (edge_axis == 1) is_parallel = (fabs(d.X()) < 1e-6 && fabs(d.Z()) < 1e-6);
+            else is_parallel = (fabs(d.X()) < 1e-6 && fabs(d.Y()) < 1e-6);
+            if (is_parallel) { fm.Add(rcr, e); ec++; }
+        }
+    }
+    if (ec > 0) { fm.Build(); if (fm.IsDone()) hs = fm.Shape(); }
+    return hs;
+}
 
 // Helper: cut round/rrect through-holes into a shape using window_data.
 // Returns the cut shape. (No fillets — preview only needs the hole geometry.)
@@ -3935,23 +3948,30 @@ static TopoDS_Shape cut_holes_into_shape(TopoDS_Shape shape,
                 if (rcr <= 0) rcr = 0.5;
                 double cut_d = thickness * 4.0;
                 double bx, by, bz, sx, sy, sz;
+                int edge_axis;  // through-wall axis: 0=X, 1=Y, 2=Z
                 int fc = (int)face_code;
                 if (fc == 0 || fc == 1) {
+                    // Bottom/Top: rrect in XY, through Z (width along X, height along Y)
                     bx = cx - rw / 2.0; by = cy - rh / 2.0; bz = cz - cut_d / 2.0;
                     sx = rw; sy = rh; sz = cut_d;
+                    edge_axis = 2;
                 } else if (fc == 2 || fc == 3) {
-                    bx = cx - cut_d / 2.0; by = cy - rh / 2.0; bz = cz - rw / 2.0;
-                    sx = cut_d; sy = rh; sz = rw;
+                    // Left/Right walls: rrect in YZ, through X. Width (rw) along Y,
+                    // height (rh) along Z — matches _make_rrect_cutter rotation and
+                    // the STEP export (Y=rw, Z=rh).
+                    bx = cx - cut_d / 2.0; by = cy - rw / 2.0; bz = cz - rh / 2.0;
+                    sx = cut_d; sy = rw; sz = rh;
+                    edge_axis = 0;
                 } else {
+                    // Front/Back: rrect in XZ, through Y
                     bx = cx - rw / 2.0; by = cy - cut_d / 2.0; bz = cz - rh / 2.0;
                     sx = rw; sy = cut_d; sz = rh;
+                    edge_axis = 1;
                 }
-                // Rounded box cutter
-                TopoDS_Shape rbox = create_rounded_box_solid(sx, sy, sz, rcr);
+                // Rounded box cutter (same construction as STEP export)
+                TopoDS_Shape rbox = make_rrect_cutter_box(bx, by, bz, sx, sy, sz, rcr, edge_axis);
                 if (!rbox.IsNull()) {
-                    gp_Trsf trsf;
-                    trsf.SetTranslation(gp_Vec(bx + sx / 2.0, by + sy / 2.0, bz + sz / 2.0));
-                    cutters.push_back(BRepBuilderAPI_Transform(rbox, trsf).Shape());
+                    cutters.push_back(rbox);
                     // Rrect: fillet_r=fields[7], fillet_type=fields[8]
                     double fr = (fields.size() >= 8) ? fields[7] : 0.0;
                     int ft = (fields.size() >= 9) ? (int)fields[8] : 2;

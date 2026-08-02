@@ -1178,11 +1178,6 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
         if not hasattr(self, 'hole_pos_x') or layout is None:
             return
 
-        # Track whether the nearest face is a side wall (NURBS) vs bottom/top (planar).
-        # Bottom/top faces are always flat even on curved shells, so NURBS limitations
-        # (force Both-sides fillet) only apply to true side walls.
-        _is_side_face = False
-
         # ── Shell info ──
         if obj and obj.get('object_type') == 'parametric_shell':
             w = obj.get('width', 100.0)
@@ -1204,7 +1199,6 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
             dist_bottom = abs(pz)
             dist_top = abs(pz - hs)
             min_wall = min(dist_right, dist_left, dist_front, dist_back, dist_bottom, dist_top)
-            _is_side_face = min_wall not in (dist_bottom, dist_top)
 
             box = layout.box()
             box.label(text=_t("Position (X/Y from center, Z from bottom) mm"), icon='ORIENTATION_LOCAL')
@@ -1256,16 +1250,10 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
             layout.prop(self, 'hole_cr')
             layout.prop(self, 'hole_fillet')
             if self.hole_fillet > 0.0001:
-                # Only force both-sides for NURBS curved shell side walls.
-                # Bottom/top faces are planar even on curved shells, so all
-                # three options (outer/inner/both) are available there.
-                obj = context.active_object
-                is_curved = obj and obj.get('corner_type') == 'curved'
-                if is_curved and _is_side_face:
-                    self.hole_fillet_type = '2'
-                    layout.label(text=_t("  ℹ RRect fillet forced Both-sides (curved side wall OCCT limitation)"), icon='INFO')
-                else:
-                    layout.prop(self, 'hole_fillet_type')
+                # All three options (outer/inner/both) are available on every
+                # face — bottom/top are planar, and curved side walls now also
+                # support per-side rrect fillets via the shared OCCT logic.
+                layout.prop(self, 'hole_fillet_type')
             layout.label(text=_t("  → RRect {w:.1f}×{h:.1f}mm cr={cr:.1f}").format(w=self.hole_width, h=self.hole_height, cr=self.hole_cr))
         layout.separator()
         layout.prop(self, 'keep_cutter')

@@ -57,6 +57,55 @@ fragments as inner → filleted both rims.
   side INNER/BOTH/OUTER bspline 17/18/17, rrect toroidal=8, user test30 (3 round
   bottom + round side) toroidal=4, no-fillet toroidal=0.
 
+## 2026-08-02 follow-up 3: rrect on cosine side wall + bottom — CONFIRMED OK
+- **Symptom (false alarm)**: my own test showed side-wall rrect (fc=2) had NO
+  fillet (toroidal=0, bspline=0) and no rim edges in x∈[48,50].
+- **Root cause: TEST CONFIG ERROR.** I placed the side hole at cx=50 (assuming a
+  planar right wall at x=50). But the COSINE (curved) shell's right wall at
+  z=22 is actually at x≈[44.5,46.5] (wall=2). Cutter X∈[46,54] only pierced the
+  outer half [46,46.5] → hole rim at x∈[46,47.29] = cutter end-face, no true rim.
+  The code was fine all along.
+- **Correct center for cosine wall tests**: at z, right wall outer = hw(z), inner
+  = hw(z)-thickness; hw shrinks 50→40 from bottom to top (cosine inset
+  total_inset=min(hw,hd)*curve_ratio*0.5=10). At z=22 outer≈46.5, inner≈44.5, so
+  use cx≈45.5 for a side hole at z=22.
+- **Verify (correct cx=45.5)**: bottom rrect torus 4/4/8/0 (O/I/B/N); side rrect
+  bspline 24/24/32/16 (O/I/B/N). Both STEP + preview correct.
+- **Lesson**: when testing holes on the curved (cosine) shell, hole center must
+  be ON the wall, not at half-width/2. Verify rim by checking surface counts
+  (torus for planar bottom, bspline for NURBS side), not by assuming wall at x=50.
+
+## 2026-08-03 follow-up 4: MULTI-HOLE rrect crosstalk → all holes became BOTH-sides
+- **Symptom**: Blender preview of a shell with 5 rrects (3 bottom O/I/B + 2 side)
+  showed EVERY bottom rrect with BOTH-side rim fillet (single-hole tests were fine).
+- **Root cause**: `apply_hole_fillets` collected rim edges with a WIDE radius band
+  (`dist ∈ [effR*0.5, effR*1.6]`, effR=max(w,h)/1.2). With several holes on the
+  same face, hole A's band captured hole B's rim edges too → each hole's outer/
+  inner split picked up neighbors' rims → everything filleted both sides.
+- **Fix**: rrect holes now use a TIGHT **contour-box membership** test instead of
+  the radius band: edge belongs to hole i iff its curve-midpoint (dx,dy)/(dy,dz)/
+  (dx,dz) lies within the rrect footprint (±w/2, ±h/2 + 0.7 tol) for that face,
+  AND it's a true rim edge (endpoints move ALONG the contour; exclude through-wall
+  edges whose deltas are ~0 in both in-plane axes). Round holes keep the wide band
+  (single circular rim, no crosstalk).
+- **ALSO FIXED**: preview `cut_holes_into_shape` rrect cutter used
+  `create_rounded_box_solid(sx,sy,sz,rcr)` whose corner fillet is in the **XY**
+  plane only → side-wall (fc=2/3, footprint in YZ) and front/back (fc=4/5, XZ)
+  rrect holes came out as PLAIN RECTANGLES (corner radius on wrong plane). Replaced
+  with shared `make_rrect_cutter_box(bx,by,bz,sx,sy,sz,rcr,edge_axis)` = plain box
+  + fillet the 4 edges parallel to the through-wall axis (X/Y/Z), identical to the
+  STEP export's construction. Also fixed fc=2/3 YZ mapping to Y=rw(宽),Z=rh(高) to
+  match `_make_rrect_cutter` rotation + STEP export.
+- **Verify (5-hole combo, 100x80x50 curved wall=2)**:
+  - Preview bottom: x=0 OUTER 1848/88, x=-22 INNER 88/1936, x=+22 BOTH 1848/1936 ✓
+  - Preview side:  y=0 OUTER 783/151, y=-18 BOTH 803/801 ✓
+  - STEP export OK (2.3MB, B_SPLINE=120 TOROIDAL=16 CYLINDRICAL=40)
+  - Round regression (3 round bottom O/I/B): 1008/0, 0/1008, 1008/1008 ✓
+  - Side-wall INNER no longer fails ("no suitable edges")
+- **UI**: removed the "RRect fillet forced Both-sides on curved side wall" override
+  in `parametric_shell.py` draw() — side-wall rrect now shows outer/inner/both like
+  bottom/top (OCCT limitation no longer applies).
+
 ## Code locations (module.cpp)
 - File-scope `HoleFilletInfo` struct + `apply_hole_fillets` fwd decl: ~line 3304
 - STEP export fillet call: `shape = apply_hole_fillets(resultSolid, ...)` ~line 3650

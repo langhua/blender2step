@@ -1,0 +1,9 @@
+bottom OUTER: outer=656 inner=88 mid=333
+bottom INNER: outer=88 inner=656 mid=334
+bottom BOTH: outer=656 inner=656 mid=667
+bottom NONE: outer=88 inner=88 mid=0
+side OUTER: outer=2 inner=2
+side INNER: outer=2 inner=138
+side BOTH: outer=2 inner=187
+side NONE: outer=2 inner=2
+DONE

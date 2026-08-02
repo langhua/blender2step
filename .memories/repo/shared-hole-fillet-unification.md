@@ -106,6 +106,55 @@ fragments as inner → filleted both rims.
   in `parametric_shell.py` draw() — side-wall rrect now shows outer/inner/both like
   bottom/top (OCCT limitation no longer applies).
 
+## 2026-08-03 follow-up 5: ALL shell types (square/rounded/curved) unified on OCCT
+- **Request**: user wants square & rounded shells (and round/rrect holes on them) to
+  use OCCT like curved shells, instead of Blender Boolean (`_do_simple_stage0/1`).
+- **Verified C++ already supports all types**: `create_parametric_shell_solid` handles
+  square/rounded via box-based path (create_rounded_box_solid outer-inner cut + rim
+  ring) and curved via loft path. `generate_parametric_shell_mesh` + `cut_holes_into_shape`
+  + `apply_hole_fillets` all work for every corner_type.
+- **UI changes in parametric_shell.py**:
+  1. `_rebuild_stage_create` now sends ALL corner types to `_rebuild_stage_create_occt`
+     (was curved-only; bpy.ops.create_parametric_shell fallback is now dead).
+  2. `_rebuild_stage_create_occt` gained `corner_type` param (default 'curved'), passes
+     it to `generate_parametric_shell_mesh` instead of hardcoding 'curved'.
+  3. Add-hole `execute()` now always rebuilds via OCCT (removed `is_curved` branch +
+     `_do_simple_stage0/1` calls + Blender cutter object creation — the cutter mesh
+     was only needed for Boolean, OCCT only needs the window_data entry string).
+  4. Remove-hole & edit-hole operators made SYNCHRONOUS (no modal loop) since OCCT
+     rebuild bakes all holes in (`_holes_builtin`).
+- **Verification (100x80x50 wall=2, all 3 types)**: bottom round O/I/B = 1008/0,0/1008,
+  1008/1008; bottom rrect O/I/B = 1851/88,88/1851,1851/1851; side round BOTH midwall
+  fillet verts ~1848 (vs none=84); STEP export torus counts correct (round=4, rrect=16,
+  side=2). All ✓.
+- **IMPORTANT geometry lesson**: side-wall fillet does NOT bulge beyond the outer wall
+  face. On a planar wall the outer rim fillet torus sits INSIDE wall thickness
+  (center x = wall_x - fr, surface spans [wall_x-2fr, wall_x]); inner fillet spans
+  [wall_x-thick, wall_x-thick+2fr]. So detecting side fillet via verts outside the wall
+  face (x>wall_x or x<wall_x-thick) FAILS — must compare mid-wall vertex density
+  (BOTH has ~1800 mid-wall verts, NONE only ~84).
+
+## 2026-08-03 follow-up 6: DEAD CODE REMOVED from parametric_shell.py
+- Removed ~2229 lines (3566→1337) of unreachable Blender-Boolean hole code from
+  `step_exporter/ui/parametric_shell.py` after OCCT unification. Backup at
+  `parametric_shell.py.bak` (keep until user confirms in real Blender UI).
+- Deleted: `_fillet_stage_0..5/_bevel`, `_apply_fillet_torus_union`, `_direct_cut_hole`,
+  `_bmesh_cut_round_tunnel/_circle`, `_cleanup_after_bool/_mesh`, `_delete_small_fragments`,
+  `_do_simple_stage0/1`, `_add_rrect_step_ring`, `_force_redraw`,
+  `_apply_bottom_rrect_recess/_ring`, `_apply_bottom_outer/inner_ring`, `_fillet_hole_edge`,
+  `_fillet_rrect_edge`, `_keep_or_remove`, `_make_ring_shared`, `_tilt_scale`,
+  `_rebuild_stage_hole`, `_rebuild_shell_mesh`; dead methods `_make_rrect_cutter`,
+  `_make_solid_box`, `_apply_bool`, `_build_boolean_shell`, `_make_curved_solid`,
+  `_build_square`, `_build_rounded`; dead `modal()`/`_cleanup_modal()`/`_rb_cleanup()` on
+  add/remove/edit operators. All had ZERO live callers (verified by subagent: no execute()
+  returns RUNNING_MODAL; modal attrs never assigned; no cross-module imports).
+- **Verification**: AST parse OK; Blender 5.2 background E2E — square shell created,
+  3 round holes added one-by-one (OCCT rebuild v=1948→3880→7576), remove hole works,
+  STEP export OK (torus=4). All pass. Also confirmed round+rrect combo OK via direct C++.
+- Lesson: when invoking add_hole_to_shell via bpy.ops directly (no invoke), hole_pos_x/y/z
+  default to 0 → all holes overlap at origin → OCCT fillet fails ("no suitable edges").
+  Always pass explicit hole_pos_x/y/z in tests.
+
 ## Code locations (module.cpp)
 - File-scope `HoleFilletInfo` struct + `apply_hole_fillets` fwd decl: ~line 3304
 - STEP export fillet call: `shape = apply_hole_fillets(resultSolid, ...)` ~line 3650

@@ -89,8 +89,11 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
 
     # ── Curved corner ──
     curve_ratio: FloatProperty(
-        name=_t("Cosine Ratio"), default=50.0, min=0.0, max=100.0, subtype='PERCENTAGE',
-        description=_t("Bottom shrink ratio for cosine walls (0=flat, 100=max curve)"))
+        name=_t("Cosine Ratio X"), default=50.0, min=0.0, max=100.0, subtype='PERCENTAGE',
+        description=_t("Left/right wall cosine ratio (0=flat, 100=max curve)"))
+    curve_ratio_y: FloatProperty(
+        name=_t("Cosine Ratio Y"), default=50.0, min=0.0, max=100.0, subtype='PERCENTAGE',
+        description=_t("Front/back wall cosine ratio, independent from left/right (0=flat, 100=max curve)"))
     eccentric_y: FloatProperty(
         name=_t("Eccentric Y"), default=0.0, min=-100.0, max=100.0, subtype='PERCENTAGE',
         description=_t("Y-axis offset for cosine curve center (−100%=bottom edge, +100%=top edge)"))
@@ -100,12 +103,11 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
 
     # ── Dynamic clamping for curved + rim ──
     def _clamp_cr_bf(self):
-        """When curved corners + rim present, enforce minimum cr=2.7, bf=0.1 to avoid geometry issues."""
+        """When curved corners + rim present, enforce minimum cr=2.7 to avoid boolean issues.
+        Bottom fillet is left as-is (0..any) — the rim works with bf=0."""
         if self.corner_type == 'curved' and self.rim_type != 'none':
             if self.corner_radius < 2.7:
                 self.corner_radius = 2.7
-            if self.bottom_fillet < 0.1:
-                self.bottom_fillet = 0.1
 
     def invoke(self, context, event):
         return context.window_manager.invoke_props_dialog(self, width=360)
@@ -124,13 +126,14 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
             layout.prop(self, 'corner_radius')
         if self.corner_type == 'curved':
             layout.prop(self, 'curve_ratio')
+            layout.prop(self, 'curve_ratio_y')
             layout.prop(self, 'eccentric_y')
             layout.prop(self, 'cosine_layers')
         layout.prop(self, 'bottom_fillet')
         # Hint: minimum values for curved + rim
         if self.corner_type == 'curved' and self.rim_type != 'none':
             hint = layout.box()
-            hint.label(text=_t("Cosine + Rim: CR ≥ 2.7mm, BF ≥ 0.1mm"), icon='INFO')
+            hint.label(text=_t("Cosine + Rim: CR ≥ 2.7mm"), icon='INFO')
         layout.separator()
         layout.prop(self, 'rim_type')
         if self.rim_type != 'none':
@@ -169,6 +172,7 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
                                            self.rim_top_ratio / 100.0, bfs,
                                            self.corner_type,
                                            self.curve_ratio / 100.0,
+                                           self.curve_ratio_y / 100.0,
                                            self.eccentric_y / 100.0,
                                            self.cosine_layers,
                                            S)
@@ -194,6 +198,7 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         obj['rim_top_ratio'] = self.rim_top_ratio
         obj['bottom_fillet'] = self.bottom_fillet
         obj['curve_ratio'] = self.curve_ratio
+        obj['curve_ratio_y'] = self.curve_ratio_y
         obj['eccentric_y'] = self.eccentric_y
         obj['cosine_layers'] = self.cosine_layers
 
@@ -213,14 +218,14 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
     # ── Direct shell with bottom fillet (manual construction) ──
 
     def _build_shell_direct(self, w, d, h, t, bt, cr, rw, rh, rim_type, rim_shape, top_ratio, bf,
-                            corner_type='rounded', curve_ratio=0.5, eccentric_y=0.0,
+                            corner_type='rounded', curve_ratio=0.5, curve_ratio_y=0.5, eccentric_y=0.0,
                             cosine_layers=64, S=0.001):
         """Build shell with bottom fillet via shared profile_utils.
         t=wall thickness, bt=bottom thickness."""
         import math
         
         if corner_type == 'curved' and cr > 0.0001:
-            return self._build_curved_shell(w, d, h, t, bt, cr, rw, rh, rim_type, rim_shape, top_ratio, bf, curve_ratio, eccentric_y, cosine_layers, S)
+            return self._build_curved_shell(w, d, h, t, bt, cr, rw, rh, rim_type, rim_shape, top_ratio, bf, curve_ratio, curve_ratio_y, eccentric_y, cosine_layers, S)
         
         print(f"[Direct] rounded/square path, bf={bf*1000:.1f}mm")
         hw, hd = w / 2.0, d / 2.0
@@ -390,7 +395,7 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
 
     # ── Curved-corner shell (cosine walls, smaller bottom) ──
 
-    def _build_curved_shell(self, w, d, h, t, bt, cr, rw, rh, rim_type, rim_shape, top_ratio, bf, curve_ratio, eccentric_y=0.0, cosine_layers=64, S=0.001):
+    def _build_curved_shell(self, w, d, h, t, bt, cr, rw, rh, rim_type, rim_shape, top_ratio, bf, curve_ratio, curve_ratio_y=0.5, eccentric_y=0.0, cosine_layers=64, S=0.001):
         """Build shell with cosine walls via OCCT (exact STEP match).
         w,d,h,t,bt,cr,rw,rh,bf are in Blender units; converted to STEP units for C++."""
         import bmesh as _bmc
@@ -411,7 +416,7 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
                 rim_type, rw * inv, rh * inv,
                 rim_shape, top_ratio,
                 bf * inv, curve_ratio, eccentric_y,
-                '', int(cosine_layers))
+                '', int(cosine_layers), curve_ratio_y)
             if result is None:
                 raise RuntimeError("OCCT returned None")
             verts = result['vertices']
@@ -1056,6 +1061,7 @@ def _rebuild_stage_create(obj):
     rim_top_ratio = obj.get('rim_top_ratio', 100.0)
     bf = obj.get('bottom_fillet', 0.0)
     curve_ratio = obj.get('curve_ratio', 50.0)
+    curve_ratio_y = obj.get('curve_ratio_y', curve_ratio)
     eccentric_y = obj.get('eccentric_y', 0.0)
     bt = obj.get('bottom_thickness', t)
     wd = obj.get('window_data', '')
@@ -1067,7 +1073,7 @@ def _rebuild_stage_create(obj):
             bpy.context.window.cursor_set('WAIT')
             _rebuild_stage_create_occt(obj, w, d, h_val, t, bt, cr, rim_type_str,
                                        rim_width, rim_height, rim_shape, rim_top_ratio,
-                                       bf, curve_ratio, eccentric_y, wd, wd_local,
+                                       bf, curve_ratio, curve_ratio_y, eccentric_y, wd, wd_local,
                                        corner_type)
         finally:
             bpy.context.window.cursor_set('DEFAULT')
@@ -1083,7 +1089,7 @@ def _rebuild_stage_create(obj):
         corner_radius=cr, bottom_fillet=bf,
         rim_type=rim_type_str, rim_width=rim_width, rim_height=rim_height,
         rim_shape=rim_shape, rim_top_ratio=rim_top_ratio,
-        curve_ratio=curve_ratio, eccentric_y=eccentric_y)
+        curve_ratio=curve_ratio, curve_ratio_y=curve_ratio_y, eccentric_y=eccentric_y)
 
     # Re-find original object by marker (Python ref was invalidated by bpy.ops)
     obj = None
@@ -1110,7 +1116,7 @@ def _rebuild_stage_create(obj):
 
     for key in ('width', 'depth', 'height', 'wall_thickness', 'corner_type',
                 'corner_radius', 'object_type', 'unit', 'rim_type', 'rim_width',
-                'rim_height', 'rim_shape', 'rim_top_ratio', 'bottom_fillet', 'curve_ratio', 'eccentric_y', 'bottom_thickness', 'cosine_layers'):
+                'rim_height', 'rim_shape', 'rim_top_ratio', 'bottom_fillet', 'curve_ratio', 'curve_ratio_y', 'eccentric_y', 'bottom_thickness', 'cosine_layers'):
         val = obj.get(key)
         if val is not None:
             obj[key] = val
@@ -1120,7 +1126,7 @@ def _rebuild_stage_create(obj):
 
 
 def _rebuild_stage_create_occt(obj, w, d, h_val, t, bt, cr, rim_type, rw, rh,
-                               rim_shape, rim_top_ratio, bf, curve_ratio, ecc_y,
+                               rim_shape, rim_top_ratio, bf, curve_ratio, curve_ratio_y, ecc_y,
                                wd, wd_local, corner_type='curved'):
     """Regenerate shell mesh via OCCT with holes pre-cut (exact STEP match).
     Works for square, rounded and curved shells — all share the same OCCT path."""
@@ -1157,7 +1163,7 @@ def _rebuild_stage_create_occt(obj, w, d, h_val, t, bt, cr, rim_type, rw, rh,
             rim_type, rw, rh,
             rim_shape, rim_top_ratio / 100.0,
             bf, curve_ratio / 100.0, ecc_y / 100.0,
-            wd, int(obj.get('cosine_layers', 64)))
+            wd, int(obj.get('cosine_layers', 64)), curve_ratio_y / 100.0)
         if result is None:
             print("[STEP Exporter] OCCT mesh generation failed")
             return

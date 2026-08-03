@@ -41,6 +41,9 @@
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepBndLib.hxx>
 #include <Bnd_Box.hxx>
+#include <BRepAdaptor_Surface.hxx>
+#include <BRepBndLib.hxx>
+#include <Bnd_Box.hxx>
 #include <TopExp_Explorer.hxx>
 #include <BRepCheck_Analyzer.hxx>
 #include <BRepGProp.hxx>
@@ -2782,6 +2785,7 @@ TopoDS_Shape create_parametric_shell_solid(double width, double depth, double he
                                             double rim_top_ratio,
                                             double bottom_fillet,
                                             double curve_ratio,
+                                            double curve_ratio_y,
                                             double eccentric_y,
                                             int n_layers = 64) {
     bool rounded = (corner_type && (strcmp(corner_type, "rounded") == 0) && corner_radius > 0.001);
@@ -2795,16 +2799,26 @@ TopoDS_Shape create_parametric_shell_solid(double width, double depth, double he
         ratio = is_trapezoid ? std::max(0.0, rim_top_ratio) : 1.0;
     }
 
-    // Curved path: rim is horizontal ring at top, not extra height
-    double total_h = (curved || !has_rim) ? height : height + rim_height;
+    // Rim adds a raised outer edge of rim_height (same convention as the box path).
+    // Curved shell body keeps its cosine shape over `height`; the loft is extended
+    // rim_height taller at full width so the rim cut leaves a raised edge on top.
+    double total_h = !has_rim ? height : height + rim_height;
 
     // ── Curved (cosine) path: solid loft with embedded bottom fillet ──
     if (curved) {
         double hw = width / 2.0, hd = depth / 2.0;
-        double total_inset = std::min(hw, hd) * curve_ratio * 0.5;
+        // Independent cosine ratios: curve_ratio → left/right (x) walls,
+        // curve_ratio_y → front/back (y) walls. Equal ratios = uniform proportional shrink.
+        double total_inset_x = std::min(hw, hd) * curve_ratio * 0.5;
+        double total_inset_y = std::min(hw, hd) * curve_ratio_y * 0.5;
         double hh = total_h / 2.0;
         int nLayers = (n_layers > 8) ? n_layers : 64;  // user-controlled loft resolution
-        int bfSegs = (bottom_fillet > 0.001) ? 16 : 0;  // fine circular-fillet resolution
+        // Fine circular-fillet resolution. Scale with bf so SMALL fillets don't pack
+        // 17 near-coincident loft wires into a tiny z-range (that made the B-spline
+        // loft degenerate → 100k+ vertex meshes for bf<~0.8). Wire spacing ≈0.1mm,
+        // capped at 16 (smooth for bf ≥ 1.6).
+        int bfSegs = (bottom_fillet > 0.001)
+            ? std::max(2, (int)std::min(16.0, std::round(bottom_fillet * 10.0))) : 0;
         double bf = bottom_fillet;
 
         // Build layers bottom→top: fillet zone then cosine wall
@@ -2827,11 +2841,12 @@ TopoDS_Shape create_parametric_shell_solid(double width, double depth, double he
                     // Cosine inset at THIS z (not at wall_bot)
                     double t = (hh - (z - z_shift)) / (2.0 * hh);
                     t = std::max(0.0, std::min(1.0, t));
-                    double cos_inset = total_inset * (1.0 - cos(M_PI / 2.0 * t));
+                    double cos_inset_x = total_inset_x * (1.0 - cos(M_PI / 2.0 * t));
+                    double cos_inset_y = total_inset_y * aspect * (1.0 - cos(M_PI / 2.0 * t));
                     zs.push_back(z);
-                    hws.push_back(base_hw - cos_inset - offset);
-                    hds.push_back(base_hd - (cos_inset + offset) * aspect);
-                    yos.push_back(cos_inset * eccentric_y);  // eccentric only on cosine, NOT fillet
+                    hws.push_back(base_hw - cos_inset_x - offset);
+                    hds.push_back(base_hd - cos_inset_y - offset * aspect);
+                    yos.push_back(cos_inset_y * eccentric_y);  // eccentric on cosine Y-inset, NOT fillet
                 }
             }
 
@@ -2843,11 +2858,12 @@ TopoDS_Shape create_parametric_shell_solid(double width, double depth, double he
                 double z = wall_bot + (wall_top - wall_bot) * i / nLayers;
                 double t = (hh - (z - z_shift)) / (2.0 * hh);
                 t = std::max(0.0, std::min(1.0, t));
-                double inset = total_inset * (1.0 - cos(M_PI / 2.0 * t));
+                double inset_x = total_inset_x * (1.0 - cos(M_PI / 2.0 * t));
+                double inset_y = total_inset_y * aspect * (1.0 - cos(M_PI / 2.0 * t));
                 zs.push_back(z);
-                hws.push_back(base_hw - inset);
-                hds.push_back(base_hd - inset * aspect);
-                yos.push_back(inset * eccentric_y);
+                hws.push_back(base_hw - inset_x);
+                hds.push_back(base_hd - inset_y);
+                yos.push_back(inset_y * eccentric_y);
             }
             return std::make_tuple(zs, hws, hds, yos);
         };
@@ -3003,8 +3019,8 @@ TopoDS_Shape create_parametric_shell_solid(double width, double depth, double he
                 double ring_cr = has_corners ? (is_outside ? std::max(cr - rim_width, 0.0) : cr + rim_width) : 0.0;
                 double inner_wall_cr = curved ? cr : (rounded ? std::max(0.0, cr - thickness) : 0.0);
                 double inner_ring_cr = has_corners ? (is_outside ? std::max(cr - thickness, 0.0) : inner_wall_cr + rim_width) : 0.0;
-                TopoDS_Shape oBox = create_rounded_box_solid(ow, od, rim_height + 2.0, ring_cr);
-                TopoDS_Shape iBox = create_rounded_box_solid(iw, id, rim_height + 4.0, inner_ring_cr);
+                TopoDS_Shape oBox = create_rounded_box_solid(ow, od, rim_height, ring_cr);
+                TopoDS_Shape iBox = create_rounded_box_solid(iw, id, rim_height + 2.0, inner_ring_cr);
                 TopoDS_Solid so, si;
                 auto toSolid = [](TopoDS_Shape& s) -> TopoDS_Solid {
                     if (s.ShapeType() == TopAbs_SOLID) return TopoDS::Solid(s);
@@ -3022,7 +3038,8 @@ TopoDS_Shape create_parametric_shell_solid(double width, double depth, double he
 
             if (!ring.IsNull()) {
                 gp_Trsf t;
-                t.SetTranslation(gp_Vec(0, 0, height - rim_height / 2.0));
+                double ring_z = tapered ? height : height + rim_height / 2.0;
+                t.SetTranslation(gp_Vec(0, 0, ring_z));
                 ring = BRepBuilderAPI_Transform(ring, t).Shape();
                 BRepAlgoAPI_Cut rc(result, ring);
                 if (rc.IsDone()) {
@@ -3308,12 +3325,13 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
     const char* rim_shape = "rect"; double rim_top_ratio = 1.0;
     double bottom_fillet = 0.0;
     double curve_ratio = 0.5;
+    double curve_ratio_y = -1.0;  // -1 → same as curve_ratio (backward compat)
     double eccentric_y = 0.0;
     double bottom_thickness = 0.0;
     const char* window_data = "";
     double rot_x = 0.0, rot_y = 0.0, rot_z = 0.0;
 
-    if (!PyArg_ParseTuple(args, "sdddd|ddsdddsddssisddddsddd",
+    if (!PyArg_ParseTuple(args, "sdddd|ddsdddsddssisddddsdddd",
                           &filename, &width, &depth, &height, &thickness,
                           &bottom_thickness, &corner_radius, &corner_type,
                           &pos_x, &pos_y, &pos_z,
@@ -3321,18 +3339,20 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                           &step_schema, &unit, &enable_logging,
                           &rim_shape, &rim_top_ratio,
                           &bottom_fillet, &curve_ratio, &eccentric_y, &window_data,
-                          &rot_x, &rot_y, &rot_z)) {
+                          &rot_x, &rot_y, &rot_z, &curve_ratio_y)) {
         PyErr_SetString(PyExc_TypeError,
             "export_parametric_shell_step() expected: filename, width, depth, height, thickness"
-            "[, bottom_thickness, corner_radius, corner_type, pos_x, pos_y, pos_z, rim_type, rim_width, rim_height, step_schema, unit, enable_logging, rim_shape, rim_top_ratio, bottom_fillet, curve_ratio, eccentric_y, window_data, rot_x, rot_y, rot_z]");
+            "[, bottom_thickness, corner_radius, corner_type, pos_x, pos_y, pos_z, rim_type, rim_width, rim_height, step_schema, unit, enable_logging, rim_shape, rim_top_ratio, bottom_fillet, curve_ratio, eccentric_y, window_data, rot_x, rot_y, rot_z, curve_ratio_y]");
         return NULL;
     }
+    if (curve_ratio_y < 0.0) curve_ratio_y = curve_ratio;  // backward compat: single-ratio callers
 
     std::cout << "\n[STEP Exporter] =========================================" << std::endl;
     std::cout << "[STEP Exporter] Exporting parametric shell to: " << filename << " [CODE:v20260718b]" << std::endl;
     std::cout << "[STEP Exporter]   dims: " << width << "x" << depth << "x" << height
               << " wall=" << thickness << " corner=" << corner_type << " r=" << corner_radius
-              << " bf=" << bottom_fillet << " curve=" << curve_ratio << " ecc_y=" << eccentric_y << std::endl;
+              << " bf=" << bottom_fillet << " curve=" << curve_ratio << "/" << curve_ratio_y
+              << " ecc_y=" << eccentric_y << std::endl;
     std::cout << "[STEP Exporter]   pos=(" << pos_x << "," << pos_y << "," << pos_z << ")" << std::endl;
     if (window_data && window_data[0] != '\0')
         std::cout << "[STEP Exporter]   window_data = \"" << window_data << "\"" << std::endl;
@@ -3362,7 +3382,7 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                                                             thickness, bottom_thickness, corner_type, corner_radius,
                                                             rim_type, rim_width, rim_height,
                                                             rim_shape, rim_top_ratio,
-                                                            bottom_fillet, curve_ratio, eccentric_y);
+                                                            bottom_fillet, curve_ratio, curve_ratio_y, eccentric_y);
         if (shape.IsNull()) {
             if (saved_stdout_fd >= 0) { _dup2(saved_stdout_fd, _fileno(stdout)); if (log_file) fclose(log_file); }
             Py_RETURN_FALSE;
@@ -3448,7 +3468,7 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                     double half_w = width / 2.0, half_d = depth / 2.0;
                     // Cylinder long enough to cut through ONE wall (with curve margin)
                     // but NOT so long it reaches the opposite wall
-                    double curve_inset = std::min(half_w, half_d) * curve_ratio * 0.5;
+                    double curve_inset = std::min(half_w, half_d) * std::max(curve_ratio, curve_ratio_y) * 0.5;
                     double cyl_len = thickness * 4.0 + curve_inset * 2.0 + 10.0;  // through one wall + margin
 
                     // Cylinder centered on hole position (cx,cy,cz), extends ±cyl_len/2
@@ -3890,7 +3910,7 @@ static TopoDS_Shape make_rrect_cutter_box(double bx, double by, double bz,
 // Returns the cut shape. (No fillets — preview only needs the hole geometry.)
 static TopoDS_Shape cut_holes_into_shape(TopoDS_Shape shape,
                                          double width, double depth, double height,
-                                         double thickness, double curve_ratio,
+                                         double thickness, double curve_ratio, double curve_ratio_y,
                                          const char* window_data) {
     if (!window_data || window_data[0] == '\0')
         return shape;
@@ -3924,7 +3944,7 @@ static TopoDS_Shape cut_holes_into_shape(TopoDS_Shape shape,
             // Type 1: round hole
             if (fabs(type_code - 1.0) < 1e-6) {
                 double hole_r = r_or_w;
-                double curve_inset = std::min(half_w, half_d) * curve_ratio * 0.5;
+                double curve_inset = std::min(half_w, half_d) * std::max(curve_ratio, curve_ratio_y) * 0.5;
                 double cyl_len = thickness * 4.0 + curve_inset * 2.0 + 10.0;
                 gp_Ax2 ax;
                 int fc = (int)face_code;
@@ -4013,23 +4033,25 @@ PyObject* generate_parametric_shell_mesh(PyObject* self, PyObject* args) {
     double rim_top_ratio = 1.0;
     double bottom_fillet = 0.0;
     double curve_ratio = 0.5;
+    double curve_ratio_y = -1.0;  // -1 → same as curve_ratio (backward compat)
     double eccentric_y = 0.0;
     const char* window_data = "";
     int cosine_layers = 64;
 
-    if (!PyArg_ParseTuple(args, "ddddd|sdsddsddddsi",
+    if (!PyArg_ParseTuple(args, "ddddd|sdsddsddddsid",
                           &width, &depth, &height, &thickness, &bottom_thickness,
                           &corner_type, &corner_radius,
                           &rim_type, &rim_width, &rim_height,
                           &rim_shape, &rim_top_ratio,
                           &bottom_fillet, &curve_ratio, &eccentric_y,
-                          &window_data, &cosine_layers)) {
+                          &window_data, &cosine_layers, &curve_ratio_y)) {
         PyErr_SetString(PyExc_TypeError,
             "generate_parametric_shell_mesh() expected: width, depth, height, thickness, bottom_thickness"
             "[, corner_type, corner_radius, rim_type, rim_width, rim_height, rim_shape, rim_top_ratio,"
-            " bottom_fillet, curve_ratio, eccentric_y, window_data, cosine_layers]");
+            " bottom_fillet, curve_ratio, eccentric_y, window_data, cosine_layers, curve_ratio_y]");
         return NULL;
     }
+    if (curve_ratio_y < 0.0) curve_ratio_y = curve_ratio;  // backward compat: single-ratio callers
 
     try {
         TopoDS_Shape shape = create_parametric_shell_solid(
@@ -4037,7 +4059,7 @@ PyObject* generate_parametric_shell_mesh(PyObject* self, PyObject* args) {
             corner_type, corner_radius,
             rim_type, rim_width, rim_height,
             rim_shape, rim_top_ratio,
-            bottom_fillet, curve_ratio, eccentric_y,
+            bottom_fillet, curve_ratio, curve_ratio_y, eccentric_y,
             cosine_layers);
 
         if (shape.IsNull()) {
@@ -4046,7 +4068,7 @@ PyObject* generate_parametric_shell_mesh(PyObject* self, PyObject* args) {
 
         // Cut holes (preview only needs geometry, no fillets)
         shape = cut_holes_into_shape(shape, width, depth, height, thickness,
-                                     curve_ratio, window_data);
+                                     curve_ratio, curve_ratio_y, window_data);
         if (shape.IsNull()) {
             Py_RETURN_NONE;
         }
@@ -4127,6 +4149,9 @@ PyObject* generate_parametric_shell_mesh(PyObject* self, PyObject* args) {
         Py_RETURN_NONE;
     }
 }
+
+// ── TEMP DIAGNOSTIC: analyze B-rep faces of a parametric shell (type, z-extent, normal tilt) ──
+// (removed after verification — see session log for the rim-verticality analysis)
 
 // 模块方法定义表
 static PyMethodDef step_exporter_methods[] = {

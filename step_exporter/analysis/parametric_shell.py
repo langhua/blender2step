@@ -45,7 +45,7 @@ def _analyze_parametric_shell_from_mesh(obj, context=None, scale=1.0):
     bf = obj.get('bottom_fillet', 0.0) * unit_factor
 
     log_to_file(f"[STEP Exporter]   unit={unit}, factor={unit_factor}, dims={w_mm:.1f}x{d_mm:.1f}x{h_mm:.1f}mm")
-    log_to_file(f"[STEP Exporter]   curve_ratio={obj.get('curve_ratio', 50.0):.0f}% eccentric_y={obj.get('eccentric_y', 0.0):.0f}%")
+    log_to_file(f"[STEP Exporter]   curve_ratio={obj.get('curve_ratio', 50.0):.0f}% curve_ratio_y={obj.get('curve_ratio_y', obj.get('curve_ratio', 50.0)):.0f}% eccentric_y={obj.get('eccentric_y', 0.0):.0f}%")
     if rim_type != 'none':
         log_to_file(f"[STEP Exporter]   rim={rim_type} rw={rim_w_mm:.1f} rh={rim_h_mm:.1f} shape={rim_shape} ratio={rim_top_ratio:.2f}")
     if bf > 0:
@@ -68,6 +68,7 @@ def _analyze_parametric_shell_from_mesh(obj, context=None, scale=1.0):
         'rim_top_ratio': rim_top_ratio,
         'bottom_fillet': bf,
         'curve_ratio': obj.get('curve_ratio', 0.5) / 100.0 if obj.get('corner_type') == 'curved' else 0.5,
+        'curve_ratio_y': obj.get('curve_ratio_y', obj.get('curve_ratio', 50.0)) / 100.0 if obj.get('corner_type') == 'curved' else 0.5,
         'eccentric_y': obj.get('eccentric_y', 0.0) / 100.0,
         'pos_x': obj.location.x * scale,
         'pos_y': obj.location.y * scale,

@@ -895,7 +895,8 @@ def _parametric_export_staged():
                         wd,
                         pparams.get('rot_x', 0.0),
                         pparams.get('rot_y', 0.0),
-                        pparams.get('rot_z', 0.0))
+                        pparams.get('rot_z', 0.0),
+                        pparams.get('curve_ratio_y', pparams.get('curve_ratio', 0.5)))
                 
                 elif obj_type == 'regular':
                     obj = obj_params

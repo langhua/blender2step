@@ -187,6 +187,64 @@ fragments as inner → filleted both rims.
   `STEPControl_Reader` + `BRepMesh_IncrementalMesh` + dedup function; load pyd standalone
   with `step_exporter\lib` in PATH (DLLs live there; system Python313 works, no Blender).
 
+## 2026-08-03 follow-up 9: INDEPENDENT COSINE RATIOS (curve_ratio_x / curve_ratio_y)
+- **Feature**: left/right (x) walls and front/back (y) walls can now use DIFFERENT
+  cosine ratios. New UI prop `curve_ratio_y`; `curve_ratio` stays = x (left/right).
+- **C++ geometry** (module.cpp `create_parametric_shell_solid` curved path):
+  - `total_inset_x = min(hw,hd)*curve_ratio*0.5`
+  - `total_inset_y = min(hw,hd)*curve_ratio_y*0.5`
+  - layers: `hw -= cos_inset_x`, `hd -= cos_inset_y*aspect` (aspect=hd/hw kept so
+    EQUAL ratios ⇒ identical uniform proportional shrink as before).
+- **API placement (IMPORTANT)**: `curve_ratio_y` was added at the END of both
+  positional arg lists (`generate_parametric_shell_mesh`: after cosine_layers;
+  `export_parametric_shell_step`: after rot_z), with sentinel default `-1.0` →
+  resolved to curve_ratio. This keeps OLD positional callers working unchanged.
+  (First attempt put it in the middle → broke old callers → reverted to end.)
+- **Verify**: standalone pyd — equal 50/50 → x shrink 0.806 / y 0.805 (uniform);
+  old signature == equal-ratio exactly; x=0,y=50 → x flat/bot=50, y 40→32; STEP
+  export OK. Blender E2E: curve_ratio=0, curve_ratio_y=100 → x flat 0.05/0.05,
+  y 0.04→0.02 (curved), `curve_ratio_y` stored on object.
+
+## 2026-08-03 follow-up 10: CURVED SHELL RIM HEIGHT FIX + SMALL-FILLET DEGENERACY
+- **Symptom**: curved (cosine) shell with rim — outer edge height wrong (set 1mm,
+  looked ~0.5mm). Root causes found (2 independent bugs):
+- **Bug A — rim placement** (module.cpp curved path): ring was translated to
+  `height - rim_height/2` with oBox height `rh+2` → no raised edge above shell top
+  (max z = height). Box/rounded path translates to `height + rh/2` with oBox `rh`
+  → raised rim. FIX: curved now (1) `total_h = height + rim_height` when rim present
+  (was always `height` for curved), (2) ring at `tapered ? height : height + rh/2`,
+  (3) oBox/iBox heights `rh`/`rh+2` (was rh+2/rh+4). Verified: rh=1→raise 1.00,
+  rh=2→2.00, rh=0.5→0.50 (matches rounded).
+- **Bug B — small bottom-fillet degeneracy**: bf in ~0.05–0.5mm made the curved loft
+  degenerate → 100k–535k vertex meshes or hangs. Cause: bfSegs=16 packed 17 near-
+  coincident loft wires into a tiny z-range. FIX: `bfSegs = max(2, min(16, round(bf*10)))`
+  (wire spacing ≈0.1mm). Verified: bf=0.5→6425 verts (was 142k), bf=0.8→10k, bf≥1→clean.
+  bf=0.1–0.2 still dense (~35–77k) but functional (not broken).
+- **Bug B trigger**: `_clamp_cr_bf` in parametric_shell.py forced `bottom_fillet=0.1`
+  for curved+rim → always hit the degenerate path. FIX: clamp now only enforces
+  `corner_radius >= 2.7` (bf left as user set, incl. 0). Verified bf=0+rim works.
+- **Blender E2E**: curved+rim rh=1 → 5028 verts (clean), bf stays 0, rim raises 1mm,
+  STEP export OK (336KB).
+
+## 2026-08-03 follow-up 11: RIM VERTICALITY VERIFIED (B-rep analysis)
+- **Question**: are the rim edges vertical (shells mate in pairs via inner/outer edge
+  interlock)? Verified with a temporary B-rep face analyzer (BRepAdaptor_Surface +
+  BRepBndLib, sampled normal at face center AND at top edge; removed after use).
+- **Results (curved & rounded, outside+inside rim)**:
+  - Rim STEP faces (the interlock/mating faces): **planes & cylinders, tilt = 0.0°
+    (perfectly vertical)** for BOTH curved and rounded. ✓
+  - Rim TOP face: plane, 90° (horizontal). ✓
+  - Wall surfaces at rim top (z≈51): rounded = 0.0° (perfect); curved outer wall =
+    0.5-0.7° off vertical, curved inner wall = 1.7-2.7° off (small residual draft
+    from the cosine loft B-spline boundary). Acceptable for snap-fit, not perfectly 0.
+- **DECISION (user, 2026-08-03)**: keep the small curved-wall draft as-is — it's
+  beneficial for mold release (脱模). No need to force 0° verticality.
+- **Lesson**: preview-mesh vertex/triangle analysis is UNRELIABLE for 1mm-thin rim
+  features (528-vert coarse box mesh, no vertices/triangles land in thin strips).
+  Must use B-rep face analysis (BRepAdaptor_Surface normals) for such checks.
+- **Temp diag**: `analyze_shell_faces(...)` returned (type,zmin,zmax,pt,normal_center,
+  normal_top,tilt_center,tilt_top) per face; removed after verification.
+
 ## Code locations (module.cpp)
 - File-scope `HoleFilletInfo` struct + `apply_hole_fillets` fwd decl: ~line 3304
 - STEP export fillet call: `shape = apply_hole_fillets(resultSolid, ...)` ~line 3650

@@ -155,6 +155,38 @@ fragments as inner → filleted both rims.
   default to 0 → all holes overlap at origin → OCCT fillet fails ("no suitable edges").
   Always pass explicit hole_pos_x/y/z in tests.
 
+## 2026-08-03 follow-up 7: CURVED SHELL BOTTOM FILLET — SMOOTH TRANSITION FIX
+- **Symptom**: on cosine (curved) shells with bottom fillet, the wall→fillet transition
+  was smooth but fillet→bottom-face transition showed a visible crease in Blender.
+- **Root cause** (src/export/module.cpp `create_parametric_shell_solid` curved path):
+  the bottom fillet zone used LINEAR z (`z=-hh+bf*i/bfSegs`) with `offset=bf*(1-sin(π/2*s))`.
+  This is NOT a true circular fillet: at the bottom (s=0) dz/ds=bf≠0 but doffset/ds=-bf·π/2≠0,
+  so the surface cuts into the bottom face at ~57°, breaking G1 continuity → crease.
+- **Fix**: parameterize the fillet as a TRUE quarter-circle:
+  - `θ = π/2 · s`, `z = -hh + z_shift + bf·(1-cosθ)`  → dz/dθ=0 at bottom ⇒ tangent VERTICAL
+  - `offset = bf·(1-sinθ)` (radial inset, bf at bottom → 0 at wall)
+  - Also raised `bfSegs` 8→16 (fillet loft resolution).
+- **Verify**: OCCT normal analysis shows smooth tilt 11°→72° across fillet (no jump);
+  mesh density in z[0,0.5]mm near bottom rose from ~3 z-layers (old) to 92 (bfSegs=16);
+  E2E in Blender: create curved+bf=2 (9359 verts), add round hole (13442), STEP export OK.
+- **bfSegs note**: 32 gives more bottom z-layers (197) but LOWER total verts (6462 vs 9599);
+  16 is the better balance (max total verts + 92 bottom layers).
+
+## 2026-08-03 follow-up 8: STEP EXPORT VERIFIED = SAME SMOOTH FILLET (test30.step)
+- **Question**: is the exported .step as smooth as the Blender preview? → YES, provably.
+- **Architecture proof**: `export_parametric_shell_step` AND `generate_parametric_shell_mesh`
+  (preview) both call the SAME `create_parametric_shell_solid`; preview is just a
+  BRepMesh tessellation of it, STEP is the exact B-rep write. Identical geometry.
+- **Read-back verification** (temporary `read_step_mesh` diag fn added to module.cpp,
+  then removed after use): STEPControl_Reader reads test30.step back → BRepMesh 0.05 →
+  triangle normal tilt vs z (tilt = atan2(|nz|, horizontal)):
+  - seam z=0: tilt ≈ 83° (near-tangent to horizontal bottom plane; old broken code ≈33°)
+  - smooth monotonic 83°→62°→44°→33°→22°→13°→10° over z 0→0.45mm (bf≈0.5 in test30)
+  - no jumps anywhere ⇒ G1; z=1.2 flat face = inner bottom floor (bottom_thickness=1.2)
+- **Practical tip**: to read a STEP back through OCCT, add a temporary
+  `STEPControl_Reader` + `BRepMesh_IncrementalMesh` + dedup function; load pyd standalone
+  with `step_exporter\lib` in PATH (DLLs live there; system Python313 works, no Blender).
+
 ## Code locations (module.cpp)
 - File-scope `HoleFilletInfo` struct + `apply_hole_fillets` fwd decl: ~line 3304
 - STEP export fillet call: `shape = apply_hole_fillets(resultSolid, ...)` ~line 3650

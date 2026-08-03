@@ -2804,7 +2804,7 @@ TopoDS_Shape create_parametric_shell_solid(double width, double depth, double he
         double total_inset = std::min(hw, hd) * curve_ratio * 0.5;
         double hh = total_h / 2.0;
         int nLayers = (n_layers > 8) ? n_layers : 64;  // user-controlled loft resolution
-        int bfSegs = (bottom_fillet > 0.001) ? 8 : 0;  // balanced fillet resolution
+        int bfSegs = (bottom_fillet > 0.001) ? 16 : 0;  // fine circular-fillet resolution
         double bf = bottom_fillet;
 
         // Build layers bottom→top: fillet zone then cosine wall
@@ -2813,12 +2813,17 @@ TopoDS_Shape create_parametric_shell_solid(double width, double depth, double he
             std::vector<double> zs, hws, hds, yos;
             double aspect = base_hd / base_hw;  // match Python's proportional inset
 
-            // 1. Bottom fillet zone: z from -hh+z_shift to -hh+z_shift+bf
+            // 1. Bottom fillet zone: true circular fillet connecting bottom face
+            //    (z=-hh) to the wall (z=-hh+bf). Parameterize as a quarter-circle:
+            //      z      = bf*(1-cosθ)   → dz/dθ = 0 at bottom ⇒ tangent is VERTICAL
+            //      offset = bf*(1-sinθ)   → radial inset, 0 at wall
+            //    This gives G1-smooth transition at the bottom face (no crease).
             if (bf > 0.001) {
                 for (int i = 0; i <= bfSegs; i++) {
-                    double z = -hh + z_shift + bf * i / bfSegs;
                     double s = (double)i / bfSegs;
-                    double offset = bf * (1.0 - sin(M_PI / 2.0 * s));
+                    double theta = M_PI / 2.0 * s;
+                    double z = -hh + z_shift + bf * (1.0 - cos(theta));
+                    double offset = bf * (1.0 - sin(theta));
                     // Cosine inset at THIS z (not at wall_bot)
                     double t = (hh - (z - z_shift)) / (2.0 * hh);
                     t = std::max(0.0, std::min(1.0, t));

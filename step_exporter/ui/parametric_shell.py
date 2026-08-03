@@ -87,11 +87,6 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         name=_t("Top Ratio"), default=100.0, min=0.0, max=100.0, subtype='PERCENTAGE',
         description=_t("Top width as % of bottom width (0 = triangle)"))
 
-    # ── Debug ──
-    debug_keep_cutters: BoolProperty(
-        name=_t("Keep Cutters (Debug)"), default=False,
-        description=_t("Keep boolean cutter objects for debugging"))
-
     # ── Curved corner ──
     curve_ratio: FloatProperty(
         name=_t("Cosine Ratio"), default=50.0, min=0.0, max=100.0, subtype='PERCENTAGE',
@@ -145,8 +140,6 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
             if self.rim_shape == 'trapezoid':
                 layout.prop(self, 'rim_top_ratio')
         layout.separator()
-        layout.separator()
-        layout.prop(self, 'debug_keep_cutters')
 
     def execute(self, context):
         # Clamp minimum values for curved + rim shells
@@ -177,7 +170,6 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
                                            self.corner_type,
                                            self.curve_ratio / 100.0,
                                            self.eccentric_y / 100.0,
-                                           self.debug_keep_cutters,
                                            self.cosine_layers,
                                            S)
         finally:
@@ -204,7 +196,6 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         obj['curve_ratio'] = self.curve_ratio
         obj['eccentric_y'] = self.eccentric_y
         obj['cosine_layers'] = self.cosine_layers
-        obj['debug_keep_cutters'] = self.debug_keep_cutters
 
         unit_label = "mm" if self.unit == 'mm' else "m"
         self.report({'INFO'}, _t("Shell: {w:.0f}×{d:.0f}×{h:.0f}{u}, wall={t:.1f}{u}").format(w=w, d=d, h=h, t=t, u=unit_label))
@@ -219,135 +210,17 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         bpy.context.collection.objects.link(obj)
         return obj
 
-    def _make_rim_ring_debug(self, w, d, t, rw, rh, rim_type, z_pos, cr=0.0, rim_shape='rect', top_ratio=1.0):
-        """Create RimRing cutter at given Z position.
-        When rim_shape='trapezoid', top profile is narrower by top_ratio."""
-        if rim_type == 'none' or rw < 0.0001 or rh < 0.0001:
-            return None
-        rtw = rw
-        is_out = (rim_type == 'outside')
-        tapered = (rim_shape == 'trapezoid' and 0.001 < top_ratio < 0.999)
-        if is_out:
-            rw_o, rw_i = w - 2*rtw, max((w - 2*rtw) - 2*t, 0.001)
-            rd_o, rd_i = d - 2*rtw, max((d - 2*rtw) - 2*t, 0.001)
-        else:
-            rw_o, rw_i = w + 2*rtw, max(w - 2*t + 2*rtw, 0.001)
-            rd_o, rd_i = d + 2*rtw, max(d - 2*t + 2*rtw, 0.001)
-        # Trapezoid: ring is 2*rh tall centered at z=h. Profiles at z=h±rh.
-        # Actual shelf is at midpoint z=h (linear interp). Top profile compensates:
-        #   top = shelf_at_h − (bottom − shelf_at_h) = 2*shelf_at_h − bottom
-        # Inside:  shelf edge = inner_wall + rw*ratio
-        # Outside: shelf edge = outer_wall - rw*ratio
-        rw_o_top, rd_o_top = rw_o, rd_o
-        rw_i_top, rd_i_top = rw_i, rd_i
-        if tapered:
-            if is_out:
-                # Outside: shelf outer edge at z=h = outer_wall - rw*ratio
-                #   top = 2*(outer_wall - rw*ratio) - (outer_wall - rw)
-                #       = outer_wall - rw*(2*ratio - 1)
-                rw_o_top = max(w - 2*rtw*(2*top_ratio - 1), 0.001)
-                rd_o_top = max(d - 2*rtw*(2*top_ratio - 1), 0.001)
-            else:
-                # Inside: shelf inner edge at z=h = inner_wall + rw*ratio
-                #   top = 2*(inner_wall + rw*ratio) - (inner_wall + rw)
-                #       = inner_wall + rw*(2*ratio - 1)
-                rw_i_top = max(w - 2*t + 2*rtw*(2*top_ratio - 1), 0.001)
-                rd_i_top = max(d - 2*t + 2*rtw*(2*top_ratio - 1), 0.001)
-        rm = bmesh.new()
-        r_half = rh
-        use_rounded = (cr > 0.0001)
-        if use_rounded:
-            hw_o, hd_o = rw_o / 2.0, rd_o / 2.0
-            hw_i, hd_i = max(rw_i, 0.001) / 2.0, max(rd_i, 0.001) / 2.0
-            if is_out:
-                cr_o = max(cr - rtw, 0.0001)
-                cr_i = max(cr - t, 0.0001)
-            else:
-                cr_o = max(cr + rtw, 0.0001)
-                cr_i = max(cr - t + rtw, 0.0001)
-            seg = max(8, int(cr / min(w, d) * 64))
-            o_pts = make_profile(hw_o, hd_o, cr_o, seg)
-            i_pts = make_profile(hw_i, hd_i, cr_i, seg)
-            # Top profiles (narrower for trapezoid)
-            hw_o_top = max(rw_o_top, 0.001) / 2.0
-            hd_o_top = max(rd_o_top, 0.001) / 2.0
-            hw_i_top = max(rw_i_top, 0.001) / 2.0
-            hd_i_top = max(rd_i_top, 0.001) / 2.0
-            if tapered:
-                if is_out:
-                    # Outside: compensated corner radius for top profile
-                    cr_o_top = max(cr - rtw*(2*top_ratio - 1), 0.0001)
-                    o_top_pts = make_profile(hw_o_top, hd_o_top, cr_o_top, seg)
-                    i_top_pts = i_pts
-                else:
-                    # Inside: compensated corner radius for top profile
-                    cr_i_top = max(cr - t + rtw*(2*top_ratio - 1), 0.0001)
-                    i_top_pts = make_profile(hw_i_top, hd_i_top, cr_i_top, seg)
-                    o_top_pts = o_pts
-            else:
-                o_top_pts = o_pts
-                i_top_pts = i_pts
-            # Build ring tube from profiles
-            ob_v = [rm.verts.new((x, y, -r_half)) for x, y in o_pts]
-            ot_v = [rm.verts.new((x, y,  r_half)) for x, y in o_top_pts]
-            ib_v = [rm.verts.new((x, y, -r_half)) for x, y in i_pts]
-            it_v = [rm.verts.new((x, y,  r_half)) for x, y in i_top_pts]
-            n = len(o_pts)
-            for i in range(n):
-                j = (i + 1) % n
-                rm.faces.new([ob_v[i], ob_v[j], ot_v[j], ot_v[i]])
-                rm.faces.new([ib_v[j], ib_v[i], it_v[i], it_v[j]])
-                rm.faces.new([ot_v[i], ot_v[j], it_v[j], it_v[i]])
-                rm.faces.new([ob_v[i], ob_v[j], ib_v[j], ib_v[i]])
-        else:
-            hw_o, hd_o = rw_o / 2.0, rd_o / 2.0
-            hw_i, hd_i = max(rw_i, 0.001) / 2.0, max(rd_i, 0.001) / 2.0
-            # Top profiles (narrower for trapezoid)
-            hw_o_top = max(rw_o_top, 0.001) / 2.0
-            hd_o_top = max(rd_o_top, 0.001) / 2.0
-            hw_i_top = max(rw_i_top, 0.001) / 2.0
-            hd_i_top = max(rd_i_top, 0.001) / 2.0
-            if tapered:
-                if is_out:
-                    # Outside: outer moves, inner stays
-                    hw_i_top, hd_i_top = hw_i, hd_i
-                else:
-                    # Inside: inner moves, outer stays
-                    hw_o_top, hd_o_top = hw_o, hd_o
-            ob = [rm.verts.new((x, y, -r_half)) for x, y in
-                  [(-hw_o,-hd_o),(hw_o,-hd_o),(hw_o,hd_o),(-hw_o,hd_o)]]
-            ot_v = [rm.verts.new((x, y, r_half)) for x, y in
-                   [(-hw_o_top,-hd_o_top),(hw_o_top,-hd_o_top),(hw_o_top,hd_o_top),(-hw_o_top,hd_o_top)]]
-            ib = [rm.verts.new((x, y, -r_half)) for x, y in
-                  [(-hw_i,-hd_i),(hw_i,-hd_i),(hw_i,hd_i),(-hw_i,hd_i)]]
-            it_v = [rm.verts.new((x, y, r_half)) for x, y in
-                   [(-hw_i_top,-hd_i_top),(hw_i_top,-hd_i_top),(hw_i_top,hd_i_top),(-hw_i_top,hd_i_top)]]
-            for i in range(4):
-                j = (i+1)%4
-                rm.faces.new([ob[i], ob[j], ot_v[j], ot_v[i]])
-                rm.faces.new([ib[j], ib[i], it_v[i], it_v[j]])
-                rm.faces.new([ot_v[i], ot_v[j], it_v[j], it_v[i]])
-                rm.faces.new([ob[i], ob[j], ib[j], ib[i]])
-        rm.normal_update()
-        ring = self._bm_to_object(rm, "RimRing")
-        ring.location.z = z_pos
-        ring.hide_viewport = False
-        ring.hide_select = False
-        ring.display_type = 'WIRE'
-        return ring
-
-
     # ── Direct shell with bottom fillet (manual construction) ──
 
     def _build_shell_direct(self, w, d, h, t, bt, cr, rw, rh, rim_type, rim_shape, top_ratio, bf,
-                            corner_type='rounded', curve_ratio=0.5, eccentric_y=0.0, keep_cutters=False,
+                            corner_type='rounded', curve_ratio=0.5, eccentric_y=0.0,
                             cosine_layers=64, S=0.001):
         """Build shell with bottom fillet via shared profile_utils.
         t=wall thickness, bt=bottom thickness."""
         import math
         
         if corner_type == 'curved' and cr > 0.0001:
-            return self._build_curved_shell(w, d, h, t, bt, cr, rw, rh, rim_type, rim_shape, top_ratio, bf, curve_ratio, eccentric_y, keep_cutters, cosine_layers, S)
+            return self._build_curved_shell(w, d, h, t, bt, cr, rw, rh, rim_type, rim_shape, top_ratio, bf, curve_ratio, eccentric_y, cosine_layers, S)
         
         print(f"[Direct] rounded/square path, bf={bf*1000:.1f}mm")
         hw, hd = w / 2.0, d / 2.0
@@ -513,16 +386,11 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         obj = self._bm_to_object(bm, "ShellBody")
         obj.name = "ParamShell"
         obj.data.name = "ParamShell"
-        
-        # Debug: show rim ring if keep_cutters
-        if keep_cutters and rim_type != 'none':
-            self._make_rim_ring_debug(w, d, t, rw, rh, rim_type, h + rh, cr)
-        
         return obj
 
     # ── Curved-corner shell (cosine walls, smaller bottom) ──
 
-    def _build_curved_shell(self, w, d, h, t, bt, cr, rw, rh, rim_type, rim_shape, top_ratio, bf, curve_ratio, eccentric_y=0.0, keep_cutters=False, cosine_layers=64, S=0.001):
+    def _build_curved_shell(self, w, d, h, t, bt, cr, rw, rh, rim_type, rim_shape, top_ratio, bf, curve_ratio, eccentric_y=0.0, cosine_layers=64, S=0.001):
         """Build shell with cosine walls via OCCT (exact STEP match).
         w,d,h,t,bt,cr,rw,rh,bf are in Blender units; converted to STEP units for C++."""
         import bmesh as _bmc
@@ -1215,8 +1083,7 @@ def _rebuild_stage_create(obj):
         corner_radius=cr, bottom_fillet=bf,
         rim_type=rim_type_str, rim_width=rim_width, rim_height=rim_height,
         rim_shape=rim_shape, rim_top_ratio=rim_top_ratio,
-        curve_ratio=curve_ratio, eccentric_y=eccentric_y,
-        debug_keep_cutters=False)
+        curve_ratio=curve_ratio, eccentric_y=eccentric_y)
 
     # Re-find original object by marker (Python ref was invalidated by bpy.ops)
     obj = None

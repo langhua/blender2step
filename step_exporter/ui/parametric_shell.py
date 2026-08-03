@@ -606,8 +606,6 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
                ('rrect', _t("Rounded Rect"), _t("Rounded rectangle through-hole"))],
         default='round',
     )
-    keep_cutter: BoolProperty(name=_t("Keep Cutter"), default=False,
-        description=_t("Keep the cutter object visible after cutting (for preview/debug)"))
     hole_radius: FloatProperty(name=_t("Radius"), default=5.0, min=0.1, max=500.0)
     hole_fillet: FloatProperty(name=_t("Edge Fillet"), default=0.0, min=0.0, max=100.0,
         description=_t("Fillet radius for hole edge (max 0.4×wall thickness to prevent overlap)"))
@@ -742,7 +740,6 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
                 layout.prop(self, 'hole_fillet_type')
             layout.label(text=_t("  → RRect {w:.1f}×{h:.1f}mm cr={cr:.1f}").format(w=self.hole_width, h=self.hole_height, cr=self.hole_cr))
         layout.separator()
-        layout.prop(self, 'keep_cutter')
 
     def execute(self, context):
         import math

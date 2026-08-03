@@ -462,9 +462,12 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
                 it_v, ib_v = [], []
                 tapered = (0.001 < ratio < 0.999)
                 if tapered:
-                    it_cr = max(cr - rw*(1-ratio), 0.001)
-                    it_pts = make_profile(hw - rw*(1-ratio), hd - rw*(1-ratio), it_cr, seg) if cr>0.0001 else \
-                             [(x-rw*(1-ratio)*(1 if x>0 else -1), y-rw*(1-ratio)*(1 if y>0 else -1)) for x,y in outer_pts]
+                    # Trapezoid outside: shelf inner edge tapers from outer-rw
+                    # (bottom) to outer-rw*ratio (top) — top shelf keeps rw*ratio
+                    # width, matching the C++ box path and cosine shell.
+                    it_cr = max(cr - rw*ratio, 0.001)
+                    it_pts = make_profile(hw - rw*ratio, hd - rw*ratio, it_cr, seg) if cr>0.0001 else \
+                             [(x-rw*ratio*(1 if x>0 else -1), y-rw*ratio*(1 if y>0 else -1)) for x,y in outer_pts]
                     it_v = [bm.verts.new((x, y, h + rh)) for x, y in it_pts]
                 ib_cr = max(cr - rw, 0.0001)
                 ib_pts = make_profile(hw - rw, hd - rw, ib_cr, seg) if cr>0.0001 else \

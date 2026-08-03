@@ -39,3 +39,16 @@ Profile offsets use `max(value, EPS)` to avoid zero/negative dimensions.
 - `ob_off = max(t - rw, EPS)` — inside rim shelf offset
 - `ib_cr = max(cr - rw, EPS)` — outside rim bottom corner radius
 - `ob_cr = max(cr - t + rw, EPS)` — inside rim bottom corner radius
+
+## Trapezoid Rim (rim_shape='trapezoid', rim_top_ratio = percent)
+Top ratio semantics: **top shelf width = rw * ratio** (ratio = rim_top_ratio/100, e.g. 90% → 0.9*rw).
+- **Outside**: bottom shelf inner edge = outer - rw; top shelf inner edge = outer - rw*ratio.
+- **Inside**: bottom shelf outer edge = inner + rw; top shelf outer edge = inner + rw*ratio.
+- Both `_build_shell_direct` (square/rounded bmesh) and C++ box/curved paths must agree.
+
+**2026-08-03 FIX**: `_build_shell_direct` outside trapezoid used `rw*(1-ratio)` for the top
+shelf inner edge (→ 90% ratio gave only 10% top!). Changed to `rw*ratio`. Inside branch was
+already correct. Verified in Blender: square & rounded trapezoid 90% → top shelf 0.9mm (=rw*ratio).
+- C++ box path uses `ring_outer_top_hw = width/2 - rw*ratio` (outside) — already correct.
+- C++ curved path uses compensation `rw*(2*ratio-1)` (loft midpoint) → shelf = rw*ratio — correct.
+- `_make_rim_ring_debug` also uses `2*ratio-1` (debug wireframe only, consistent with curved).

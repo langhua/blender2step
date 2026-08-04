@@ -5,6 +5,130 @@ from mathutils import Vector
 from ..core.utils import log_to_file
 from ..core import _globals as _g
 
+
+def _validated_stored_radius(stored_r_mm, mesh_bottom_r, mesh_top_r):
+    """Validate a stored `cylinder_original_radius` (mm) against the mesh-detected
+    body radius (meters).
+
+    The stored radius is only trustworthy when the object was created by the addon
+    and its mesh still matches (e.g. chamfer/fillet slightly reduce the scanned
+    radius, so stored ≈ mesh + feature). If the mesh has been manually edited /
+    tapered after creation, the stored value is stale and would export a wrong
+    (usually much too large) radius.
+
+    Returns the radius in METERS if the stored value is consistent, else None.
+    "Consistent" = within [0.5x, 4x] of the mesh body radius.
+    """
+    if stored_r_mm <= 0:
+        return None
+    mesh_r_mm = max(mesh_bottom_r, mesh_top_r) * 1000.0
+    if mesh_r_mm <= 0:
+        return None
+    if mesh_r_mm * 0.5 <= stored_r_mm <= mesh_r_mm * 4.0:
+        return stored_r_mm * 0.001  # mm → m
+    return None
+
+
+def _analyze_from_stored_params(obj, scale):
+    """Build the analysis result DIRECTLY from creation-time stored params
+    (`param_*` custom properties, stored in mm / radians-degrees).
+
+    This bypasses the fragile mesh analysis: the addon records every parameter at
+    creation, so the export can reproduce the exact geometry. Returns None if the
+    object has no `param_*` props → caller falls back to mesh detection.
+
+    Result format matches the mesh-analysis output (lengths in mm, rot in radians).
+    """
+    if not hasattr(obj, 'get'):
+        return None
+    if obj.get('param_cylinder_type') is None or obj.get('param_height') is None:
+        return None
+    S = scale if scale > 0 else 1000.0
+    ctype = obj['param_cylinder_type']  # 'standard' | 'tapered'
+    H = obj['param_height']  # mm
+    chamfer_type = obj.get('param_chamfer_type', 'none')
+    hole_type = obj.get('param_hole_type', 'none')
+
+    pos_x = obj.location.x * S
+    pos_y = obj.location.y * S
+    pos_z = obj.location.z * S
+    rot_x = obj.rotation_euler.x
+    rot_y = obj.rotation_euler.y
+    rot_z = obj.rotation_euler.z
+
+    base = {'pos_x': pos_x, 'pos_y': pos_y, 'pos_z': pos_z,
+            'rot_x': rot_x, 'rot_y': rot_y, 'rot_z': rot_z}
+
+    # 外缘倒角/圆角 (mm)
+    csz = obj.get('param_chamfer_size', 0)
+    fr = obj.get('param_fillet_radius', 0)
+    top_ch = top_fr = btm_ch = btm_fr = 0.0
+    if chamfer_type == 'chamfer':
+        top_ch = csz
+    elif chamfer_type == 'fillet':
+        top_fr = fr
+    elif chamfer_type == 'chamfer_fillet':
+        top_ch = csz; btm_fr = fr
+    elif chamfer_type == 'chamfer_both':
+        top_ch = csz; btm_ch = csz
+    elif chamfer_type == 'fillet_both':
+        top_fr = fr; btm_fr = fr
+
+    hole_fillet = obj.get('param_hole_fillet_radius', 0)
+    hole_r = obj.get('param_hole_radius', 0)
+    hole_depth_pct = obj.get('param_hole_depth_pct', 50)
+    hole_depth = H * hole_depth_pct / 100.0  # mm (百分比 → 绝对高度)
+
+    def _blank_groove():
+        return {'groove_depth': 0, 'groove_bottom_width': 0, 'groove_top_width': 0,
+                'groove_extrusion_length': 0, 'groove_angle': 45.0}
+
+    if ctype == 'tapered':
+        br = obj.get('param_bottom_radius', 0)
+        tr = obj.get('param_top_radius', 0)
+        if hole_type in ('top', 'bottom', 'both'):
+            res = {'obj_type': 'cone_blind_hole', 'bottom_radius': br, 'top_radius': tr,
+                   'height': H, 'hole_radius': hole_r, 'hole_depth': hole_depth,
+                   'hole_fillet_radius': hole_fillet, 'hole_position': hole_type,
+                   'top_chamfer': top_ch, 'top_fillet': top_fr,
+                   'bottom_chamfer': btm_ch, 'bottom_fillet': btm_fr}
+            res.update(base); res.update(_blank_groove())
+            return res
+        else:
+            res = {'obj_type': 'cone', 'bottom_radius': br, 'top_radius': tr, 'height': H,
+                   'top_chamfer': top_ch, 'top_fillet': top_fr,
+                   'bottom_chamfer': btm_ch, 'bottom_fillet': btm_fr}
+            res.update(base)
+            return res
+    else:
+        r = obj.get('param_radius', 0)
+        if hole_type in ('top', 'bottom', 'both'):
+            res = {'obj_type': 'cylinder_blind_hole', 'radius': r, 'height': H,
+                   'hole_radius': hole_r, 'hole_depth': hole_depth,
+                   'hole_fillet_radius': hole_fillet, 'hole_position': hole_type,
+                   'top_chamfer': top_ch, 'top_fillet': top_fr,
+                   'bottom_chamfer': btm_ch, 'bottom_fillet': btm_fr}
+            res.update(base); res.update(_blank_groove())
+            return res
+        else:
+            obj_type = 'cylinder'
+            if top_ch > 0 and btm_fr > 0:
+                obj_type = 'cylinder_chamfer_fillet'
+            elif top_fr > 0 and btm_fr > 0:
+                obj_type = 'cylinder_fillet_both'
+            elif btm_fr > 0:
+                obj_type = 'cylinder_fillet'
+            elif top_ch > 0 and btm_ch > 0:
+                obj_type = 'cylinder_chamfer_both'
+            elif top_ch > 0:
+                obj_type = 'cylinder_chamfer'
+            res = {'obj_type': obj_type, 'radius': r, 'height': H,
+                   'top_chamfer': top_ch, 'top_fillet': top_fr,
+                   'bottom_chamfer': btm_ch, 'bottom_fillet': btm_fr}
+            res.update(base)
+            return res
+
+
 def _analyze_cylinder_from_mesh(obj, context, scale):
     """
     从 mesh 分析识别是否为圆柱/圆锥/空心圆柱类型，并测量所有参数
@@ -33,6 +157,14 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
     """
     if obj.type != 'MESH':
         return None
+    
+    # 优先使用创建时存储的参数（param_* 属性）——完全绕开 mesh 检测。
+    # 只有没有 param_* 属性的对象（如手动建的 mesh）才走 mesh 检测。
+    stored_res = _analyze_from_stored_params(obj, scale)
+    if stored_res is not None:
+        log_to_file(f"[STEP Exporter] Using stored creation params for {obj.name}: "
+                    f"type={stored_res['obj_type']} (bypasses mesh detection)")
+        return stored_res
     
     import bmesh
     import math
@@ -1633,8 +1765,11 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                 stored_chamfer_sz = obj.get('chamfer_size', 0) if hasattr(obj, 'get') else 0
                 stored_fillet_r = obj.get('fillet_radius_edge', 0) if hasattr(obj, 'get') else 0
                 stored_orig_r = obj.get('cylinder_original_radius', 0) if hasattr(obj, 'get') else 0
-                if stored_orig_r > 0:
-                    body_radius_for_export = stored_orig_r * 0.001  # mm -> m
+                _valid_orig = _validated_stored_radius(stored_orig_r, bottom_radius, top_radius)
+                if _valid_orig is not None:
+                    body_radius_for_export = _valid_orig  # mm -> m
+                else:
+                    log_to_file(f"[STEP Exporter]   ⚠ stored cylinder_original_radius={stored_orig_r}mm inconsistent with mesh (bR={bottom_radius*1000:.2f} tR={top_radius*1000:.2f}mm), using mesh radius")
                 if stored_chamfer_type == 'chamfer':
                     top_feature = 'chamfer'; top_feature_size = stored_chamfer_sz * 0.001
                 elif stored_chamfer_type == 'fillet':
@@ -1693,15 +1828,19 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
             stored_fillet_r = obj.get('fillet_radius_edge', 0) if hasattr(obj, 'get') else 0
             stored_orig_r = obj.get('cylinder_original_radius', 0) if hasattr(obj, 'get') else 0
             top_feat = 'none'; top_sz = 0.0; bot_feat = 'none'; bot_sz = 0.0
-            if stored_orig_r > 0:
-                body_radius_for_export = stored_orig_r * 0.001  # mm -> m
-            elif stored_chamfer_type in ('chamfer_both', 'fillet_both', 'chamfer_fillet'):
-                top_add = (stored_chamfer_sz if stored_chamfer_type in ('chamfer_both', 'chamfer_fillet') else 0)
-                top_add = max(top_add, stored_fillet_r if stored_chamfer_type in ('fillet_both',) else 0)
-                bot_add = (stored_chamfer_sz if stored_chamfer_type == 'chamfer_both' else 0)
-                bot_add = max(bot_add, stored_fillet_r if stored_chamfer_type in ('fillet_both', 'chamfer_fillet') else 0)
-                body_radius_for_export = max(bottom_radius + bot_add * 0.001, top_radius + top_add * 0.001)
-                log_to_file(f"[STEP Exporter]   Estimated orig radius from edge features: {body_radius_for_export:.3f}")
+            _valid_orig = _validated_stored_radius(stored_orig_r, bottom_radius, top_radius)
+            if _valid_orig is not None:
+                body_radius_for_export = _valid_orig  # mm -> m
+            else:
+                if stored_orig_r > 0:
+                    log_to_file(f"[STEP Exporter]   ⚠ stored cylinder_original_radius={stored_orig_r}mm inconsistent with mesh (bR={bottom_radius*1000:.2f} tR={top_radius*1000:.2f}mm), using mesh radius")
+                if stored_chamfer_type in ('chamfer_both', 'fillet_both', 'chamfer_fillet'):
+                    top_add = (stored_chamfer_sz if stored_chamfer_type in ('chamfer_both', 'chamfer_fillet') else 0)
+                    top_add = max(top_add, stored_fillet_r if stored_chamfer_type in ('fillet_both',) else 0)
+                    bot_add = (stored_chamfer_sz if stored_chamfer_type == 'chamfer_both' else 0)
+                    bot_add = max(bot_add, stored_fillet_r if stored_chamfer_type in ('fillet_both', 'chamfer_fillet') else 0)
+                    body_radius_for_export = max(bottom_radius + bot_add * 0.001, top_radius + top_add * 0.001)
+                    log_to_file(f"[STEP Exporter]   Estimated orig radius from edge features: {body_radius_for_export:.3f}")
             if stored_chamfer_type == 'chamfer':
                 top_feat = 'chamfer'; top_sz = stored_chamfer_sz * 0.001
             elif stored_chamfer_type == 'fillet':
@@ -2024,7 +2163,11 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
                 if above_zls:
                     z_hole_bottom = above_zls[0]
                     hole_depth = sorted_z[-1] - z_hole_bottom
-                    hole_wall_zls = [zl for zl in above_zls if zl < sorted_z[-1] * 0.99]
+                    # 孔壁层：半径必须明显小于外壁（< 顶/底部半径的 80%），
+                    # 否则会误把外壁层当作孔（对锥体尤其重要）。
+                    ref_r = max(top_radius, bottom_radius)
+                    hole_wall_zls = [zl for zl in above_zls
+                                     if zl < sorted_z[-1] * 0.99 and z_radius_data[zl] < ref_r * 0.8]
                     if hole_wall_zls:
                         hole_wall_r = sorted([z_radius_data[zl] for zl in hole_wall_zls])
                         hole_radius = hole_wall_r[len(hole_wall_r)//2]
@@ -2073,21 +2216,27 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
         # NOTE: mesh-detected chamfer/fillet are unreliable near hole openings.
         # stored_ctype from gallery creation fully specifies all edge features.
         # No fallback to mesh-detected values.
-        if stored_orig_r > 0:
-            body_radius_for_export = stored_orig_r * 0.001  # use original radius
-        elif stored_ctype in ('chamfer_both', 'fillet_both', 'chamfer_fillet'):
-            # Both ends treated, no stored orig radius: estimate from edge features
-            top_add = (stored_csz if stored_ctype in ('chamfer_both', 'chamfer_fillet') else 0)
-            top_add = max(top_add, stored_fr if stored_ctype in ('fillet_both',) else 0)
-            bot_add = (stored_csz if stored_ctype == 'chamfer_both' else 0)
-            bot_add = max(bot_add, stored_fr if stored_ctype in ('fillet_both', 'chamfer_fillet') else 0)
-            body_radius_for_export = max(bottom_radius + bot_add * 0.001, top_radius + top_add * 0.001)
-            log_to_file(f"[STEP Exporter]   Estimated orig radius from edge features: {body_radius_for_export:.3f} (bR={bottom_radius:.3f}+{bot_add*0.001:.3f} tR={top_radius:.3f}+{top_add*0.001:.3f})")
+        _valid_orig = _validated_stored_radius(stored_orig_r, bottom_radius, top_radius)
+        if _valid_orig is not None:
+            body_radius_for_export = _valid_orig  # use original radius (validated vs mesh)
+        else:
+            if stored_orig_r > 0:
+                log_to_file(f"[STEP Exporter]   ⚠ stored cylinder_original_radius={stored_orig_r}mm inconsistent with mesh (bR={bottom_radius*1000:.2f} tR={top_radius*1000:.2f}mm), using mesh radius")
+            if stored_ctype in ('chamfer_both', 'fillet_both', 'chamfer_fillet'):
+                # Both ends treated, no stored orig radius: estimate from edge features
+                top_add = (stored_csz if stored_ctype in ('chamfer_both', 'chamfer_fillet') else 0)
+                top_add = max(top_add, stored_fr if stored_ctype in ('fillet_both',) else 0)
+                bot_add = (stored_csz if stored_ctype == 'chamfer_both' else 0)
+                bot_add = max(bot_add, stored_fr if stored_ctype in ('fillet_both', 'chamfer_fillet') else 0)
+                body_radius_for_export = max(bottom_radius + bot_add * 0.001, top_radius + top_add * 0.001)
+                log_to_file(f"[STEP Exporter]   Estimated orig radius from edge features: {body_radius_for_export:.3f} (bR={bottom_radius:.3f}+{bot_add*0.001:.3f} tR={top_radius:.3f}+{top_add*0.001:.3f})")
 
         # Check if cone body + blind hole (use cone_blind_hole C++ path)
         # Bidirectional: cone can narrow upward or widen upward
         radius_ratio = top_radius / bottom_radius if bottom_radius > 0 else 1.0
-        is_cone_like = (radius_ratio < 0.85 or radius_ratio > 1.0 / 0.85)
+        # 锥体阈值：原本 15%，但用户手动锥化的圆柱（如脱模锥度 2.5→2.4, 4%）
+        # 也会被当作圆柱。降到 3% 保留这类小锥度（半径 std 检查已保证数据干净）。
+        is_cone_like = (radius_ratio < 0.97 or radius_ratio > 1.0 / 0.97)
         # If stored edge feature explains the radius difference, it's a cylinder not cone
         if is_cone_like and stored_ctype:
             # 边缘特征（倒角/圆角）可部分解释半径差，但不能解释大幅差异

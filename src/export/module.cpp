@@ -41,14 +41,10 @@
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepBndLib.hxx>
 #include <Bnd_Box.hxx>
-#include <BRepAdaptor_Surface.hxx>
-#include <BRepBndLib.hxx>
-#include <Bnd_Box.hxx>
-#include <TopExp_Explorer.hxx>
-#include <BRepCheck_Analyzer.hxx>
 #include <BRepGProp.hxx>
 #include <GProp_GProps.hxx>
 #include <TopExp_Explorer.hxx>
+#include <BRepCheck_Analyzer.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Iterator.hxx>
 #include <TopLoc_Location.hxx>
@@ -2727,6 +2723,18 @@ PyObject* merge_step_files(PyObject* self, PyObject* args) {
             for (Standard_Integer s = 1; s <= nbShapes; s++) {
                 TopoDS_Shape shape = reader.Shape(s);
                 if (!shape.IsNull()) {
+                    // Skip wireframe-only shapes (e.g. the "dummy vertex" — a
+                    // GEOMETRIC_CURVE_SET point used to force the unit context).
+                    // It reads back as a COMPOUND with no faces; keeping it would
+                    // add spurious empty "Vertex" objects in FreeCAD. Only keep
+                    // shapes that contain faces (solids, shells, meshes).
+                    bool has_face = false;
+                    for (TopExp_Explorer fe(shape, TopAbs_FACE); fe.More(); fe.Next()) {
+                        has_face = true; break;
+                    }
+                    if (!has_face) {
+                        continue;
+                    }
                     builder.Add(compound, shape);
                     success_count++;
                 }
@@ -2746,8 +2754,10 @@ PyObject* merge_step_files(PyObject* self, PyObject* args) {
         STEPControl_Writer writer;
         Interface_Static::SetCVal("write.step.schema", step_schema);
         Interface_Static::SetCVal("write.step.unit", step_unit);
-        // Assembly level 2 = auto: each compound child gets its own PRODUCT
-        Interface_Static::SetIVal("write.step.assembly", 2);
+        // Write compound — assembly level 0 writes as a single PRODUCT with a
+        // compound of all solids. Using assembly level >=1 (separate PRODUCTs)
+        // crashes FreeCAD 1.0.x GUI importer with an Access violation.
+        Interface_Static::SetIVal("write.step.assembly", 0);
 
         if (writer.Transfer(compound, STEPControl_AsIs) != IFSelect_RetDone) {
             std::cerr << "[STEP Exporter] Failed to transfer compound to writer" << std::endl;

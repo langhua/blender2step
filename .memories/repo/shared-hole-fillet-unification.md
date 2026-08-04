@@ -245,6 +245,24 @@ fragments as inner → filleted both rims.
 - **Temp diag**: `analyze_shell_faces(...)` returned (type,zmin,zmax,pt,normal_center,
   normal_top,tilt_center,tilt_top) per face; removed after verification.
 
+## 2026-08-03 follow-up 12: CYLINDER BLIND-HOLE DEPTH % FIX
+- **Symptom**: parametric cylinder bottom/top/both blind hole — set 50% depth, hole
+  looked ~72% deep.
+- **Root cause** (step_exporter/ui/parametric_cylinder.py `_create_holes`): the
+  cutter's `ext_bottom = max(hr_end*2.0, H*0.05)` (~1.8mm for typical holes) was
+  ADDED to the cutter's z_top (bottom hole) / subtracted from z_bottom (top hole),
+  making the blind hole `ext_bottom` too deep (e.g. 50% → 71.6%).
+- **Fix**: `ext_bottom = max(hr_end*0.005, H*0.0005)` (tiny boolean margin only).
+  Verified in Blender: 50% → hole flat bottom at 50.1% (was 71.6%). C++ export
+  (`export_cylinder_blind_hole_step`) was already correct (cuts to exactly hole_depth)
+  — so preview now matches STEP.
+- **Related (FIXED)**: stepped/tapered_stepped holes used `ext_ov = H*0.05` extending the
+  LARGE cutter BELOW step_z → large section ~5% too deep (e.g. 80% → 85%). Fixed:
+  large/tapered cutter now ends EXACTLY at step_z; the small cutter still overlaps
+  above step_z (hidden inside the wider large radius) so the union stays watertight.
+  Verified in Blender: stepped 80% → step at 80.0%; tapered_stepped 80% → step at
+  z=-12.0 exactly (radius 8 above, 5 below).
+
 ## Code locations (module.cpp)
 - File-scope `HoleFilletInfo` struct + `apply_hole_fillets` fwd decl: ~line 3304
 - STEP export fillet call: `shape = apply_hole_fillets(resultSolid, ...)` ~line 3650

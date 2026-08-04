@@ -144,8 +144,33 @@ def _strip_wireframe_chain(entities):
 
 
 def _merge_step_files(output_path, temp_files):
-    """将多个 STEP 文件合并为一个，重新编号实体 ID"""
-    
+    """将多个 STEP 文件合并为一个。
+
+    优先使用 C++ OCCT 合并（assembly=0 → 单一 PRODUCT，几何由 OCCT 精确读回，
+    FreeCAD 1.0 可正常导入；多个 PRODUCT 会使 FreeCAD GUI 导入崩溃）。
+    C++ 模块不可用时回退到纯文本合并（重新编号实体 ID）。
+    """
+    # Prefer the OCCT-based merge: it produces a single-PRODUCT compound file that
+    # FreeCAD 1.0.x imports reliably (multi-PRODUCT STEP files crash FreeCAD's GUI
+    # importer with an Access violation).
+    cpp = getattr(_g, 'step_exporter', None)
+    if cpp is not None and hasattr(cpp, 'merge_step_files'):
+        try:
+            file_list = list(temp_files)
+            if not file_list:
+                return False
+            result = cpp.merge_step_files(output_path, file_list,
+                                          getattr(_g, '_merge_schema', 'AP214IS'),
+                                          getattr(_g, '_merge_unit', 'MILLIMETER'),
+                                          0)
+            if result:
+                log_to_file(f"[STEP Exporter] OCCT merge OK ({result} shapes -> {output_path})")
+                return True
+            log_to_file("[STEP Exporter] OCCT merge returned false, falling back to text merge")
+        except Exception as merge_err:
+            log_to_file(f"[STEP Exporter] OCCT merge failed ({merge_err}), falling back to text merge")
+
+    # ── Fallback: pure-text merge (renumber entity IDs, preserve geometry exactly) ──
     header = None
     all_data_sections = []
     max_entity_id = 0

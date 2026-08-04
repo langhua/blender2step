@@ -61,6 +61,11 @@ class STEP_EXPORTER_OT_create_parametric_cylinder(Operator):
     segments: IntProperty(
         name=_t("Segments"), default=64, min=8, max=256,
     )
+    update_selected: BoolProperty(
+        name=_t("Write to Selected"),
+        default=False,
+        description="Write these parameters to the selected object's properties instead of creating a new one (for fixing existing parametric objects)",
+    )
     
     # === 单位 ===
     unit: EnumProperty(
@@ -207,6 +212,7 @@ class STEP_EXPORTER_OT_create_parametric_cylinder(Operator):
             box.prop(self, 'bottom_radius')
         box.prop(self, 'height')
         box.prop(self, 'segments')
+        box.prop(self, 'update_selected')
         
         # Chamfer/Fillet
         box = layout.box()
@@ -261,6 +267,15 @@ class STEP_EXPORTER_OT_create_parametric_cylinder(Operator):
     
     def execute(self, context):
         try:
+            # 勾选"写入选中对象"时：不创建新对象，把参数写入当前选中的 mesh 对象
+            if self.update_selected:
+                obj = context.active_object
+                if obj is None or obj.type != 'MESH':
+                    self.report({'ERROR'}, _t("Select a mesh object to write params to"))
+                    return {'CANCELLED'}
+                _store_creation_params(obj, self)
+                self.report({'INFO'}, _t("Params written to {name}", name=obj.name))
+                return {'FINISHED'}
             obj = _generate_parametric_cylinder(self)
             if obj:
                 obj.select_set(True)
@@ -402,8 +417,44 @@ def _generate_parametric_cylinder(props):
     # 存储圆倒角参数到自定义属性，供导出时读取
     if props.hole_fillet_radius > 0:
         obj['hole_fillet_radius'] = props.hole_fillet_radius
+
+    # === 5. 存储所有创建参数（mm），供导出时直接读取，避免依赖 mesh 检测 ===
+    _store_creation_params(obj, props)
     
     return obj
+
+
+def _store_creation_params(obj, props):
+    """把创建时的所有参数写入对象自定义属性（param_*，mm/度），供导出直接读取。"""
+    obj['param_cylinder_type'] = props.cylinder_type          # 'standard' | 'tapered'
+    obj['param_height'] = props.height
+    if props.cylinder_type == 'standard':
+        obj['param_radius'] = props.radius
+    else:
+        obj['param_bottom_radius'] = props.bottom_radius
+        obj['param_top_radius'] = props.top_radius
+    obj['param_chamfer_type'] = props.chamfer_type
+    obj['param_chamfer_size'] = props.chamfer_size
+    obj['param_fillet_radius'] = props.fillet_radius
+    obj['param_hole_type'] = props.hole_type
+    obj['param_hole_radius'] = props.hole_radius
+    obj['param_hole_depth_pct'] = props.hole_depth
+    obj['param_hole_is_tapered'] = props.hole_is_tapered
+    obj['param_hole_opening_radius'] = props.hole_opening_radius
+    obj['param_hole_end_radius'] = props.hole_end_radius
+    obj['param_hole_fillet_radius'] = props.hole_fillet_radius
+    obj['param_stepped_large_radius'] = props.stepped_large_radius
+    obj['param_stepped_large_height_pct'] = props.stepped_large_height
+    obj['param_stepped_small_radius'] = props.stepped_small_radius
+    obj['param_tapered_step_top_radius'] = props.tapered_step_top_radius
+    obj['param_tapered_step_bottom_radius'] = props.tapered_step_bottom_radius
+    obj['param_groove_enabled'] = props.groove_enabled
+    if props.groove_enabled:
+        obj['param_groove_angle_deg'] = math.degrees(props.groove_angle)
+        obj['param_groove_top_width'] = props.groove_top_width
+        obj['param_groove_depth_pct'] = props.groove_depth_pct
+        if props.cylinder_type == 'tapered':
+            obj['param_groove_cone_depth_mult'] = props.groove_cone_depth_mult
 
 
 def _apply_edge_treatment(obj, props, S):
@@ -516,9 +567,11 @@ def _create_holes(obj, props, S):
     
     hh = H
     ext = max(hr_end, hole_d * 0.5) if props.hole_type != 'through' else max(hr_end, H * 0.5)
-    # Blind holes: also extend cutter past hole bottom to avoid boolean residuals
+    # Blind holes: extend cutter past the hole bottom by only a TINY boolean margin.
+    # (Was max(hr_end*2, H*0.05) ≈ 1.8mm → made 50% blind holes ~72% deep. C++ export
+    #  already cuts to exactly hole_depth; keep the preview consistent.)
     if props.hole_type in ('top', 'bottom', 'both'):
-        ext_bottom = max(hr_end * 2.0, H * 0.05)
+        ext_bottom = max(hr_end * 0.005, H * 0.0005)
     else:
         ext_bottom = 0.0
     
@@ -559,11 +612,12 @@ def _create_holes(obj, props, S):
         large_h = props.stepped_large_height / 100.0 * H
         small_r = props.stepped_small_radius * S
         step_z = hh / 2 - large_h
-        ext_ov = H * 0.05  # 5% of height — enough overlap, clean step
-        # 创建两个切割体
+        ext_ov = H * 0.05  # 5% of height — overlap for clean union at the step
+        # 创建两个切割体。大孔段恰好结束于 step_z（不再向台阶下方延伸 ext_ov，
+        # 否则大孔会超深 5%）；小孔段向上多延伸 ext_ov，重叠区被大孔半径覆盖。
         cutter_large = make_hole_cutter(
             "HoleCutter_StepLarge_Tmp",
-            step_z - ext_ov, hh / 2 + ext_ov, large_r, large_r
+            step_z, hh / 2 + ext_ov, large_r, large_r
         )
         cutter_small = make_hole_cutter(
             "HoleCutter_StepSmall_Tmp",
@@ -592,15 +646,18 @@ def _create_holes(obj, props, S):
         large_h = props.stepped_large_height / 100.0 * H
         small_r = props.stepped_small_radius * S
         step_z = hh / 2 - large_h
-        ext_ov = H * 0.05  # 5% of height — enough overlap, clean step
-        # Compute extrapolated radii so design radii match exactly at step_z and hh/2
+        ext_ov = H * 0.05  # 5% of height — overlap for clean union at the step
+        # Compute extrapolated radii so design radii match exactly at step_z and hh/2.
+        # Tapered cutter ends exactly at step_z (no extension below → no over-depth),
+        # with r=taper_step_r there; the small cutter overlaps above step_z (hidden
+        # inside the wider taper). r_cutter_top keeps radius == taper_top_r at top face.
         grad = (taper_top_r - taper_step_r) / large_h  # radius change per unit z
-        r_cutter_bot = taper_step_r - ext_ov * grad   # narrower at extended bottom
-        r_cutter_top = taper_top_r + ext_ov * grad     # wider at extended top
+        r_cutter_bot = taper_step_r                     # exact radius at step plane
+        r_cutter_top = taper_top_r + ext_ov * grad      # wider at extended top
         # 创建两个切割体
         cutter_top = make_hole_cutter(
             "HoleCutter_TprStepTop",
-            step_z - ext_ov, hh / 2 + ext_ov, r_cutter_bot, r_cutter_top
+            step_z, hh / 2 + ext_ov, r_cutter_bot, r_cutter_top
         )
         cutter_bot = make_hole_cutter(
             "HoleCutter_TprStepSmall",

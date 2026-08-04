@@ -1005,10 +1005,14 @@ def _parametric_export_staged():
                         pass
                 log_to_file(f"[STEP Exporter] Chunked merge OK ({successful_count} objects)")
             elif successful_count == 1:
-                # 单文件：直接复制
-                import shutil
-                shutil.copy2(successful_temp_files[0], data['filepath'])
-                log_to_file(f"[STEP Exporter] Single file copied")
+                # 单文件：仍走 merge（OCCT 重写为单一 PRODUCT 并过滤 dummy vertex），
+                # 保证 FreeCAD 可导入（单个 shell 的 enhanced writer 输出多 PRODUCT 会崩溃）。
+                try:
+                    _merge_step_files(data['filepath'], successful_temp_files)
+                except Exception:
+                    import shutil
+                    shutil.copy2(successful_temp_files[0], data['filepath'])
+                log_to_file(f"[STEP Exporter] Single file merged")
             
             # Apply global X-axis mirroring if requested
             if data.get('flip_x', False):

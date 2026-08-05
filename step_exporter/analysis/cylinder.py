@@ -79,53 +79,82 @@ def _analyze_from_stored_params(obj, scale):
     hole_depth_pct = obj.get('param_hole_depth_pct', 50)
     hole_depth = H * hole_depth_pct / 100.0  # mm (百分比 → 绝对高度)
 
-    def _blank_groove():
-        return {'groove_depth': 0, 'groove_bottom_width': 0, 'groove_top_width': 0,
-                'groove_extrusion_length': 0, 'groove_angle': 45.0}
+    # 凹槽参数（mm）。优先使用 _create_groove 已存的精确尺寸（step_groove_*），
+    # 否则按 param_groove_* 计算（与 _create_groove 相同的公式）。
+    def _groove_params(br, tr, r):
+        if not obj.get('param_groove_enabled', False):
+            return {'groove_depth': 0, 'groove_bottom_width': 0, 'groove_top_width': 0,
+                    'groove_extrusion_length': 0, 'groove_angle': 45.0}
+        gd = obj.get('step_groove_depth', 0) or 0
+        gbw = obj.get('step_groove_bottom_width', 0) or 0
+        gtw = obj.get('step_groove_top_width', 0) or 0
+        gel = obj.get('step_groove_extrusion_length', 0) or 0
+        angle = obj.get('param_groove_angle_deg', 45.0)
+        if gd > 0 and gbw > 0:
+            return {'groove_depth': gd, 'groove_bottom_width': gbw, 'groove_top_width': gtw,
+                    'groove_extrusion_length': gel, 'groove_angle': angle}
+        mid_r = (br + tr) / 2.0 if ctype == 'tapered' else r
+        pct = obj.get('param_groove_depth_pct', 20)
+        depth = mid_r * pct / 100.0
+        mult = obj.get('param_groove_cone_depth_mult', 1.0) if ctype == 'tapered' else 1.0
+        cutter_depth = depth * mult
+        top_w = obj.get('param_groove_top_width', 0)
+        bot_w = top_w + 2.0 * cutter_depth * math.tan(math.radians(angle))
+        return {'groove_depth': depth, 'groove_bottom_width': bot_w, 'groove_top_width': top_w,
+                'groove_extrusion_length': 2.0 * mid_r + 4.0, 'groove_angle': angle}
 
     if ctype == 'tapered':
         br = obj.get('param_bottom_radius', 0)
         tr = obj.get('param_top_radius', 0)
+        gp = _groove_params(br, tr, 0)
         if hole_type in ('top', 'bottom', 'both'):
-            res = {'obj_type': 'cone_blind_hole', 'bottom_radius': br, 'top_radius': tr,
+            res = {'obj_type': 'cone_blind_hole_groove' if gp['groove_depth'] > 0 else 'cone_blind_hole',
+                   'bottom_radius': br, 'top_radius': tr,
                    'height': H, 'hole_radius': hole_r, 'hole_depth': hole_depth,
                    'hole_fillet_radius': hole_fillet, 'hole_position': hole_type,
                    'top_chamfer': top_ch, 'top_fillet': top_fr,
                    'bottom_chamfer': btm_ch, 'bottom_fillet': btm_fr}
-            res.update(base); res.update(_blank_groove())
+            res.update(base); res.update(gp)
             return res
         else:
-            res = {'obj_type': 'cone', 'bottom_radius': br, 'top_radius': tr, 'height': H,
+            res = {'obj_type': 'cone_groove' if gp['groove_depth'] > 0 else 'cone',
+                   'bottom_radius': br, 'top_radius': tr, 'height': H,
                    'top_chamfer': top_ch, 'top_fillet': top_fr,
                    'bottom_chamfer': btm_ch, 'bottom_fillet': btm_fr}
             res.update(base)
+            if gp['groove_depth'] > 0:
+                res.update(gp)
             return res
     else:
         r = obj.get('param_radius', 0)
+        gp = _groove_params(0, 0, r)
         if hole_type in ('top', 'bottom', 'both'):
             res = {'obj_type': 'cylinder_blind_hole', 'radius': r, 'height': H,
                    'hole_radius': hole_r, 'hole_depth': hole_depth,
                    'hole_fillet_radius': hole_fillet, 'hole_position': hole_type,
                    'top_chamfer': top_ch, 'top_fillet': top_fr,
                    'bottom_chamfer': btm_ch, 'bottom_fillet': btm_fr}
-            res.update(base); res.update(_blank_groove())
+            res.update(base); res.update(gp)  # C++ cylinder_blind_hole 支持凹槽
             return res
         else:
-            obj_type = 'cylinder'
-            if top_ch > 0 and btm_fr > 0:
-                obj_type = 'cylinder_chamfer_fillet'
-            elif top_fr > 0 and btm_fr > 0:
-                obj_type = 'cylinder_fillet_both'
-            elif btm_fr > 0:
-                obj_type = 'cylinder_fillet'
-            elif top_ch > 0 and btm_ch > 0:
-                obj_type = 'cylinder_chamfer_both'
-            elif top_ch > 0:
-                obj_type = 'cylinder_chamfer'
+            obj_type = 'grooved_cylinder' if gp['groove_depth'] > 0 else 'cylinder'
+            if obj_type == 'cylinder':
+                if top_ch > 0 and btm_fr > 0:
+                    obj_type = 'cylinder_chamfer_fillet'
+                elif top_fr > 0 and btm_fr > 0:
+                    obj_type = 'cylinder_fillet_both'
+                elif btm_fr > 0:
+                    obj_type = 'cylinder_fillet'
+                elif top_ch > 0 and btm_ch > 0:
+                    obj_type = 'cylinder_chamfer_both'
+                elif top_ch > 0:
+                    obj_type = 'cylinder_chamfer'
             res = {'obj_type': obj_type, 'radius': r, 'height': H,
                    'top_chamfer': top_ch, 'top_fillet': top_fr,
                    'bottom_chamfer': btm_ch, 'bottom_fillet': btm_fr}
             res.update(base)
+            if obj_type == 'grooved_cylinder':
+                res.update(gp)
             return res
 
 

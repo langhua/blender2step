@@ -27,6 +27,15 @@
 - 分析结果 cone_blind_hole 全部正确；C++ 导出有效实体（Cone+Plane+Cylinder 表面）
 - 体积 146.86（≈锥体积157.5 - 孔10.6）
 
+## 凹槽支持（2026-08-04 补充）
+- `_analyze_from_stored_params` 处理 `param_groove_enabled`：
+  - 优先读 `_create_groove` 存的 `step_groove_depth/bottom_width/top_width/extrusion_length`（mm）
+  - 否则按 param_groove_* 计算（同 _create_groove 公式）
+- obj_type：tapered+孔+凹槽 → `cone_blind_hole_groove`；tapered+凹槽 → `cone_groove`；
+  standard+孔+凹槽 → `cylinder_blind_hole`（C++ 支持 groove 参数）；
+  standard+凹槽 → `grooved_cylinder`
+- 验证：锥柱+顶孔+凹槽导出 `cone_blind_hole_groove`，STEP 含 SurfaceOfRevolution（凹槽）表面，有效
+
 ## 验证结果（2026-08-04 用户重导出 test30.step）
 - PRODUCT=1（单 product，FreeCAD 崩溃已修复）；FreeCAD 导入 7 对象全有效
 - 3 个锥柱用存储参数（`Using stored creation params ... bypasses mesh detection`）

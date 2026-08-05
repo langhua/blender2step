@@ -217,8 +217,10 @@ TopoDS_Shape create_hollow_cone_solid_parametric(
     // ===== Radius compensation for chamfer/fillet (cones only; cylinders pre-compensated by Python) =====
     double actual_bot_r = outer_bottom_radius;
     double actual_top_r = outer_top_radius;
-    double top_sz = std::max(top_chamfer, top_fillet);
-    double bot_sz = std::max(bottom_chamfer, bottom_fillet);
+    // 仅倒角(chamfer)会削减顶/底面半径才需补偿；圆角(fillet)保持设计半径不变。
+    // （否则窄顶锥顶半径 +0.2 会反转为上粗下细——bmesh 预览验证顶面仍是设计半径）
+    double top_sz = top_chamfer;
+    double bot_sz = bottom_chamfer;
     bool is_cylinder = (std::abs(outer_bottom_radius - outer_top_radius) < 0.01);
     if (!is_cylinder) {
         // Cone: compensate each end independently for chamfer/fillet
@@ -1003,8 +1005,9 @@ TopoDS_Shape create_hollow_cone_fillet_with_groove_parametric(
     // Use compensated radii matching create_hollow_cone_solid_parametric
     double comp_bot_r = outer_bottom_radius;
     double comp_top_r = outer_top_radius;
-    double top_sz = std::max(top_chamfer, top_fillet);
-    double bot_sz = std::max(bottom_chamfer, bottom_fillet);
+    // 仅倒角补偿半径；圆角保持设计半径（否则窄顶锥反转成上粗下细）
+    double top_sz = top_chamfer;
+    double bot_sz = bottom_chamfer;
     bool is_cyl = (std::abs(outer_bottom_radius - outer_top_radius) < 0.01);
     if (!is_cyl) {
         if (top_sz > 0.001) comp_top_r += top_sz;
@@ -1163,8 +1166,9 @@ TopoDS_Shape create_cone_stepped_hole_parametric(
         // C++ adds chamfer/fillet size back to get true cone body radius
         double actual_top_r = outer_top_radius;
         double actual_bot_r = outer_bottom_radius;
-        double top_sz = std::max(top_chamfer, top_fillet_radius);
-        double bot_sz = std::max(bottom_chamfer, bottom_fillet_radius);
+        // 仅倒角补偿半径；圆角保持设计半径（否则窄顶锥反转成上粗下细）
+        double top_sz = top_chamfer;
+        double bot_sz = bottom_chamfer;
         bool is_cyl = (std::abs(outer_bottom_radius - outer_top_radius) < 0.01);
         if (!is_cyl) {
             if (top_sz > 0.001) {
@@ -1833,8 +1837,9 @@ TopoDS_Shape create_cone_with_blind_hole_solid_parametric(
     // Add chamfer/fillet size back to get true cone body radius before edge treatment.
     double actual_top_r = top_radius;
     double actual_bot_r = bottom_radius;
-    double top_sz = std::max(top_chamfer, top_fillet);
-    double bot_sz = std::max(bottom_chamfer, bottom_fillet);
+    // 仅倒角补偿半径；圆角保持设计半径（否则窄顶锥反转成上粗下细）
+    double top_sz = top_chamfer;
+    double bot_sz = bottom_chamfer;
     bool is_cyl = (std::abs(bottom_radius - top_radius) < 0.01);
     if (!is_cyl) {
         if (top_sz > 0.001) {
@@ -2359,8 +2364,9 @@ TopoDS_Shape create_cone_with_groove_parametric(
     // ===== Radius compensation for chamfer/fillet =====
     double actual_bot_r = bottom_radius;
     double actual_top_r = top_radius;
-    double top_sz = std::max(top_chamfer, top_fillet);
-    double bot_sz = std::max(bottom_chamfer, bottom_fillet);
+    // 仅倒角补偿半径；圆角保持设计半径（否则窄顶锥反转成上粗下细）
+    double top_sz = top_chamfer;
+    double bot_sz = bottom_chamfer;
     bool is_cyl = (std::abs(bottom_radius - top_radius) < 0.01);
     if (!is_cyl) {
         if (top_sz > 0.001) actual_top_r += top_sz;
@@ -2475,8 +2481,9 @@ TopoDS_Shape create_cone_with_blind_hole_and_groove_parametric(
     // Cut trapezoidal groove with compensated radii (matching cone_blind_hole)
     double comp_bot_r = bottom_radius;
     double comp_top_r = top_radius;
-    double top_sz = std::max(top_chamfer, top_fillet);
-    double bot_sz = std::max(bottom_chamfer, bottom_fillet);
+    // 仅倒角补偿半径；圆角保持设计半径（否则窄顶锥反转成上粗下细）
+    double top_sz = top_chamfer;
+    double bot_sz = bottom_chamfer;
     bool is_cyl = (std::abs(bottom_radius - top_radius) < 0.01);
     if (!is_cyl) {
         if (top_sz > 0.001) comp_top_r += top_sz;
@@ -2549,8 +2556,9 @@ TopoDS_Shape create_cone_stepped_hole_with_groove_parametric(
     // Groove cutter with compensated radii (matching cone_stepped_hole)
     double comp_bot_r = outer_bottom_radius;
     double comp_top_r = outer_top_radius;
-    double top_sz = std::max(top_chamfer, top_fillet_radius);
-    double bot_sz = std::max(bottom_chamfer, bottom_fillet_radius);
+    // 仅倒角补偿半径；圆角保持设计半径（否则窄顶锥反转成上粗下细）
+    double top_sz = top_chamfer;
+    double bot_sz = bottom_chamfer;
     bool is_cyl = (std::abs(outer_bottom_radius - outer_top_radius) < 0.01);
     if (!is_cyl) {
         if (top_sz > 0.001) comp_top_r += top_sz;

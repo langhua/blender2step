@@ -4033,6 +4033,96 @@ static TopoDS_Shape cut_holes_into_shape(TopoDS_Shape shape,
     return result;
 }
 
+// ====================== 公共：OCCT 实体 → 三角网格 dict ======================
+// 供预览网格生成使用（generate_parametric_shell_mesh / generate_cylinder_mesh）。
+// 三角化 + 按位置去重，返回 {'vertices': [(x,y,z),...], 'triangles': [(i,j,k),...]}。
+static PyObject* shape_to_mesh_dict(const TopoDS_Shape& shape, double deflection, double angular = 0.15) {
+    if (shape.IsNull()) {
+        Py_RETURN_NONE;
+    }
+    try {
+        // Triangulate the solid (fine deflection for smooth preview surface)
+        BRepMesh_IncrementalMesh mesh(shape, deflection, Standard_False, angular);
+        mesh.Perform();
+
+        // Hash-based vertex dedup: O(n) via position key
+        std::vector<gp_Pnt> dedupVerts;
+        std::vector<std::array<int, 3>> dedupTris;
+        std::unordered_map<uint64_t, int> posToIdx;
+
+        auto hashPos = [](const gp_Pnt& p) -> uint64_t {
+            // Quantize to 0.0001mm to merge near-identical points
+            int64_t ix = (int64_t)(p.X() * 10000.0 + 0.5);
+            int64_t iy = (int64_t)(p.Y() * 10000.0 + 0.5);
+            int64_t iz = (int64_t)(p.Z() * 10000.0 + 0.5);
+            return ((uint64_t)ix << 42) ^ ((uint64_t)iy << 21) ^ (uint64_t)iz;
+        };
+
+        for (TopExp_Explorer fex(shape, TopAbs_FACE); fex.More(); fex.Next()) {
+            const TopoDS_Face& face = TopoDS::Face(fex.Current());
+            TopLoc_Location loc;
+            Handle(Poly_Triangulation) tri = BRep_Tool::Triangulation(face, loc);
+            if (tri.IsNull()) continue;
+
+            // OCCT 的 REVERSED 面（法线朝内的存储面）三角化绕序是朝内的。
+            // 翻转绕序使其与几何外法线一致，保证整网格水密且法线一致朝外
+            // （否则 calc_volume / 布尔 / 3D打印检查会出错）。
+            const bool reversed = (face.Orientation() == TopAbs_REVERSED);
+
+            std::vector<int> faceToGlobal;
+            for (int i = 1; i <= tri->NbNodes(); i++) {
+                gp_Pnt p = tri->Node(i).Transformed(loc);
+                uint64_t h = hashPos(p);
+                auto it = posToIdx.find(h);
+                if (it != posToIdx.end()) {
+                    faceToGlobal.push_back(it->second);
+                } else {
+                    int idx = (int)dedupVerts.size();
+                    posToIdx[h] = idx;
+                    dedupVerts.push_back(p);
+                    faceToGlobal.push_back(idx);
+                }
+            }
+            for (int i = 1; i <= tri->NbTriangles(); i++) {
+                int n1, n2, n3;
+                tri->Triangle(i).Get(n1, n2, n3);
+                if (reversed) std::swap(n2, n3);
+                dedupTris.push_back({faceToGlobal[n1-1], faceToGlobal[n2-1], faceToGlobal[n3-1]});
+            }
+        }
+
+        // Build Python dict
+        PyObject* result = PyDict_New();
+        PyObject* vertList = PyList_New(dedupVerts.size());
+        for (size_t i = 0; i < dedupVerts.size(); i++) {
+            PyObject* tup = PyTuple_Pack(3,
+                PyFloat_FromDouble(dedupVerts[i].X()),
+                PyFloat_FromDouble(dedupVerts[i].Y()),
+                PyFloat_FromDouble(dedupVerts[i].Z()));
+            PyList_SetItem(vertList, i, tup);
+        }
+        PyDict_SetItemString(result, "vertices", vertList);
+
+        PyObject* triList = PyList_New(dedupTris.size());
+        for (size_t i = 0; i < dedupTris.size(); i++) {
+            PyObject* tup = PyTuple_Pack(3,
+                PyLong_FromLong(dedupTris[i][0]),
+                PyLong_FromLong(dedupTris[i][1]),
+                PyLong_FromLong(dedupTris[i][2]));
+            PyList_SetItem(triList, i, tup);
+        }
+        PyDict_SetItemString(result, "triangles", triList);
+
+        return result;
+    } catch (Standard_Failure& e) {
+        std::cerr << "[Mesh Gen] OCCT error: " << e.GetMessageString() << std::endl;
+        Py_RETURN_NONE;
+    } catch (...) {
+        std::cerr << "[Mesh Gen] Unknown error" << std::endl;
+        Py_RETURN_NONE;
+    }
+}
+
 PyObject* generate_parametric_shell_mesh(PyObject* self, PyObject* args) {
     double width, depth, height, thickness, bottom_thickness;
     const char* corner_type = "square";
@@ -4083,74 +4173,7 @@ PyObject* generate_parametric_shell_mesh(PyObject* self, PyObject* args) {
             Py_RETURN_NONE;
         }
 
-        // Triangulate the solid (fine deflection for smooth preview surface)
-        // Fine triangulation for smooth preview (small deflection + angular control)
-        BRepMesh_IncrementalMesh mesh(shape, 0.08, Standard_False, 0.15);
-        mesh.Perform();
-
-        // Hash-based vertex dedup: O(n) via position key
-        std::vector<gp_Pnt> dedupVerts;
-        std::vector<std::array<int, 3>> dedupTris;
-        std::unordered_map<uint64_t, int> posToIdx;
-
-        auto hashPos = [](const gp_Pnt& p) -> uint64_t {
-            // Quantize to 0.0001mm to merge near-identical points
-            int64_t ix = (int64_t)(p.X() * 10000.0 + 0.5);
-            int64_t iy = (int64_t)(p.Y() * 10000.0 + 0.5);
-            int64_t iz = (int64_t)(p.Z() * 10000.0 + 0.5);
-            return ((uint64_t)ix << 42) ^ ((uint64_t)iy << 21) ^ (uint64_t)iz;
-        };
-
-        for (TopExp_Explorer fex(shape, TopAbs_FACE); fex.More(); fex.Next()) {
-            const TopoDS_Face& face = TopoDS::Face(fex.Current());
-            TopLoc_Location loc;
-            Handle(Poly_Triangulation) tri = BRep_Tool::Triangulation(face, loc);
-            if (tri.IsNull()) continue;
-
-            std::vector<int> faceToGlobal;
-            for (int i = 1; i <= tri->NbNodes(); i++) {
-                gp_Pnt p = tri->Node(i).Transformed(loc);
-                uint64_t h = hashPos(p);
-                auto it = posToIdx.find(h);
-                if (it != posToIdx.end()) {
-                    faceToGlobal.push_back(it->second);
-                } else {
-                    int idx = (int)dedupVerts.size();
-                    posToIdx[h] = idx;
-                    dedupVerts.push_back(p);
-                    faceToGlobal.push_back(idx);
-                }
-            }
-            for (int i = 1; i <= tri->NbTriangles(); i++) {
-                int n1, n2, n3;
-                tri->Triangle(i).Get(n1, n2, n3);
-                dedupTris.push_back({faceToGlobal[n1-1], faceToGlobal[n2-1], faceToGlobal[n3-1]});
-            }
-        }
-
-        // Build Python dict
-        PyObject* result = PyDict_New();
-        PyObject* vertList = PyList_New(dedupVerts.size());
-        for (size_t i = 0; i < dedupVerts.size(); i++) {
-            PyObject* tup = PyTuple_Pack(3,
-                PyFloat_FromDouble(dedupVerts[i].X()),
-                PyFloat_FromDouble(dedupVerts[i].Y()),
-                PyFloat_FromDouble(dedupVerts[i].Z()));
-            PyList_SetItem(vertList, i, tup);
-        }
-        PyDict_SetItemString(result, "vertices", vertList);
-
-        PyObject* triList = PyList_New(dedupTris.size());
-        for (size_t i = 0; i < dedupTris.size(); i++) {
-            PyObject* tup = PyTuple_Pack(3,
-                PyLong_FromLong(dedupTris[i][0]),
-                PyLong_FromLong(dedupTris[i][1]),
-                PyLong_FromLong(dedupTris[i][2]));
-            PyList_SetItem(triList, i, tup);
-        }
-        PyDict_SetItemString(result, "triangles", triList);
-
-        return result;
+        return shape_to_mesh_dict(shape, 0.08);
     } catch (Standard_Failure& e) {
         std::cerr << "[Mesh Gen] OCCT error: " << e.GetMessageString() << std::endl;
         Py_RETURN_NONE;
@@ -4160,8 +4183,222 @@ PyObject* generate_parametric_shell_mesh(PyObject* self, PyObject* args) {
     }
 }
 
-// ── TEMP DIAGNOSTIC: analyze B-rep faces of a parametric shell (type, z-extent, normal tilt) ──
-// (removed after verification — see session log for the rim-verticality analysis)
+// ====================== 圆柱/锥柱/倒锥柱 OCCT 预览网格 ======================
+// 根据创建参数构建与 STEP 导出完全一致的 OCCT 实体，并三角化返回网格。
+// 参数全部为毫米（与 _store_creation_params 存储一致），构建的实体以原点为中心。
+static TopoDS_Shape build_cylinder_like_shape(
+    const char* cyl_type, double height,
+    double radius, double bottom_radius, double top_radius,
+    const char* chamfer_type, double chamfer_size, double fillet_radius,
+    const char* hole_type, double hole_radius, double hole_depth_pct,
+    int hole_is_tapered, double hole_opening_radius, double hole_end_radius,
+    double hole_fillet_radius,
+    double stepped_large_radius, double stepped_large_height_pct, double stepped_small_radius,
+    double tapered_step_top_radius, double tapered_step_bottom_radius,
+    int groove_enabled, double groove_angle_deg, double groove_top_width,
+    double groove_depth_pct, double groove_cone_depth_mult)
+{
+    const double M_PI_ = 3.14159265358979323846;
+    const bool tapered = (std::strcmp(cyl_type, "tapered") == 0);
+    const double H = height;
+
+    // ---- 外缘倒角/圆角（与 _analyze_from_stored_params 相同映射）----
+    double top_ch = 0, top_fr = 0, btm_ch = 0, btm_fr = 0;
+    if (std::strcmp(chamfer_type, "chamfer") == 0) top_ch = chamfer_size;
+    else if (std::strcmp(chamfer_type, "fillet") == 0) top_fr = fillet_radius;
+    else if (std::strcmp(chamfer_type, "chamfer_fillet") == 0) { top_ch = chamfer_size; btm_fr = fillet_radius; }
+    else if (std::strcmp(chamfer_type, "chamfer_both") == 0) { top_ch = chamfer_size; btm_ch = chamfer_size; }
+    else if (std::strcmp(chamfer_type, "fillet_both") == 0) { top_fr = fillet_radius; btm_fr = fillet_radius; }
+
+    // ---- 凹槽参数（与 _groove_params 相同公式）----
+    double groove_depth = 0, g_bw = 0, g_tw = 0, g_ext = 0;
+    if (groove_enabled) {
+        double mid_r = tapered ? (bottom_radius + top_radius) / 2.0 : radius;
+        double depth = mid_r * groove_depth_pct / 100.0;
+        double cdepth = depth * (tapered ? groove_cone_depth_mult : 1.0);
+        double tw = groove_top_width;
+        double bw = tw + 2.0 * cdepth * std::tan(groove_angle_deg * M_PI_ / 180.0);
+        groove_depth = depth; g_bw = bw; g_tw = tw; g_ext = 2.0 * mid_r + 4.0;
+    }
+
+    if (tapered) {
+        // ---- 锥柱 / 倒锥柱 ----
+        if (std::strcmp(hole_type, "stepped") == 0 || std::strcmp(hole_type, "tapered_stepped") == 0) {
+            double large_h = stepped_large_height_pct / 100.0 * H;
+            double small_h = H - large_h;
+            double small_r = stepped_small_radius;
+            double inner_top, inner_btm;
+            if (std::strcmp(hole_type, "tapered_stepped") == 0) {
+                inner_top = tapered_step_top_radius; inner_btm = tapered_step_bottom_radius;
+            } else {
+                inner_top = stepped_large_radius; inner_btm = stepped_large_radius;
+            }
+            if (groove_enabled) {
+                return create_cone_stepped_hole_with_groove_parametric(
+                    bottom_radius, top_radius, H, small_r, small_h,
+                    inner_btm, inner_top, top_fr, btm_fr, hole_fillet_radius,
+                    top_ch, btm_ch, groove_depth, g_bw, g_tw, g_ext);
+            }
+            return create_cone_stepped_hole_parametric(
+                bottom_radius, top_radius, H, small_r, small_h,
+                inner_btm, inner_top, top_fr, btm_fr, hole_fillet_radius, top_ch, btm_ch);
+        }
+        if (std::strcmp(hole_type, "top") == 0 || std::strcmp(hole_type, "bottom") == 0 || std::strcmp(hole_type, "both") == 0) {
+            double hole_depth = H * hole_depth_pct / 100.0;
+            double hole_r = hole_radius;
+            double hole_r_bottom = 0.0;
+            if (hole_is_tapered) { hole_r = hole_opening_radius; hole_r_bottom = hole_end_radius; }
+            bool is_bottom = (std::strcmp(hole_type, "bottom") == 0);
+            double hd_top = (std::strcmp(hole_type, "both") == 0) ? hole_depth : 0.0;
+            if (groove_enabled) {
+                return create_cone_with_blind_hole_and_groove_parametric(
+                    bottom_radius, top_radius, H, hole_r, hole_depth, hd_top,
+                    hole_fillet_radius, hole_type, hole_r_bottom,
+                    top_ch, top_fr, btm_ch, btm_fr,
+                    groove_depth, g_bw, g_tw, g_ext);
+            }
+            return create_cone_with_blind_hole_solid_parametric(
+                bottom_radius, top_radius, H, hole_r, hole_depth, hd_top,
+                hole_fillet_radius, is_bottom, hole_r_bottom,
+                top_ch, top_fr, btm_ch, btm_fr);
+        }
+        if (std::strcmp(hole_type, "through") == 0) {
+            // 锥形通孔 → 空心锥
+            double inner_top = hole_opening_radius;
+            double inner_btm = hole_is_tapered ? hole_end_radius : hole_radius;
+            return create_hollow_cone_solid_parametric(
+                bottom_radius, top_radius, inner_btm, inner_top, H,
+                top_ch, top_fr, btm_ch, btm_fr, hole_fillet_radius);
+        }
+        // 实心锥 + 外缘特征
+        if (groove_enabled) {
+            return create_cone_with_groove_parametric(
+                bottom_radius, top_radius, H, groove_depth, g_bw, g_tw, g_ext,
+                top_ch, top_fr, btm_ch, btm_fr);
+        }
+        if (top_ch > 0 && btm_ch > 0) return create_cone_chamfer_solid_parametric_both(bottom_radius, top_radius, H, btm_ch, top_ch);
+        if (top_fr > 0 && btm_fr > 0) return create_cone_fillet_solid_parametric_both(bottom_radius, top_radius, H, btm_fr, top_fr);
+        if (top_ch > 0 && btm_fr > 0) return create_cone_chamfer_fillet_solid_parametric(bottom_radius, top_radius, H, top_ch, btm_fr, true);
+        if (top_ch > 0) return create_cone_chamfer_fillet_solid_parametric(bottom_radius, top_radius, H, top_ch, 0.0, true);
+        if (top_fr > 0) return create_cone_chamfer_fillet_solid_parametric(bottom_radius, top_radius, H, 0.0, top_fr, false);
+        if (btm_ch > 0) return create_cone_chamfer_fillet_solid_parametric(bottom_radius, top_radius, H, btm_ch, 0.0, false);
+        if (btm_fr > 0) return create_cone_chamfer_fillet_solid_parametric(bottom_radius, top_radius, H, 0.0, btm_fr, true);
+        return create_cone_solid_parametric(bottom_radius, top_radius, H);
+    } else {
+        // ---- 标准圆柱 ----
+        if (std::strcmp(hole_type, "stepped") == 0 || std::strcmp(hole_type, "tapered_stepped") == 0) {
+            double large_h = stepped_large_height_pct / 100.0 * H;
+            if (std::strcmp(hole_type, "tapered_stepped") == 0) {
+                return create_cylinder_tapered_stepped_hole_parametric(
+                    radius, H, large_h, tapered_step_top_radius, tapered_step_bottom_radius,
+                    stepped_small_radius, hole_fillet_radius, top_ch, top_fr, btm_ch, btm_fr,
+                    groove_depth, g_bw, g_tw, g_ext);
+            }
+            return create_cylinder_stepped_hole_parametric(
+                radius, H, stepped_large_radius, large_h, stepped_small_radius,
+                hole_fillet_radius, top_ch, top_fr, btm_ch, btm_fr,
+                groove_depth, g_bw, g_tw, g_ext);
+        }
+        if (std::strcmp(hole_type, "top") == 0 || std::strcmp(hole_type, "bottom") == 0) {
+            double hole_depth = H * hole_depth_pct / 100.0;
+            double hole_r = hole_radius;
+            double hole_r_bottom = 0.0;
+            if (hole_is_tapered) { hole_r = hole_opening_radius; hole_r_bottom = hole_end_radius; }
+            bool is_bottom = (std::strcmp(hole_type, "bottom") == 0);
+            return create_cylinder_with_blind_hole_solid_parametric(
+                radius, H, hole_r, hole_depth, hole_fillet_radius, is_bottom, hole_r_bottom,
+                top_ch, top_fr, btm_ch, btm_fr, groove_depth, g_bw, g_tw, g_ext);
+        }
+        if (std::strcmp(hole_type, "both") == 0) {
+            double hole_depth = H * hole_depth_pct / 100.0;
+            double hole_r = hole_radius;
+            double hole_r_bottom = 0.0;
+            if (hole_is_tapered) { hole_r = hole_opening_radius; hole_r_bottom = hole_end_radius; }
+            return create_cylinder_with_dual_blind_holes_solid_parametric(
+                radius, H, hole_r, hole_depth, hole_depth, hole_fillet_radius, hole_r_bottom,
+                top_ch, top_fr, btm_ch, btm_fr, groove_depth, g_bw, g_tw, g_ext);
+        }
+        if (std::strcmp(hole_type, "through") == 0) {
+            double hole_r = hole_radius;
+            if (hole_is_tapered) {
+                return create_hollow_cylinder_tapered_solid_parametric(
+                    radius, hole_opening_radius, hole_end_radius, H,
+                    hole_fillet_radius, top_ch, top_fr, btm_ch, btm_fr);
+            }
+            return create_hollow_cylinder_solid_parametric(radius, hole_r, H);
+        }
+        // 实心圆柱 + 外缘特征
+        if (groove_enabled) {
+            return create_cylinder_with_groove_parametric(
+                radius, H, groove_depth, g_bw, g_tw, g_ext, top_ch, top_fr, btm_ch, btm_fr);
+        }
+        // create_cylinder_chamfer_fillet_solid_parametric(reversed=false) = 顶部倒角+底部圆角
+        // （与导出一致：cylinder 的 chamfer_fillet 分支 reversed_flag=0）
+        if (top_ch > 0 && btm_fr > 0) return create_cylinder_chamfer_fillet_solid_parametric(radius, H, top_ch, btm_fr, false);
+        if (top_fr > 0 && btm_fr > 0) return create_cylinder_fillet_both_solid_parametric(radius, H, top_fr, btm_fr);
+        if (top_ch > 0 && btm_ch > 0) return create_cylinder_chamfer_both_solid_parametric(radius, H, top_ch, btm_ch);
+        if (top_fr > 0) return create_cylinder_fillet_solid_parametric(radius, H, top_fr);
+        if (top_ch > 0) return create_cylinder_chamfer_solid_parametric(radius, H, top_ch);
+        // 仅底部（UI 不可达，但保持与导出一致：用 _both 变体只做底部）
+        if (btm_fr > 0) return create_cylinder_fillet_both_solid_parametric(radius, H, 0.0, btm_fr);
+        if (btm_ch > 0) return create_cylinder_chamfer_both_solid_parametric(radius, H, 0.0, btm_ch);
+        return create_cylinder_solid_parametric(radius, H);
+    }
+}
+
+PyObject* generate_cylinder_mesh(PyObject* self, PyObject* args) {
+    const char* cyl_type;
+    double height;
+    double radius = 0.0, bottom_radius = 0.0, top_radius = 0.0;
+    const char* chamfer_type = "none";
+    double chamfer_size = 0.0, fillet_radius = 0.0;
+    const char* hole_type = "none";
+    double hole_radius = 0.0, hole_depth_pct = 0.0;
+    int hole_is_tapered = 0;
+    double hole_opening_radius = 0.0, hole_end_radius = 0.0, hole_fillet_radius = 0.0;
+    double stepped_large_radius = 0.0, stepped_large_height_pct = 0.0, stepped_small_radius = 0.0;
+    double tapered_step_top_radius = 0.0, tapered_step_bottom_radius = 0.0;
+    int groove_enabled = 0;
+    double groove_angle_deg = 45.0, groove_top_width = 0.0, groove_depth_pct = 0.0, groove_cone_depth_mult = 1.0;
+    double deflection = 0.05;
+
+    if (!PyArg_ParseTuple(args, "sd|dddsddsddiddddddddiddddd",
+                          &cyl_type, &height,
+                          &radius, &bottom_radius, &top_radius,
+                          &chamfer_type, &chamfer_size, &fillet_radius,
+                          &hole_type, &hole_radius, &hole_depth_pct,
+                          &hole_is_tapered, &hole_opening_radius, &hole_end_radius, &hole_fillet_radius,
+                          &stepped_large_radius, &stepped_large_height_pct, &stepped_small_radius,
+                          &tapered_step_top_radius, &tapered_step_bottom_radius,
+                          &groove_enabled, &groove_angle_deg, &groove_top_width,
+                          &groove_depth_pct, &groove_cone_depth_mult,
+                          &deflection)) {
+        PyErr_SetString(PyExc_TypeError,
+            "generate_cylinder_mesh() expected: cylinder_type, height, "
+            "[radius, bottom_radius, top_radius, chamfer_type, chamfer_size, fillet_radius, "
+            "hole_type, hole_radius, hole_depth_pct, hole_is_tapered, hole_opening_radius, "
+            "hole_end_radius, hole_fillet_radius, stepped_large_radius, stepped_large_height_pct, "
+            "stepped_small_radius, tapered_step_top_radius, tapered_step_bottom_radius, "
+            "groove_enabled, groove_angle_deg, groove_top_width, groove_depth_pct, "
+            "groove_cone_depth_mult, deflection]");
+        return NULL;
+    }
+
+    TopoDS_Shape shape = build_cylinder_like_shape(
+        cyl_type, height, radius, bottom_radius, top_radius,
+        chamfer_type, chamfer_size, fillet_radius,
+        hole_type, hole_radius, hole_depth_pct, hole_is_tapered,
+        hole_opening_radius, hole_end_radius, hole_fillet_radius,
+        stepped_large_radius, stepped_large_height_pct, stepped_small_radius,
+        tapered_step_top_radius, tapered_step_bottom_radius,
+        groove_enabled, groove_angle_deg, groove_top_width,
+        groove_depth_pct, groove_cone_depth_mult);
+
+    if (shape.IsNull()) {
+        Py_RETURN_NONE;
+    }
+    return shape_to_mesh_dict(shape, deflection);
+}
 
 // 模块方法定义表
 static PyMethodDef step_exporter_methods[] = {
@@ -4210,6 +4447,7 @@ static PyMethodDef step_exporter_methods[] = {
     {"get_version", get_version, METH_NOARGS, "Get module version"},
     {"get_occt_version", get_occt_version, METH_NOARGS, "Get OpenCASCADE version"},
     {"generate_parametric_shell_mesh", generate_parametric_shell_mesh, METH_VARARGS, "Generate parametric shell mesh using OCCT (matches STEP export)"},
+    {"generate_cylinder_mesh", generate_cylinder_mesh, METH_VARARGS, "Generate parametric cylinder/cone/inverted-cone mesh using OCCT (matches STEP export)"},
     {NULL, NULL, 0, NULL}
 };
 

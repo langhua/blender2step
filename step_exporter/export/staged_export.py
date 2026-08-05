@@ -249,18 +249,18 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
     pz = cparams.get('pos_z', 0.0)
     
     if obj_type == 'cylinder':
-        success = cpp_exporter.export_cylinder_step(
+        return cpp_exporter.export_cylinder_step(
             temp_file, cparams['radius'], cparams['height'],
             px, py, pz, data['step_schema'], data['step_unit'],
             1 if data['enable_logging'] else 0)
     elif obj_type == 'cone':
-        success = cpp_exporter.export_cone_step(
+        return cpp_exporter.export_cone_step(
             temp_file, cparams['bottom_radius'], cparams['top_radius'],
             cparams['height'], px, py, pz,
             data['step_schema'], data['step_unit'],
             1 if data['enable_logging'] else 0)
     elif obj_type == 'hollow_cylinder':
-        success = cpp_exporter.export_hollow_cylinder_step(
+        return cpp_exporter.export_hollow_cylinder_step(
             temp_file, cparams['outer_radius'], cparams['inner_radius'],
             cparams['height'], px, py, pz,
             data['step_schema'], data['step_unit'],

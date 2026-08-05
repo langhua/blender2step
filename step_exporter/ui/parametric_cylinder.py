@@ -274,6 +274,10 @@ class STEP_EXPORTER_OT_create_parametric_cylinder(Operator):
                     self.report({'ERROR'}, _t("Select a mesh object to write params to"))
                     return {'CANCELLED'}
                 _store_creation_params(obj, self)
+                # 用 OCCT 重新生成预览网格（若该对象是参数化圆柱类）
+                if obj.get('param_cylinder_type') is not None:
+                    S = 0.001 if self.unit == 'mm' else 1.0
+                    _apply_occt_preview_mesh(obj, self, S)
                 self.report({'INFO'}, _t("Params written to {name}", name=obj.name))
                 return {'FINISHED'}
             obj = _generate_parametric_cylinder(self)
@@ -420,8 +424,67 @@ def _generate_parametric_cylinder(props):
 
     # === 5. 存储所有创建参数（mm），供导出时直接读取，避免依赖 mesh 检测 ===
     _store_creation_params(obj, props)
+
+    # === 6. 用 OCCT 生成预览网格（与 STEP 导出完全一致），失败时保留 bmesh 预览 ===
+    _apply_occt_preview_mesh(obj, props, S)
     
     return obj
+
+
+def _apply_occt_preview_mesh(obj, props, S):
+    """用 OCCT 参数化实体生成预览网格（与 STEP 导出几何完全一致）。
+
+    取代 bmesh/布尔预览，消除 bmesh 与 OCCT 之间的几何漂移（倒角/圆角补偿、
+    布尔残留等）。失败时静默保留原 bmesh 预览。
+    """
+    import math as _m
+    try:
+        from ..core import _globals as _g
+        cpp = _g.step_exporter
+        if cpp is None:
+            import _step_exporter as cpp
+        if not hasattr(cpp, 'generate_cylinder_mesh'):
+            log_to_file("[STEP Exporter] OCCT preview unavailable (old pyd), keeping bmesh preview")
+            return
+        result = cpp.generate_cylinder_mesh(
+            props.cylinder_type, props.height,
+            props.radius, props.bottom_radius, props.top_radius,
+            props.chamfer_type, props.chamfer_size, props.fillet_radius,
+            props.hole_type, props.hole_radius, props.hole_depth,
+            1 if props.hole_is_tapered else 0,
+            props.hole_opening_radius, props.hole_end_radius, props.hole_fillet_radius,
+            props.stepped_large_radius, props.stepped_large_height, props.stepped_small_radius,
+            props.tapered_step_top_radius, props.tapered_step_bottom_radius,
+            1 if props.groove_enabled else 0,
+            _m.degrees(props.groove_angle), props.groove_top_width,
+            props.groove_depth_pct, props.groove_cone_depth_mult,
+            0.02)  # deflection (mm) — 光滑预览
+        if result is None:
+            log_to_file("[STEP Exporter] OCCT preview returned None, keeping bmesh preview")
+            return
+        verts = result['vertices']
+        tris = result['triangles']
+        if len(verts) < 4 or len(tris) < 4:
+            log_to_file("[STEP Exporter] OCCT preview empty mesh, keeping bmesh preview")
+            return
+        import bmesh as _bm
+        bm = _bm.new()
+        bm_verts = [bm.verts.new((v[0] * S, v[1] * S, v[2] * S)) for v in verts]
+        bm.verts.ensure_lookup_table()
+        for tri in tris:
+            try:
+                bm.faces.new([bm_verts[tri[0]], bm_verts[tri[1]], bm_verts[tri[2]]])
+            except ValueError:
+                pass
+        bm.normal_update()
+        bm.to_mesh(obj.data)
+        bm.free()
+        for f in obj.data.polygons:
+            f.use_smooth = True
+        obj.data.update()
+        log_to_file(f"[STEP Exporter] OCCT preview mesh applied: {len(verts)} verts, {len(tris)} tris")
+    except Exception as e:
+        log_to_file(f"[STEP Exporter] OCCT preview failed, keeping bmesh preview: {e}")
 
 
 def _store_creation_params(obj, props):
@@ -932,20 +995,26 @@ def _apply_hole_fillet(obj, props, S):
 
     else:
         # Original logic for through / top / bottom / both
+        # NOTE: must select only HORIZONTAL rim edges (BOTH endpoints on the
+        # top/bottom plane). Using min() on the two endpoint z-distances wrongly
+        # also selects the VERTICAL hole-wall edges (one endpoint touches the
+        # face plane), which then get beveled into a thick residual ring around
+        # the hole opening. Use max() so only in-plane rim edges are selected.
+        tol = 0.0005  # 0.5mm — plane tolerance for horizontal rim edges
         for edge in bm.edges:
             vz0 = edge.verts[0].co.z
             vz1 = edge.verts[1].co.z
             if props.hole_type in ('top', 'through', 'both'):
-                dz_top_min = min(abs(vz0 - top_z), abs(vz1 - top_z))
-                if dz_top_min < 0.01:
+                dz_top = max(abs(vz0 - top_z), abs(vz1 - top_z))
+                if dz_top < tol:
                     dist0 = math.sqrt(edge.verts[0].co.x**2 + edge.verts[0].co.y**2)
                     dist1 = math.sqrt(edge.verts[1].co.x**2 + edge.verts[1].co.y**2)
                     if dist0 < outer_r_top * 0.9 and dist1 < outer_r_top * 0.9:
                         edge.select = True
             
             if props.hole_type in ('bottom', 'through', 'both'):
-                dz_btm_min = min(abs(vz0 - btm_z), abs(vz1 - btm_z))
-                if dz_btm_min < 0.01:
+                dz_btm = max(abs(vz0 - btm_z), abs(vz1 - btm_z))
+                if dz_btm < tol:
                     dist0 = math.sqrt(edge.verts[0].co.x**2 + edge.verts[0].co.y**2)
                     dist1 = math.sqrt(edge.verts[1].co.x**2 + edge.verts[1].co.y**2)
                     if dist0 < outer_r_btm * 0.9 and dist1 < outer_r_btm * 0.9:

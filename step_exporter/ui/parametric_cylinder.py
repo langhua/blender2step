@@ -22,6 +22,44 @@ def _swap_radii_callback(self):
     self['swap_radii'] = False
 
 
+def _load_params_from_object(props, obj):
+    """把选中参数化对象的 param_* 属性回填到操作符属性（面板）。
+
+    返回 True 表示成功（对象是带 param_cylinder_type 的 mesh）。"""
+    if obj is None or obj.type != 'MESH':
+        return False
+    if obj.get('param_cylinder_type') is None:
+        return False
+    props.cylinder_type = obj['param_cylinder_type']
+    props.height = obj.get('param_height', props.height)
+    if props.cylinder_type == 'standard':
+        props.radius = obj.get('param_radius', props.radius)
+    else:
+        props.bottom_radius = obj.get('param_bottom_radius', props.bottom_radius)
+        props.top_radius = obj.get('param_top_radius', props.top_radius)
+    props.chamfer_type = obj.get('param_chamfer_type', 'none')
+    props.chamfer_size = obj.get('param_chamfer_size', 0.0)
+    props.fillet_radius = obj.get('param_fillet_radius', 0.0)
+    props.hole_type = obj.get('param_hole_type', 'none')
+    props.hole_radius = obj.get('param_hole_radius', 0.0)
+    props.hole_depth = obj.get('param_hole_depth_pct', 50.0)
+    props.hole_is_tapered = obj.get('param_hole_is_tapered', False)
+    props.hole_opening_radius = obj.get('param_hole_opening_radius', 0.0)
+    props.hole_end_radius = obj.get('param_hole_end_radius', 0.0)
+    props.hole_fillet_radius = obj.get('param_hole_fillet_radius', 0.0)
+    props.stepped_large_radius = obj.get('param_stepped_large_radius', 0.0)
+    props.stepped_large_height = obj.get('param_stepped_large_height_pct', 80.0)
+    props.stepped_small_radius = obj.get('param_stepped_small_radius', 0.0)
+    props.tapered_step_top_radius = obj.get('param_tapered_step_top_radius', 0.0)
+    props.tapered_step_bottom_radius = obj.get('param_tapered_step_bottom_radius', 0.0)
+    props.groove_enabled = obj.get('param_groove_enabled', False)
+    props.groove_angle = math.radians(obj.get('param_groove_angle_deg', 45.0))
+    props.groove_top_width = obj.get('param_groove_top_width', 0.0)
+    props.groove_depth_pct = obj.get('param_groove_depth_pct', 20.0)
+    props.groove_cone_depth_mult = obj.get('param_groove_cone_depth_mult', 1.0)
+    return True
+
+
 class STEP_EXPORTER_OT_create_parametric_cylinder(Operator):
     """创建参数化圆柱体（标准/锥形，带倒角/开孔）"""
     bl_idname = "step_exporter.create_parametric_cylinder"
@@ -50,7 +88,7 @@ class STEP_EXPORTER_OT_create_parametric_cylinder(Operator):
         name=_t("Bottom R"), default=20.0, min=0.1, max=500.0,
     )
     swap_radii: BoolProperty(
-        name="Swap", default=False,
+        name=_t("Swap"), default=False,
         description=_t("Swap top and bottom radius"),
         update=lambda self, ctx: _swap_radii_callback(self),
     )
@@ -64,7 +102,7 @@ class STEP_EXPORTER_OT_create_parametric_cylinder(Operator):
     update_selected: BoolProperty(
         name=_t("Write to Selected"),
         default=False,
-        description="Write these parameters to the selected object's properties instead of creating a new one (for fixing existing parametric objects)",
+        description=_t("Write these parameters to the selected object's properties instead of creating a new one (for fixing existing parametric objects)"),
     )
     
     # === 单位 ===
@@ -182,6 +220,10 @@ class STEP_EXPORTER_OT_create_parametric_cylinder(Operator):
     )
     
     def invoke(self, context, event):
+        # 选中了参数化圆柱/锥柱 → 自动把对象的当前参数回填到面板，方便直接修改
+        obj = context.active_object
+        if obj is not None and obj.type == 'MESH' and obj.get('param_cylinder_type') is not None:
+            _load_params_from_object(self, obj)
         return context.window_manager.invoke_props_dialog(self, width=320)
 
     def _get_auto_depth(self):
@@ -212,7 +254,6 @@ class STEP_EXPORTER_OT_create_parametric_cylinder(Operator):
             box.prop(self, 'bottom_radius')
         box.prop(self, 'height')
         box.prop(self, 'segments')
-        box.prop(self, 'update_selected')
         
         # Chamfer/Fillet
         box = layout.box()
@@ -228,13 +269,19 @@ class STEP_EXPORTER_OT_create_parametric_cylinder(Operator):
         box.label(text=_t("Hole"), icon='MESH_CYLINDER')
         box.prop(self, 'hole_type')
         if self.hole_type != 'none':
-            if self.hole_type in ('stepped', 'tapered_stepped'):
+            if self.hole_type == 'stepped':
+                # 普通台阶孔：大孔是等径直孔，只需 大孔半径 + 大孔高% + 小孔半径
                 box.prop(self, 'stepped_large_radius')
                 box.prop(self, 'stepped_large_height')
                 box.prop(self, 'stepped_small_radius')
-                if self.hole_type == 'tapered_stepped':
-                    box.prop(self, 'tapered_step_top_radius')
-                    box.prop(self, 'tapered_step_bottom_radius')
+                box.prop(self, 'hole_fillet_radius')
+            elif self.hole_type == 'tapered_stepped':
+                # 锥形台阶孔：大孔段是锥形，由 锥形顶半径(顶面开口) + 锥形台阶半径(台阶处) 决定，
+                # 大孔半径(stepped_large_radius) 不参与，隐藏避免误解
+                box.prop(self, 'tapered_step_top_radius')
+                box.prop(self, 'tapered_step_bottom_radius')
+                box.prop(self, 'stepped_large_height')
+                box.prop(self, 'stepped_small_radius')
                 box.prop(self, 'hole_fillet_radius')
             else:
                 box.prop(self, 'hole_is_tapered')
@@ -264,6 +311,10 @@ class STEP_EXPORTER_OT_create_parametric_cylinder(Operator):
             info = layout.box()
             info.label(text=_t("Depth: {depth:.1f} mm  |  Bottom W: {bot_w:.1f} mm", depth=auto_depth, bot_w=derived_bot_w))
             info.label(text=_t("  (bot_w = top_w + 2×depth×tan(angle))"))
+        
+        # 写入选中对象（放在对话框最下方）
+        layout.separator()
+        layout.prop(self, 'update_selected')
     
     def execute(self, context):
         try:
@@ -479,12 +530,44 @@ def _apply_occt_preview_mesh(obj, props, S):
         bm.normal_update()
         bm.to_mesh(obj.data)
         bm.free()
-        for f in obj.data.polygons:
-            f.use_smooth = True
-        obj.data.update()
+        # 自动平滑：曲面（锥面/圆柱面/孔壁）平滑，棱边（底部/台阶等直角边）保持锐利
+        _apply_preview_shading(obj)
         log_to_file(f"[STEP Exporter] OCCT preview mesh applied: {len(verts)} verts, {len(tris)} tris")
     except Exception as e:
         log_to_file(f"[STEP Exporter] OCCT preview failed, keeping bmesh preview: {e}")
+
+
+def _apply_preview_shading(obj, threshold_deg=30.0):
+    """预览着色：曲面平滑、大角度棱边锐利（使底部/台阶边缘在实体模式下清晰）。"""
+    import math as _m
+    import bmesh as _bms
+    data = obj.data
+    for f in data.polygons:
+        f.use_smooth = True
+    try:
+        data.use_auto_smooth = True
+        data.auto_smooth_angle = _m.radians(threshold_deg)
+    except Exception:
+        pass
+    thr = _m.radians(threshold_deg)
+    bm = _bms.new()
+    bm.from_mesh(data)
+    bm.edges.ensure_lookup_table()
+    bm.faces.ensure_lookup_table()
+    for e in bm.edges:
+        if len(e.link_faces) != 2:
+            continue
+        n0 = e.link_faces[0].normal
+        n1 = e.link_faces[1].normal
+        try:
+            ang = n0.angle(n1)
+        except ValueError:
+            continue
+        if ang > thr:
+            e.smooth = False
+    bm.to_mesh(data)
+    bm.free()
+    data.update()
 
 
 def _store_creation_params(obj, props):

@@ -100,6 +100,12 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
     cosine_layers: IntProperty(
         name=_t("Cosine Layers"), default=64, min=24, max=256, step=8,
         description=_t("Wall layer count (24=fast, 64=standard, 128=precise, 256=extreme)"))
+    # 写入选中对象：编辑已有参数化壳体
+    update_selected: BoolProperty(
+        name=_t("Write to Selected"),
+        default=False,
+        description=_t("Write these parameters to the selected object's properties instead of creating a new one (for fixing existing parametric objects)"),
+    )
 
     # ── Dynamic clamping for curved + rim ──
     def _clamp_cr_bf(self):
@@ -110,6 +116,10 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
                 self.corner_radius = 2.7
 
     def invoke(self, context, event):
+        # 选中了参数化壳体 → 自动把对象当前参数回填到面板，方便直接修改
+        obj = context.active_object
+        if obj is not None and obj.type == 'MESH' and obj.get('object_type') == 'parametric_shell':
+            self._load_params_from_object(obj)
         return context.window_manager.invoke_props_dialog(self, width=360)
 
     def draw(self, context):
@@ -142,7 +152,9 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
             layout.prop(self, 'rim_shape')
             if self.rim_shape == 'trapezoid':
                 layout.prop(self, 'rim_top_ratio')
+        # 写入选中对象（放在对话框最下方）
         layout.separator()
+        layout.prop(self, 'update_selected')
 
     def execute(self, context):
         # Clamp minimum values for curved + rim shells
@@ -154,6 +166,21 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         else:
             cr = self.corner_radius if self.corner_type == 'rounded' else 0.0
         cr = max(0.0, min(cr, w / 2 - t, d / 2 - t))
+
+        # 写入选中对象：不新建，把参数写入选中壳体并重建预览
+        if self.update_selected:
+            obj = context.active_object
+            if obj is None or obj.type != 'MESH':
+                self.report({'ERROR'}, _t("Select a mesh object to write params to"))
+                return {'CANCELLED'}
+            self._store_params(obj, cr)
+            try:
+                _rebuild_stage_create(obj)
+            except Exception as e:
+                self.report({'WARNING'}, _t("Params written, preview rebuild failed: {err}", err=str(e)))
+            self.report({'INFO'}, _t("Params written to {name}", name=obj.name))
+            return {'FINISHED'}
+
         rw = self.rim_width if self.rim_type != 'none' else 0.0
         rh = self.rim_height if self.rim_type != 'none' else 0.0
         bf = self.bottom_fillet
@@ -180,12 +207,18 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
             context.window.cursor_set('DEFAULT')
 
         # Store params (in user-facing unit)
+        self._store_params(obj, cr)
 
-        # Store params (in user-facing unit)
-        obj['width'] = w
-        obj['depth'] = d
-        obj['height'] = h
-        obj['wall_thickness'] = t
+        unit_label = "mm" if self.unit == 'mm' else "m"
+        self.report({'INFO'}, _t("Shell: {w:.0f}×{d:.0f}×{h:.0f}{u}, wall={t:.1f}{u}").format(w=w, d=d, h=h, t=t, u=unit_label))
+        return {'FINISHED'}
+
+    def _store_params(self, obj, cr):
+        """把面板参数写入对象属性（用户单位），供导出与 _rebuild_stage_create 读取。"""
+        obj['width'] = self.width
+        obj['depth'] = self.depth
+        obj['height'] = self.height
+        obj['wall_thickness'] = self.thickness
         obj['bottom_thickness'] = self.bottom_thickness
         obj['corner_type'] = self.corner_type
         obj['corner_radius'] = cr
@@ -202,9 +235,26 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
         obj['eccentric_y'] = self.eccentric_y
         obj['cosine_layers'] = self.cosine_layers
 
-        unit_label = "mm" if self.unit == 'mm' else "m"
-        self.report({'INFO'}, _t("Shell: {w:.0f}×{d:.0f}×{h:.0f}{u}, wall={t:.1f}{u}").format(w=w, d=d, h=h, t=t, u=unit_label))
-        return {'FINISHED'}
+    def _load_params_from_object(self, obj):
+        """把选中参数化壳体的属性回填到面板。"""
+        self.unit = obj.get('unit', self.unit)
+        self.corner_type = obj.get('corner_type', self.corner_type)
+        self.width = obj.get('width', self.width)
+        self.depth = obj.get('depth', self.depth)
+        self.height = obj.get('height', self.height)
+        self.thickness = obj.get('wall_thickness', self.thickness)
+        self.bottom_thickness = obj.get('bottom_thickness', self.bottom_thickness)
+        self.corner_radius = obj.get('corner_radius', self.corner_radius)
+        self.bottom_fillet = obj.get('bottom_fillet', self.bottom_fillet)
+        self.rim_type = obj.get('rim_type', self.rim_type)
+        self.rim_width = obj.get('rim_width', self.rim_width)
+        self.rim_height = obj.get('rim_height', self.rim_height)
+        self.rim_shape = obj.get('rim_shape', self.rim_shape)
+        self.rim_top_ratio = obj.get('rim_top_ratio', self.rim_top_ratio)
+        self.curve_ratio = obj.get('curve_ratio', self.curve_ratio)
+        self.curve_ratio_y = obj.get('curve_ratio_y', self.curve_ratio_y)
+        self.eccentric_y = obj.get('eccentric_y', self.eccentric_y)
+        self.cosine_layers = obj.get('cosine_layers', self.cosine_layers)
 
     @staticmethod
     def _bm_to_object(bm, name):

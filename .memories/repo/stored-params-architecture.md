@@ -107,6 +107,41 @@
 - **验证**：用户场景预览顶面2.404/底2.5/最大径2.5（上细下粗 ✓）；STEP 导出 vol=83.72
   （与旧 bmesh 83.68 一致，之前错误 91.55）；6 种锥体变体预览≈导出全部 OK
 
+## 锥形台阶孔 UI/着色修复（2026-08-06）
+- **Q1 底部不够锐利**：`_apply_occt_preview_mesh` 之前 `use_smooth=True` 全平滑 → 底部棱边发虚。
+  新增 `_apply_preview_shading(obj, threshold=30°)`：自动平滑 + 按面角标记锐利边
+  （底部/台阶 90° 边 sharp、锥面/圆柱面/孔壁 smooth、顶部圆角 smooth）。验证：底缘 84/84 sharp
+- **Q2 大孔半径 vs 锥形顶半径**：
+  - 普通台阶孔 `stepped`：大孔段是等径直孔 → 用 `大孔半径`(stepped_large_radius)，不用锥形顶/台阶
+  - 锥形台阶孔 `tapered_stepped`：大孔段是锥形 → 用 `锥形顶半径`(tapered_step_top_radius，
+    顶面开口) + `锥形台阶半径`(tapered_step_bottom_radius，台阶处)，**大孔半径不参与**
+  - UI 已改：`tapered_stepped` 时隐藏 `stepped_large_radius`（避免误解）；两者共用 大孔高% + 小孔半径
+- 验证：用户场景（倒锥2.75/2.65+顶圆角0.2+锥形台阶孔 顶1.75/台1.65/小1.1/高80%）
+  分析=cone_stepped_hole 参数全部正确（inner_top=1.75 inner_btm=1.65 small=1.1）
+
+## 从选中对象回填参数（2026-08-06）
+- 需求：编辑已有圆柱/锥柱时，把对象当前参数回填到"参数化圆柱"面板
+- 实现：`_load_params_from_object(props, obj)` 读对象 `param_*` 属性回填操作符属性；
+  `invoke()` 中若活动对象是带 `param_cylinder_type` 的 mesh 则自动回填（打开对话框即预填）
+- 验证：字段全部正确回填（类型/半径/高度/倒角/孔/锥形台阶/凹槽等）；非参数化对象返回 False 不加载
+- 使用：选中对象 → 点"Generate Cylinder" → 对话框预填该对象参数 → 修改 → 勾
+  "Write to Selected" 确定即更新；不勾选确定则用这些参数新建一个
+
+## 壳体编辑功能（2026-08-06，参数化壳体也支持生成/编辑）
+- 需求：把圆柱的"编辑已有对象"功能同样加到参数化壳体
+- 实现（`ui/parametric_shell.py` `STEP_EXPORTER_OT_create_parametric_shell`）：
+  - `update_selected` BoolProperty（"写入选中对象"）+ draw 复选框
+  - `execute` 中 update_selected 时：`_store_params(obj, cr)` 写属性 →
+    `_rebuild_stage_create(obj)`（OCCT 重建预览，含孔 window_data 保留）
+  - `_store_params(obj, cr)`：把面板参数写入 obj（width/depth/height/wall_thickness/
+    corner_type/corner_radius/rim_*/curve_ratio/eccentric_y/cosine_layers 等）
+  - `_load_params_from_object(obj)`：invoke 时活动对象 `object_type=='parametric_shell'`
+    则回填面板（自动预填）
+  - 面板按钮改名 "Generate / Edit Shell"（生成/编辑壳体）+ i18n
+- 验证（注册操作符实测）：建壳 100×80×50 → write-to-selected 改为 rounded 120×70×40
+  t=3 内边 1.5 → dims 120×70×41.2（40+rim1.2）、props 全更新、位置保留、OCCT 重建 528 verts
+- 注：壳体属性键名无 param_ 前缀（width/height/...），object_type='parametric_shell' 识别
+
 ## 孔口圆角残留修复（2026-08-06，顶部盲孔残留物）
 - **症状**：锥柱+顶部盲孔+孔口圆角 → 顶部孔口一圈残留物（879 个竖壁面环）
 - **根因**：`ui/parametric_cylinder.py` `_apply_hole_fillet` 用 `min(|vz0-top|,|vz1-top|)<0.01`

@@ -136,6 +136,9 @@ jobs:
         run: ruff check step_exporter/ --output-format=github
         continue-on-error: true
 
+      - name: Check step_exporter/lib has no orphaned DLLs
+        run: python tools/audit_lib.py --check
+
   # ============================================================
   # 集成测试：生成圆柱 → 导出 STEP → 验证（需要 .pyd）
   # ============================================================

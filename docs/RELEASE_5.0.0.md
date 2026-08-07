@@ -61,6 +61,33 @@ python tools/make_release.py                  # packages blender2step-5.0.0.zip
 
 Requires Python 3.13 and OpenCASCADE 7.8.1 (see `BUILD.md`).
 
+## 🚀 Release checklist
+
+Steps to cut a new release (run from the repo root, Windows x64):
+
+1. **Bump the version** in `step_exporter/__init__.py` (`bl_info["version"]`,
+   `bl_info["blender"]`) and `src/export/module.cpp` (`MODULE_VERSION`); add a
+   `CHANGELOG.md` entry and update the README / release-note docs.
+2. **Rebuild the C++ core and commit the binary** — the release zip only packs
+   git-tracked files, so the rebuilt `step_exporter/lib/_step_exporter.pyd` (and
+   any changed DLLs) must be committed:
+   ```shell
+   cmake --build build --config Release
+   ```
+3. **Audit `step_exporter/lib/`** — no orphaned DLLs may be present:
+   ```shell
+   python tools/audit_lib.py --check
+   ```
+4. **Build the release zip** (runs the orphan check again automatically):
+   ```shell
+   python tools/make_release.py            # -> blender2step-<version>.zip
+   ```
+5. **Smoke-test the zip**: install in a fresh Blender 5.x, create + export a
+   parametric part, and verify the STEP in FreeCAD.
+6. **Push** — CI runs build / test / integration / lint (including the lib audit).
+7. **Tag & publish**: `git tag v<version>` → GitHub Release → attach
+   `blender2step-<version>.zip` and paste this file's content as the release notes.
+
 ## ✅ Tests
 
 CI runs C++ build + Blender unit tests + integration tests (create → export STEP →

@@ -11,7 +11,11 @@ artifacts (test .step/.log/.blend files, __pycache__, debug scripts, ...) never
 leak into the release. The compiled `_step_exporter.pyd` and the OpenCASCADE
 `TK*.dll` runtimes are committed to git, so a fresh clone produces a complete,
 installable zip without building.
+
+Before packing, step_exporter/lib/ is checked for orphaned DLLs (DLLs that the
+pyd does not reference) — see tools/audit_lib.py. Pass --no-lib-check to skip.
 """
+import argparse
 import os
 import sys
 import zipfile
@@ -60,7 +64,39 @@ def git_tracked_files():
     return {p.replace("\\", "/") for p in out.split("\0") if p.strip()}
 
 
+def check_lib_orphans(tracked):
+    """Fail if any git-tracked ORPHAN DLL would be packed into the release zip.
+
+    Orphaned DLLs are present in step_exporter/lib but not referenced by
+    _step_exporter.pyd (see tools/audit_lib.py). Only git-tracked ones matter,
+    because untracked files are never packed.
+    """
+    try:
+        from audit_lib import classify
+    except Exception as exc:
+        print(f"[RELEASE] WARNING: could not import audit_lib ({exc}); "
+              "skipping orphaned-DLL check")
+        return
+    _needed, orphan, _risky, sizes, _root = classify()
+    packed_orphans = sorted(
+        o for o in orphan if f"step_exporter/lib/{o}" in tracked)
+    if packed_orphans:
+        total_kb = sum(sizes[o] for o in packed_orphans) / 1024
+        raise SystemExit(
+            f"[RELEASE] FAIL: {len(packed_orphans)} orphaned DLL(s) are git-tracked "
+            f"and would be packed (~{total_kb:.0f} KB):\n"
+            + "\n".join("  - " + o for o in packed_orphans)
+            + "\nRemove them (run `python tools/audit_lib.py`) or pass --no-lib-check.")
+
+
 def main():
+    ap = argparse.ArgumentParser(description="Build a Blender-addon release zip.")
+    ap.add_argument("version", nargs="?",
+                    help="override version (default: read from bl_info)")
+    ap.add_argument("--no-lib-check", action="store_true",
+                    help="skip the orphaned-DLL check on step_exporter/lib")
+    args = ap.parse_args()
+
     if not os.path.isdir(PKG):
         raise SystemExit(f"Package dir not found: {PKG}")
     for f in REQUIRED_LIB:
@@ -69,10 +105,13 @@ def main():
             raise SystemExit(f"Missing required runtime file: {f}\n"
                              "Build/refresh it first (see BUILD.md).")
 
-    version = sys.argv[1] if len(sys.argv) > 1 else find_version()
+    version = args.version or find_version()
     out_zip = os.path.join(REPO, f"blender2step-{version}.zip")
 
     tracked = git_tracked_files()
+
+    if not args.no_lib_check:
+        check_lib_orphans(tracked)
 
     n_files = 0
     skipped = 0

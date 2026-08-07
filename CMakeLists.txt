@@ -136,7 +136,7 @@ add_custom_command(TARGET step_exporter POST_BUILD
 
 # ====== 5. 链接库 ======
 # Python 扩展模块需要链接 Python 导入库来解析符号
-# 运行时由Blender环境提供python311.dll
+# 运行时由Blender环境提供python313.dll
 target_link_libraries(step_exporter
     PRIVATE
         ${OpenCASCADE_LIBRARIES}  # 使用 vcpkg 找到的所有库

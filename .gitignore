@@ -39,3 +39,12 @@ _cpp_dbg.txt
 _cpp_*.txt
 **/_cpp_dbg.txt
 **/_cpp_*.txt
+
+# Temp / one-off debug artifacts from local development sessions
+_ci_*
+_summary.py
+_fc_inspect*.py
+_check_label.py
+_test_shell_edit.txt
+
+**/*.zip

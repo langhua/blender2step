@@ -23,6 +23,30 @@ blender2step is one step in a simple electronics manufacturing toolchain:
 | Enclosure design | [FritzingToBlender](https://github.com/langhua/FritzingToBlender) | Import Gerber RS-274X into Blender for enclosure modeling, fit testing, rendering, and exploded views |
 | STEP export | **blender2step** ← you are here | Blender enclosure → STEP format → mold manufacturing |
 
+## Installation (for users)
+
+**Platform: Windows 64-bit only** — the zip bundles a Windows `_step_exporter.pyd`
+and OpenCASCADE `TK*.dll` runtimes; there is no Linux/macOS build.
+
+Requires **Blender 4.2 or newer** (developed and tested on Blender 5.2).
+
+1. Download the release zip, e.g. `step_exporter-4.2.3.zip`.
+2. In Blender: **Edit → Preferences → Add-ons → Install from Disk...**
+3. Select the zip file and enable **"STEP Exporter (Enhanced)"**.
+4. The addon appears under **File → Export → STEP (Enhanced)**.
+
+> The zip bundles the compiled C++ core (`_step_exporter.pyd`) and the OpenCASCADE
+> runtime DLLs inside `step_exporter/lib/`, so **no separate install or build is needed**.
+
+To build the release zip yourself, run from the repo root:
+
+```shell
+python tools/make_release.py
+```
+
+See [`CHANGELOG.md`](./CHANGELOG.md) for the full history and
+[`docs/RELEASE_4.2.3.md`](./docs/RELEASE_4.2.3.md) for the latest release notes.
+
 ## Development
 
 ### Recommended Tools

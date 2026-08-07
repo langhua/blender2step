@@ -513,8 +513,7 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
         top_fr = cparams.get('top_fillet', 0.0)
         btm_ch = cparams.get('bottom_chamfer', 0.0)
         btm_fr = cparams.get('bottom_fillet', 0.0)
-        # DEBUG: log all args
-        _args = [
+        return cpp_exporter.export_cone_blind_hole_groove_step(
             temp_file,
             cparams['bottom_radius'], cparams['top_radius'], cparams['height'],
             cparams['hole_radius'], cparams['hole_depth'],
@@ -528,9 +527,7 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
             cparams.get('groove_offset', 0),
             px, py, pz,
             data['step_schema'], data['step_unit'],
-            1 if data['enable_logging'] else 0]
-        print(f"[STEP Exporter] [DBG] cone_blind_hole_groove args: {[(type(a).__name__, a) for a in _args]}")
-        return cpp_exporter.export_cone_blind_hole_groove_step(*_args)
+            1 if data['enable_logging'] else 0)
     elif obj_type == 'cone_chamfer_fillet':
         # Determine feature order: C++ expects chamfer_size first, fillet_radius second
         # reversed=0: bottom chamfer + top fillet; reversed=1: bottom fillet + top chamfer

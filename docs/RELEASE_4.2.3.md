@@ -1,0 +1,65 @@
+# Release v4.2.3 — Groove Eccentricity & Parametric Editing
+
+**blender2step** is a Blender addon that exports 3D models to STEP using OpenCASCADE 7.8.1.
+This release focuses on parametric editing of cylinders/cones/shells, exact OCCT-based
+previews, and a new **groove eccentricity** parameter.
+
+> **⚠ Platform: Windows 64-bit only.** The zip bundles a Windows `_step_exporter.pyd`
+> (Python extension) and OpenCASCADE `TK*.dll` runtimes, so this build does **not** run
+> on Linux or macOS.
+
+Requires **Blender 4.2+** (tested on 5.2).
+
+---
+
+## ✨ New in this release
+
+- **Groove eccentricity (`Eccentric %`)** — move the external trapezoidal groove
+  up/down on cylinders and cones as a percentage of height (−45% … +45%).
+  - Cones adapt the groove to the local wall radius, so the groove stays flush with
+    the slanted surface at any offset.
+  - The Blender preview and the STEP export use the **same** OCCT geometry.
+- **Parametric editing ("Write to Selected")** for cylinders, cones, inverted-cones
+  and parametric shells — adjust parameters and regenerate an existing object in place.
+- **OCCT-generated preview meshes** for cylinders/cones/inverted-cones, so what you
+  see in Blender matches the STEP file exactly.
+- **Fully parametric cylinder export** — parts are exported from their stored
+  creation parameters instead of fragile mesh re-detection.
+
+## 🐛 Bug fixes
+
+- **Grooved cone STEP export** produced wrong groove size/position. The export now
+  always computes groove parameters from the live creation parameters (previously it
+  could read stale values after editing), so **preview == export**.
+- Removed a 0.2 mm groove-width discrepancy (bmesh boolean margin leaked into the
+  exported width).
+- Cone inverted-radius compensation (only chamfers enlarge the outer radius).
+- Removed leftover debug logging from the export path.
+
+## 📦 Installation
+
+1. Download `step_exporter-4.2.3.zip`.
+2. Blender: **Edit → Preferences → Add-ons → Install from Disk…** → select the zip → enable
+   **"STEP Exporter (Enhanced)"**.
+3. Find it under **File → Export → STEP (Enhanced)**.
+
+The zip bundles the compiled C++ core (`_step_exporter.pyd`) and all OpenCASCADE
+runtime DLLs — no separate build or install is needed. **Windows 64-bit only.**
+
+## 🔨 Build from source
+
+```shell
+cmake --build build --config Release          # produces step_exporter/lib/_step_exporter.pyd
+python tools/make_release.py                  # packages step_exporter-4.2.3.zip
+```
+
+Requires Python 3.13 and OpenCASCADE 7.8.1 (see `BUILD.md`).
+
+## ✅ Tests
+
+CI runs C++ build + Blender unit tests + integration tests (create → export STEP →
+verify shells) + ruff lint. See `CHANGELOG.md` for the full history.
+
+---
+
+Full changelog: [`CHANGELOG.md`](../CHANGELOG.md)

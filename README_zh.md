@@ -23,6 +23,30 @@ blender2step 是简单电子产品制造工具链中的一步：
 | 外壳设计 | [FritzingToBlender](https://github.com/langhua/FritzingToBlender) | 将 Gerber RS-274X 导入 Blender，用于外壳建模、试装、渲染和分解图 |
 | STEP 导出 | **blender2step** ← 你在这里 | Blender 外壳 → STEP 格式 → 模具制造 |
 
+## 安装（用户）
+
+**平台：仅支持 Windows 64 位** —— zip 内打包的是 Windows 版 `_step_exporter.pyd` 和
+OpenCASCADE `TK*.dll` 运行库，暂无 Linux / macOS 版本。
+
+需要 **Blender 4.2 或更新版本**（开发与测试基于 Blender 5.2）。
+
+1. 下载发布 zip，例如 `step_exporter-4.2.3.zip`。
+2. 在 Blender 中：**编辑 → 偏好设置 → 插件 → 从磁盘安装...**
+3. 选择 zip 文件并启用 **"STEP Exporter (Enhanced)"**。
+4. 插件位于 **文件 → 导出 → STEP (Enhanced)**。
+
+> zip 内已打包编译好的 C++ 核心（`_step_exporter.pyd`）和 OpenCASCADE 运行时
+> DLL（位于 `step_exporter/lib/`），**无需单独安装或编译**。
+
+如需自己生成发布 zip，请在仓库根目录运行：
+
+```shell
+python tools/make_release.py
+```
+
+完整历史见 [`CHANGELOG.md`](./CHANGELOG.md)，最新版本说明见
+[`docs/RELEASE_4.2.3.md`](./docs/RELEASE_4.2.3.md)（英文）。
+
 ## 开发
 
 ### 推荐工具

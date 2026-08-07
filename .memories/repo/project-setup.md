@@ -14,6 +14,12 @@
 - C++ build: `cd f:\git\blender2step\build` → `cmake --build . --config Release`
 - `.pyd` auto-copies to `step_exporter/lib/` on build
 
+## Release packaging (tools/make_release.py)
+- Run: `python tools/make_release.py` → produces **`blender2step-<version>.zip`** (NOT step_exporter-*.zip)
+- Only **git-tracked** files under `step_exporter/` are packed (via `git ls-files`); untracked
+  .step/.log/.blend artifacts never leak in. lib/.pyd + TK*.dll ARE committed → fresh clone installable.
+- `**/*.zip` is gitignored, so the release zip itself is never committed.
+
 ## Python Module Structure
 ```
 step_exporter/

@@ -1,13 +1,13 @@
 """
 STEP Exporter for Blender (Enhanced)
-Version 4.2.3 with advanced BREP and solid creation support
+Version 5.0.0 with advanced BREP and solid creation support
 """
 
 bl_info = {
     "name": "STEP Exporter (Enhanced)",
     "author": "Blender STEP Exporter",
-    "version": (4, 2, 3),
-    "blender": (4, 2, 0),
+    "version": (5, 0, 0),
+    "blender": (5, 0, 0),
     "location": "File > Export > STEP (Enhanced)",
     "description": "Export to STEP format with advanced BREP, solid creation and geometry fixing",
     "category": "Import-Export",

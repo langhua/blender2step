@@ -28,9 +28,9 @@ blender2step 是简单电子产品制造工具链中的一步：
 **平台：仅支持 Windows 64 位** —— zip 内打包的是 Windows 版 `_step_exporter.pyd` 和
 OpenCASCADE `TK*.dll` 运行库，暂无 Linux / macOS 版本。
 
-需要 **Blender 4.2 或更新版本**（开发与测试基于 Blender 5.2）。
+需要 **Blender 5.0 或更新版本**（Python 3.13；开发与测试基于 Blender 5.2）。
 
-1. 下载发布 zip，例如 `step_exporter-4.2.3.zip`。
+1. 下载发布 zip，例如 `blender2step-5.0.0.zip`。
 2. 在 Blender 中：**编辑 → 偏好设置 → 插件 → 从磁盘安装...**
 3. 选择 zip 文件并启用 **"STEP Exporter (Enhanced)"**。
 4. 插件位于 **文件 → 导出 → STEP (Enhanced)**。
@@ -45,7 +45,7 @@ python tools/make_release.py
 ```
 
 完整历史见 [`CHANGELOG.md`](./CHANGELOG.md)，最新版本说明见
-[`docs/RELEASE_4.2.3.md`](./docs/RELEASE_4.2.3.md)（英文）。
+[`docs/RELEASE_5.0.0.md`](./docs/RELEASE_5.0.0.md)（英文）。
 
 ## 开发
 

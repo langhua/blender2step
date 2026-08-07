@@ -28,9 +28,9 @@ blender2step is one step in a simple electronics manufacturing toolchain:
 **Platform: Windows 64-bit only** — the zip bundles a Windows `_step_exporter.pyd`
 and OpenCASCADE `TK*.dll` runtimes; there is no Linux/macOS build.
 
-Requires **Blender 4.2 or newer** (developed and tested on Blender 5.2).
+Requires **Blender 5.0 or newer** (Python 3.13; developed and tested on Blender 5.2).
 
-1. Download the release zip, e.g. `step_exporter-4.2.3.zip`.
+1. Download the release zip, e.g. `blender2step-5.0.0.zip`.
 2. In Blender: **Edit → Preferences → Add-ons → Install from Disk...**
 3. Select the zip file and enable **"STEP Exporter (Enhanced)"**.
 4. The addon appears under **File → Export → STEP (Enhanced)**.
@@ -45,7 +45,7 @@ python tools/make_release.py
 ```
 
 See [`CHANGELOG.md`](./CHANGELOG.md) for the full history and
-[`docs/RELEASE_4.2.3.md`](./docs/RELEASE_4.2.3.md) for the latest release notes.
+[`docs/RELEASE_5.0.0.md`](./docs/RELEASE_5.0.0.md) for the latest release notes.
 
 ## Development
 

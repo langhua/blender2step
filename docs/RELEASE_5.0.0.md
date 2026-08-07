@@ -1,4 +1,4 @@
-# Release v4.2.3 — Groove Eccentricity & Parametric Editing
+# Release v5.0.0 — Blender 5.0+ & Groove Eccentricity
 
 **blender2step** is a Blender addon that exports 3D models to STEP using OpenCASCADE 7.8.1.
 This release focuses on parametric editing of cylinders/cones/shells, exact OCCT-based
@@ -8,12 +8,18 @@ previews, and a new **groove eccentricity** parameter.
 > (Python extension) and OpenCASCADE `TK*.dll` runtimes, so this build does **not** run
 > on Linux or macOS.
 
-Requires **Blender 4.2+** (tested on 5.2).
+Requires **Blender 5.0+ (Python 3.13)** (tested on 5.2).
+
+> **Why Blender 5.0+?** The compiled `_step_exporter.pyd` is a CPython **3.13** extension.
+> CPython extensions are binary-bound to the Python minor version, and Blender 4.x ships
+> Python 3.11, so the addon cannot load there. Blender 5.0 and newer use Python 3.13.
 
 ---
 
 ## ✨ New in this release
 
+- **Blender 5.0+ / Python 3.13 only** — the addon is aligned to the Python 3.13
+  interpreter shipped with Blender 5.0+; `bl_info` minimum is `(5, 0, 0)`.
 - **Groove eccentricity (`Eccentric %`)** — move the external trapezoidal groove
   up/down on cylinders and cones as a percentage of height (−45% … +45%).
   - Cones adapt the groove to the local wall radius, so the groove stays flush with
@@ -38,7 +44,7 @@ Requires **Blender 4.2+** (tested on 5.2).
 
 ## 📦 Installation
 
-1. Download `blender2step-4.2.3.zip`.
+1. Download `blender2step-5.0.0.zip`.
 2. Blender: **Edit → Preferences → Add-ons → Install from Disk…** → select the zip → enable
    **"STEP Exporter (Enhanced)"**.
 3. Find it under **File → Export → STEP (Enhanced)**.
@@ -50,7 +56,7 @@ runtime DLLs — no separate build or install is needed. **Windows 64-bit only.*
 
 ```shell
 cmake --build build --config Release          # produces step_exporter/lib/_step_exporter.pyd
-python tools/make_release.py                  # packages blender2step-4.2.3.zip
+python tools/make_release.py                  # packages blender2step-5.0.0.zip
 ```
 
 Requires Python 3.13 and OpenCASCADE 7.8.1 (see `BUILD.md`).

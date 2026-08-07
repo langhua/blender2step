@@ -54,7 +54,7 @@
 #include <unordered_map>
 
 // Define version constant
-const char* MODULE_VERSION = "4.2.3";  // fix: fillet offset excluded from eccentricity
+const char* MODULE_VERSION = "5.0.0";  // Blender 5.0+ (Python 3.13) only
 
 // 获取版本信息（原始函数）
 PyObject* get_version(PyObject* self, PyObject* args) {

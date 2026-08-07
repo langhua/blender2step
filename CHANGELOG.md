@@ -8,6 +8,19 @@ which is also what the addon UI reports (see `step_exporter/__init__.py` `bl_inf
 
 ---
 
+## [5.0.0] — 2026-08-07
+
+### Changed
+- **Version bumped to 5.0.0**, aligned across `bl_info` and the C++ `MODULE_VERSION`.
+- **Requires Blender 5.0 or newer (Python 3.13).** The compiled `_step_exporter.pyd`
+  is a CPython 3.13 extension and cannot load in the Python 3.11 interpreter that
+  Blender 4.x ships (CPython extension ABI is bound to the Python minor version).
+  `bl_info` `"blender"` minimum is now `(5, 0, 0)`, so Blender 4.x shows the addon
+  as incompatible instead of loading it broken.
+- Release zip renamed to `blender2step-<version>.zip`.
+
+---
+
 ## [4.2.3] — 2026-08-07
 
 ### Added
@@ -107,3 +120,4 @@ which is also what the addon UI reports (see `step_exporter/__init__.py` `bl_inf
 ---
 
 [4.2.3]: https://github.com/langhua/blender2step/releases/tag/v4.2.3
+[5.0.0]: https://github.com/langhua/blender2step/releases/tag/v5.0.0

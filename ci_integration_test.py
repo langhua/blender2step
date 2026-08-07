@@ -38,11 +38,16 @@ def _export_sync(filepath, objs):
 
     objects_data = []
     for obj in objs:
-        data = _get_mesh_data_enhanced(obj, context, scale, apply_modifiers=True)
+        print(f"    [SYNC] analyzing mesh: {obj.name}", flush=True)
+        # apply_modifiers=False: created parametric objects have no modifiers
+        # (the OCCT preview already replaced the mesh), and calling
+        # context.evaluated_depsgraph_get() in --background mode can hang.
+        data = _get_mesh_data_enhanced(obj, context, scale, apply_modifiers=False)
         if data:
             objects_data.append(data)
     if not objects_data:
         return False
+    print(f"    [SYNC] analyzed {len(objects_data)} object(s) -> init_incremental_export", flush=True)
 
     ok = _g.step_exporter.init_incremental_export(
         filepath, len(objects_data), scale,
@@ -51,12 +56,18 @@ def _export_sync(filepath, objs):
     )
     if not ok:
         return False
+    print("    [SYNC] init_incremental_export done -> add_object_to_export", flush=True)
 
-    for data in objects_data:
+    for i, data in enumerate(objects_data):
+        print(f"    [SYNC] add_object_to_export [{i+1}/{len(objects_data)}]...", flush=True)
         if not _g.step_exporter.add_object_to_export(data, lambda p: None):
             return False
+        print(f"    [SYNC] add_object_to_export [{i+1}] OK", flush=True)
 
-    return _g.step_exporter.finalize_incremental_export()
+    print("    [SYNC] finalize_incremental_export...", flush=True)
+    ok = _g.step_exporter.finalize_incremental_export()
+    print(f"    [SYNC] finalize done: {ok}", flush=True)
+    return ok
 
 
 def clear_scene():

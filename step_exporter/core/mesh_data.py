@@ -8,17 +8,7 @@ def _get_mesh_data_enhanced(obj, context, scale, apply_modifiers=True):
     if obj.type != 'MESH':
         return None
     
-    import sys
-    log_to_file(f"[Python DEBUG] get_mesh_data_enhanced called for object '{obj.name}'")
-    sys.stdout.flush()
     mesh = obj.data
-    
-    # 检查原始顶点坐标
-    log_to_file(f"[Python DEBUG] Original mesh vertex count: {len(mesh.vertices)}")
-    if len(mesh.vertices) > 0:
-        for i in range(min(5, len(mesh.vertices))):
-            v = mesh.vertices[i]
-            log_to_file(f"[Python DEBUG] Original vertex {i}: ({v.co.x}, {v.co.y}, {v.co.z})")
     
     # 获取最终几何（应用修改器）
     depsgraph = context.evaluated_depsgraph_get() if apply_modifiers else None

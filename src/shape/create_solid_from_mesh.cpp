@@ -35,13 +35,10 @@ TopoDS_Shape create_solid_from_mesh(const std::vector<std::vector<double>>& vert
             
             meshBBoxSize = sqrt(pow(xmax - xmin, 2) + pow(ymax - ymin, 2) + pow(zmax - zmin, 2));
             std::cout << "[STEP Exporter] Mesh bounding box size (scaled): " << meshBBoxSize << std::endl;
-            std::cout << "[STEP Exporter] DEBUG: Bounding box ranges (scaled): x[" << xmin << "," << xmax << "] y[" << ymin << "," << ymax << "] z[" << zmin << "," << zmax << "]" << std::endl;
         }
         
         // 根据包围盒大小调整容差
         double adjustedTolerance = tolerance;
-        std::cout << "[STEP Exporter] DEBUG: tolerance parameter = " << tolerance << std::endl;
-        std::cout << "[STEP] Mesh bounding box size: " << meshBBoxSize << std::endl;
         
         // 如果包围盒大小小于1微米（1e-6米），视为零尺寸模型，使用默认容差
 
@@ -56,7 +53,6 @@ TopoDS_Shape create_solid_from_mesh(const std::vector<std::vector<double>>& vert
             if (maxReasonableTolerance < 1.0e-6) {
                 maxReasonableTolerance = 1.0e-6;
             }
-            std::cout << "[STEP Exporter] DEBUG: tolerance=" << tolerance << " meshBBoxSize=" << meshBBoxSize << " maxReasonableTolerance=" << maxReasonableTolerance << std::endl;
             // 如果用户指定的容差过大（超过最大合理容差），则使用最大合理容差
 
             if (tolerance > maxReasonableTolerance) {
@@ -93,33 +89,21 @@ TopoDS_Shape create_solid_from_mesh(const std::vector<std::vector<double>>& vert
 
         bool allowNonManifold = false; // 默认强制流形几何
         
-        std::cout << "[STEP Exporter] DEBUG: faces.size() = " << faces.size() << std::endl;
         if (faces.size() < 500) {
             toleranceMultiplier = 10.0; // 简单网格，使用合理容差
-
             allowNonManifold = false;
-            std::cout << "[STEP Exporter] DEBUG: Branch 1 (faces < 500)" << std::endl;
         } else if (faces.size() < 2000) {
             toleranceMultiplier = 10.0; // 中等复杂度网格（如猴头），强制流形几何
-
             allowNonManifold = false;
-            std::cout << "[STEP Exporter] DEBUG: Branch 2 (500 <= faces < 2000)" << std::endl;
         } else if (faces.size() < 5000) {
             toleranceMultiplier = 10.0; // 高面数网格
-
             allowNonManifold = false;
-            std::cout << "[STEP Exporter] DEBUG: Branch 3 (2000 <= faces < 5000)" << std::endl;
         } else if (faces.size() < 10000) {
             toleranceMultiplier = 10.0; // 复杂网格
-
             allowNonManifold = true;
-            std::cout << "[STEP Exporter] DEBUG: Branch 4 (5000 <= faces < 10000)" << std::endl;
         } else {
             toleranceMultiplier = 5.0; // 极高细节网格，使用极小容差保持完整性
-
             allowNonManifold = true; // 允许非流形几何，避免过度修复
-
-            std::cout << "[STEP Exporter] DEBUG: Branch 5 (faces >= 10000)" << std::endl;
         }
         std::cout << "[STEP Exporter] Mesh face count: " << faces.size() << ", using tolerance multiplier: " << toleranceMultiplier 
                   << ", non-manifold allowed: " << (allowNonManifold ? "yes" : "no") << std::endl;
@@ -185,16 +169,9 @@ TopoDS_Shape create_solid_from_mesh(const std::vector<std::vector<double>>& vert
                     if (analyticFaceMaker.IsDone()) {
                         faceShape = analyticFaceMaker.Face();
                         faceCreated = true;
-                        if (face_idx < 3) {
-                            std::cout << "[DEBUG] Face " << face_idx << " created as analytic surface." << std::endl;
-                        }
                     }
                 } catch (const Standard_Failure& e) {
                     // 解析曲面创建失败，回退到多边形面片
-
-                    if (face_idx < 3) {
-                        std::cout << "[DEBUG] Analytic surface creation failed for face " << face_idx << ": " << e.GetMessageString() << ", using polygonal face." << std::endl;
-                    }
                 }
             }
             
@@ -205,9 +182,6 @@ TopoDS_Shape create_solid_from_mesh(const std::vector<std::vector<double>>& vert
                 if (polyFaceMaker.IsDone()) {
                     faceShape = polyFaceMaker.Face();
                     faceCreated = true;
-                    if (face_idx < 3) {
-                        std::cout << "[DEBUG] Face " << face_idx << " created as polygonal face (no analytic surface)." << std::endl;
-                    }
                 }
             }
             

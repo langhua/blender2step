@@ -45,28 +45,10 @@ def _get_mesh_data_enhanced(obj, context, scale, apply_modifiers=True):
         # 检查顶点是否为零
         if abs(world_co.x) < 1e-12 and abs(world_co.y) < 1e-12 and abs(world_co.z) < 1e-12:
             zero_vertex_count += 1
-        
-        # 详细调试前 5 个顶点
-        if idx < 5:
-            log_to_file(f"[Python DEBUG] Vertex {idx}:")
-            log_to_file(f"  Local co: ({vert.co.x}, {vert.co.y}, {vert.co.z})")
-            log_to_file(f"  World co: ({world_co.x}, {world_co.y}, {world_co.z})")
-            log_to_file(f"  Scaled: ({vertex_scaled[0]}, {vertex_scaled[1]}, {vertex_scaled[2]})")
-            log_to_file(f"  Matrix: {eval_obj.matrix_world}")
-    
-    # 调试：打印统计信息
-    log_to_file(f"[Python DEBUG] Object '{obj.name}' vertex analysis:")
-    log_to_file(f"  Total vertices: {len(vertices)}")
-    log_to_file(f"  Zero world-co vertices: {zero_vertex_count}")
-    log_to_file(f"  Scale factor: {scale}")
-    log_to_file(f"  Matrix world: {eval_obj.matrix_world}")
-    import sys
-    sys.stdout.flush()
     
     # 如果所有顶点都为零，打印严重警告
     if zero_vertex_count == len(vertices) and len(vertices) > 0:
         log_to_file(f"[Python WARNING] ALL vertices have zero world coordinates! Check object transform and mesh data.")
-        sys.stdout.flush()
     
     # 获取三角面
     faces = []

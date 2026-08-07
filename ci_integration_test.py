@@ -8,6 +8,12 @@ import sys
 import os
 import tempfile
 
+# Make CI logs stream in real time (stdout is block-buffered when piped).
+try:
+    sys.stdout.reconfigure(line_buffering=True)
+except Exception:
+    pass
+
 repo_root = os.path.dirname(os.path.abspath(__file__))
 lib_dir = os.path.join(repo_root, "step_exporter", "lib")
 if os.path.exists(lib_dir):
@@ -60,77 +66,84 @@ def clear_scene():
 
 def test_case(name, **params):
     global passed, failed
-    import signal
     import math
+    import threading
 
-    def timeout_handler(signum, frame):
-        raise TimeoutError("C++ export too slow")
-
-    # Only available on Unix, skip on Windows CI
-    has_signal = hasattr(signal, 'SIGALRM')
-
-    rot_x = params.pop('_rot_x', 0.0)
-    rot_y = params.pop('_rot_y', 0.0)
-    rot_z = params.pop('_rot_z', 0.0)
-
-    rot_label = ""
-    if rot_x or rot_y or rot_z:
-        rot_label = f" [rot=({rot_x:.0f},{rot_y:.0f},{rot_z:.0f})]"
-
-    print(f"\n  [{name}{rot_label}]")
-    clear_scene()
-
+    # Watchdog: a C++ export can hang (e.g. an OCCT call never returns). signal.SIGALRM
+    # is not available on Windows, so use a daemon timer that aborts the process with a
+    # clear message instead of letting CI hang until the GitHub job timeout cancels it.
+    watchdog_secs = int(os.environ.get('CI_TEST_TIMEOUT', '180'))
+    watchdog = threading.Timer(
+        watchdog_secs,
+        lambda: (print(f"\n    TIMEOUT: test '{name}' exceeded {watchdog_secs}s — possible hang, aborting"),
+                 os._exit(1)))
+    watchdog.daemon = True
+    watchdog.start()
     try:
-        bpy.ops.step_exporter.create_parametric_cylinder(**params)
-    except Exception as e:
-        print(f"    SKIP: create error: {e}")
-        failed += 1
-        return
+        rot_x = params.pop('_rot_x', 0.0)
+        rot_y = params.pop('_rot_y', 0.0)
+        rot_z = params.pop('_rot_z', 0.0)
 
-    objs = [o for o in bpy.context.scene.objects if o.type == 'MESH']
-    if not objs:
-        print(f"    FAIL: no mesh")
-        failed += 1
-        return
+        rot_label = ""
+        if rot_x or rot_y or rot_z:
+            rot_label = f" [rot=({rot_x:.0f},{rot_y:.0f},{rot_z:.0f})]"
 
-    # Apply test rotation to the created object
-    if rot_x or rot_y or rot_z:
-        objs[0].rotation_euler = (rot_x, rot_y, rot_z)
-        bpy.context.view_layer.update()
+        print(f"\n  [{name}{rot_label}]")
+        clear_scene()
 
-    verts = len(objs[0].data.vertices)
-    print(f"    Mesh: {objs[0].name} ({verts} verts)")
-    if verts > 10000:
-        print(f"    SKIP: too many vertices for CI")
-        failed += 1
-        return
+        try:
+            bpy.ops.step_exporter.create_parametric_cylinder(**params)
+        except Exception as e:
+            print(f"    SKIP: create error: {e}")
+            failed += 1
+            return
 
-    step_path = os.path.join(tempfile.gettempdir(), f"ci_int_{name}.step")
-    try:
-        ok = _export_sync(step_path, objs)
-    except Exception as e:
-        print(f"    FAIL: export exception: {e}")
-        failed += 1
-        return
+        objs = [o for o in bpy.context.scene.objects if o.type == 'MESH']
+        if not objs:
+            print(f"    FAIL: no mesh")
+            failed += 1
+            return
 
-    if not ok or not os.path.exists(step_path):
-        print(f"    FAIL: export failed")
-        failed += 1
-        return
+        # Apply test rotation to the created object
+        if rot_x or rot_y or rot_z:
+            objs[0].rotation_euler = (rot_x, rot_y, rot_z)
+            bpy.context.view_layer.update()
 
-    shells, faces = _verify_step_shell(step_path)
-    size = os.path.getsize(step_path)
-    if shells >= 1:
-        print(f"    PASS: {size} bytes, {shells} shell(s)")
-        passed += 1
-    else:
-        print(f"    FAIL: {shells} shell(s)")
-        failed += 1
+        verts = len(objs[0].data.vertices)
+        print(f"    Mesh: {objs[0].name} ({verts} verts)")
+        if verts > 10000:
+            print(f"    SKIP: too many vertices for CI")
+            failed += 1
+            return
 
-    try:
-        os.unlink(step_path)
-    except:
-        pass
+        step_path = os.path.join(tempfile.gettempdir(), f"ci_int_{name}.step")
+        try:
+            ok = _export_sync(step_path, objs)
+        except Exception as e:
+            print(f"    FAIL: export exception: {e}")
+            failed += 1
+            return
+
+        if not ok or not os.path.exists(step_path):
+            print(f"    FAIL: export failed")
+            failed += 1
+            return
+
+        shells, faces = _verify_step_shell(step_path)
+        size = os.path.getsize(step_path)
+        if shells >= 1:
+            print(f"    PASS: {size} bytes, {shells} shell(s)")
+            passed += 1
+        else:
+            print(f"    FAIL: {shells} shell(s)")
+            failed += 1
+
+        try:
+            os.unlink(step_path)
+        except:
+            pass
+    finally:
+        watchdog.cancel()
 
 
 print("=" * 60)
@@ -162,53 +175,67 @@ import _step_exporter as cpp_exporter2
 # then rotate STEP file via rotate_step_file
 def test_rotation(name, **params):
     global passed, failed
-    # Extract rotation param BEFORE passing to operator (operator won't accept it)
-    ry = params.pop('_rot_y', 0.0)
-    print(f"\n  [{name}] (rot_y={math.degrees(ry):.0f}°)")
-    clear_scene()
+    import threading
+
+    # Watchdog (same as test_case): abort the process if anything hangs so CI fails
+    # fast with a clear message instead of being canceled by the job timeout.
+    watchdog_secs = int(os.environ.get('CI_TEST_TIMEOUT', '180'))
+    watchdog = threading.Timer(
+        watchdog_secs,
+        lambda: (print(f"\n    TIMEOUT: test '{name}' exceeded {watchdog_secs}s — possible hang, aborting"),
+                 os._exit(1)))
+    watchdog.daemon = True
+    watchdog.start()
     try:
-        bpy.ops.step_exporter.create_parametric_cylinder(**params)
-    except Exception as e:
-        print(f"    SKIP: create error: {e}")
-        failed += 1
-        return
+        # Extract rotation param BEFORE passing to operator (operator won't accept it)
+        ry = params.pop('_rot_y', 0.0)
+        print(f"\n  [{name}] (rot_y={math.degrees(ry):.0f}°)")
+        clear_scene()
+        try:
+            bpy.ops.step_exporter.create_parametric_cylinder(**params)
+        except Exception as e:
+            print(f"    SKIP: create error: {e}")
+            failed += 1
+            return
 
-    objs = [o for o in bpy.context.scene.objects if o.type == 'MESH']
-    if not objs:
-        print(f"    FAIL: no mesh")
-        failed += 1
-        return
+        objs = [o for o in bpy.context.scene.objects if o.type == 'MESH']
+        if not objs:
+            print(f"    FAIL: no mesh")
+            failed += 1
+            return
 
-    step_path = os.path.join(tempfile.gettempdir(), f"ci_int_{name}.step")
-    try:
-        ok = _export_sync(step_path, objs)
-    except Exception as e:
-        print(f"    FAIL: export exception: {e}")
-        failed += 1
-        return
+        step_path = os.path.join(tempfile.gettempdir(), f"ci_int_{name}.step")
+        try:
+            ok = _export_sync(step_path, objs)
+        except Exception as e:
+            print(f"    FAIL: export exception: {e}")
+            failed += 1
+            return
 
-    if not ok or not os.path.exists(step_path):
-        print(f"    FAIL: export failed")
-        failed += 1
-        return
+        if not ok or not os.path.exists(step_path):
+            print(f"    FAIL: export failed")
+            failed += 1
+            return
 
-    # Apply rotation to the STEP file (post-export)
-    if abs(ry) > 1e-6:
-        cpp_exporter2.rotate_step_file(step_path, 0.0, 0.0, 0.0, 40.0, 0.0, ry, 0.0)
+        # Apply rotation to the STEP file (post-export)
+        if abs(ry) > 1e-6:
+            cpp_exporter2.rotate_step_file(step_path, 0.0, 0.0, 0.0, 40.0, 0.0, ry, 0.0)
 
-    shells, faces = _verify_step_shell(step_path)
-    size = os.path.getsize(step_path)
-    if shells >= 1:
-        print(f"    PASS: {size} bytes, {shells} shell(s)")
-        passed += 1
-    else:
-        print(f"    FAIL: {shells} shell(s)")
-        failed += 1
+        shells, faces = _verify_step_shell(step_path)
+        size = os.path.getsize(step_path)
+        if shells >= 1:
+            print(f"    PASS: {size} bytes, {shells} shell(s)")
+            passed += 1
+        else:
+            print(f"    FAIL: {shells} shell(s)")
+            failed += 1
 
-    try:
-        os.unlink(step_path)
-    except:
-        pass
+        try:
+            os.unlink(step_path)
+        except:
+            pass
+    finally:
+        watchdog.cancel()
 
 test_rotation("std_y30", cylinder_type='standard', radius=15.0, height=40.0,
               _rot_y=math.radians(30))

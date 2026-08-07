@@ -20,7 +20,7 @@ def log_to_file(msg):
         msg = msg + "\n"
     
     # 始终输出到console
-    print(msg, end='')
+    print(msg, end='', flush=True)
     
     # 同时写入step日志文件
     if _g._export_log_file and not _g._export_log_file.closed:

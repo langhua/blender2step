@@ -85,7 +85,8 @@ static TopoDS_Solid shape_to_solid(const TopoDS_Shape& shape) {
 // ====================== Trapezoidal Groove Forward Declaration ======================
 static bool apply_trapezoidal_groove(TopoDS_Solid& solid, double radius,
                                       double groove_depth, double groove_bottom_width,
-                                      double groove_top_width, double groove_extrusion_length);
+                                      double groove_top_width, double groove_extrusion_length,
+                                      double groove_offset = 0.0);
 
 // ====================== 参数化圆柱体实体创建 ======================
 
@@ -974,7 +975,8 @@ TopoDS_Shape create_hollow_cone_fillet_with_groove_parametric(
     double groove_depth, double groove_bottom_width,
     double groove_top_width, double groove_extrusion_length,
     double top_chamfer, double top_fillet,
-    double bottom_chamfer, double bottom_fillet)
+    double bottom_chamfer, double bottom_fillet,
+    double groove_offset)
 {
     // Step 1: Create hollow cone solid (without fillet - apply fillet after groove cut)
     TopoDS_Shape coneShape = create_hollow_cone_solid_parametric(
@@ -1013,7 +1015,8 @@ TopoDS_Shape create_hollow_cone_fillet_with_groove_parametric(
         if (top_sz > 0.001) comp_top_r += top_sz;
         if (bot_sz > 0.001) comp_bot_r += bot_sz;
     }
-    double mid_outer_radius = (comp_bot_r + comp_top_r) / 2.0;
+    // Local outer radius at the groove center (z = groove_offset) for eccentric placement
+    double mid_outer_radius = comp_bot_r + (comp_top_r - comp_bot_r) * (groove_offset + height / 2.0) / height;
     double hb = groove_bottom_width / 2.0;
     double ht = groove_top_width / 2.0;
     double half_ext = groove_extrusion_length / 2.0;
@@ -1027,10 +1030,10 @@ TopoDS_Shape create_hollow_cone_fillet_with_groove_parametric(
     //   p3: (R_surface, -hb) - outer/bottom
     //   p2: (r_inner, -ht) - inner/bottom
     //   p1: (r_inner, +ht) - inner/top
-    gp_Pnt p0(R_surface, -half_ext, +hb);
-    gp_Pnt p1(r_inner,  -half_ext, +ht);
-    gp_Pnt p2(r_inner,  -half_ext, -ht);
-    gp_Pnt p3(R_surface, -half_ext, -hb);
+    gp_Pnt p0(R_surface, -half_ext, +hb + groove_offset);
+    gp_Pnt p1(r_inner,  -half_ext, +ht + groove_offset);
+    gp_Pnt p2(r_inner,  -half_ext, -ht + groove_offset);
+    gp_Pnt p3(R_surface, -half_ext, -hb + groove_offset);
 
     BRepBuilderAPI_MakePolygon wireMaker;
     wireMaker.Add(p0);
@@ -1368,7 +1371,8 @@ TopoDS_Shape create_cylinder_with_blind_hole_solid_parametric(
     double top_chamfer, double top_fillet,
     double bottom_chamfer, double bottom_fillet,
     double groove_depth, double groove_bottom_width,
-    double groove_top_width, double groove_extrusion_length)
+    double groove_top_width, double groove_extrusion_length,
+    double groove_offset)
 {
     double halfH = height / 2.0;
     double ext = 5.0; // extend for clean cut
@@ -1508,7 +1512,7 @@ TopoDS_Shape create_cylinder_with_blind_hole_solid_parametric(
             TopoDS_Solid groove_solid = shape_to_solid(hole_solid);
             if (!groove_solid.IsNull()) {
                 apply_trapezoidal_groove(groove_solid, radius, groove_depth,
-                                         groove_bottom_width, groove_top_width, groove_extrusion_length);
+                                         groove_bottom_width, groove_top_width, groove_extrusion_length, groove_offset);
                 hole_solid = groove_solid;
             }
         }
@@ -1625,7 +1629,7 @@ TopoDS_Shape create_cylinder_with_blind_hole_solid_parametric(
         TopoDS_Solid groove_solid = shape_to_solid(result_solid);
         if (!groove_solid.IsNull()) {
             apply_trapezoidal_groove(groove_solid, radius, groove_depth,
-                                     groove_bottom_width, groove_top_width, groove_extrusion_length);
+                                     groove_bottom_width, groove_top_width, groove_extrusion_length, groove_offset);
             result_solid = groove_solid;
         }
     }
@@ -1641,7 +1645,8 @@ TopoDS_Shape create_cylinder_with_dual_blind_holes_solid_parametric(
     double top_chamfer, double top_fillet,
     double bottom_chamfer, double bottom_fillet,
     double groove_depth, double groove_bottom_width,
-    double groove_top_width, double groove_extrusion_length)
+    double groove_top_width, double groove_extrusion_length,
+    double groove_offset)
 {
     TopoDS_Shape outerShape = create_cylinder_solid_parametric(radius, height);
     if (outerShape.IsNull()) return TopoDS_Shape();
@@ -1994,7 +1999,8 @@ TopoDS_Shape create_cylinder_stepped_hole_parametric(
     double top_chamfer, double top_fillet,
     double bottom_chamfer, double bottom_fillet,
     double groove_depth, double groove_bottom_width,
-    double groove_top_width, double groove_extrusion_length)
+    double groove_top_width, double groove_extrusion_length,
+    double groove_offset)
 {
     double halfH = height / 2.0;
 
@@ -2104,7 +2110,7 @@ TopoDS_Shape create_cylinder_stepped_hole_parametric(
     // Apply trapezoidal groove if specified
     if (groove_depth > 0.001) {
         apply_trapezoidal_groove(solid, radius, groove_depth,
-                                 groove_bottom_width, groove_top_width, groove_extrusion_length);
+                                 groove_bottom_width, groove_top_width, groove_extrusion_length, groove_offset);
     }
     return solid;
 }
@@ -2118,7 +2124,8 @@ TopoDS_Shape create_cylinder_tapered_stepped_hole_parametric(
     double top_chamfer, double top_fillet,
     double bottom_chamfer, double bottom_fillet,
     double groove_depth, double groove_bottom_width,
-    double groove_top_width, double groove_extrusion_length)
+    double groove_top_width, double groove_extrusion_length,
+    double groove_offset)
 {
     double halfH = height / 2.0;
 
@@ -2233,7 +2240,7 @@ TopoDS_Shape create_cylinder_tapered_stepped_hole_parametric(
     // Apply trapezoidal groove if specified
     if (groove_depth > 0.001) {
         apply_trapezoidal_groove(solid, radius, groove_depth,
-                                 groove_bottom_width, groove_top_width, groove_extrusion_length);
+                                 groove_bottom_width, groove_top_width, groove_extrusion_length, groove_offset);
     }
     return solid;
 }
@@ -2243,7 +2250,8 @@ TopoDS_Shape create_cylinder_tapered_stepped_hole_parametric(
 
 static bool apply_trapezoidal_groove(TopoDS_Solid& solid, double radius,
                                       double groove_depth, double groove_bottom_width,
-                                      double groove_top_width, double groove_extrusion_length)
+                                      double groove_top_width, double groove_extrusion_length,
+                                      double groove_offset)
 {
     if (groove_depth <= 0.001) return true; // no groove, nothing to do
 
@@ -2258,11 +2266,12 @@ static bool apply_trapezoidal_groove(TopoDS_Solid& solid, double radius,
     double r_surface = r_floor + span;
 
     // Build trapezoid face at Y = -half_ext, cross-section in XZ plane
+    // groove_offset shifts the groove vertically (0 = mid-height, + = up)
     BRepBuilderAPI_MakePolygon wireMaker;
-    wireMaker.Add(gp_Pnt(r_surface, -half_ext,  hb));
-    wireMaker.Add(gp_Pnt(r_floor,   -half_ext,  ht));
-    wireMaker.Add(gp_Pnt(r_floor,   -half_ext, -ht));
-    wireMaker.Add(gp_Pnt(r_surface, -half_ext, -hb));
+    wireMaker.Add(gp_Pnt(r_surface, -half_ext,  hb + groove_offset));
+    wireMaker.Add(gp_Pnt(r_floor,   -half_ext,  ht + groove_offset));
+    wireMaker.Add(gp_Pnt(r_floor,   -half_ext, -ht + groove_offset));
+    wireMaker.Add(gp_Pnt(r_surface, -half_ext, -hb + groove_offset));
     wireMaker.Close();
 
     if (!wireMaker.IsDone()) { std::cerr << "[STEP Exporter] Groove wire failed" << std::endl; return false; }
@@ -2301,7 +2310,8 @@ TopoDS_Shape create_cylinder_with_groove_parametric(
     double groove_depth, double groove_bottom_width,
     double groove_top_width, double groove_extrusion_length,
     double top_chamfer, double top_fillet,
-    double bottom_chamfer, double bottom_fillet)
+    double bottom_chamfer, double bottom_fillet,
+    double groove_offset)
 {
     double halfH = height / 2.0;
 
@@ -2342,13 +2352,13 @@ TopoDS_Shape create_cylinder_with_groove_parametric(
     apply_edge(false);
 
     // Create trapezoidal groove
-    if (!apply_trapezoidal_groove(solid, radius, groove_depth, groove_bottom_width, groove_top_width, groove_extrusion_length)) {
+    if (!apply_trapezoidal_groove(solid, radius, groove_depth, groove_bottom_width, groove_top_width, groove_extrusion_length, groove_offset)) {
         return solid; // return un-grooved cylinder on failure
     }
 
     std::cout << "[STEP Exporter] Created cylinder with groove: r=" << radius << " h=" << height
               << " groove_d=" << groove_depth << " bot_w=" << groove_bottom_width
-              << " top_w=" << groove_top_width << std::endl;
+              << " top_w=" << groove_top_width << " offset=" << groove_offset << std::endl;
     return solid;
 }
 
@@ -2357,7 +2367,8 @@ TopoDS_Shape create_cone_with_groove_parametric(
     double groove_depth, double groove_bottom_width,
     double groove_top_width, double groove_extrusion_length,
     double top_chamfer, double top_fillet,
-    double bottom_chamfer, double bottom_fillet)
+    double bottom_chamfer, double bottom_fillet,
+    double groove_offset)
 {
     double mid_r = (bottom_radius + top_radius) / 2.0;
 
@@ -2373,8 +2384,10 @@ TopoDS_Shape create_cone_with_groove_parametric(
         if (bot_sz > 0.001) actual_bot_r += bot_sz;
     }
 
-    // Use compensated radii for groove positioning (matching cone_blind_hole_groove)
-    mid_r = (actual_bot_r + actual_top_r) / 2.0;
+    // Use compensated radii for groove positioning (matching cone_blind_hole_groove).
+    // For eccentric placement, use the local cone radius at z = groove_offset
+    // (cone centered at origin: bottom z=-height/2 → radius actual_bot_r).
+    mid_r = actual_bot_r + (actual_top_r - actual_bot_r) * (groove_offset + height / 2.0) / height;
 
     // Create cone body with edge features
     TopoDS_Shape outer = create_cone_solid_parametric(actual_bot_r, actual_top_r, height);
@@ -2411,8 +2424,8 @@ TopoDS_Shape create_cone_with_groove_parametric(
     apply_edge(true);
     apply_edge(false);
 
-    // Create trapezoidal groove cutter at mid-height
-    // Use compensated max radius + margin to ensure cutter extends outside cone at all Z levels
+    // Create trapezoidal groove cutter at z = groove_offset (eccentric placement)
+    // Use compensated local radius + margin to ensure cutter extends outside cone at all Z levels
     double hb = groove_bottom_width / 2.0;
     double ht = groove_top_width / 2.0;
     double half_ext = groove_extrusion_length / 2.0;
@@ -2421,10 +2434,10 @@ TopoDS_Shape create_cone_with_groove_parametric(
     double r_surface = r_floor + span;
 
     BRepBuilderAPI_MakePolygon wireMaker;
-    wireMaker.Add(gp_Pnt(r_surface, -half_ext,  hb));
-    wireMaker.Add(gp_Pnt(r_floor,   -half_ext,  ht));
-    wireMaker.Add(gp_Pnt(r_floor,   -half_ext, -ht));
-    wireMaker.Add(gp_Pnt(r_surface, -half_ext, -hb));
+    wireMaker.Add(gp_Pnt(r_surface, -half_ext,  hb + groove_offset));
+    wireMaker.Add(gp_Pnt(r_floor,   -half_ext,  ht + groove_offset));
+    wireMaker.Add(gp_Pnt(r_floor,   -half_ext, -ht + groove_offset));
+    wireMaker.Add(gp_Pnt(r_surface, -half_ext, -hb + groove_offset));
     wireMaker.Close();
 
     if (!wireMaker.IsDone()) return solid;
@@ -2461,7 +2474,8 @@ TopoDS_Shape create_cone_with_blind_hole_and_groove_parametric(
     double top_chamfer, double top_fillet,
     double bottom_chamfer, double bottom_fillet,
     double groove_depth, double groove_bottom_width,
-    double groove_top_width, double groove_extrusion_length)
+    double groove_top_width, double groove_extrusion_length,
+    double groove_offset)
 {
     bool is_bottom = (strcmp(hole_position, "bottom") == 0);
     bool is_both = (strcmp(hole_position, "both") == 0);
@@ -2489,7 +2503,7 @@ TopoDS_Shape create_cone_with_blind_hole_and_groove_parametric(
         if (top_sz > 0.001) comp_top_r += top_sz;
         if (bot_sz > 0.001) comp_bot_r += bot_sz;
     }
-    double mid_r = (comp_bot_r + comp_top_r) / 2.0;
+    double mid_r = comp_bot_r + (comp_top_r - comp_bot_r) * (groove_offset + height / 2.0) / height;
     double hb = groove_bottom_width / 2.0;
     double ht = groove_top_width / 2.0;
     double half_ext = groove_extrusion_length / 2.0;
@@ -2498,10 +2512,10 @@ TopoDS_Shape create_cone_with_blind_hole_and_groove_parametric(
     double r_surface = r_floor + span;
 
     BRepBuilderAPI_MakePolygon wireMaker;
-    wireMaker.Add(gp_Pnt(r_surface, -half_ext,  hb));
-    wireMaker.Add(gp_Pnt(r_floor,   -half_ext,  ht));
-    wireMaker.Add(gp_Pnt(r_floor,   -half_ext, -ht));
-    wireMaker.Add(gp_Pnt(r_surface, -half_ext, -hb));
+    wireMaker.Add(gp_Pnt(r_surface, -half_ext,  hb + groove_offset));
+    wireMaker.Add(gp_Pnt(r_floor,   -half_ext,  ht + groove_offset));
+    wireMaker.Add(gp_Pnt(r_floor,   -half_ext, -ht + groove_offset));
+    wireMaker.Add(gp_Pnt(r_surface, -half_ext, -hb + groove_offset));
     wireMaker.Close();
 
     if (!wireMaker.IsDone()) return solid;
@@ -2539,7 +2553,8 @@ TopoDS_Shape create_cone_stepped_hole_with_groove_parametric(
     double hole_fillet_radius,
     double top_chamfer, double bottom_chamfer,
     double groove_depth, double groove_bottom_width,
-    double groove_top_width, double groove_extrusion_length)
+    double groove_top_width, double groove_extrusion_length,
+    double groove_offset)
 {
     TopoDS_Shape shape = create_cone_stepped_hole_parametric(
         outer_bottom_radius, outer_top_radius, height,
@@ -2564,7 +2579,7 @@ TopoDS_Shape create_cone_stepped_hole_with_groove_parametric(
         if (top_sz > 0.001) comp_top_r += top_sz;
         if (bot_sz > 0.001) comp_bot_r += bot_sz;
     }
-    double mid_r = (comp_bot_r + comp_top_r) / 2.0;
+    double mid_r = comp_bot_r + (comp_top_r - comp_bot_r) * (groove_offset + height / 2.0) / height;
     double hb = groove_bottom_width / 2.0;
     double ht = groove_top_width / 2.0;
     double half_ext = groove_extrusion_length / 2.0;
@@ -2573,10 +2588,10 @@ TopoDS_Shape create_cone_stepped_hole_with_groove_parametric(
     double r_surface = r_floor + span;
 
     BRepBuilderAPI_MakePolygon wireMaker;
-    wireMaker.Add(gp_Pnt(r_surface, -half_ext,  hb));
-    wireMaker.Add(gp_Pnt(r_floor,   -half_ext,  ht));
-    wireMaker.Add(gp_Pnt(r_floor,   -half_ext, -ht));
-    wireMaker.Add(gp_Pnt(r_surface, -half_ext, -hb));
+    wireMaker.Add(gp_Pnt(r_surface, -half_ext,  hb + groove_offset));
+    wireMaker.Add(gp_Pnt(r_floor,   -half_ext,  ht + groove_offset));
+    wireMaker.Add(gp_Pnt(r_floor,   -half_ext, -ht + groove_offset));
+    wireMaker.Add(gp_Pnt(r_surface, -half_ext, -hb + groove_offset));
     wireMaker.Close();
 
     if (!wireMaker.IsDone()) return solid;

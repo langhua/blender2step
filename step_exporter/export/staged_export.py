@@ -386,7 +386,8 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
                 cparams.get('groove_depth', 0),
                 cparams.get('groove_bottom_width', 0),
                 cparams.get('groove_top_width', 0),
-                cparams.get('groove_extrusion_length', 0))
+                cparams.get('groove_extrusion_length', 0),
+                cparams.get('groove_offset', 0))
         return cpp_exporter.export_cylinder_blind_hole_step(
             temp_file, cparams['radius'], cparams['height'],
             cparams['hole_radius'], cparams['hole_depth'],
@@ -400,7 +401,8 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
             cparams.get('groove_depth', 0),
             cparams.get('groove_bottom_width', 0),
             cparams.get('groove_top_width', 0),
-            cparams.get('groove_extrusion_length', 0)),
+            cparams.get('groove_extrusion_length', 0),
+            cparams.get('groove_offset', 0)),
     elif obj_type == 'cylinder_stepped_hole':
         top_ch = cparams.get('top_chamfer', 0.0)
         top_fr = cparams.get('top_fillet', 0.0)
@@ -425,7 +427,8 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
             cparams.get('groove_depth', 0),
             cparams.get('groove_bottom_width', 0),
             cparams.get('groove_top_width', 0),
-            cparams.get('groove_extrusion_length', 0)),
+            cparams.get('groove_extrusion_length', 0),
+            cparams.get('groove_offset', 0)),
     elif obj_type == 'cylinder_tapered_stepped_hole':
         top_ch = cparams.get('top_chamfer', 0.0)
         top_fr = cparams.get('top_fillet', 0.0)
@@ -451,7 +454,8 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
             cparams.get('groove_depth', 0),
             cparams.get('groove_bottom_width', 0),
             cparams.get('groove_top_width', 0),
-            cparams.get('groove_extrusion_length', 0)),
+            cparams.get('groove_extrusion_length', 0),
+            cparams.get('groove_offset', 0)),
     elif obj_type == 'cone_groove':
         top_ch = cparams.get('top_chamfer', 0.0)
         top_fr = cparams.get('top_fillet', 0.0)
@@ -465,7 +469,8 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
             top_ch, top_fr, btm_ch, btm_fr,
             px, py, pz,
             data['step_schema'], data['step_unit'],
-            1 if data['enable_logging'] else 0)
+            1 if data['enable_logging'] else 0,
+            cparams.get('groove_offset', 0))
     elif obj_type == 'grooved_cylinder':
         top_ch = cparams.get('top_chamfer', 0.0)
         top_fr = cparams.get('top_fillet', 0.0)
@@ -478,7 +483,8 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
             top_ch, top_fr, btm_ch, btm_fr,
             px, py, pz,
             data['step_schema'], data['step_unit'],
-            1 if data['enable_logging'] else 0)
+            1 if data['enable_logging'] else 0,
+            cparams.get('groove_offset', 0))
     elif obj_type == 'cone_blind_hole':
         hole_pos = cparams.get('hole_position', 'top')
         hole_r_bottom = cparams.get('hole_radius_bottom', 0.0)
@@ -519,6 +525,7 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
             top_ch, top_fr, btm_ch, btm_fr,
             cparams['groove_depth'], cparams['groove_bottom_width'],
             cparams['groove_top_width'], cparams['groove_extrusion_length'],
+            cparams.get('groove_offset', 0),
             px, py, pz,
             data['step_schema'], data['step_unit'],
             1 if data['enable_logging'] else 0]
@@ -596,6 +603,7 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
             cparams.get('groove_bottom_width', 0),
             cparams.get('groove_top_width', 0),
             cparams.get('groove_extrusion_length', 0),
+            cparams.get('groove_offset', 0),
             px, py, pz, data['step_schema'], data['step_unit'],
             1 if data['enable_logging'] else 0)
     elif obj_type == 'hollow_cone_grooved':
@@ -615,6 +623,7 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
             cparams.get('groove_bottom_width', 0),
             cparams.get('groove_top_width', 0),
             cparams.get('groove_extrusion_length', 0),
+            cparams.get('groove_offset', 0),
             top_ch, top_fr, btm_ch, btm_fr,
             px, py, pz, data['step_schema'], data['step_unit'],
             1 if data['enable_logging'] else 0)
@@ -635,6 +644,7 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
             cparams.get('groove_bottom_width', 0),
             cparams.get('groove_top_width', 0),
             cparams.get('groove_extrusion_length', 0),
+            cparams.get('groove_offset', 0),
             top_ch, top_fr, btm_ch, btm_fr,
             px, py, pz, data['step_schema'], data['step_unit'],
             1 if data['enable_logging'] else 0)
@@ -689,6 +699,7 @@ def _export_cylinder_staged(cpp_exporter, temp_file, cparams, data):
                 top_fr, btm_fr, hole_fr, top_ch, btm_ch,
                 cparams['groove_depth'], cparams['groove_bottom_width'],
                 cparams['groove_top_width'], cparams['groove_extrusion_length'],
+                cparams.get('groove_offset', 0),
                 px, py, pz, data['step_schema'], data['step_unit'],
                 1 if data['enable_logging'] else 0)
             if result:

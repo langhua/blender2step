@@ -86,20 +86,15 @@ def _analyze_from_stored_params(obj, scale):
     else:
         hole_r_bottom = 0.0
 
-    # 凹槽参数（mm）。优先使用 _create_groove 已存的精确尺寸（step_groove_*），
-    # 否则按 param_groove_* 计算（与 _create_groove 相同的公式）。
+    # 凹槽参数（mm）。始终按 param_groove_* 计算（与 OCCT 预览 build_cylinder_like_shape
+    # 完全相同的公式），保证 预览 == 导出，且编辑后立即生效。
+    # 注意：不要用 _create_groove 存的 step_groove_* —— 编辑对象（update_selected）只更新
+    # param_groove_*，step_groove_* 是创建时的旧值，会导致导出凹槽大小/位置错误。
     def _groove_params(br, tr, r):
         if not obj.get('param_groove_enabled', False):
             return {'groove_depth': 0, 'groove_bottom_width': 0, 'groove_top_width': 0,
-                    'groove_extrusion_length': 0, 'groove_angle': 45.0}
-        gd = obj.get('step_groove_depth', 0) or 0
-        gbw = obj.get('step_groove_bottom_width', 0) or 0
-        gtw = obj.get('step_groove_top_width', 0) or 0
-        gel = obj.get('step_groove_extrusion_length', 0) or 0
+                    'groove_extrusion_length': 0, 'groove_angle': 45.0, 'groove_offset': 0}
         angle = obj.get('param_groove_angle_deg', 45.0)
-        if gd > 0 and gbw > 0:
-            return {'groove_depth': gd, 'groove_bottom_width': gbw, 'groove_top_width': gtw,
-                    'groove_extrusion_length': gel, 'groove_angle': angle}
         mid_r = (br + tr) / 2.0 if ctype == 'tapered' else r
         pct = obj.get('param_groove_depth_pct', 20)
         depth = mid_r * pct / 100.0
@@ -107,8 +102,10 @@ def _analyze_from_stored_params(obj, scale):
         cutter_depth = depth * mult
         top_w = obj.get('param_groove_top_width', 0)
         bot_w = top_w + 2.0 * cutter_depth * math.tan(math.radians(angle))
+        ecc = obj.get('param_groove_eccentric', 0) or 0
         return {'groove_depth': depth, 'groove_bottom_width': bot_w, 'groove_top_width': top_w,
-                'groove_extrusion_length': 2.0 * mid_r + 4.0, 'groove_angle': angle}
+                'groove_extrusion_length': 2.0 * mid_r + 4.0, 'groove_angle': angle,
+                'groove_offset': H * ecc / 100.0}
 
     # 外缘特征双命名：导出分支有的读 top_chamfer/top_fillet/bottom_chamfer/bottom_fillet，
     # 有的读 top_feature/top_feature_size/bottom_feature/bottom_feature_size。
@@ -514,6 +511,7 @@ def _analyze_cylinder_from_mesh(obj, context, scale):
             'groove_top_width': obj.get('step_groove_top_width', 0),
             'groove_extrusion_length': obj.get('step_groove_extrusion_length', 0),
             'groove_angle': obj.get('step_groove_angle', 45.0),
+            'groove_offset': obj.get('step_groove_offset', 0) or 0,
         }
     
     # 阶梯孔检测

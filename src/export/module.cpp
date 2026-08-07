@@ -1364,6 +1364,7 @@ PyObject* export_cylinder_blind_hole_step(PyObject* self, PyObject* args) {
     double bottom_chamfer = 0.0, bottom_fillet = 0.0;
     double groove_depth = 0.0, groove_bottom_width = 0.0;
     double groove_top_width = 0.0, groove_extrusion_length = 0.0;
+    double groove_offset = 0.0;
     double pos_x = 0.0, pos_y = 0.0, pos_z = 0.0;
     const char* step_schema = "AP214IS";
     const char* unit = "MILLIMETER";
@@ -1380,14 +1381,15 @@ PyObject* export_cylinder_blind_hole_step(PyObject* self, PyObject* args) {
                           &pos_x, &pos_y, &pos_z,
                           &step_schema, &unit, &enable_logging,
                           &groove_depth, &groove_bottom_width,
-                          &groove_top_width, &groove_extrusion_length)) {
+                          &groove_top_width, &groove_extrusion_length,
+                          &groove_offset)) {
         PyErr_SetString(PyExc_TypeError,
             "export_cylinder_blind_hole_step() expected: filename, radius, height, "
             "hole_radius, hole_depth, [hole_fillet_radius], [hole_radius_bottom], "
             "[hole_position], [top_chamfer], [top_fillet], "
             "[bottom_chamfer], [bottom_fillet], "
             "[pos_x], [pos_y], [pos_z], [step_schema], [unit], [enable_logging], "
-            "[groove_depth], [groove_bottom_width], [groove_top_width], [groove_extrusion_length]");
+            "[groove_depth], [groove_bottom_width], [groove_top_width], [groove_extrusion_length], [groove_offset]");
         return NULL;
     }
 
@@ -1396,7 +1398,7 @@ PyObject* export_cylinder_blind_hole_step(PyObject* self, PyObject* args) {
         TopoDS_Shape shape = create_cylinder_with_blind_hole_solid_parametric(
             radius, height, hole_radius, hole_depth, hole_fillet_radius, is_bottom, hole_radius_bottom,
             top_chamfer, top_fillet, bottom_chamfer, bottom_fillet,
-            groove_depth, groove_bottom_width, groove_top_width, groove_extrusion_length);
+            groove_depth, groove_bottom_width, groove_top_width, groove_extrusion_length, groove_offset);
         if (shape.IsNull()) { Py_RETURN_FALSE; }
 
         if (pos_x != 0.0 || pos_y != 0.0 || pos_z != 0.0) {
@@ -1436,6 +1438,7 @@ PyObject* export_cylinder_dual_blind_holes_step(PyObject* self, PyObject* args) 
     double bottom_chamfer = 0.0, bottom_fillet = 0.0;
     double groove_depth = 0.0, groove_bottom_width = 0.0;
     double groove_top_width = 0.0, groove_extrusion_length = 0.0;
+    double groove_offset = 0.0;
     double pos_x = 0.0, pos_y = 0.0, pos_z = 0.0;
     const char* step_schema = "AP214IS";
     const char* unit = "MILLIMETER";
@@ -1451,13 +1454,14 @@ PyObject* export_cylinder_dual_blind_holes_step(PyObject* self, PyObject* args) 
                           &pos_x, &pos_y, &pos_z,
                           &step_schema, &unit, &enable_logging,
                           &groove_depth, &groove_bottom_width,
-                          &groove_top_width, &groove_extrusion_length)) {
+                          &groove_top_width, &groove_extrusion_length,
+                          &groove_offset)) {
         PyErr_SetString(PyExc_TypeError,
             "export_cylinder_dual_blind_holes_step() expected: filename, radius, height, hole_radius, "
             "bottom_hole_depth, top_hole_depth, [hole_fillet_radius], [hole_radius_bottom], "
             "[top_chamfer], [top_fillet], [bottom_chamfer], [bottom_fillet], "
             "[pos_x], [pos_y], [pos_z], [step_schema], [unit], [enable_logging], "
-            "[groove_depth], [groove_bottom_width], [groove_top_width], [groove_extrusion_length]");
+            "[groove_depth], [groove_bottom_width], [groove_top_width], [groove_extrusion_length], [groove_offset]");
         return NULL;
     }
 
@@ -1466,7 +1470,7 @@ PyObject* export_cylinder_dual_blind_holes_step(PyObject* self, PyObject* args) 
             radius, height, hole_radius, bottom_hole_depth, top_hole_depth,
             hole_fillet_radius, hole_radius_bottom,
             top_chamfer, top_fillet, bottom_chamfer, bottom_fillet,
-            groove_depth, groove_bottom_width, groove_top_width, groove_extrusion_length);
+            groove_depth, groove_bottom_width, groove_top_width, groove_extrusion_length, groove_offset);
         if (shape.IsNull()) { Py_RETURN_FALSE; }
 
         if (pos_x != 0.0 || pos_y != 0.0 || pos_z != 0.0) {
@@ -1505,6 +1509,7 @@ PyObject* export_cylinder_stepped_hole_step(PyObject* self, PyObject* args) {
     double bottom_chamfer = 0.0, bottom_fillet = 0.0;
     double groove_depth = 0.0, groove_bottom_width = 0.0;
     double groove_top_width = 0.0, groove_extrusion_length = 0.0;
+    double groove_offset = 0.0;
     double pos_x = 0.0, pos_y = 0.0, pos_z = 0.0;
     const char* step_schema = "AP214IS";
     const char* unit = "MILLIMETER";
@@ -1519,13 +1524,14 @@ PyObject* export_cylinder_stepped_hole_step(PyObject* self, PyObject* args) {
                           &pos_x, &pos_y, &pos_z,
                           &step_schema, &unit, &enable_logging,
                           &groove_depth, &groove_bottom_width,
-                          &groove_top_width, &groove_extrusion_length)) {
+                          &groove_top_width, &groove_extrusion_length,
+                          &groove_offset)) {
         PyErr_SetString(PyExc_TypeError,
             "export_cylinder_stepped_hole_step() expected: filename, radius, height, "
             "large_hole_r, large_hole_h, small_hole_r, [hole_fillet_r], "
             "[top_chamfer], [top_fillet], [bottom_chamfer], [bottom_fillet], "
             "[pos_x], [pos_y], [pos_z], [step_schema], [unit], [enable_logging], "
-            "[groove_depth], [groove_bottom_width], [groove_top_width], [groove_extrusion_length]");
+            "[groove_depth], [groove_bottom_width], [groove_top_width], [groove_extrusion_length], [groove_offset]");
         return NULL;
     }
 
@@ -1533,7 +1539,7 @@ PyObject* export_cylinder_stepped_hole_step(PyObject* self, PyObject* args) {
         TopoDS_Shape shape = create_cylinder_stepped_hole_parametric(
             radius, height, large_hole_r, large_hole_h, small_hole_r,
             hole_fillet_r, top_chamfer, top_fillet, bottom_chamfer, bottom_fillet,
-            groove_depth, groove_bottom_width, groove_top_width, groove_extrusion_length);
+            groove_depth, groove_bottom_width, groove_top_width, groove_extrusion_length, groove_offset);
         if (shape.IsNull()) Py_RETURN_FALSE;
 
         if (pos_x != 0.0 || pos_y != 0.0 || pos_z != 0.0) {
@@ -1565,6 +1571,7 @@ PyObject* export_cylinder_tapered_stepped_hole_step(PyObject* self, PyObject* ar
     double bottom_chamfer = 0.0, bottom_fillet = 0.0;
     double groove_depth = 0.0, groove_bottom_width = 0.0;
     double groove_top_width = 0.0, groove_extrusion_length = 0.0;
+    double groove_offset = 0.0;
     double pos_x = 0.0, pos_y = 0.0, pos_z = 0.0;
     const char* step_schema = "AP214IS";
     const char* unit = "MILLIMETER";
@@ -1579,13 +1586,14 @@ PyObject* export_cylinder_tapered_stepped_hole_step(PyObject* self, PyObject* ar
                           &pos_x, &pos_y, &pos_z,
                           &step_schema, &unit, &enable_logging,
                           &groove_depth, &groove_bottom_width,
-                          &groove_top_width, &groove_extrusion_length)) {
+                          &groove_top_width, &groove_extrusion_length,
+                          &groove_offset)) {
         PyErr_SetString(PyExc_TypeError,
             "export_cylinder_tapered_stepped_hole_step() expected: filename, radius, height, "
             "large_hole_h, taper_top_r, taper_step_r, small_hole_r, [hole_fillet_r], "
             "[top_chamfer], [top_fillet], [bottom_chamfer], [bottom_fillet], "
             "[pos_x], [pos_y], [pos_z], [step_schema], [unit], [enable_logging], "
-            "[groove_depth], [groove_bottom_width], [groove_top_width], [groove_extrusion_length]");
+            "[groove_depth], [groove_bottom_width], [groove_top_width], [groove_extrusion_length], [groove_offset]");
         return NULL;
     }
 
@@ -1593,7 +1601,7 @@ PyObject* export_cylinder_tapered_stepped_hole_step(PyObject* self, PyObject* ar
         TopoDS_Shape shape = create_cylinder_tapered_stepped_hole_parametric(
             radius, height, large_hole_h, taper_top_r, taper_step_r, small_hole_r,
             hole_fillet_r, top_chamfer, top_fillet, bottom_chamfer, bottom_fillet,
-            groove_depth, groove_bottom_width, groove_top_width, groove_extrusion_length);
+            groove_depth, groove_bottom_width, groove_top_width, groove_extrusion_length, groove_offset);
         if (shape.IsNull()) Py_RETURN_FALSE;
 
         if (pos_x != 0.0 || pos_y != 0.0 || pos_z != 0.0) {
@@ -1620,6 +1628,7 @@ PyObject* export_cylinder_tapered_stepped_hole_step(PyObject* self, PyObject* ar
 PyObject* export_cylinder_groove_step(PyObject* self, PyObject* args) {
     const char* filename;
     double radius, height, groove_depth, groove_bottom_width, groove_top_width, groove_extrusion_length;
+    double groove_offset = 0.0;
     double top_chamfer = 0.0, top_fillet = 0.0;
     double bottom_chamfer = 0.0, bottom_fillet = 0.0;
     double pos_x = 0.0, pos_y = 0.0, pos_z = 0.0;
@@ -1627,25 +1636,26 @@ PyObject* export_cylinder_groove_step(PyObject* self, PyObject* args) {
     const char* unit = "MILLIMETER";
     int enable_logging = 1;
 
-    if (!PyArg_ParseTuple(args, "sdddddd|dddddddssi",
+    if (!PyArg_ParseTuple(args, "sdddddd|dddddddssid",
                           &filename, &radius, &height,
                           &groove_depth, &groove_bottom_width, &groove_top_width, &groove_extrusion_length,
                           &top_chamfer, &top_fillet,
                           &bottom_chamfer, &bottom_fillet,
                           &pos_x, &pos_y, &pos_z,
-                          &step_schema, &unit, &enable_logging)) {
+                          &step_schema, &unit, &enable_logging,
+                          &groove_offset)) {
         PyErr_SetString(PyExc_TypeError,
             "export_cylinder_groove_step() expected: filename, radius, height, "
             "groove_depth, groove_bottom_width, groove_top_width, groove_extrusion_length, "
             "[top_chamfer], [top_fillet], [bottom_chamfer], [bottom_fillet], "
-            "[pos_x], [pos_y], [pos_z], [step_schema], [unit], [enable_logging]");
+            "[pos_x], [pos_y], [pos_z], [step_schema], [unit], [enable_logging], [groove_offset]");
         return NULL;
     }
 
     try {
         TopoDS_Shape shape = create_cylinder_with_groove_parametric(
             radius, height, groove_depth, groove_bottom_width, groove_top_width, groove_extrusion_length,
-            top_chamfer, top_fillet, bottom_chamfer, bottom_fillet);
+            top_chamfer, top_fillet, bottom_chamfer, bottom_fillet, groove_offset);
         if (shape.IsNull()) Py_RETURN_FALSE;
 
         if (pos_x != 0.0 || pos_y != 0.0 || pos_z != 0.0) {
@@ -1673,6 +1683,7 @@ PyObject* export_cone_groove_step(PyObject* self, PyObject* args) {
     const char* filename;
     double bottom_radius, top_radius, height;
     double groove_depth, groove_bottom_width, groove_top_width, groove_extrusion_length;
+    double groove_offset = 0.0;
     double top_chamfer = 0.0, top_fillet = 0.0;
     double bottom_chamfer = 0.0, bottom_fillet = 0.0;
     double pos_x = 0.0, pos_y = 0.0, pos_z = 0.0;
@@ -1680,17 +1691,18 @@ PyObject* export_cone_groove_step(PyObject* self, PyObject* args) {
     const char* unit = "MILLIMETER";
     int enable_logging = 1;
 
-    if (!PyArg_ParseTuple(args, "sddddddd|dddddddssi",
+    if (!PyArg_ParseTuple(args, "sddddddd|dddddddssid",
                           &filename, &bottom_radius, &top_radius, &height,
                           &groove_depth, &groove_bottom_width, &groove_top_width, &groove_extrusion_length,
                           &top_chamfer, &top_fillet, &bottom_chamfer, &bottom_fillet,
                           &pos_x, &pos_y, &pos_z,
-                          &step_schema, &unit, &enable_logging)) {
+                          &step_schema, &unit, &enable_logging,
+                          &groove_offset)) {
         PyErr_SetString(PyExc_TypeError,
             "export_cone_groove_step() expected: filename, bottom_radius, top_radius, height, "
             "groove_depth, groove_bottom_width, groove_top_width, groove_extrusion_length, "
             "[top_chamfer], [top_fillet], [bottom_chamfer], [bottom_fillet], "
-            "[pos_x], [pos_y], [pos_z], [step_schema], [unit], [enable_logging]");
+            "[pos_x], [pos_y], [pos_z], [step_schema], [unit], [enable_logging], [groove_offset]");
         return NULL;
     }
 
@@ -1698,7 +1710,7 @@ PyObject* export_cone_groove_step(PyObject* self, PyObject* args) {
         TopoDS_Shape shape = create_cone_with_groove_parametric(
             bottom_radius, top_radius, height,
             groove_depth, groove_bottom_width, groove_top_width, groove_extrusion_length,
-            top_chamfer, top_fillet, bottom_chamfer, bottom_fillet);
+            top_chamfer, top_fillet, bottom_chamfer, bottom_fillet, groove_offset);
         if (shape.IsNull()) Py_RETURN_FALSE;
 
         if (pos_x != 0.0 || pos_y != 0.0 || pos_z != 0.0) {
@@ -1800,12 +1812,13 @@ PyObject* export_cone_blind_hole_groove_step(PyObject* self, PyObject* args) {
     double top_chamfer = 0.0, top_fillet = 0.0;
     double bottom_chamfer = 0.0, bottom_fillet = 0.0;
     double groove_depth, groove_bottom_width, groove_top_width, groove_extrusion_length;
+    double groove_offset = 0.0;
     double pos_x = 0.0, pos_y = 0.0, pos_z = 0.0;
     const char* step_schema = "AP214IS";
     const char* unit = "MILLIMETER";
     int enable_logging = 1;
 
-    if (!PyArg_ParseTuple(args, "sddddddddsdddddddd|dddssi",
+    if (!PyArg_ParseTuple(args, "sddddddddsddddddddd|dddssi",
                           &filename,
                           &bottom_radius, &top_radius, &height,
                           &hole_radius, &hole_depth,
@@ -1817,6 +1830,7 @@ PyObject* export_cone_blind_hole_groove_step(PyObject* self, PyObject* args) {
                           &bottom_chamfer, &bottom_fillet,
                           &groove_depth, &groove_bottom_width,
                           &groove_top_width, &groove_extrusion_length,
+                          &groove_offset,
                           &pos_x, &pos_y, &pos_z,
                           &step_schema, &unit, &enable_logging)) {
         PyErr_SetString(PyExc_TypeError,
@@ -1824,7 +1838,7 @@ PyObject* export_cone_blind_hole_groove_step(PyObject* self, PyObject* args) {
             "hole_radius, hole_depth, hole_fillet_radius, hole_radius_bottom, "
             "hole_depth_top, hole_position, top_chamfer, top_fillet, "
             "bottom_chamfer, bottom_fillet, "
-            "groove_depth, groove_bottom_width, groove_top_width, groove_extrusion_length, "
+            "groove_depth, groove_bottom_width, groove_top_width, groove_extrusion_length, groove_offset, "
             "[pos_x], [pos_y], [pos_z], [step_schema], [unit], [enable_logging]");
         return NULL;
     }
@@ -1835,7 +1849,7 @@ PyObject* export_cone_blind_hole_groove_step(PyObject* self, PyObject* args) {
             hole_radius, hole_depth, hole_depth_top,
             hole_fillet_radius, hole_position, hole_radius_bottom,
             top_chamfer, top_fillet, bottom_chamfer, bottom_fillet,
-            groove_depth, groove_bottom_width, groove_top_width, groove_extrusion_length);
+            groove_depth, groove_bottom_width, groove_top_width, groove_extrusion_length, groove_offset);
         if (shape.IsNull()) { Py_RETURN_FALSE; }
 
         if (pos_x != 0.0 || pos_y != 0.0 || pos_z != 0.0) {
@@ -2211,12 +2225,13 @@ PyObject* export_cone_stepped_hole_groove_step(PyObject* self, PyObject* args) {
     double hole_fillet_radius = 0.0;
     double top_chamfer = 0.0, bottom_chamfer = 0.0;
     double groove_depth, groove_bottom_width, groove_top_width, groove_extrusion_length;
+    double groove_offset = 0.0;
     double pos_x = 0.0, pos_y = 0.0, pos_z = 0.0;
     const char* step_schema = "AP214IS";
     const char* unit = "MILLIMETER";
     int enable_logging = 1;
 
-    if (!PyArg_ParseTuple(args, "sdddddddddddddddd|dddssi",
+    if (!PyArg_ParseTuple(args, "sddddddddddddddddd|dddssi",
                           &filename,
                           &outer_bottom_radius, &outer_top_radius, &height,
                           &small_hole_radius, &small_hole_height,
@@ -2226,6 +2241,7 @@ PyObject* export_cone_stepped_hole_groove_step(PyObject* self, PyObject* args) {
                           &top_chamfer, &bottom_chamfer,
                           &groove_depth, &groove_bottom_width,
                           &groove_top_width, &groove_extrusion_length,
+                          &groove_offset,
                           &pos_x, &pos_y, &pos_z,
                           &step_schema, &unit, &enable_logging)) {
         PyErr_SetString(PyExc_TypeError,
@@ -2234,7 +2250,7 @@ PyObject* export_cone_stepped_hole_groove_step(PyObject* self, PyObject* args) {
             "small_hole_radius, small_hole_height, inner_bottom_radius, inner_top_radius, "
             "[top_fillet_radius], [bottom_fillet_radius], [hole_fillet_radius], "
             "[top_chamfer], [bottom_chamfer], "
-            "groove_depth, groove_bottom_width, groove_top_width, groove_extrusion_length, "
+            "groove_depth, groove_bottom_width, groove_top_width, groove_extrusion_length, groove_offset, "
             "[pos_x], [pos_y], [pos_z], [step_schema], [unit], [enable_logging]");
         return NULL;
     }
@@ -2246,7 +2262,7 @@ PyObject* export_cone_stepped_hole_groove_step(PyObject* self, PyObject* args) {
             inner_bottom_radius, inner_top_radius,
             top_fillet_radius, bottom_fillet_radius, hole_fillet_radius,
             top_chamfer, bottom_chamfer,
-            groove_depth, groove_bottom_width, groove_top_width, groove_extrusion_length);
+            groove_depth, groove_bottom_width, groove_top_width, groove_extrusion_length, groove_offset);
         if (shape.IsNull()) { Py_RETURN_FALSE; }
 
         if (pos_x != 0.0 || pos_y != 0.0 || pos_z != 0.0) {
@@ -2274,6 +2290,7 @@ PyObject* export_hollow_cone_fillet_with_groove_step(PyObject* self, PyObject* a
     const char* filename;
     double outer_bottom_radius, outer_top_radius, inner_bottom_radius, inner_top_radius, height;
     double fillet_radius, groove_depth, groove_bottom_width, groove_top_width, groove_extrusion_length;
+    double groove_offset = 0.0;
     double top_chamfer = 0.0, top_fillet = 0.0;
     double bottom_chamfer = 0.0, bottom_fillet = 0.0;
     double pos_x = 0.0, pos_y = 0.0, pos_z = 0.0;
@@ -2281,13 +2298,14 @@ PyObject* export_hollow_cone_fillet_with_groove_step(PyObject* self, PyObject* a
     const char* unit = "MILLIMETER";
     int enable_logging = 1;
 
-    if (!PyArg_ParseTuple(args, "sdddddddddd|dddddddssi",
+    if (!PyArg_ParseTuple(args, "sddddddddddd|dddddddssi",
                           &filename,
                           &outer_bottom_radius, &outer_top_radius,
                           &inner_bottom_radius, &inner_top_radius,
                           &height, &fillet_radius,
                           &groove_depth, &groove_bottom_width, &groove_top_width,
                           &groove_extrusion_length,
+                          &groove_offset,
                           &top_chamfer, &top_fillet,
                           &bottom_chamfer, &bottom_fillet,
                           &pos_x, &pos_y, &pos_z,
@@ -2296,7 +2314,7 @@ PyObject* export_hollow_cone_fillet_with_groove_step(PyObject* self, PyObject* a
             "export_hollow_cone_fillet_with_groove_step() expected: filename, "
             "outer_bottom_radius, outer_top_radius, inner_bottom_radius, inner_top_radius, "
             "height, fillet_radius, groove_depth, groove_bottom_width, groove_top_width, "
-            "groove_extrusion_length, [top_chamfer], [top_fillet], [bottom_chamfer], [bottom_fillet], "
+            "groove_extrusion_length, groove_offset, [top_chamfer], [top_fillet], [bottom_chamfer], [bottom_fillet], "
             "[pos_x], [pos_y], [pos_z], [step_schema], [unit], [enable_logging]");
         return NULL;
     }
@@ -2307,7 +2325,7 @@ PyObject* export_hollow_cone_fillet_with_groove_step(PyObject* self, PyObject* a
             inner_bottom_radius, inner_top_radius, height,
             fillet_radius, groove_depth, groove_bottom_width,
             groove_top_width, groove_extrusion_length,
-            top_chamfer, top_fillet, bottom_chamfer, bottom_fillet);
+            top_chamfer, top_fillet, bottom_chamfer, bottom_fillet, groove_offset);
         if (shape.IsNull()) { Py_RETURN_FALSE; }
 
         if (pos_x != 0.0 || pos_y != 0.0 || pos_z != 0.0) {
@@ -4196,11 +4214,13 @@ static TopoDS_Shape build_cylinder_like_shape(
     double stepped_large_radius, double stepped_large_height_pct, double stepped_small_radius,
     double tapered_step_top_radius, double tapered_step_bottom_radius,
     int groove_enabled, double groove_angle_deg, double groove_top_width,
-    double groove_depth_pct, double groove_cone_depth_mult)
+    double groove_depth_pct, double groove_cone_depth_mult, double groove_eccentric)
 {
     const double M_PI_ = 3.14159265358979323846;
     const bool tapered = (std::strcmp(cyl_type, "tapered") == 0);
     const double H = height;
+    // Vertical groove offset (mm) from eccentric % of height (0 = mid-height, + = up)
+    const double groove_offset = H * groove_eccentric / 100.0;
 
     // ---- 外缘倒角/圆角（与 _analyze_from_stored_params 相同映射）----
     double top_ch = 0, top_fr = 0, btm_ch = 0, btm_fr = 0;
@@ -4237,7 +4257,7 @@ static TopoDS_Shape build_cylinder_like_shape(
                 return create_cone_stepped_hole_with_groove_parametric(
                     bottom_radius, top_radius, H, small_r, small_h,
                     inner_btm, inner_top, top_fr, btm_fr, hole_fillet_radius,
-                    top_ch, btm_ch, groove_depth, g_bw, g_tw, g_ext);
+                    top_ch, btm_ch, groove_depth, g_bw, g_tw, g_ext, groove_offset);
             }
             return create_cone_stepped_hole_parametric(
                 bottom_radius, top_radius, H, small_r, small_h,
@@ -4255,7 +4275,7 @@ static TopoDS_Shape build_cylinder_like_shape(
                     bottom_radius, top_radius, H, hole_r, hole_depth, hd_top,
                     hole_fillet_radius, hole_type, hole_r_bottom,
                     top_ch, top_fr, btm_ch, btm_fr,
-                    groove_depth, g_bw, g_tw, g_ext);
+                    groove_depth, g_bw, g_tw, g_ext, groove_offset);
             }
             return create_cone_with_blind_hole_solid_parametric(
                 bottom_radius, top_radius, H, hole_r, hole_depth, hd_top,
@@ -4274,7 +4294,7 @@ static TopoDS_Shape build_cylinder_like_shape(
         if (groove_enabled) {
             return create_cone_with_groove_parametric(
                 bottom_radius, top_radius, H, groove_depth, g_bw, g_tw, g_ext,
-                top_ch, top_fr, btm_ch, btm_fr);
+                top_ch, top_fr, btm_ch, btm_fr, groove_offset);
         }
         if (top_ch > 0 && btm_ch > 0) return create_cone_chamfer_solid_parametric_both(bottom_radius, top_radius, H, btm_ch, top_ch);
         if (top_fr > 0 && btm_fr > 0) return create_cone_fillet_solid_parametric_both(bottom_radius, top_radius, H, btm_fr, top_fr);
@@ -4292,12 +4312,12 @@ static TopoDS_Shape build_cylinder_like_shape(
                 return create_cylinder_tapered_stepped_hole_parametric(
                     radius, H, large_h, tapered_step_top_radius, tapered_step_bottom_radius,
                     stepped_small_radius, hole_fillet_radius, top_ch, top_fr, btm_ch, btm_fr,
-                    groove_depth, g_bw, g_tw, g_ext);
+                    groove_depth, g_bw, g_tw, g_ext, groove_offset);
             }
             return create_cylinder_stepped_hole_parametric(
                 radius, H, stepped_large_radius, large_h, stepped_small_radius,
                 hole_fillet_radius, top_ch, top_fr, btm_ch, btm_fr,
-                groove_depth, g_bw, g_tw, g_ext);
+                groove_depth, g_bw, g_tw, g_ext, groove_offset);
         }
         if (std::strcmp(hole_type, "top") == 0 || std::strcmp(hole_type, "bottom") == 0) {
             double hole_depth = H * hole_depth_pct / 100.0;
@@ -4307,7 +4327,7 @@ static TopoDS_Shape build_cylinder_like_shape(
             bool is_bottom = (std::strcmp(hole_type, "bottom") == 0);
             return create_cylinder_with_blind_hole_solid_parametric(
                 radius, H, hole_r, hole_depth, hole_fillet_radius, is_bottom, hole_r_bottom,
-                top_ch, top_fr, btm_ch, btm_fr, groove_depth, g_bw, g_tw, g_ext);
+                top_ch, top_fr, btm_ch, btm_fr, groove_depth, g_bw, g_tw, g_ext, groove_offset);
         }
         if (std::strcmp(hole_type, "both") == 0) {
             double hole_depth = H * hole_depth_pct / 100.0;
@@ -4316,7 +4336,7 @@ static TopoDS_Shape build_cylinder_like_shape(
             if (hole_is_tapered) { hole_r = hole_opening_radius; hole_r_bottom = hole_end_radius; }
             return create_cylinder_with_dual_blind_holes_solid_parametric(
                 radius, H, hole_r, hole_depth, hole_depth, hole_fillet_radius, hole_r_bottom,
-                top_ch, top_fr, btm_ch, btm_fr, groove_depth, g_bw, g_tw, g_ext);
+                top_ch, top_fr, btm_ch, btm_fr, groove_depth, g_bw, g_tw, g_ext, groove_offset);
         }
         if (std::strcmp(hole_type, "through") == 0) {
             double hole_r = hole_radius;
@@ -4330,7 +4350,7 @@ static TopoDS_Shape build_cylinder_like_shape(
         // 实心圆柱 + 外缘特征
         if (groove_enabled) {
             return create_cylinder_with_groove_parametric(
-                radius, H, groove_depth, g_bw, g_tw, g_ext, top_ch, top_fr, btm_ch, btm_fr);
+                radius, H, groove_depth, g_bw, g_tw, g_ext, top_ch, top_fr, btm_ch, btm_fr, groove_offset);
         }
         // create_cylinder_chamfer_fillet_solid_parametric(reversed=false) = 顶部倒角+底部圆角
         // （与导出一致：cylinder 的 chamfer_fillet 分支 reversed_flag=0）
@@ -4360,9 +4380,10 @@ PyObject* generate_cylinder_mesh(PyObject* self, PyObject* args) {
     double tapered_step_top_radius = 0.0, tapered_step_bottom_radius = 0.0;
     int groove_enabled = 0;
     double groove_angle_deg = 45.0, groove_top_width = 0.0, groove_depth_pct = 0.0, groove_cone_depth_mult = 1.0;
+    double groove_eccentric = 0.0;
     double deflection = 0.05;
 
-    if (!PyArg_ParseTuple(args, "sd|dddsddsddiddddddddiddddd",
+    if (!PyArg_ParseTuple(args, "sd|dddsddsddiddddddddidddddd",
                           &cyl_type, &height,
                           &radius, &bottom_radius, &top_radius,
                           &chamfer_type, &chamfer_size, &fillet_radius,
@@ -4372,6 +4393,7 @@ PyObject* generate_cylinder_mesh(PyObject* self, PyObject* args) {
                           &tapered_step_top_radius, &tapered_step_bottom_radius,
                           &groove_enabled, &groove_angle_deg, &groove_top_width,
                           &groove_depth_pct, &groove_cone_depth_mult,
+                          &groove_eccentric,
                           &deflection)) {
         PyErr_SetString(PyExc_TypeError,
             "generate_cylinder_mesh() expected: cylinder_type, height, "
@@ -4380,7 +4402,7 @@ PyObject* generate_cylinder_mesh(PyObject* self, PyObject* args) {
             "hole_end_radius, hole_fillet_radius, stepped_large_radius, stepped_large_height_pct, "
             "stepped_small_radius, tapered_step_top_radius, tapered_step_bottom_radius, "
             "groove_enabled, groove_angle_deg, groove_top_width, groove_depth_pct, "
-            "groove_cone_depth_mult, deflection]");
+            "groove_cone_depth_mult, groove_eccentric, deflection]");
         return NULL;
     }
 
@@ -4392,7 +4414,7 @@ PyObject* generate_cylinder_mesh(PyObject* self, PyObject* args) {
         stepped_large_radius, stepped_large_height_pct, stepped_small_radius,
         tapered_step_top_radius, tapered_step_bottom_radius,
         groove_enabled, groove_angle_deg, groove_top_width,
-        groove_depth_pct, groove_cone_depth_mult);
+        groove_depth_pct, groove_cone_depth_mult, groove_eccentric);
 
     if (shape.IsNull()) {
         Py_RETURN_NONE;

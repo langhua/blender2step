@@ -205,6 +205,7 @@ _STRINGS = {
     "Clearing holes...": {"zh_CN": "清除开孔..."},
     "Compile and install first": {"zh_CN": "请先编译并安装"},
     "Cone Depth ×": {"zh_CN": "锥深倍率"},
+    "Eccentric %": {"zh_CN": "偏心 %"},
     "Cone gallery created — {count} items": {"zh_CN": "圆锥库已创建 — {count} 个"},
     "Cone Gallery △": {"zh_CN": "圆锥库 △"},
     "Cone Gallery ▽": {"zh_CN": "倒锥库 ▽"},

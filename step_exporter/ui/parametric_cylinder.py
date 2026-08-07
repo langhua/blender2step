@@ -57,6 +57,7 @@ def _load_params_from_object(props, obj):
     props.groove_top_width = obj.get('param_groove_top_width', 0.0)
     props.groove_depth_pct = obj.get('param_groove_depth_pct', 20.0)
     props.groove_cone_depth_mult = obj.get('param_groove_cone_depth_mult', 1.0)
+    props.groove_eccentric = obj.get('param_groove_eccentric', 0.0)
     return True
 
 
@@ -218,6 +219,10 @@ class STEP_EXPORTER_OT_create_parametric_cylinder(Operator):
         name=_t("Cone Depth ×"), default=1.5, min=1.0, max=3.0, step=0.1,
         description="Multiplier for groove depth on tapered cylinders (compensates slanted surface)",
     )
+    groove_eccentric: FloatProperty(
+        name=_t("Eccentric %"), default=0.0, min=-45.0, max=45.0, subtype='PERCENTAGE',
+        description="Vertical offset of the groove as % of height (0=mid-height, +=up, -=down)",
+    )
     
     def invoke(self, context, event):
         # 选中了参数化圆柱/锥柱 → 自动把对象的当前参数回填到面板，方便直接修改
@@ -304,6 +309,7 @@ class STEP_EXPORTER_OT_create_parametric_cylinder(Operator):
             box.prop(self, 'groove_depth_pct')
             if self.cylinder_type == 'tapered':
                 box.prop(self, 'groove_cone_depth_mult')
+            box.prop(self, 'groove_eccentric')
             # Derived dimensions (read-only info)
             auto_depth = self._get_auto_depth()
             angle_rad = self.groove_angle
@@ -509,6 +515,7 @@ def _apply_occt_preview_mesh(obj, props, S):
             1 if props.groove_enabled else 0,
             _m.degrees(props.groove_angle), props.groove_top_width,
             props.groove_depth_pct, props.groove_cone_depth_mult,
+            props.groove_eccentric,
             0.02)  # deflection (mm) — 光滑预览
         if result is None:
             log_to_file("[STEP Exporter] OCCT preview returned None, keeping bmesh preview")
@@ -599,6 +606,7 @@ def _store_creation_params(obj, props):
         obj['param_groove_angle_deg'] = math.degrees(props.groove_angle)
         obj['param_groove_top_width'] = props.groove_top_width
         obj['param_groove_depth_pct'] = props.groove_depth_pct
+        obj['param_groove_eccentric'] = props.groove_eccentric
         if props.cylinder_type == 'tapered':
             obj['param_groove_cone_depth_mult'] = props.groove_cone_depth_mult
 
@@ -956,6 +964,10 @@ def _create_groove(obj, props, S):
                 f"angle={math.degrees(angle_rad):.1f}°"
                 f"{' mult='+str(props.groove_cone_depth_mult) if props.cylinder_type=='tapered' else ''}")
 
+    # Eccentric offset: groove centered at z=0; shift cutter vertically (meters)
+    ecc_pct = getattr(props, 'groove_eccentric', 0.0) or 0.0
+    ecc_m = props.height * S * ecc_pct / 100.0
+
     # Use cube primitive (proven to work with EXACT solver) + vertex move
     bpy.ops.mesh.primitive_cube_add(size=1.0, location=(0, 0, 0))
     cutter = bpy.context.active_object
@@ -975,7 +987,7 @@ def _create_groove(obj, props, S):
         new_y = half_ext if y_sign > 0 else -half_ext
         # Z: wider at surface (X+), narrower at floor (X-)
         half_w = hb if x_sign > 0 else ht
-        new_z = half_w if z_sign > 0 else -half_w
+        new_z = (half_w if z_sign > 0 else -half_w) + ecc_m
 
         v.co = (new_x, new_y, new_z)
 
@@ -999,6 +1011,7 @@ def _create_groove(obj, props, S):
     obj['step_groove_top_width'] = props.groove_top_width
     obj['step_groove_extrusion_length'] = 2.0 * (R_mid / S) + 4.0
     obj['step_groove_angle'] = math.degrees(angle_rad)  # degrees, for C++ export
+    obj['step_groove_offset'] = props.height * ecc_pct / 100.0  # mm, vertical offset (+=up)
 
 
 def _boolean_difference(target, cutter):

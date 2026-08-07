@@ -119,7 +119,8 @@ TopoDS_Shape create_cylinder_with_blind_hole_solid_parametric(double radius, dou
                                                                double top_chamfer = 0.0, double top_fillet = 0.0,
                                                                double bottom_chamfer = 0.0, double bottom_fillet = 0.0,
                                                                double groove_depth = 0.0, double groove_bottom_width = 0.0,
-                                                               double groove_top_width = 0.0, double groove_extrusion_length = 0.0);
+                                                               double groove_top_width = 0.0, double groove_extrusion_length = 0.0,
+                                                               double groove_offset = 0.0);
 // Cylinder with dual blind holes (both ends)
 TopoDS_Shape create_cylinder_with_dual_blind_holes_solid_parametric(double radius, double height,
                                                                      double hole_radius, double bottom_hole_depth,
@@ -128,7 +129,8 @@ TopoDS_Shape create_cylinder_with_dual_blind_holes_solid_parametric(double radiu
                                                                      double top_chamfer = 0.0, double top_fillet = 0.0,
                                                                      double bottom_chamfer = 0.0, double bottom_fillet = 0.0,
                                                                      double groove_depth = 0.0, double groove_bottom_width = 0.0,
-                                                                     double groove_top_width = 0.0, double groove_extrusion_length = 0.0);
+                                                                     double groove_top_width = 0.0, double groove_extrusion_length = 0.0,
+                                                                     double groove_offset = 0.0);
 // Cylinder with stepped through hole (large hole from top, small hole through bottom)
 TopoDS_Shape create_cylinder_stepped_hole_parametric(double radius, double height,
                                                       double large_hole_r, double large_hole_h,
@@ -136,7 +138,8 @@ TopoDS_Shape create_cylinder_stepped_hole_parametric(double radius, double heigh
                                                       double top_chamfer = 0.0, double top_fillet = 0.0,
                                                       double bottom_chamfer = 0.0, double bottom_fillet = 0.0,
                                                       double groove_depth = 0.0, double groove_bottom_width = 0.0,
-                                                      double groove_top_width = 0.0, double groove_extrusion_length = 0.0);
+                                                      double groove_top_width = 0.0, double groove_extrusion_length = 0.0,
+                                                      double groove_offset = 0.0);
 // Cylinder with tapered stepped hole (conical top + small cylinder bottom)
 TopoDS_Shape create_cylinder_tapered_stepped_hole_parametric(double radius, double height,
                                                       double large_hole_h,
@@ -145,19 +148,22 @@ TopoDS_Shape create_cylinder_tapered_stepped_hole_parametric(double radius, doub
                                                       double top_chamfer = 0.0, double top_fillet = 0.0,
                                                       double bottom_chamfer = 0.0, double bottom_fillet = 0.0,
                                                       double groove_depth = 0.0, double groove_bottom_width = 0.0,
-                                                      double groove_top_width = 0.0, double groove_extrusion_length = 0.0);
+                                                      double groove_top_width = 0.0, double groove_extrusion_length = 0.0,
+                                                      double groove_offset = 0.0);
 // Cylinder with external trapezoidal groove at mid-height
 TopoDS_Shape create_cylinder_with_groove_parametric(double radius, double height,
                                                      double groove_depth, double groove_bottom_width,
                                                      double groove_top_width, double groove_extrusion_length,
                                                      double top_chamfer = 0.0, double top_fillet = 0.0,
-                                                     double bottom_chamfer = 0.0, double bottom_fillet = 0.0);
+                                                     double bottom_chamfer = 0.0, double bottom_fillet = 0.0,
+                                                     double groove_offset = 0.0);
 // Cone with external trapezoidal groove at mid-height
 TopoDS_Shape create_cone_with_groove_parametric(double bottom_radius, double top_radius, double height,
                                                  double groove_depth, double groove_bottom_width,
                                                  double groove_top_width, double groove_extrusion_length,
                                                  double top_chamfer, double top_fillet,
-                                                 double bottom_chamfer, double bottom_fillet);
+                                                 double bottom_chamfer, double bottom_fillet,
+                                                 double groove_offset = 0.0);
 // Cone stepped hole + external groove
 TopoDS_Shape create_cone_stepped_hole_with_groove_parametric(double outer_bottom_radius, double outer_top_radius,
                                                               double height,
@@ -167,7 +173,8 @@ TopoDS_Shape create_cone_stepped_hole_with_groove_parametric(double outer_bottom
                                                               double hole_fillet_radius,
                                                               double top_chamfer, double bottom_chamfer,
                                                               double groove_depth, double groove_bottom_width,
-                                                              double groove_top_width, double groove_extrusion_length);
+                                                              double groove_top_width, double groove_extrusion_length,
+                                                              double groove_offset = 0.0);
 // Cone with blind hole (single end)
 TopoDS_Shape create_cone_with_blind_hole_solid_parametric(double bottom_radius, double top_radius, double height,
                                                            double hole_radius, double hole_depth,
@@ -185,7 +192,8 @@ TopoDS_Shape create_cone_with_blind_hole_and_groove_parametric(double bottom_rad
                                                                 double top_chamfer, double top_fillet,
                                                                 double bottom_chamfer, double bottom_fillet,
                                                                 double groove_depth, double groove_bottom_width,
-                                                                double groove_top_width, double groove_extrusion_length);
+                                                                double groove_top_width, double groove_extrusion_length,
+                                                                double groove_offset = 0.0);
 TopoDS_Shape create_cone_chamfer_solid_parametric(double bottom_radius, double top_radius, double height,
                                                    double chamfer_size, int is_top_chamfer);
 TopoDS_Shape create_cone_chamfer_solid_parametric_both(double bottom_radius, double top_radius, double height,
@@ -205,7 +213,8 @@ TopoDS_Shape create_hollow_cone_fillet_with_groove_parametric(double outer_botto
                                                                double groove_depth, double groove_bottom_width,
                                                                double groove_top_width, double groove_extrusion_length,
                                                                double top_chamfer = 0.0, double top_fillet = 0.0,
-                                                               double bottom_chamfer = 0.0, double bottom_fillet = 0.0);
+                                                               double bottom_chamfer = 0.0, double bottom_fillet = 0.0,
+                                                               double groove_offset = 0.0);
 TopoDS_Shape create_cone_stepped_hole_parametric(double outer_bottom_radius, double outer_top_radius,
                                                   double height,
                                                   double small_hole_radius, double small_hole_height,

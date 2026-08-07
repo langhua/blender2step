@@ -24,50 +24,54 @@ sys.path.insert(0, repo_root)
 bpy.ops.preferences.addon_enable(module="step_exporter")
 
 from step_exporter.core.utils import _verify_step_shell
-from step_exporter.core.mesh_data import _get_mesh_data_enhanced
-from step_exporter.core import _globals as _g
 
 passed = 0
 failed = 0
 
 
 def _export_sync(filepath, objs):
-    """Synchronous STEP export using C++ incremental API (no modal timer)."""
+    """Synchronous STEP export using the REAL parametric pipeline:
+    analyze from stored creation params (param_*) -> analytic C++ export.
+
+    Why not the mesh path: the previous implementation fed the OCCT preview mesh
+    through _get_mesh_data_enhanced + add_object_to_export, which sews every
+    triangle with BRepBuilderAPI_Sewing. On the high-poly fillet preview
+    (2778 verts / 5552 tris) that sewing never returns, so CI hung at
+    "add_object_to_export [1/1]". The real addon exports parametric cylinders
+    analytically (BRepPrimAPI + BRepFilletAPI, no mesh sewing), so the
+    integration test exercises exactly that path.
+    """
     context = bpy.context
     scale = 1000.0
 
-    objects_data = []
+    from step_exporter.analysis import _analyze_cylinder_from_mesh
+    from step_exporter.export.staged_export import _export_cylinder_staged
+    import _step_exporter as cpp_exporter
+
+    data = {
+        'step_schema': 'AP242',
+        'step_unit': 'MILLIMETER',
+        'enable_logging': False,
+        # Only used if an analytic branch falls back to mesh export (not expected
+        # for these stored-param cases, but keeps _export_as_mesh_fallback happy).
+        'fix_geometry': 0,
+        'create_solid': 0,
+        'advanced_brep': 0,
+    }
+
     for obj in objs:
-        print(f"    [SYNC] analyzing mesh: {obj.name}", flush=True)
-        # apply_modifiers=False: created parametric objects have no modifiers
-        # (the OCCT preview already replaced the mesh), and calling
-        # context.evaluated_depsgraph_get() in --background mode can hang.
-        data = _get_mesh_data_enhanced(obj, context, scale, apply_modifiers=False)
-        if data:
-            objects_data.append(data)
-    if not objects_data:
-        return False
-    print(f"    [SYNC] analyzed {len(objects_data)} object(s) -> init_incremental_export", flush=True)
-
-    ok = _g.step_exporter.init_incremental_export(
-        filepath, len(objects_data), scale,
-        0, 0, 0,  # fix_geometry, create_solid, advanced_brep
-        'AP242', 'MILLIMETER', 0, 0.001, lambda msg: None,
-    )
-    if not ok:
-        return False
-    print("    [SYNC] init_incremental_export done -> add_object_to_export", flush=True)
-
-    for i, data in enumerate(objects_data):
-        print(f"    [SYNC] add_object_to_export [{i+1}/{len(objects_data)}]...", flush=True)
-        if not _g.step_exporter.add_object_to_export(data, lambda p: None):
-            return False
-        print(f"    [SYNC] add_object_to_export [{i+1}] OK", flush=True)
-
-    print("    [SYNC] finalize_incremental_export...", flush=True)
-    ok = _g.step_exporter.finalize_incremental_export()
-    print(f"    [SYNC] finalize done: {ok}", flush=True)
-    return ok
+        print(f"    [SYNC] analyzing: {obj.name}", flush=True)
+        # _analyze_cylinder_from_mesh reads the creation-time param_* properties
+        # first (no depsgraph, no mesh analysis -> cannot hang in --background),
+        # and only falls back to mesh detection for non-parametric objects.
+        cparams = _analyze_cylinder_from_mesh(obj, context, scale)
+        if cparams:
+            print(f"    [SYNC] detected {cparams['obj_type']} -> analytic export", flush=True)
+            ok = _export_cylinder_staged(cpp_exporter, filepath, cparams, data)
+            print(f"    [SYNC] export {'OK' if ok else 'FAIL'}", flush=True)
+            return bool(ok)
+    print("    [SYNC] no parametric cylinder detected", flush=True)
+    return False
 
 
 def clear_scene():

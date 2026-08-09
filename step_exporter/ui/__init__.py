@@ -6,5 +6,8 @@ from .parametric_cylinder import (STEP_EXPORTER_OT_create_parametric_cylinder,
     _apply_hole_fillet, _on_hole_param_change, _boolean_difference)
 from .parametric_shell import (STEP_EXPORTER_OT_create_parametric_shell, STEP_EXPORTER_OT_add_hole_to_shell,
     STEP_EXPORTER_OT_remove_shell_hole, STEP_EXPORTER_OT_edit_shell_hole,
-    STEP_EXPORTER_OT_clear_shell_holes, STEP_EXPORTER_PT_shell_holes)
+    STEP_EXPORTER_OT_clear_shell_holes, STEP_EXPORTER_PT_shell_holes,
+    STEP_EXPORTER_OT_add_slot_to_shell, STEP_EXPORTER_OT_remove_shell_slot,
+    STEP_EXPORTER_OT_edit_shell_slot, STEP_EXPORTER_OT_clear_shell_slots,
+    STEP_EXPORTER_PT_shell_slots)
 from .cylinder_panel import STEP_EXPORTER_PT_cylinder_panel

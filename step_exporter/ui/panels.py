@@ -55,7 +55,7 @@ class STEP_EXPORTER_PT_sample_generators(Panel):
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
     bl_category = _t("STEP Export")
-    bl_order = 2
+    bl_order = 3
     bl_options = {'DEFAULT_CLOSED'}
     
     def draw(self, context):

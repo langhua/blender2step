@@ -879,9 +879,12 @@ def _parametric_export_staged():
                     pparams = obj_params
                     bf_val = pparams.get('bottom_fillet', 0.0)
                     wd = pparams.get('window_data', '')
-                    log_to_file(f"[STEP Exporter] Exporting parametric shell {obj_num}/{total_objects} (C++), bf={bf_val}, pos=({pparams.get('pos_x',0):.4f},{pparams.get('pos_y',0):.4f},{pparams.get('pos_z',0):.4f}) holes={'yes' if wd else 'no'}...")
+                    sd = pparams.get('slot_data', '')
+                    log_to_file(f"[STEP Exporter] Exporting parametric shell {obj_num}/{total_objects} (C++), bf={bf_val}, pos=({pparams.get('pos_x',0):.4f},{pparams.get('pos_y',0):.4f},{pparams.get('pos_z',0):.4f}) holes={'yes' if wd else 'no'} slots={'yes' if sd else 'no'}...")
                     if wd:
                         log_to_file(f"[STEP Exporter]   window_data = \"{wd}\"")
+                    if sd:
+                        log_to_file(f"[STEP Exporter]   slot_data = \"{sd}\"")
                     success = cpp_exporter.export_parametric_shell_step(
                         temp_file,
                         pparams['width'], pparams['depth'], pparams['height'],
@@ -904,7 +907,8 @@ def _parametric_export_staged():
                         pparams.get('rot_x', 0.0),
                         pparams.get('rot_y', 0.0),
                         pparams.get('rot_z', 0.0),
-                        pparams.get('curve_ratio_y', pparams.get('curve_ratio', 0.5)))
+                        pparams.get('curve_ratio_y', pparams.get('curve_ratio', 0.5)),
+                        sd)
                 
                 elif obj_type == 'regular':
                     obj = obj_params

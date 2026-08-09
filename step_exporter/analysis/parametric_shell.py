@@ -75,6 +75,7 @@ def _analyze_parametric_shell_from_mesh(obj, context=None, scale=1.0):
         'pos_z': (obj.location.z * scale) - (h_mm / 2.0),
         'rot_x': obj.rotation_euler.x, 'rot_y': obj.rotation_euler.y, 'rot_z': obj.rotation_euler.z,
         'window_data': _fix_window_data_faces(obj),
+        'slot_data': obj.get('slot_data', ''),
     }
 
 

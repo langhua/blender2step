@@ -500,17 +500,32 @@ class STEP_EXPORTER_OT_create_parametric_shell(Operator):
 
 
 
+def _shell_local_bottom_z(obj):
+    """Return the shell bottom Z in object-local space (meters).
+
+    Fresh direct shells have their origin at the bottom (mesh spans z∈[0,h]),
+    while OCCT-rebuilt / curved shells are centered (z∈[-h/2,h/2]). Using the
+    mesh bbox makes the Z-from-bottom conversion work for both conventions
+    (this fixes the FIRST slot/hole being misplaced by half the height).
+    """
+    try:
+        return min(c[2] for c in obj.bound_box)
+    except Exception:
+        S = 0.001 if obj.get('unit', 'mm') == 'mm' else 1.0
+        return -obj.get('height', 50.0) * S / 2.0
+
+
 def _move_cursor_to_hole_pos(op, context):
     """Move 3D cursor to world coords matching shell-local hole_pos_x/y/z (mm)."""
     obj = context.active_object
     if not obj or obj.get('object_type') != 'parametric_shell':
         return
-    h_m = obj.get('height', 50.0) * (0.001 if obj.get('unit', 'mm') == 'mm' else 1.0)
-    # hole_pos_z is "from bottom" → convert to local Z (origin at shell center)
+    bottom_z = _shell_local_bottom_z(obj)
+    # hole_pos_z is "from bottom" → convert to local Z using actual shell bottom
     local = mathutils.Vector((
         op.hole_pos_x * 0.001,
         op.hole_pos_y * 0.001,
-        op.hole_pos_z * 0.001 - h_m / 2
+        op.hole_pos_z * 0.001 + bottom_z
     ))
     world = obj.matrix_world @ local
     context.scene.cursor.location = world
@@ -562,15 +577,14 @@ class STEP_EXPORTER_OT_add_hole_to_shell(Operator):
         cursor = context.scene.cursor.location
         if obj and obj.get('object_type') == 'parametric_shell':
             self._invoke_obj_name = obj.name  # remember for redo panel
-            S = 0.001 if obj.get('unit', 'mm') == 'mm' else 1.0
-            h_m = obj.get('height', 50.0) * S
             # Convert cursor to shell-local frame (accounts for rotation)
             cursor_local = obj.matrix_world.inverted() @ cursor
             # Shell-local: X/Y relative to shell center, Z from shell bottom
-            # (shell bottom is at local Z = -h_m/2)
+            # (bottom Z from mesh bbox — handles bottom-origin & centered meshes)
+            bottom_z = _shell_local_bottom_z(obj)
             self.hole_pos_x = round(cursor_local.x * 1000, 1)
             self.hole_pos_y = round(cursor_local.y * 1000, 1)
-            self.hole_pos_z = round((cursor_local.z + h_m / 2) * 1000, 1)
+            self.hole_pos_z = round((cursor_local.z - bottom_z) * 1000, 1)
         else:
             self.hole_pos_x = cursor.x * 1000
             self.hole_pos_y = cursor.y * 1000
@@ -885,11 +899,11 @@ def _move_cursor_to_edit_hole_pos(op, context):
     obj = context.active_object
     if not obj or obj.get('object_type') != 'parametric_shell':
         return
-    h_m = obj.get('height', 50.0) * (0.001 if obj.get('unit', 'mm') == 'mm' else 1.0)
+    bottom_z = _shell_local_bottom_z(obj)
     local = mathutils.Vector((
         op.edit_cx * 0.001,
         op.edit_cy * 0.001,
-        op.edit_cz * 0.001 - h_m / 2
+        op.edit_cz * 0.001 + bottom_z
     ))
     world = obj.matrix_world @ local
     context.scene.cursor.location = world
@@ -1094,6 +1108,132 @@ def _mark_sharp_edges_by_angle(obj, threshold_deg=30.0):
     bm.free()
 
 
+def _mark_slot_rims_sharp(obj, mesh):
+    """Explicitly mark slot rim edges (opening + floor) sharp.
+
+    Angle-threshold sharp marking (30°) FAILS for steep-taper slots: the sloped
+    wall meets the wall/floor at an angle below 30° (e.g. ratio=0.5 gives ~28°),
+    so the rim is left smooth and renders blurry. Here we instead locate the rim
+    by geometry — edges lying on the slot's opening/floor outline — and force
+    them sharp, regardless of the face angle. Handles round (circle outline) and
+    rrect (rounded-rect outline) slots, tapered or straight.
+    """
+    import math, bmesh as _bmrs
+    sd = obj.get('slot_data', '')
+    if not sd:
+        return
+    S = 0.001 if obj.get('unit', 'mm') == 'mm' else 1.0
+    inv = 1.0 / S  # mesh coords (m) → slot_data units (mm for mm-unit shells)
+    w = obj.get('width', 100.0)
+    d = obj.get('depth', 80.0)
+    h = obj.get('height', 50.0)
+
+    # Parse slots: (kind, cx, cy, cz, dims, depth, bottom_ratio, face_code)
+    # round: dims = (R, 0, 0); rrect: dims = (rw, rh, cr)
+    slots = []
+    for e in sd.split(';'):
+        e = e.strip()
+        if not e:
+            continue
+        parts = e.split(',')
+        if len(parts) < 7:
+            continue
+        try:
+            tc = int(float(parts[4]))
+            cx, cy, cz = float(parts[0]), float(parts[1]), float(parts[2])
+            fc = int(float(parts[-1]))
+            if tc == 3 and len(parts) >= 7:  # round slot: ...,radius,3,depth,br,face
+                R = float(parts[3])
+                depth = float(parts[5])
+                br = float(parts[6]) if len(parts) >= 8 else 1.0
+                slots.append(('round', cx, cy, cz, R, 0.0, 0.0, depth, br, fc))
+            elif tc == 4 and len(parts) >= 9:  # rrect slot: ...,w,4,h,cr,depth,br,face
+                rw = float(parts[3]); rh = float(parts[5]); rcr = float(parts[6])
+                depth = float(parts[7])
+                br = float(parts[8]) if len(parts) >= 10 else 1.0
+                slots.append(('rrect', cx, cy, cz, rw, rh, rcr, depth, br, fc))
+        except (ValueError, IndexError):
+            continue
+    if not slots:
+        return
+
+    # Face-code → wall geometry (slot_data units). fc 0-5 outer, 6-11 inner.
+    thick = obj.get('wall_thickness', 2.0)
+    bt = obj.get('bottom_thickness', thick)
+    geom = {}
+    geom[0] = (2, 0.0, 0, 1)             # bottom:  z=0,        tangent x,y
+    geom[1] = (2, h, 0, 1)               # top:     z=h,        tangent x,y
+    geom[2] = (0, -w / 2.0, 1, 2)        # left:    x=-w/2,     tangent y,z
+    geom[3] = (0, w / 2.0, 1, 2)         # right:   x=+w/2,     tangent y,z
+    geom[4] = (1, -d / 2.0, 0, 2)        # front:   y=-d/2,     tangent x,z
+    geom[5] = (1, d / 2.0, 0, 2)         # back:    y=+d/2,     tangent x,z
+    geom[6] = (2, bt, 0, 1)              # bottom inner:  z=bt
+    geom[7] = (2, h - thick, 0, 1)       # top inner:     z=h-thick
+    geom[8] = (0, -w / 2.0 + thick, 1, 2)  # left inner:  x=-w/2+thick
+    geom[9] = (0, w / 2.0 - thick, 1, 2)   # right inner: x=w/2-thick
+    geom[10] = (1, -d / 2.0 + thick, 0, 2) # front inner: y=-d/2+thick
+    geom[11] = (1, d / 2.0 - thick, 0, 2)  # back inner:  y=d/2-thick
+
+    plane_tol = 0.6   # tolerance from the wall/floor plane
+    rad_tol = 0.9     # tolerance from the rim outline
+
+    def on_rrect_outline(u, v, W, H, cr):
+        """True if (u,v) lies on the rounded-rect boundary (W×H, corner cr)."""
+        hw, hh, r = W / 2.0, H / 2.0, max(cr, 0.001)
+        dx = max(abs(u) - (hw - r), 0.0)
+        dy = max(abs(v) - (hh - r), 0.0)
+        return abs(math.hypot(dx, dy) - r) < rad_tol
+
+    bm = _bmrs.new()
+    bm.from_mesh(mesh)
+    bm.edges.ensure_lookup_table()
+    bm.faces.ensure_lookup_table()
+
+    for e in bm.edges:
+        if len(e.link_faces) != 2:
+            continue
+        # Mesh is centered in Z (built with v.z*S - h/2 in _rebuild_stage_create_occt),
+        # while slot_data Z is measured from the shell bottom → add h/2 back.
+        m0 = (e.verts[0].co.x * inv, e.verts[0].co.y * inv, e.verts[0].co.z * inv + h / 2.0)
+        m1 = (e.verts[1].co.x * inv, e.verts[1].co.y * inv, e.verts[1].co.z * inv + h / 2.0)
+        mid = ((m0[0] + m1[0]) / 2, (m0[1] + m1[1]) / 2, (m0[2] + m1[2]) / 2)
+        sharp = False
+        for (kind, cx, cy, cz, a, b, c, depth, br, fc) in slots:
+            if fc not in geom:
+                continue
+            axis, wall_coord, ta, tb = geom[fc]
+            u = mid[ta] - (cx, cy, cz)[ta]
+            v = mid[tb] - (cx, cy, cz)[tb]
+            # Opening rim: on wall plane, edge lies on the opening outline
+            if abs(mid[axis] - wall_coord) < plane_tol:
+                if kind == 'round':
+                    if abs(math.hypot(u, v) - a) < rad_tol:
+                        sharp = True
+                        break
+                elif on_rrect_outline(u, v, a, b, c):
+                    sharp = True
+                    break
+            # Floor rim: on floor plane (depth into wall), edge on scaled outline.
+            # Inner walls cut toward the OUTER surface → into direction is reversed.
+            into = +1.0 if (fc % 6) in (0, 2, 4) else -1.0
+            if fc >= 6:
+                into = -into
+            floor_coord = wall_coord + into * depth
+            if abs(mid[axis] - floor_coord) < plane_tol:
+                if kind == 'round':
+                    if abs(math.hypot(u, v) - a * br) < rad_tol:
+                        sharp = True
+                        break
+                elif on_rrect_outline(u, v, a * br, b * br, c * br):
+                    sharp = True
+                    break
+        if sharp:
+            e.smooth = False
+
+    bm.to_mesh(mesh)
+    bm.free()
+
+
 def _rebuild_stage_create(obj):
     """Stage: Create fresh shell mesh and swap data. All shell types (square,
     rounded, curved) regenerate via OCCT (with holes pre-cut) for exact STEP match."""
@@ -1161,6 +1301,7 @@ def _rebuild_stage_create(obj):
 
     obj['window_data'] = wd
     obj['window_data_local'] = wd_local
+    obj['slot_data'] = obj.get('slot_data', '')
     obj.name = obj_name
     del obj['_rb_marker']
 
@@ -1178,7 +1319,7 @@ def _rebuild_stage_create(obj):
 def _rebuild_stage_create_occt(obj, w, d, h_val, t, bt, cr, rim_type, rw, rh,
                                rim_shape, rim_top_ratio, bf, curve_ratio, curve_ratio_y, ecc_y,
                                wd, wd_local, corner_type='curved'):
-    """Regenerate shell mesh via OCCT with holes pre-cut (exact STEP match).
+    """Regenerate shell mesh via OCCT with holes & slots pre-cut (exact STEP match).
     Works for square, rounded and curved shells — all share the same OCCT path."""
     import bmesh as _bm_occt
     try:
@@ -1189,7 +1330,7 @@ def _rebuild_stage_create_occt(obj, w, d, h_val, t, bt, cr, rim_type, rw, rh,
         if not hasattr(cpp, 'generate_parametric_shell_mesh'):
             print("[STEP Exporter] C++ mesh generation unavailable")
             return
-        # Clamp hole coordinates to shell bounds (prevents garbage positions)
+        # Clamp hole coordinates to shell bounds
         if wd:
             hw_c, hd_c = w / 2.0, d / 2.0
             cleaned = []
@@ -1207,13 +1348,16 @@ def _rebuild_stage_create_occt(obj, w, d, h_val, t, bt, cr, rim_type, rw, rh,
                         pass
                 cleaned.append(','.join(parts))
             wd = ';'.join(cleaned)
+        # Get slot data
+        sd = obj.get('slot_data', '')
         result = cpp.generate_parametric_shell_mesh(
             w, d, h_val, t, bt,
             corner_type, cr,
             rim_type, rw, rh,
             rim_shape, rim_top_ratio / 100.0,
             bf, curve_ratio / 100.0, ecc_y / 100.0,
-            wd, int(obj.get('cosine_layers', 64)), curve_ratio_y / 100.0)
+            wd, int(obj.get('cosine_layers', 64)), curve_ratio_y / 100.0,
+            sd)
         if result is None:
             print("[STEP Exporter] OCCT mesh generation failed")
             return
@@ -1240,8 +1384,16 @@ def _rebuild_stage_create_occt(obj, w, d, h_val, t, bt, cr, rim_type, rw, rh,
         bm.free()
 
         old_mesh = obj.data
+        # Preserve the shell's world-space bottom Z when swapping to the centered
+        # OCCT mesh. Fresh direct shells are bottom-origin (mesh z∈[0,h]) while the
+        # OCCT mesh is centered (z∈[-h/2,h/2]) — without this adjustment the shell
+        # visibly drops by half its height on the FIRST edit.
+        old_bottom_z = _shell_local_bottom_z(obj)
         obj.data = new_mesh
         bpy.data.meshes.remove(old_mesh, do_unlink=True)
+        # Centered mesh bottom sits at local -hh_m; shift location.z so the world
+        # bottom stays put (axis-aligned shells).
+        obj.location.z += old_bottom_z + hh_m
         obj['window_data'] = wd
         obj['window_data_local'] = wd_local
         obj['_holes_builtin'] = True  # holes already in OCCT mesh
@@ -1249,6 +1401,8 @@ def _rebuild_stage_create_occt(obj, w, d, h_val, t, bt, cr, rim_type, rw, rh,
             f.use_smooth = True
         # Mark sharp edges by face angle (crisp corners/perimeters, smooth walls)
         _mark_sharp_edges_by_angle(obj, threshold_deg=30.0)
+        # Explicitly sharpen slot rims (angle method misses steep tapers)
+        _mark_slot_rims_sharp(obj, obj.data)
         print(f"[STEP Exporter] OCCT rebuild: v={len(verts)} t={len(tris)} holes={bool(wd)}")
         bpy.context.view_layer.objects.active = obj
         obj.select_set(True)
@@ -1256,5 +1410,571 @@ def _rebuild_stage_create_occt(obj, w, d, h_val, t, bt, cr, rim_type, rw, rh,
         print(f"[STEP Exporter] OCCT rebuild failed: {e}")
 
 
+# ═══════════════════════════════════════════════════════════════
+#  Slots (grooves/depressions on wall faces, partial depth)
+# ═══════════════════════════════════════════════════════════════
+
+def _parse_slot_list(obj):
+    """Return list of (entry_string, description) for all slots."""
+    sd = obj.get('slot_data', '')
+    if not sd:
+        return []
+    entries = [e.strip() for e in sd.split(';') if e.strip()]
+    result = []
+    face_names = {0: _t("Bottom"), 1: _t("Top"), 2: _t("Left"), 3: _t("Right"), 4: _t("Front"), 5: _t("Back"),
+                  6: _t("Bottom (inner)"), 7: _t("Top (inner)"), 8: _t("Left (inner)"), 9: _t("Right (inner)"),
+                  10: _t("Front (inner)"), 11: _t("Back (inner)")}
+    for e in entries:
+        parts = e.split(',')
+        if len(parts) < 5:
+            result.append((e, "?"))
+            continue
+        try:
+            cx, cy, cz = float(parts[0]), float(parts[1]), float(parts[2])
+            tc = int(float(parts[4]))
+            face = int(float(parts[-1])) if len(parts) >= 7 else -1
+            fn = face_names.get(face, f"Face{face}")
+            if tc == 3:  # round slot
+                r = float(parts[3])
+                depth = float(parts[5]) if len(parts) >= 7 else 0.0
+                br = float(parts[6]) if len(parts) >= 8 else 1.0
+                if br < 0.999:
+                    desc = _t("Round Slot Tapered Ø{t:.1f}→Ø{b:.1f}mm depth={d:.1f}").format(t=r * 2, b=r * 2 * br, d=depth) + f" @ ({cx:.1f},{cy:.1f},{cz:.1f}) {fn}"
+                else:
+                    desc = _t("Round Slot Ø{r:.1f}mm depth={d:.1f}").format(r=r * 2, d=depth) + f" @ ({cx:.1f},{cy:.1f},{cz:.1f}) {fn}"
+            elif tc == 4 and len(parts) >= 8:  # rrect slot
+                rw = float(parts[3]); rh = float(parts[5]); rcr = float(parts[6])
+                depth = float(parts[7]) if len(parts) >= 9 else 0.0
+                br = float(parts[8]) if len(parts) >= 10 else 1.0
+                if br < 0.999:
+                    desc = _t("RRect Slot Tapered {rw:.0f}×{rh:.0f}→{bw:.0f}×{bh:.0f} cr={rcr:.1f} depth={d:.1f}").format(
+                        rw=rw, rh=rh, bw=rw * br, bh=rh * br, rcr=rcr, d=depth) + f" @ {fn}"
+                else:
+                    desc = _t("RRect Slot {rw:.0f}×{rh:.0f} cr={rcr:.1f} depth={d:.1f}").format(rw=rw, rh=rh, rcr=rcr, d=depth) + f" @ {fn}"
+            else:
+                desc = _t("Slot").format() + f" @ ({cx:.1f},{cy:.1f},{cz:.1f})"
+            result.append((e, desc))
+        except (ValueError, IndexError):
+            result.append((e, "?"))
+    return result
+
+
+def _move_cursor_to_slot_pos(op, context):
+    """Move 3D cursor to world coords matching shell-local slot_pos_x/y/z (mm)."""
+    obj = context.active_object
+    if not obj or obj.get('object_type') != 'parametric_shell':
+        return
+    bottom_z = _shell_local_bottom_z(obj)
+    local = mathutils.Vector((
+        op.slot_pos_x * 0.001,
+        op.slot_pos_y * 0.001,
+        op.slot_pos_z * 0.001 + bottom_z
+    ))
+    world = obj.matrix_world @ local
+    context.scene.cursor.location = world
+
+
+class STEP_EXPORTER_OT_add_slot_to_shell(Operator):
+    """Add a slot (partial-depth groove) to an existing parametric shell at the 3D cursor position."""
+    bl_idname = "step_exporter.add_slot_to_shell"
+    bl_label = _t("Add Slot to Shell")
+    bl_options = {'UNDO'}
+    bl_description = _t("Add a slot/groove at the 3D cursor position (Shift+RMB to place)")
+
+    slot_type: EnumProperty(
+        name=_t("Type"),
+        items=[('round', _t("Round"), _t("Circular slot (partial depth)")),
+               ('rrect', _t("Rounded Rect"), _t("Rounded rectangle slot (partial depth)"))],
+        default='round',
+    )
+    slot_side: EnumProperty(
+        name=_t("Side"),
+        items=[('outer', _t("Outer"), _t("Cut from the outer wall surface")),
+               ('inner', _t("Inner"), _t("Cut from the inner wall surface (inside the shell)"))],
+        default='outer',
+        description=_t("Which side of the wall the slot is cut from"))
+    slot_radius: FloatProperty(name=_t("Radius"), default=5.0, min=0.1, max=500.0)
+    slot_width: FloatProperty(name=_t("Width"), default=10.0, min=0.1, max=500.0)
+    slot_height: FloatProperty(name=_t("Height"), default=8.0, min=0.1, max=500.0)
+    slot_cr: FloatProperty(name=_t("Corner R"), default=2.0, min=0.0, max=500.0)
+    slot_depth: FloatProperty(
+        name=_t("Depth"), default=1.0, min=0.01, max=100.0, step=0.1, precision=2,
+        description=_t("Slot depth (max 80% of wall thickness)"))
+    # ── Taper for round slots (bottom radius = 20%-100% of top radius) ──
+    slot_taper: BoolProperty(
+        name=_t("Tapered"), default=False,
+        description=_t("Make the round slot conical (bottom radius smaller than top)"))
+    slot_bottom_ratio: FloatProperty(
+        name=_t("Bottom Ratio"), default=80.0, min=20.0, max=100.0, subtype='PERCENTAGE',
+        description=_t("Bottom radius as % of top radius (20%-100%, 100%=straight)"))
+    slot_pos_x: FloatProperty(name="X", default=0.0, precision=1,
+        update=lambda self, ctx: _move_cursor_to_slot_pos(self, ctx))
+    slot_pos_y: FloatProperty(name="Y", default=0.0, precision=1,
+        update=lambda self, ctx: _move_cursor_to_slot_pos(self, ctx))
+    slot_pos_z: FloatProperty(name="Z", default=0.0, precision=1,
+        update=lambda self, ctx: _move_cursor_to_slot_pos(self, ctx))
+
+    @classmethod
+    def poll(cls, context):
+        obj = context.active_object
+        return obj and obj.type == 'MESH' and obj.get('object_type') == 'parametric_shell'
+
+    def invoke(self, context, event):
+        obj = context.active_object
+        cursor = context.scene.cursor.location
+        if obj and obj.get('object_type') == 'parametric_shell':
+            self._invoke_obj_name = obj.name
+            cursor_local = obj.matrix_world.inverted() @ cursor
+            # Z from shell bottom (bottom Z from mesh bbox — handles both conventions)
+            bottom_z = _shell_local_bottom_z(obj)
+            self.slot_pos_x = round(cursor_local.x * 1000, 1)
+            self.slot_pos_y = round(cursor_local.y * 1000, 1)
+            self.slot_pos_z = round((cursor_local.z - bottom_z) * 1000, 1)
+            # Default depth: 50% of wall thickness or 1mm, whichever is smaller
+            t = obj.get('wall_thickness', 2.0)
+            self.slot_depth = round(min(t * 0.5, 1.0), 2)
+        else:
+            self.slot_pos_x = cursor.x * 1000
+            self.slot_pos_y = cursor.y * 1000
+            self.slot_pos_z = cursor.z * 1000
+        return context.window_manager.invoke_props_dialog(self, width=340)
+
+    def draw(self, context):
+        layout = self.layout
+        obj = context.active_object
+
+        if not hasattr(self, 'slot_pos_x') or layout is None:
+            return
+
+        # ── Shell info ──
+        if obj and obj.get('object_type') == 'parametric_shell':
+            w = obj.get('width', 100.0)
+            d = obj.get('depth', 80.0)
+            h = obj.get('height', 50.0)
+            t = obj.get('wall_thickness', 2.0)
+            S = 0.001 if obj.get('unit', 'mm') == 'mm' else 1.0
+            ws, ds, hs = w * S, d * S, h * S
+            px = self.slot_pos_x * 0.001
+            py = self.slot_pos_y * 0.001
+            pz = self.slot_pos_z * 0.001
+
+            dist_right = abs(px - ws / 2)
+            dist_left = abs(px + ws / 2)
+            dist_front = abs(py - ds / 2)
+            dist_back = abs(py + ds / 2)
+            dist_bottom = abs(pz)
+            dist_top = abs(pz - hs)
+            min_wall = min(dist_right, dist_left, dist_front, dist_back, dist_bottom, dist_top)
+
+            box = layout.box()
+            box.label(text=_t("Position (X/Y from center, Z from bottom) mm"), icon='ORIENTATION_LOCAL')
+            row = box.row(align=True)
+            row.prop(self, 'slot_pos_x')
+            row.prop(self, 'slot_pos_y')
+            row.prop(self, 'slot_pos_z')
+            wall_names = {
+                min_wall == dist_right: _t("Right wall (+X)"),
+                min_wall == dist_left: _t("Left wall (-X)"),
+                min_wall == dist_front: _t("Back wall (+Y)"),
+                min_wall == dist_back: _t("Front wall (-Y)"),
+                min_wall == dist_bottom: _t("Bottom face"),
+                min_wall == dist_top: _t("Top rim (may be open)"),
+            }
+            wall_name = wall_names.get(True, _t("Unknown"))
+            box.label(text=_t("Nearest: {name}").format(name=wall_name))
+            box.label(text=_t("Wall thickness={t:.1f}mm (max depth={md:.1f}mm)").format(t=t, md=t * 0.8))
+
+        # ── Slot config ──
+        layout.separator()
+        layout.prop(self, 'slot_type')
+        layout.prop(self, 'slot_side')
+        if self.slot_type == 'round':
+            layout.prop(self, 'slot_radius')
+            layout.label(text=_t("  → Circular slot, Ø={d:.1f}mm").format(d=self.slot_radius * 2))
+        else:
+            layout.prop(self, 'slot_width')
+            layout.prop(self, 'slot_height')
+            layout.prop(self, 'slot_cr')
+            layout.label(text=_t("  → RRect slot {w:.1f}×{h:.1f}mm cr={cr:.1f}").format(w=self.slot_width, h=self.slot_height, cr=self.slot_cr))
+        # Taper (supported by both round and rrect)
+        layout.prop(self, 'slot_taper')
+        if self.slot_taper:
+            layout.prop(self, 'slot_bottom_ratio')
+            if self.slot_type == 'round':
+                layout.label(text=_t("  → Tapered Ø{t:.1f}→Ø{b:.1f}mm").format(t=self.slot_radius * 2, b=self.slot_radius * 2 * self.slot_bottom_ratio / 100.0))
+            else:
+                br = self.slot_bottom_ratio / 100.0
+                layout.label(text=_t("  → Tapered {w:.1f}×{h:.1f}→{bw:.1f}×{bh:.1f}mm").format(
+                    w=self.slot_width, h=self.slot_height,
+                    bw=self.slot_width * br, bh=self.slot_height * br))
+        layout.prop(self, 'slot_depth')
+        layout.label(text=_t("  → Depth={d:.2f}mm (max {md:.1f}mm = 80% of wall)").format(d=self.slot_depth, md=obj.get('wall_thickness', 2.0) * 0.8 if obj else 1.6))
+        layout.separator()
+
+    def execute(self, context):
+        import math
+        px_r_mm = self.slot_pos_x
+        py_r_mm = self.slot_pos_y
+        pz_r_mm = self.slot_pos_z
+
+        obj = context.active_object
+        stored_name = getattr(self, '_invoke_obj_name', None)
+        if stored_name:
+            obj = bpy.data.objects.get(stored_name) or obj
+        if not obj or obj.get('object_type') != 'parametric_shell':
+            best_dist = float('inf')
+            for o in bpy.data.objects:
+                if o.get('object_type') != 'parametric_shell':
+                    continue
+                if o.hide_viewport or o.hide_get():
+                    continue
+                d = (o.location - context.scene.cursor.location).length
+                if d < best_dist:
+                    best_dist = d
+                    obj = o
+        if obj:
+            bpy.context.view_layer.update()
+            obj = bpy.data.objects.get(obj.name) or obj
+
+        if not obj or obj.get('object_type') != 'parametric_shell':
+            self.report({'ERROR'}, _t("Select a parametric shell first"))
+            return {'CANCELLED'}
+
+        w = obj.get('width', 100.0)
+        d = obj.get('depth', 80.0)
+        t = obj.get('wall_thickness', 2.0)
+        S = 0.001 if obj.get('unit', 'mm') == 'mm' else 1.0
+
+        # Validate depth: 0 < depth ≤ 80% of wall thickness
+        max_depth = t * 0.8
+        if self.slot_depth <= 0:
+            self.report({'ERROR'}, _t("Depth must be > 0"))
+            return {'CANCELLED'}
+        if self.slot_depth > max_depth + 0.001:
+            self.report({'ERROR'}, _t("Depth must be ≤ 80%% of wall thickness (%.1fmm)") % max_depth)
+            return {'CANCELLED'}
+
+        h = obj.get('height', 50.0) * S
+        px_r = px_r_mm * 0.001
+        py_r = py_r_mm * 0.001
+        pz_r = pz_r_mm * 0.001
+
+        hw, hd = w * S / 2, d * S / 2
+        thickness = t * S
+
+        # Auto-clamp Z and determine face_code
+        dist_walls = [abs(px_r - hw), abs(px_r + hw), abs(py_r - hd), abs(py_r + hd)]
+        dist_bottom = abs(pz_r)
+        dist_top = abs(pz_r - h)
+        all_dists = [dist_bottom, dist_top] + dist_walls
+        nearest = all_dists.index(min(all_dists))
+
+        # Determine wall + side. face_code: 0-5 = outer walls, 6-11 = inner walls.
+        is_inner = (self.slot_side == 'inner')
+        bt_mm = obj.get('bottom_thickness', t)  # bottom wall thickness (mm)
+        if nearest == 0:
+            # Bottom face
+            if is_inner:
+                pz_r = max(0.0, min(pz_r, bt_mm * S))
+            else:
+                pz_r = max(0.0, min(pz_r, thickness))
+            face_code = 0
+        elif nearest == 1:
+            # Top face
+            pz_r = max(h - thickness, min(pz_r, h))
+            face_code = 1
+        else:
+            pz_r = max(0.0, min(pz_r, h))
+            face_code = {2: 3, 3: 2, 4: 5, 5: 4}[nearest]
+        if is_inner:
+            face_code += 6
+
+        # Clamp slot dimensions to fit on the face (all values in mm, matching
+        # the user-facing slot_* fields — NOT the meter hw/hd/h below)
+        h_mm = obj.get('height', 50.0)
+        wall = face_code % 6
+        if wall in (0, 1):
+            # Bottom/Top face spans W×D → max radius limited by min(w,d)/2
+            max_r = min(w, d) / 2.0 - 0.1
+        elif wall in (2, 3):
+            # Left/Right walls span D×H → max radius limited by min(d,h)/2
+            max_r = min(d, h_mm) / 2.0 - 0.1
+        else:
+            # Front/Back walls span W×H → max radius limited by min(w,h)/2
+            max_r = min(w, h_mm) / 2.0 - 0.1
+        max_r = max(max_r, 0.5)
+
+        if self.slot_type == 'round':
+            if self.slot_radius > max_r:
+                self.slot_radius = max_r
+            # Tapered round slot: bottom radius = top * ratio (1.0 = straight)
+            br = (self.slot_bottom_ratio / 100.0) if self.slot_taper else 1.0
+            entry = f"{px_r/S:.3f},{py_r/S:.3f},{pz_r/S:.3f},{self.slot_radius:.3f},3,{self.slot_depth:.3f},{br:.3f},{face_code}"
+        else:
+            max_w = 2 * max_r
+            if self.slot_width > max_w:
+                self.slot_width = max(max_w, 1.0)
+            if self.slot_height > max_w:
+                self.slot_height = max(max_w, 1.0)
+            if self.slot_cr > self.slot_width / 2:
+                self.slot_cr = self.slot_width / 2 - 0.01
+            if self.slot_cr > self.slot_height / 2:
+                self.slot_cr = self.slot_height / 2 - 0.01
+            # Tapered rrect slot: floor is scaled by ratio (1.0 = straight)
+            br = (self.slot_bottom_ratio / 100.0) if self.slot_taper else 1.0
+            entry = f"{px_r/S:.3f},{py_r/S:.3f},{pz_r/S:.3f},{self.slot_width:.3f},4,{self.slot_height:.3f},{self.slot_cr:.3f},{self.slot_depth:.3f},{br:.3f},{face_code}"
+
+        set_operator(self)
+        start_progress(context, _t("Adding slot..."))
+        try:
+            existing = obj.get('slot_data', '')
+            new_sd = (existing + ';' + entry) if existing else entry
+            obj['slot_data'] = new_sd
+            update_progress(50, _t("Cutting slot..."))
+            _rebuild_stage_create(obj)
+            update_progress(100, _t("Done"))
+            self.report({'INFO'}, _t("Slot added at cursor position"))
+        finally:
+            end_progress(context)
+            clear_operator()
+        return {'FINISHED'}
+
+
+class STEP_EXPORTER_OT_remove_shell_slot(Operator):
+    """Remove a slot from the parametric shell"""
+    bl_idname = "step_exporter.remove_shell_slot"
+    bl_label = _t("Remove Slot")
+    bl_options = {'REGISTER', 'UNDO'}
+
+    slot_index: bpy.props.IntProperty(default=-1)
+
+    @classmethod
+    def poll(cls, context):
+        obj = context.active_object
+        return obj and obj.get('object_type') == 'parametric_shell' and obj.get('slot_data', '')
+
+    def execute(self, context):
+        obj = context.active_object
+        if self.slot_index < 0:
+            return {'CANCELLED'}
+        slots = _parse_slot_list(obj)
+        if self.slot_index >= len(slots):
+            return {'CANCELLED'}
+        entry_to_remove = slots[self.slot_index][0]
+        sd = obj.get('slot_data', '')
+        entries = [e.strip() for e in sd.split(';') if e.strip()]
+        entries = [e for e in entries if e != entry_to_remove]
+        obj['slot_data'] = ';'.join(entries)
+        set_operator(self)
+        start_progress(context, _t("Removing slot..."))
+        try:
+            _rebuild_stage_create(obj)
+            update_progress(100, _t("Done"))
+            self.report({'INFO'}, _t("Slot removed"))
+        finally:
+            end_progress(context)
+            clear_operator()
+        return {'FINISHED'}
+
+
+class STEP_EXPORTER_OT_clear_shell_slots(Operator):
+    """Remove all slots from the parametric shell"""
+    bl_idname = "step_exporter.clear_shell_slots"
+    bl_label = _t("Clear All Slots")
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        obj = context.active_object
+        return obj and obj.get('object_type') == 'parametric_shell' and obj.get('slot_data', '')
+
+    def execute(self, context):
+        obj = context.active_object
+        obj['slot_data'] = ''
+        set_operator(self)
+        start_progress(context, _t("Clearing slots..."))
+        _rebuild_stage_create(obj)
+        update_progress(100, _t("Done"))
+        end_progress(context)
+        clear_operator()
+        self.report({'INFO'}, _t("All slots cleared"))
+        return {'FINISHED'}
+
+
+def _move_cursor_to_edit_slot_pos(op, context):
+    """Move 3D cursor to world coords matching shell-local edit_sx/sy/sz (mm)."""
+    obj = context.active_object
+    if not obj or obj.get('object_type') != 'parametric_shell':
+        return
+    bottom_z = _shell_local_bottom_z(obj)
+    local = mathutils.Vector((
+        op.edit_sx * 0.001,
+        op.edit_sy * 0.001,
+        op.edit_sz * 0.001 + bottom_z
+    ))
+    world = obj.matrix_world @ local
+    context.scene.cursor.location = world
+
+
+class STEP_EXPORTER_OT_edit_shell_slot(Operator):
+    """Edit a slot on the parametric shell"""
+    bl_idname = "step_exporter.edit_shell_slot"
+    bl_label = _t("Edit Slot")
+    bl_options = {'UNDO'}
+
+    slot_index: bpy.props.IntProperty(default=-1)
+    edit_type: bpy.props.EnumProperty(name=_t("Type"), items=[('round', _t("Round"), ""), ('rrect', _t("Rounded Rect"), "")])
+    edit_sx: bpy.props.FloatProperty(name="X", default=0.0, precision=1,
+        update=lambda self, ctx: _move_cursor_to_edit_slot_pos(self, ctx))
+    edit_sy: bpy.props.FloatProperty(name="Y", default=0.0, precision=1,
+        update=lambda self, ctx: _move_cursor_to_edit_slot_pos(self, ctx))
+    edit_sz: bpy.props.FloatProperty(name="Z", default=0.0, precision=1,
+        update=lambda self, ctx: _move_cursor_to_edit_slot_pos(self, ctx))
+    edit_radius: bpy.props.FloatProperty(name=_t("Radius"), default=5.0, min=0.1, max=500.0)
+    edit_width: bpy.props.FloatProperty(name=_t("Width"), default=10.0, min=0.1, max=500.0)
+    edit_height: bpy.props.FloatProperty(name=_t("Height"), default=8.0, min=0.1, max=500.0)
+    edit_cr: bpy.props.FloatProperty(name=_t("Corner R"), default=2.0, min=0.0, max=500.0)
+    edit_depth: bpy.props.FloatProperty(name=_t("Depth"), default=1.0, min=0.01, max=100.0, step=0.1, precision=2)
+    edit_taper: bpy.props.BoolProperty(name=_t("Tapered"), default=False)
+    edit_bottom_ratio: bpy.props.FloatProperty(name=_t("Bottom Ratio"), default=80.0, min=20.0, max=100.0, subtype='PERCENTAGE')
+
+    @classmethod
+    def poll(cls, context):
+        obj = context.active_object
+        return obj and obj.get('object_type') == 'parametric_shell' and obj.get('slot_data', '')
+
+    def invoke(self, context, event):
+        obj = context.active_object
+        slots = _parse_slot_list(obj)
+        if self.slot_index < 0 or self.slot_index >= len(slots):
+            return {'CANCELLED'}
+        entry = slots[self.slot_index][0]
+        parts = entry.split(',')
+        try:
+            self.edit_sx = float(parts[0])
+            self.edit_sy = float(parts[1])
+            self.edit_sz = float(parts[2])
+            self._slot_face = int(float(parts[-1])) if len(parts) >= 7 else -1
+            tc = int(float(parts[4]))
+            if tc == 3:
+                self.edit_type = 'round'
+                self.edit_radius = float(parts[3])
+                self.edit_depth = float(parts[5]) if len(parts) >= 7 else 1.0
+                self.edit_bottom_ratio = float(parts[6]) * 100.0 if len(parts) >= 8 else 100.0
+                self.edit_taper = self.edit_bottom_ratio < 99.9
+            elif tc == 4 and len(parts) >= 8:
+                self.edit_type = 'rrect'
+                self.edit_width = float(parts[3])
+                self.edit_height = float(parts[5])
+                self.edit_cr = float(parts[6])
+                self.edit_depth = float(parts[7]) if len(parts) >= 9 else 1.0
+                self.edit_bottom_ratio = float(parts[8]) * 100.0 if len(parts) >= 10 else 100.0
+                self.edit_taper = self.edit_bottom_ratio < 99.9
+        except (ValueError, IndexError):
+            pass
+        return context.window_manager.invoke_props_dialog(self, width=300)
+
+    def draw(self, context):
+        layout = self.layout
+        face_names = {0: _t("Bottom"), 1: _t("Top"), 2: _t("Left"), 3: _t("Right"), 4: _t("Front"), 5: _t("Back"),
+                      6: _t("Bottom (inner)"), 7: _t("Top (inner)"), 8: _t("Left (inner)"), 9: _t("Right (inner)"),
+                      10: _t("Front (inner)"), 11: _t("Back (inner)")}
+        fn = face_names.get(getattr(self, '_slot_face', -1), '')
+        box = layout.box()
+        box.label(text=_t("Position: {face}").format(face=fn))
+        row = box.row(align=True)
+        row.prop(self, 'edit_sx')
+        row.prop(self, 'edit_sy')
+        row.prop(self, 'edit_sz')
+        layout.separator()
+        layout.prop(self, 'edit_type')
+        if self.edit_type == 'round':
+            layout.prop(self, 'edit_radius')
+        else:
+            layout.prop(self, 'edit_width')
+            layout.prop(self, 'edit_height')
+            layout.prop(self, 'edit_cr')
+        # Taper (both round and rrect)
+        layout.prop(self, 'edit_taper')
+        if self.edit_taper:
+            layout.prop(self, 'edit_bottom_ratio')
+        layout.prop(self, 'edit_depth')
+
+    def execute(self, context):
+        obj = context.active_object
+        t = obj.get('wall_thickness', 2.0)
+        max_depth = t * 0.8 + 0.001
+        if self.edit_depth <= 0:
+            self.report({'ERROR'}, _t("Depth must be > 0"))
+            return {'CANCELLED'}
+        if self.edit_depth > max_depth:
+            self.report({'ERROR'}, _t("Depth must be ≤ 80%% of wall thickness (%.1fmm)") % (t * 0.8))
+            return {'CANCELLED'}
+        slots = _parse_slot_list(obj)
+        if self.slot_index < 0 or self.slot_index >= len(slots):
+            return {'CANCELLED'}
+        old_entry = slots[self.slot_index][0]
+        old_parts = old_entry.split(',')
+        old_face = old_parts[-1]
+        if self.edit_type == 'round':
+            br = (self.edit_bottom_ratio / 100.0) if self.edit_taper else 1.0
+            new_entry = f"{self.edit_sx:.3f},{self.edit_sy:.3f},{self.edit_sz:.3f},{self.edit_radius:.3f},3,{self.edit_depth:.3f},{br:.3f},{old_face}"
+        else:
+            br = (self.edit_bottom_ratio / 100.0) if self.edit_taper else 1.0
+            new_entry = f"{self.edit_sx:.3f},{self.edit_sy:.3f},{self.edit_sz:.3f},{self.edit_width:.3f},4,{self.edit_height:.3f},{self.edit_cr:.3f},{self.edit_depth:.3f},{br:.3f},{old_face}"
+
+        sd = obj.get('slot_data', '')
+        entries = [e.strip() for e in sd.split(';') if e.strip()]
+        entries = [new_entry if e == old_entry else e for e in entries]
+        obj['slot_data'] = ';'.join(entries)
+        set_operator(self)
+        start_progress(context, _t("Updating slot..."))
+        try:
+            _rebuild_stage_create(obj)
+            update_progress(100, _t("Done"))
+            self.report({'INFO'}, _t("Slot updated"))
+        finally:
+            end_progress(context)
+            clear_operator()
+        return {'FINISHED'}
+
+
+class STEP_EXPORTER_PT_shell_slots(bpy.types.Panel):
+    """Panel for managing shell slots (partial-depth grooves)"""
+    bl_label = _t("Shell Slots")
+    bl_idname = "STEP_EXPORTER_PT_shell_slots"
+    bl_parent_id = "STEP_EXPORTER_PT_main_panel"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = "STEP Export"
+    bl_order = 2
+    bl_options = {'DEFAULT_CLOSED'}
+
+    @classmethod
+    def poll(cls, context):
+        obj = context.active_object
+        return obj and obj.get('object_type') == 'parametric_shell'
+
+    def draw(self, context):
+        layout = self.layout
+        obj = context.active_object
+        slots = _parse_slot_list(obj)
+
+        if not slots:
+            layout.label(text=_t("No slots"), icon='DOT')
+            return
+
+        layout.label(text=_t("{n} slot(s)").format(n=len(slots)))
+        box = layout.box()
+        for i, (entry, desc) in enumerate(slots):
+            row = box.row(align=True)
+            row.label(text=f"[{i + 1}] {desc}")
+            op = row.operator("step_exporter.edit_shell_slot", text="", icon='GREASEPENCIL')
+            op.slot_index = i
+            op = row.operator("step_exporter.remove_shell_slot", text="", icon='X')
+            op.slot_index = i
+
+        layout.separator()
+        layout.operator("step_exporter.clear_shell_slots", text=_t("Clear All Slots"), icon='TRASH')
 
 

@@ -10,6 +10,7 @@
 #include <BRepBuilderAPI_MakeVertex.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
 #include <BRepPrimAPI_MakeCylinder.hxx>
+#include <BRepPrimAPI_MakeCone.hxx>
 #include <BRepPrimAPI_MakeTorus.hxx>
 #include <BRepPrimAPI_MakeRevol.hxx>
 #include <BRepPrimAPI_MakePrism.hxx>
@@ -3344,6 +3345,14 @@ static TopoDS_Shape make_rrect_cutter_box(double bx, double by, double bz,
                                           double sx, double sy, double sz,
                                           double rcr, int edge_axis);
 
+// Helper: cut partial-depth slots (round/rrect grooves) into a shape.
+// bottom_thickness is the bottom wall thickness (needed for inner-bottom slots).
+static TopoDS_Shape cut_slots_into_shape(TopoDS_Shape shape,
+                                         double width, double depth, double height,
+                                         double thickness, double bottom_thickness,
+                                         double curve_ratio, double curve_ratio_y,
+                                         const char* slot_data);
+
 PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
     const char* filename; const char* corner_type = "square"; const char* step_schema = "AP214IS";
     const char* unit = "MILLIMETER"; int enable_logging = 1;
@@ -3358,8 +3367,9 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
     double bottom_thickness = 0.0;
     const char* window_data = "";
     double rot_x = 0.0, rot_y = 0.0, rot_z = 0.0;
+    const char* slot_data = "";
 
-    if (!PyArg_ParseTuple(args, "sdddd|ddsdddsddssisddddsdddd",
+    if (!PyArg_ParseTuple(args, "sdddd|ddsdddsddssisddddsdddds",
                           &filename, &width, &depth, &height, &thickness,
                           &bottom_thickness, &corner_radius, &corner_type,
                           &pos_x, &pos_y, &pos_z,
@@ -3367,10 +3377,11 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                           &step_schema, &unit, &enable_logging,
                           &rim_shape, &rim_top_ratio,
                           &bottom_fillet, &curve_ratio, &eccentric_y, &window_data,
-                          &rot_x, &rot_y, &rot_z, &curve_ratio_y)) {
+                          &rot_x, &rot_y, &rot_z, &curve_ratio_y,
+                          &slot_data)) {
         PyErr_SetString(PyExc_TypeError,
             "export_parametric_shell_step() expected: filename, width, depth, height, thickness"
-            "[, bottom_thickness, corner_radius, corner_type, pos_x, pos_y, pos_z, rim_type, rim_width, rim_height, step_schema, unit, enable_logging, rim_shape, rim_top_ratio, bottom_fillet, curve_ratio, eccentric_y, window_data, rot_x, rot_y, rot_z, curve_ratio_y]");
+            "[, bottom_thickness, corner_radius, corner_type, pos_x, pos_y, pos_z, rim_type, rim_width, rim_height, step_schema, unit, enable_logging, rim_shape, rim_top_ratio, bottom_fillet, curve_ratio, eccentric_y, window_data, rot_x, rot_y, rot_z, curve_ratio_y, slot_data]");
         return NULL;
     }
     if (curve_ratio_y < 0.0) curve_ratio_y = curve_ratio;  // backward compat: single-ratio callers
@@ -3658,6 +3669,14 @@ PyObject* export_parametric_shell_step(PyObject* self, PyObject* args) {
                 // Blender preview path) so STEP export and preview match exactly.
                 shape = apply_hole_fillets(resultSolid, holeFillets, width, depth, height, thickness);
             }
+        }
+
+        // Apply slot cutters from slot_data in SHELL-LOCAL mm (partial depth)
+        if (slot_data && slot_data[0] != '\0') {
+            std::cout << "[STEP Exporter] Slot cutting: slot_data='" << slot_data << "'" << std::endl;
+            shape = cut_slots_into_shape(shape, width, depth, height, thickness,
+                                         bottom_thickness,
+                                         curve_ratio, curve_ratio_y, slot_data);
         }
 
         // Translate shell with holes to world position AFTER cutting.
@@ -4051,6 +4070,296 @@ static TopoDS_Shape cut_holes_into_shape(TopoDS_Shape shape,
     return result;
 }
 
+// Helper: cut partial-depth slots (round/rrect grooves) into a shape using slot_data.
+// Slots are like holes but only go partway into the wall (depth ≤ 80% thickness).
+// Format: "cx,cy,cz,radius,3,depth,face_code" (round) or
+//         "cx,cy,cz,w,4,h,cr,depth,face_code" (rrect)
+
+// Geometry of a shell wall for slot cutting.
+// wall 0-5 = bottom/top/left/right/front/back; fc>=6 means the INNER surface.
+// into = unit vector pointing from the OUTER surface into the shell interior.
+// Returns the wall axis index (0=X,1=Y,2=Z), the outer/inner surface coordinate
+// along that axis, and the into-direction components.
+static void slot_wall_geom(int fc, double width, double depth, double height,
+                           double thickness, double bottom_thickness,
+                           int& axis, double& outer_pos, double& inner_pos,
+                           double& inx, double& iny, double& inz) {
+    int wall = fc % 6;
+    double off = (wall == 0) ? bottom_thickness : thickness;
+    switch (wall) {
+        case 0: axis=2; outer_pos=0.0;      inx=0; iny=0; inz= 1; break;
+        case 1: axis=2; outer_pos=height;   inx=0; iny=0; inz=-1; break;
+        case 2: axis=0; outer_pos=-width/2; inx= 1; iny=0; inz=0; break;
+        case 3: axis=0; outer_pos= width/2; inx=-1; iny=0; inz=0; break;
+        case 4: axis=1; outer_pos=-depth/2; inx=0; iny= 1; inz=0; break;
+        default:axis=1; outer_pos= depth/2; inx=0; iny=-1; inz=0; break;
+    }
+    inner_pos = outer_pos + off * (inx + iny + inz);
+}
+
+// Build a tapered rounded-rect cutter: a loft between a larger opening rrect
+// (cross-section exactly rw×rh at the wall surface) and a smaller floor rrect
+// (rw*ratio × rh*ratio at the floor). Same opening-size compensation as the
+// tapered round cone slot: the outer end is scaled up so the cross-section at
+// the wall equals the requested size. fc 0-5 outer / 6-11 inner walls.
+static TopoDS_Shape make_tapered_rrect_cutter(
+    double cx, double cy, double cz,
+    double rw, double rh, double rcr,
+    double depth, double ratio, int fc,
+    double wall_w, double wall_d, double wall_h,
+    double thickness, double bottom_thickness, double margin) {
+    double hw = wall_w / 2.0, hd = wall_d / 2.0;
+
+    // Local frame: u = width axis, v = height axis, w = inward wall axis
+    // (into the wall from the cut surface), origin = wall-surface center.
+    int wall = fc % 6;
+    bool inner = (fc >= 6);
+    double off = (wall == 0) ? bottom_thickness : thickness;
+    double ux, uy, uz, vx, vy, vz, wx, wy, wz, ox, oy, oz;
+    if (wall == 0 || wall == 1) {
+        ux=1; uy=0; uz=0; vx=0; vy=1; vz=0; wx=0; wy=0; wz=(wall==0?1.0:-1.0);
+        ox=cx; oy=cy;
+        oz = inner ? (wall==0 ? off : wall_h - off) : (wall==0 ? 0.0 : wall_h);
+    } else if (wall == 2 || wall == 3) {
+        ux=0; uy=1; uz=0; vx=0; vy=0; vz=1; wx=(wall==2?1.0:-1.0); wy=0; wz=0;
+        ox = inner ? ((wall==2?-hw:hw) + (wall==2?off:-off)) : (wall==2?-hw:hw);
+        oy=cy; oz=cz;
+    } else { // wall 4,5
+        ux=1; uy=0; uz=0; vx=0; vy=0; vz=1; wx=0; wy=(wall==4?1.0:-1.0); wz=0;
+        ox=cx; oz=cz;
+        oy = inner ? ((wall==4?-hd:hd) + (wall==4?off:-off)) : (wall==4?-hd:hd);
+    }
+    if (inner) { wx=-wx; wy=-wy; wz=-wz; }  // into-wall direction flips for inner
+
+    // Scale at the outer end (w=-margin) so the cross-section at the wall (w=0)
+    // is exactly rw×rh. f = fraction of the loft that is outside the wall.
+    double f = margin / (depth + margin);
+    double s0 = (1.0 - ratio * f) / (1.0 - f);
+    if (s0 < 1.0) s0 = 1.0;
+    if (s0 > 2.0) s0 = 2.0;  // safety cap for tiny depth
+    double open_w = rw * s0, open_h = rh * s0, open_cr = rcr * s0;
+
+    TopoDS_Wire openWire = create_rounded_rect_wire(open_w, open_h, open_cr, -margin, 0.0);
+    TopoDS_Wire floorWire = create_rounded_rect_wire(rw * ratio, rh * ratio, rcr * ratio, depth, 0.0);
+    if (openWire.IsNull() || floorWire.IsNull()) return TopoDS_Shape();
+
+    // Transform wire-local (X=u,Y=v,Z=w) → world. fromAxis = standard frame.
+    gp_Ax2 fromAxis(gp_Pnt(0, 0, 0), gp::DZ(), gp::DX());
+    gp_Ax2 toAxis(gp_Pnt(ox, oy, oz), gp_Dir(wx, wy, wz), gp_Dir(ux, uy, uz));
+    gp_Trsf tr;
+    tr.SetTransformation(toAxis, fromAxis);
+    openWire = TopoDS::Wire(BRepBuilderAPI_Transform(openWire, tr).Shape());
+    floorWire = TopoDS::Wire(BRepBuilderAPI_Transform(floorWire, tr).Shape());
+
+    // Loft into a solid
+    BRepOffsetAPI_ThruSections loft(true, false, 1e-6);
+    loft.AddWire(openWire);
+    loft.AddWire(floorWire);
+    loft.Build();
+    if (!loft.IsDone()) return TopoDS_Shape();
+    TopoDS_Shape s = loft.Shape();
+    if (s.IsNull()) return TopoDS_Shape();
+    TopoDS_Solid sol;
+    for (TopExp_Explorer ex(s, TopAbs_SOLID); ex.More(); ex.Next()) { sol = TopoDS::Solid(ex.Current()); break; }
+    if (!sol.IsNull()) return sol;
+    BRepBuilderAPI_MakeSolid ms;
+    bool added = false;
+    for (TopExp_Explorer shex(s, TopAbs_SHELL); shex.More(); shex.Next()) { ms.Add(TopoDS::Shell(shex.Current())); added = true; }
+    if (added && ms.IsDone()) return ms.Solid();
+    return TopoDS_Shape();
+}
+
+static TopoDS_Shape cut_slots_into_shape(TopoDS_Shape shape,
+                                         double width, double depth, double height,
+                                         double thickness, double bottom_thickness,
+                                         double curve_ratio, double curve_ratio_y,
+                                         const char* slot_data) {
+    if (!slot_data || slot_data[0] == '\0')
+        return shape;
+    std::string sd(slot_data);
+    std::vector<TopoDS_Shape> cutters;
+    std::string::size_type start = 0;
+
+    while (true) {
+        std::string::size_type next = sd.find(';', start);
+        std::string entry = sd.substr(start, (next == std::string::npos) ? std::string::npos : next - start);
+        if (entry.size() > 0) {
+            std::vector<double> fields;
+            std::string::size_type p0 = 0;
+            while (true) {
+                std::string::size_type p1 = entry.find(',', p0);
+                std::string tok = entry.substr(p0, (p1 == std::string::npos) ? std::string::npos : p1 - p0);
+                if (tok.size() > 0) fields.push_back(atof(tok.c_str()));
+                if (p1 == std::string::npos) break;
+                p0 = p1 + 1;
+            }
+            if (fields.size() < 5) { if (next == std::string::npos) break; start = next + 1; continue; }
+            double cx = fields[0], cy = fields[1], cz = fields[2];
+            double r_or_w = fields[3], type_code = fields[4];
+            double face_code = fields.back();
+            int fc = (int)face_code;
+
+            // Type 3: round slot
+            if (fabs(type_code - 3.0) < 1e-6 && fields.size() >= 7) {
+                double slot_r = r_or_w;
+                double slot_d = fields[5];  // depth in mm
+                // Cap depth to 80% of wall thickness
+                if (slot_d > thickness * 0.8) slot_d = thickness * 0.8;
+                if (slot_d <= 0.001) { if (next == std::string::npos) break; start = next + 1; continue; }
+                // Bottom radius ratio (0.2-1.0). Old 7-field entries default to 1.0 (straight).
+                double bottom_ratio = (fields.size() >= 8) ? fields[6] : 1.0;
+                if (bottom_ratio < 0.2) bottom_ratio = 0.2;
+                if (bottom_ratio > 1.0) bottom_ratio = 1.0;
+
+                double half_w = width / 2.0, half_d = depth / 2.0;
+                // Cutter: protrudes by a margin from the cut surface and cuts
+                // into the wall by slot_d. For a tapered slot the cone R1 (outer
+                // end) is extended so the radius AT the wall surface is exactly
+                // slot_r, and R2 (floor) is slot_r*bottom_ratio.
+                double margin = 2.0;  // small protrusion beyond the wall surface
+                double H = slot_d + margin;
+                double slope = (1.0 - bottom_ratio) > 1e-6 ? slot_r * (1.0 - bottom_ratio) / slot_d : 0.0;
+                double R1 = slot_r + slope * margin;
+                double R2 = slot_r * bottom_ratio;
+                bool tapered = bottom_ratio < 0.999;
+                bool inner = (fc >= 6);
+                // Wall geometry: axis, outer/inner surface coord, into direction.
+                int axis; double outer_pos, inner_pos, ix, iy, iz;
+                slot_wall_geom(fc, width, depth, height, thickness, bottom_thickness,
+                               axis, outer_pos, inner_pos, ix, iy, iz);
+                double comp = ix + iy + iz;  // ±1 into-direction along the wall axis
+                // Cutter start coordinate along the wall axis:
+                //   outer: protrude OUTSIDE the shell (-comp*margin)
+                //   inner: protrude INTO the hollow (+comp*margin)
+                double start_coord = inner ? (inner_pos + comp * margin)
+                                           : (outer_pos - comp * margin);
+                double dcomp = inner ? -comp : comp;  // cut direction into the wall
+                double tx, ty, tz, dx = 0, dy = 0, dz = 0;
+                if (axis == 0) { tx = start_coord; ty = cy; tz = cz; dx = dcomp; }
+                else if (axis == 1) { tx = cx; ty = start_coord; tz = cz; dy = dcomp; }
+                else { tx = cx; ty = cy; tz = start_coord; dz = dcomp; }
+                gp_Ax2 ax(gp_Pnt(tx, ty, tz), gp_Dir(dx, dy, dz));
+                TopoDS_Shape cutter;
+                if (tapered) {
+                    BRepPrimAPI_MakeCone cone(ax, R1, R2, H);
+                    cutter = cone.Shape();
+                } else {
+                    BRepPrimAPI_MakeCylinder cyl(ax, slot_r, H);
+                    cutter = cyl.Shape();
+                }
+                if (!cutter.IsNull()) {
+                    cutters.push_back(cutter);
+                    std::cout << "[STEP Exporter] Slot cutter: round r=" << slot_r
+                              << " depth=" << slot_d
+                              << (tapered ? " tapered R1=" : " r=")
+                              << R1 << "->" << R2
+                              << (inner ? " (inner)" : "")
+                              << " at (" << cx << "," << cy << "," << cz
+                              << ") face=" << fc << std::endl;
+                }
+            }
+            // Type 4: rounded rect slot
+            else if (fabs(type_code - 4.0) < 1e-6 && fields.size() >= 9) {
+                double rw = r_or_w, rh = fields[5], rcr = fields[6];
+                double slot_d = fields[7];  // depth in mm
+                // Bottom ratio (0.2-1.0). Old 9-field entries default to 1.0 (straight).
+                double bottom_ratio = (fields.size() >= 10) ? fields[8] : 1.0;
+                if (bottom_ratio < 0.2) bottom_ratio = 0.2;
+                if (bottom_ratio > 1.0) bottom_ratio = 1.0;
+                if (rcr <= 0) rcr = 0.5;
+                if (slot_d > thickness * 0.8) slot_d = thickness * 0.8;
+                if (slot_d <= 0.001) { if (next == std::string::npos) break; start = next + 1; continue; }
+
+                double half_w = width / 2.0, half_d = depth / 2.0;
+                double margin = 2.0;
+
+                // Tapered rrect: lofted cutter (opening rw×rh → floor rw*r×rh*r)
+                if (bottom_ratio < 0.999) {
+                    TopoDS_Shape taper = make_tapered_rrect_cutter(
+                        cx, cy, cz, rw, rh, rcr, slot_d, bottom_ratio, fc,
+                        width, depth, height, thickness, bottom_thickness, margin);
+                    if (!taper.IsNull()) {
+                        cutters.push_back(taper);
+                        std::cout << "[STEP Exporter] Slot cutter: rrect " << rw << "x" << rh
+                                  << " cr=" << rcr << " depth=" << slot_d
+                                  << " tapered->" << (rw * bottom_ratio) << "x" << (rh * bottom_ratio)
+                                  << (fc >= 6 ? " (inner)" : "")
+                                  << " at (" << cx << "," << cy << "," << cz << ") face=" << fc << std::endl;
+                    }
+                    if (next == std::string::npos) break;
+                    start = next + 1;
+                    continue;
+                }
+
+                // Straight rrect box cutter. Wall geometry via slot_wall_geom
+                // handles outer (fc 0-5) and inner (fc 6-11) walls.
+                int axis; double outer_pos, inner_pos, ix, iy, iz;
+                slot_wall_geom(fc, width, depth, height, thickness, bottom_thickness,
+                               axis, outer_pos, inner_pos, ix, iy, iz);
+                bool inner = (fc >= 6);
+                double comp = ix + iy + iz;
+                double start_coord = inner ? (inner_pos + comp * margin)
+                                           : (outer_pos - comp * margin);
+                double dcomp = inner ? -comp : comp;
+                double bx, by, bz, sx, sy, sz;
+                int edge_axis;
+                if (axis == 2) {
+                    // Bottom/Top: rrect in XY, extrude along Z
+                    bx = cx - rw / 2.0; by = cy - rh / 2.0;
+                    bz = (dcomp > 0) ? start_coord : start_coord - (slot_d + margin);
+                    sx = rw; sy = rh; sz = slot_d + margin;
+                    edge_axis = 2;
+                } else if (axis == 0) {
+                    // Left/Right: rrect in YZ, extrude along X
+                    bx = (dcomp > 0) ? start_coord : start_coord - (slot_d + margin);
+                    by = cy - rw / 2.0; bz = cz - rh / 2.0;
+                    sx = slot_d + margin; sy = rw; sz = rh;
+                    edge_axis = 0;
+                } else {
+                    // Front/Back: rrect in XZ, extrude along Y
+                    bx = cx - rw / 2.0; by = (dcomp > 0) ? start_coord : start_coord - (slot_d + margin);
+                    bz = cz - rh / 2.0;
+                    sx = rw; sy = slot_d + margin; sz = rh;
+                    edge_axis = 1;
+                }
+                TopoDS_Shape rbox = make_rrect_cutter_box(bx, by, bz, sx, sy, sz, rcr, edge_axis);
+                if (!rbox.IsNull()) {
+                    cutters.push_back(rbox);
+                    std::cout << "[STEP Exporter] Slot cutter: rrect " << rw << "x" << rh
+                              << " cr=" << rcr << " depth=" << slot_d
+                              << (inner ? " (inner)" : "")
+                              << " at (" << cx << "," << cy << "," << cz << ") face=" << fc << std::endl;
+                }
+            }
+        }
+        if (next == std::string::npos) break;
+        start = next + 1;
+    }
+
+    if (cutters.empty()) return shape;
+    TopoDS_Shape result = shape;
+    int beforeFaces = 0;
+    for (TopExp_Explorer e(shape, TopAbs_FACE); e.More(); e.Next()) beforeFaces++;
+    for (size_t ci = 0; ci < cutters.size(); ci++) {
+        BRepAlgoAPI_Cut cutOp(result, cutters[ci]);
+        if (cutOp.IsDone() && !cutOp.Shape().IsNull()) {
+            int solids = 0;
+            for (TopExp_Explorer sex(cutOp.Shape(), TopAbs_SOLID); sex.More(); sex.Next()) solids++;
+            if (solids > 0)
+                result = cutOp.Shape();
+            else
+                std::cout << "[STEP Exporter]   slot cutter " << ci << " produced no solids, skipped" << std::endl;
+        } else {
+            std::cout << "[STEP Exporter]   slot cutter " << ci << " cut FAILED (IsDone="
+                      << (cutOp.IsDone() ? "true" : "false") << ")" << std::endl;
+        }
+    }
+    int afterFaces = 0;
+    for (TopExp_Explorer e(result, TopAbs_FACE); e.More(); e.Next()) afterFaces++;
+    std::cout << "[STEP Exporter] Slot cutting: faces " << beforeFaces << " -> " << afterFaces << std::endl;
+    return result;
+}
+
 // ====================== 公共：OCCT 实体 → 三角网格 dict ======================
 // 供预览网格生成使用（generate_parametric_shell_mesh / generate_cylinder_mesh）。
 // 三角化 + 按位置去重，返回 {'vertices': [(x,y,z),...], 'triangles': [(i,j,k),...]}。
@@ -4155,18 +4464,20 @@ PyObject* generate_parametric_shell_mesh(PyObject* self, PyObject* args) {
     double eccentric_y = 0.0;
     const char* window_data = "";
     int cosine_layers = 64;
+    const char* slot_data = "";
 
-    if (!PyArg_ParseTuple(args, "ddddd|sdsddsddddsid",
+    if (!PyArg_ParseTuple(args, "ddddd|sdsddsddddsids",
                           &width, &depth, &height, &thickness, &bottom_thickness,
                           &corner_type, &corner_radius,
                           &rim_type, &rim_width, &rim_height,
                           &rim_shape, &rim_top_ratio,
                           &bottom_fillet, &curve_ratio, &eccentric_y,
-                          &window_data, &cosine_layers, &curve_ratio_y)) {
+                          &window_data, &cosine_layers, &curve_ratio_y,
+                          &slot_data)) {
         PyErr_SetString(PyExc_TypeError,
             "generate_parametric_shell_mesh() expected: width, depth, height, thickness, bottom_thickness"
             "[, corner_type, corner_radius, rim_type, rim_width, rim_height, rim_shape, rim_top_ratio,"
-            " bottom_fillet, curve_ratio, eccentric_y, window_data, cosine_layers, curve_ratio_y]");
+            " bottom_fillet, curve_ratio, eccentric_y, window_data, cosine_layers, curve_ratio_y, slot_data]");
         return NULL;
     }
     if (curve_ratio_y < 0.0) curve_ratio_y = curve_ratio;  // backward compat: single-ratio callers
@@ -4191,6 +4502,21 @@ PyObject* generate_parametric_shell_mesh(PyObject* self, PyObject* args) {
             Py_RETURN_NONE;
         }
 
+        // Cut slots (partial-depth grooves)
+        shape = cut_slots_into_shape(shape, width, depth, height, thickness,
+                                     bottom_thickness,
+                                     curve_ratio, curve_ratio_y, slot_data);
+        if (shape.IsNull()) {
+            Py_RETURN_NONE;
+        }
+
+        // Finer tessellation when slots/holes present: small curved features
+        // (cone/cylinder walls) need dense uniform triangles or they render
+        // with shading artifacts (blurry). Keep coarse for plain shells.
+        bool has_cuts = (window_data && window_data[0] != '\0') ||
+                        (slot_data && slot_data[0] != '\0');
+        if (has_cuts)
+            return shape_to_mesh_dict(shape, 0.03, 0.05);
         return shape_to_mesh_dict(shape, 0.08);
     } catch (Standard_Failure& e) {
         std::cerr << "[Mesh Gen] OCCT error: " << e.GetMessageString() << std::endl;

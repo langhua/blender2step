@@ -76,6 +76,17 @@
 - 验证：新建方壳光标(0.02,-0.04,0.025)→prefill(20,-40,25)→entry fc=4 前壁✓；
   重建后 world bottom 0→0 不变
 
+## 重建后材质丢失修复（2026-08-11）
+- **症状**：给外壳开槽/编辑槽后，外壳材质丢失
+- **根因**：`_rebuild_stage_create` 和 `_rebuild_stage_create_occt` 都执行
+  `obj.data = new_mesh` 换入全新网格（0 材质槽），旧网格（含材质引用）随即
+  `meshes.remove(old_mesh)` 删除 → 材质槽随之丢失
+- **修复**：新增 `_preserve_materials(old_mesh, new_mesh)` helper
+  （clear 新网格槽 + 逐槽 append 旧网格材质），在两处 `obj.data = new_mesh`
+  之前调用。覆盖所有重建路径：开槽/编辑槽/开孔/参数更新
+- 验证：Blender headless 创建 curved shell → 赋 ShellMat → 添加槽/编辑槽，
+  材质槽数保持 1 且名称=ShellMat，ALL CHECKS PASSED
+
 ## 关键文件
 - Python 操作符/面板：`ui/parametric_shell.py`（_parse_slot_list, add/remove/edit/clear_slot, PT_shell_slots）
 - C++ 切削：`src/export/module.cpp` `cut_slots_into_shape()`（在 cut_holes_into_shape 之后）

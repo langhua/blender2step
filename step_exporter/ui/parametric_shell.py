@@ -515,6 +515,23 @@ def _shell_local_bottom_z(obj):
         return -obj.get('height', 50.0) * S / 2.0
 
 
+def _preserve_materials(old_mesh, new_mesh):
+    """Copy material slots from old_mesh to new_mesh.
+
+    Rebuilding the shell swaps in a fresh mesh data-block (obj.data = new_mesh),
+    which starts with zero material slots; the old mesh (and its material refs)
+    is then removed. Copy the slots over first so the shell keeps its material
+    after adding/editing a slot, hole, or any other OCCT rebuild.
+    """
+    if old_mesh is None or new_mesh is None:
+        return
+    if old_mesh is new_mesh:
+        return
+    new_mesh.materials.clear()
+    for i in range(len(old_mesh.materials)):
+        new_mesh.materials.append(old_mesh.materials[i])
+
+
 def _move_cursor_to_hole_pos(op, context):
     """Move 3D cursor to world coords matching shell-local hole_pos_x/y/z (mm)."""
     obj = context.active_object
@@ -1295,6 +1312,7 @@ def _rebuild_stage_create(obj):
 
     new_mesh = new_obj.data
     old_mesh = obj.data
+    _preserve_materials(old_mesh, new_mesh)
     obj.data = new_mesh
     new_obj.data = old_mesh
     bpy.data.objects.remove(new_obj, do_unlink=True)
@@ -1389,6 +1407,7 @@ def _rebuild_stage_create_occt(obj, w, d, h_val, t, bt, cr, rim_type, rw, rh,
         # OCCT mesh is centered (z∈[-h/2,h/2]) — without this adjustment the shell
         # visibly drops by half its height on the FIRST edit.
         old_bottom_z = _shell_local_bottom_z(obj)
+        _preserve_materials(old_mesh, new_mesh)
         obj.data = new_mesh
         bpy.data.meshes.remove(old_mesh, do_unlink=True)
         # Centered mesh bottom sits at local -hh_m; shift location.z so the world
